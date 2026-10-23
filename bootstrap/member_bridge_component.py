@@ -39,7 +39,7 @@ PERMISSION_RECOVERY_RETAINED_MODULE_SHA256 = (
 PERMISSION_RECOVERY_CANDIDATE_MODULE_SHA256 = (
     "a6aa140fea3b3bdf63437eb818f1f9974b9cdd5f23fc09cb3352ee6b467a21e9"
 )
-# Independent hosted-probe correction; this is not part of the PR457 overlay.
+# Independent hosted-only reply/Apple approval probe; retained edge bytes stay fixed.
 PERMISSION_RECOVERY_GATEWAY_PROBE_PATH = (
     "openclaw/administrateme/scripts/check-cos-approval-gateway.mjs"
 )
@@ -48,7 +48,7 @@ PERMISSION_RECOVERY_GATEWAY_PROBE_RETAINED_SHA256 = (
     "d17351be538d5c8dd44b5fdbdf9b54f505da70018d56257daf60e633b832b901"
 )
 PERMISSION_RECOVERY_GATEWAY_PROBE_CANDIDATE_SHA256 = (
-    "76ff3412dcf925d662377c5850f89f367f32392e355780f87f40c4f517766107"
+    "f93d33acf3913ab3f191fcde4197c3dbe09911f5eefb9201c15204911a5d4271"
 )
 # Closed reviewed central overlay. The retained edge never receives these bytes.
 # Every path/presence/mode/hash must match as one coherent group before reuse.

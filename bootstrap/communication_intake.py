@@ -1,4 +1,4 @@
-"""Read the irreversible intake boundary without constructing a household runtime."""
+"""Read retained intake/write boundaries without constructing a household runtime."""
 
 from __future__ import annotations
 
@@ -15,7 +15,13 @@ import time
 from contextlib import contextmanager
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
+from adminme.apple_service_permissions import (
+    CONTRACT as APPLE_SERVICE_WRITE_CONTRACT,
+    EVENT_TYPE as APPLE_SERVICE_PERMISSION_EVENT,
+    PROVIDERS as APPLE_SERVICE_PROVIDERS,
+)
 from adminme.communication_intake_policy import (
     POLICY_EVENT_TYPE,
     POLICY_ID,
@@ -35,6 +41,23 @@ _CLEANUP_SECONDS = 2.0
 INSPECTION_MAX_SECONDS = _INSPECTION_SECONDS + _CLEANUP_SECONDS
 _NO_POLICY_EXIT = 10
 _EXPLICIT_POLICY_EXIT = 11
+_APPLE_WRITES_EXIT = 12
+_EXPLICIT_AND_APPLE_WRITES_EXIT = 13
+_EXIT_REQUIREMENTS = {
+    _NO_POLICY_EXIT: frozenset[str](),
+    _EXPLICIT_POLICY_EXIT: frozenset({POLICY_ID}),
+    _APPLE_WRITES_EXIT: frozenset({APPLE_SERVICE_WRITE_CONTRACT}),
+    _EXPLICIT_AND_APPLE_WRITES_EXIT: frozenset(
+        {POLICY_ID, APPLE_SERVICE_WRITE_CONTRACT}
+    ),
+}
+_APPLE_WRITE_FACT_TYPES = (
+    APPLE_SERVICE_PERMISSION_EVENT,
+    "member.provider_action.confirmed",
+    "external_sync.write_requested",
+    "external_sync.write_completed",
+    "external_sync.write_failed",
+)
 
 
 class CommunicationIntakeInspectionError(RuntimeError):
@@ -130,10 +153,8 @@ def _bounded_instance_policies(paths: DeploymentPaths) -> frozenset[str]:
             raise CommunicationIntakeInspectionError(
                 "communication intake inspection left a background process"
             )
-        if code == _NO_POLICY_EXIT:
-            return frozenset()
-        if code == _EXPLICIT_POLICY_EXIT:
-            return frozenset({POLICY_ID})
+        if code in _EXIT_REQUIREMENTS:
+            return _EXIT_REQUIREMENTS[code]
         raise CommunicationIntakeInspectionError(
             "durable communication intake policy cannot be verified; "
             "release mutation refused"
@@ -151,11 +172,34 @@ def _bounded_instance_policies(paths: DeploymentPaths) -> frozenset[str]:
 def required_instance_policies(
     paths: DeploymentPaths, *, test_mode: bool = False
 ) -> frozenset[str]:
-    """Inspect read-only; bound every production secret lookup in a reaped child."""
+    """Inspect durable intake and Apple contracts in one bounded, read-only child."""
     if test_mode:
         # This provider requires ADMINME_TEST_MODE=1 and has no Keychain fallback.
         return _read_instance_policies(paths, test_mode=True)
     return _bounded_instance_policies(paths)
+
+
+def _requires_apple_write_contract(fact: dict[str, Any]) -> bool:
+    # Even a revoke retains the original authority and any unknown effect. A
+    # missing/stale Settings cache must never erase this rollback boundary.
+    if fact.get("type") == APPLE_SERVICE_PERMISSION_EVENT:
+        return True
+    payload = fact.get("payload")
+    if not isinstance(payload, dict):
+        raise CommunicationIntakeInspectionError("retained write fact is invalid")
+    provider = payload.get("provider")
+    if provider == "apple_notes":
+        return True
+    if provider not in APPLE_SERVICE_PROVIDERS:
+        return False
+    command = payload.get(
+        "command_payload"
+        if fact.get("type") == "member.provider_action.confirmed"
+        else "payload"
+    )
+    # Old unmarked Calendar/Reminders actions retain their existing semantics.
+    # Presence, not truthiness, matters: an invalid marker is not a downgrade.
+    return isinstance(command, dict) and "apple_service_permission" in command
 
 
 def _read_instance_policies(
@@ -194,7 +238,16 @@ def _read_instance_policies(
                             "communication intake policy tenant is inconsistent"
                         )
                 epoch = await read_policy_epoch(log, config.tenant_id)
-                return frozenset({POLICY_ID}) if epoch is not None else frozenset()
+                required = {POLICY_ID} if epoch is not None else set()
+                async for fact in log.read_since(types=list(_APPLE_WRITE_FACT_TYPES)):
+                    if not _requires_apple_write_contract(fact):
+                        continue
+                    if fact.get("tenant_id") != config.tenant_id:
+                        raise CommunicationIntakeInspectionError(
+                            "retained Apple write history tenant is inconsistent"
+                        )
+                    required.add(APPLE_SERVICE_WRITE_CONTRACT)
+                return frozenset(required)
             finally:
                 await log.close()
 
@@ -264,7 +317,10 @@ def main(argv: list[str] | None = None) -> int:
             policies = _read_instance_policies(paths)
     except Exception:
         return 1
-    return _EXPLICIT_POLICY_EXIT if policies else _NO_POLICY_EXIT
+    return next(
+        (code for code, required in _EXIT_REQUIREMENTS.items() if policies == required),
+        1,
+    )
 
 
 if __name__ == "__main__":

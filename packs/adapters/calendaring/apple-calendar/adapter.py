@@ -657,6 +657,12 @@ class AppleCalendarAdapter(ExternalStateMirrorAdapter):
             or self._config.get("calendar_identifier")
             or ""
         )
+        if payload.get("apple_service_permission"):
+            allowed = payload.get("apple_service_allowed_container_ids")
+            if not isinstance(allowed, list) or calendar_identifier not in allowed:
+                raise ValueError(
+                    "Apple Calendar write destination is outside the current permission"
+                )
         summary = str(payload.get("summary") or "")
         start_value = payload.get("start")
         end_value = payload.get("end")
@@ -684,6 +690,12 @@ class AppleCalendarAdapter(ExternalStateMirrorAdapter):
             event = store.event_with_identifier(target_id)
             if event is None:
                 raise LookupError(f"EventKit event not found: {target_id}")
+            if payload.get("apple_service_permission"):
+                actual_calendar = _call(_call(event, "calendar"), "calendarIdentifier")
+                if actual_calendar != calendar_identifier:
+                    raise ValueError(
+                        "Apple Calendar event moved outside its approved source"
+                    )
             expected_revision = payload.get("expected_provider_revision")
             actual_revision = _to_iso(_call(event, "lastModifiedDate"))
             if (
@@ -714,6 +726,11 @@ class AppleCalendarAdapter(ExternalStateMirrorAdapter):
             event = store.update_event(event, payload=update_payload)
 
         async def _do_save() -> None:
+            from adminme.apple_service_permissions import (
+                require_unexpired_native_authorization,
+            )
+
+            require_unexpired_native_authorization(payload)
             # ``saveEvent_span_error_(event, EKSpanThisEvent, ...)``
             # per docs/reference/apple-eventkit/ekeventstore.md.
             if operation.kind == "delete_event":

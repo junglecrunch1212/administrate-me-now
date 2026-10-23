@@ -40,10 +40,17 @@ const token = randomBytes(32).toString("hex");
 const secret = randomBytes(32).toString("hex");
 const agent = "approval-probe";
 const session = `agent:${agent}:synthetic`;
-const seeds = ["allow", "deny", "finalize"].map((name) => ({
-  params: { request_id: `synthetic-${name}`, approval_event_id: `synthetic-domain-${name}` },
-  context: { sessionKey: session, agentId: agent, toolCallId: `synthetic-call-${name}` },
-  receipt: `synthetic-receipt-${name}`,
+const seeds = ["reply", "apple"].flatMap((kind) => ["allow", "deny", "finalize"].map((decision) => {
+  const name = `${kind}-${decision}`;
+  return {
+    name, decision,
+    toolName: kind === "apple" ? "administrateme_execute_pending_provider_action" : "administrateme_cos_response",
+    params: kind === "apple"
+      ? { domain_approval_event_id: `synthetic-domain-${name}` }
+      : { request_id: `synthetic-${name}`, approval_event_id: `synthetic-domain-${name}` },
+    context: { sessionKey: session, agentId: agent, toolCallId: `synthetic-call-${name}` },
+    receipt: `synthetic-receipt-${name}`,
+  };
 }));
 const evidence = {
   contract: "cos-approval-real-gateway-v1",
@@ -424,10 +431,10 @@ try {
   evidence.checks.push("real-public-apple-events-check-only-signed-result-and-admin-refusal");
 
   for (const seed of seeds) {
-    const name = seed.params.request_id.slice("synthetic-".length);
+    const name = seed.name;
     evidence.phase = `roundtrip-${name}`;
     const accepted = await requester.request("plugin.approval.request", {
-      pluginId: "administrateme", toolName: "administrateme_cos_response",
+      pluginId: "administrateme", toolName: seed.toolName,
       toolCallId: seed.context.toolCallId, sessionKey: session, agentId: agent,
       title: "Synthetic CoS reply", description: "Hosted approval boundary probe",
       allowedDecisions: ["allow-once", "deny"], timeoutMs: 30_000, twoPhase: true,
@@ -437,8 +444,13 @@ try {
     assert.match(accepted.id, /^plugin:[a-f0-9-]{36}$/);
     const row = await until(async () =>
       (await list()).items.find((item) => item.approval_id === accepted.id), "native pending delivery");
-    assert.equal(row.request_id, seed.params.request_id);
-    assert.equal(row.domain_approval_id, seed.params.approval_event_id);
+    assert.equal(row.request_id, seed.params.request_id ?? "");
+    assert.equal(row.domain_approval_id, seed.params.approval_event_id ?? seed.params.domain_approval_event_id);
+    assert.equal(row.tool_name, seed.toolName);
+    assert.equal(row.kind, name.startsWith("apple-") ? "provider_action" : "cos_response");
+    assert.equal(row.request_fingerprint, createHash("sha256").update(
+      JSON.stringify(Object.fromEntries(Object.entries(seed.params).sort(([a], [b]) => a.localeCompare(b)))),
+    ).digest("hex"));
     assert.equal(row.session_key, session);
     assert.equal(row.agent_id, agent);
     assert.equal(row.receipt_id, undefined);
@@ -460,8 +472,8 @@ try {
     assert.equal((await list()).items.length, 1);
     const waitDecision = requester.request("plugin.approval.waitDecision", { id: accepted.id });
     void waitDecision.catch(() => {});
-    const decision = name === "allow" ? "allow-once" : "deny";
-    if (name === "finalize") {
+    const decision = seed.decision === "allow" ? "allow-once" : "deny";
+    if (seed.decision === "finalize") {
       // Resolution on another real connection must reach finalizeResolved,
       // rather than relying on the relay's pre-resolution pending deletion.
       await requester.request("plugin.approval.resolve", { id: accepted.id, decision });

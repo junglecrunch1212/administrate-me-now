@@ -103,6 +103,28 @@ class IngestClient:
             raise RuntimeError("central command response was malformed")
         return body
 
+    async def authorize_apple_command(
+        self, command: dict[str, Any], configuration_sha256: str
+    ) -> dict[str, Any]:
+        # No retry: an uncertain response never authorizes the local provider.
+        from urllib.parse import quote
+
+        response = await self._client.post(
+            f"{self._endpoint}/api/bridge/commands/{quote(str(command['command_id']), safe='')}/apple-authorization",
+            json={
+                "event_id": command["event_id"],
+                "configuration_sha256": configuration_sha256,
+            },
+            headers=self._headers(),
+        )
+        response.raise_for_status()
+        body = response.json()
+        if not isinstance(body, dict) or not isinstance(
+            body.get("authorization"), dict
+        ):
+            raise RuntimeError("central Apple authorization response was malformed")
+        return body["authorization"]
+
     async def _post_with_retry(
         self, *, url: str, payload: Any, mode: str
     ) -> SubmitResult:

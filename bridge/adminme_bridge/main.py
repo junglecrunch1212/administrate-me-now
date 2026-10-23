@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import signal
+import subprocess
 import sqlite3
 import time
 import uuid
@@ -16,6 +17,12 @@ from pathlib import Path
 from typing import Any
 
 from adminme.events.envelope import EventEnvelope
+from adminme.apple_service_permissions import (
+    PROVIDERS as APPLE_SERVICE_PROVIDERS,
+    digest as apple_digest,
+    validate_edge_proof,
+    write_policy,
+)
 from adminme.bridge_authorization import BRIDGE_PACK_POLICIES, BridgePackPolicy
 from adminme.messages_reply import (
     REPLY_CAPABILITY_VERSION,
@@ -85,6 +92,16 @@ class _CommandLedger:
             "INSERT OR REPLACE INTO bridge_command_results VALUES (?, ?)",
             (command_id, json.dumps(envelope, separators=(",", ":"), sort_keys=True)),
         )
+
+    def attempt_status(self, command_id: str, request_fingerprint: str) -> str | None:
+        """Read prior uncertainty before a permission change can mask it."""
+        row = self._conn.execute(
+            "SELECT request_fingerprint FROM bridge_command_attempts WHERE command_id = ?",
+            (command_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return "ambiguous" if str(row[0]) == request_fingerprint else "conflict"
 
     def begin(self, command_id: str, request_fingerprint: str) -> str:
         """Durably claim one effect before contacting a provider.
@@ -169,8 +186,10 @@ class BridgeSupervisor:
         ingest_client: IngestClient,
         packs: list[PackHandle] | None = None,
         adapters: list[BridgeAdapter] | None = None,
+        device_identity_sha256: str = "",
     ) -> None:
         self._config = config
+        self._device_identity_sha256 = device_identity_sha256
         self._ingest_client = ingest_client
         self._packs = list(packs or [])
         if adapters is None:
@@ -296,6 +315,46 @@ class BridgeSupervisor:
                             command, error=exc, provider_called=False
                         )
                     if result_envelope is None:
+                        previous_attempt = self._command_ledger.attempt_status(
+                            command_id, str(command["request_fingerprint"])
+                        )
+                        if previous_attempt == "ambiguous":
+                            result_envelope = self._result_envelope(
+                                command,
+                                result={
+                                    "outcome": "ambiguous",
+                                    "applied": False,
+                                    "suppressed": False,
+                                    "reason": "prior_bridge_attempt_has_no_terminal_receipt",
+                                    "automatic_retry": False,
+                                },
+                                provider_called=True,
+                            )
+                        elif previous_attempt == "conflict":
+                            result_envelope = self._result_envelope(
+                                command,
+                                error=ValueError(
+                                    "command id reused with a different fingerprint"
+                                ),
+                                provider_called=False,
+                            )
+                        if result_envelope is not None:
+                            self._command_ledger.put(command_id, result_envelope)
+                    if result_envelope is None:
+                        if (
+                            command.get("provider") in APPLE_SERVICE_PROVIDERS
+                            and not command.get("apple_authorization_denied")
+                            and (command.get("payload") or {}).get(
+                                "apple_service_permission"
+                            )
+                        ):
+                            # Recheck revocation/binding just before claiming the
+                            # local attempt. Transport uncertainty means no effect.
+                            command[
+                                "apple_service_authorization"
+                            ] = await self._ingest_client.authorize_apple_command(
+                                command, apple_digest(self._config.pack_config)
+                            )
                         try:
                             adapter = self._authorized_command_adapter(
                                 command, adapters
@@ -331,9 +390,28 @@ class BridgeSupervisor:
                             else:
                                 provider_called = True
                                 try:
+                                    provider_payload = dict(
+                                        command.get("payload") or {}
+                                    )
+                                    if (
+                                        command.get("apple_service_authorization")
+                                        is not None
+                                    ):
+                                        provider_payload[
+                                            "apple_service_authorization_expires_at"
+                                        ] = command["apple_service_authorization"][
+                                            "expires_at"
+                                        ]
+                                        provider_payload[
+                                            "apple_service_allowed_container_ids"
+                                        ] = list(
+                                            command["apple_service_authorization"][
+                                                "grant"
+                                            ]["allowed_container_ids"]
+                                        )
                                     result = await getattr(adapter, "apply_write")(
                                         str(command["operation"]),
-                                        dict(command.get("payload") or {}),
+                                        provider_payload,
                                         command.get("target_external_id"),
                                     )
                                 except RuntimeError as exc:
@@ -396,6 +474,7 @@ class BridgeSupervisor:
                 "list_identifier",
             ),
             "container_external_id": ("container_external_id",),
+            "folder_external_id": ("folder_external_id",),
             "protected_source_id": ("protected_source_id",),
         }.get(str(policy.container_key), ())
         for key in aliases:
@@ -409,7 +488,23 @@ class BridgeSupervisor:
     ) -> Any:
         """Validate the central command again at the provider-process edge."""
 
-        if (
+        apple_grant = None
+        if command.get("apple_authorization_denied"):
+            raise ValueError(
+                "Apple permission was revoked or changed; this action cannot run"
+            )
+        if command.get("provider") in APPLE_SERVICE_PROVIDERS and (
+            self._config.observation_only is True
+            or self._config.provider_writes == "deny"
+            or command.get("provider") == "apple_notes"
+            or (command.get("payload") or {}).get("apple_service_permission")
+        ):
+            apple_grant = validate_edge_proof(
+                self._config,
+                command,
+                device_identity_sha256=self._device_identity_sha256,
+            )
+        elif (
             self._config.observation_only is True
             or self._config.provider_writes == "deny"
         ):
@@ -427,10 +522,22 @@ class BridgeSupervisor:
             for pack in self._config.enabled_packs
             if BRIDGE_PACK_POLICIES[pack].provider == provider
         ]
-        policy = matching[0] if len(matching) == 1 else None
+        policy = (
+            write_policy(str(provider))
+            if apple_grant is not None
+            else matching[0]
+            if len(matching) == 1
+            else None
+        )
         if policy is None:
             violations.append("provider")
-        config = self._config.pack_config.get(policy.pack, {}) if policy else {}
+        config = (
+            apple_grant
+            if apple_grant is not None
+            else self._config.pack_config.get(policy.pack, {})
+            if policy
+            else {}
+        )
         if command.get("provider_account_id") != config.get("provider_account_id"):
             violations.append("provider_account_id")
         if policy is None or command.get("operation") not in policy.write_operations:
@@ -728,6 +835,48 @@ async def _run_until_signal(supervisor: BridgeSupervisor) -> None:
         await supervisor.stop()
 
 
+def _local_device_identity(config: BridgeConfig, config_path: Path) -> str:
+    """Read existing local enrollment plus current Tailscale identity; never grant."""
+    if config.acquisition_policy is None:
+        return ""
+    path = config_path.parent / "enrollment-receipt.json"
+    try:
+        if (
+            path.is_symlink()
+            or path.stat().st_uid != os.getuid()
+            or path.stat().st_mode & 0o077
+        ):
+            return ""
+        receipt = json.loads(path.read_text())
+        if any(
+            receipt.get(key) != getattr(config, key)
+            for key in ("member_id", "enrollment_id", "instance_id")
+        ):
+            return ""
+        status = subprocess.run(
+            ["tailscale", "status", "--json"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if status.returncode:
+            return ""
+        value = json.loads(status.stdout)
+        device = value["Self"]
+        node = device.get("ID") or device.get("DNSName")
+        login = value["User"][str(device["UserID"])]["LoginName"]
+        if (
+            not isinstance(node, str)
+            or node != receipt.get("bridge_node_id")
+            or login.casefold() != config.tailscale_identity.casefold()
+        ):
+            return ""
+        return hashlib.sha256(node.encode()).hexdigest()
+    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
+        return ""
+
+
 async def main_async(config_path: Path = DEFAULT_CONFIG_PATH) -> None:
     config = load_config(config_path)
     packs = configured_packs(config)
@@ -737,7 +886,10 @@ async def main_async(config_path: Path = DEFAULT_CONFIG_PATH) -> None:
         enrollment_id=config.enrollment_id,
     )
     supervisor = BridgeSupervisor(
-        config=config, ingest_client=ingest_client, packs=packs
+        config=config,
+        ingest_client=ingest_client,
+        packs=packs,
+        device_identity_sha256=_local_device_identity(config, config_path),
     )
     try:
         await _run_until_signal(supervisor)

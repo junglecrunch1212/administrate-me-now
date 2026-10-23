@@ -1,0 +1,84 @@
+name: Apple service permission checks
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'adminme/apple_service_permissions.py'
+      - 'adminme/apple_notes_writes.py'
+      - 'adminme/products/member/apple_service_settings.py'
+      - 'adminme/products/member/apple_notes_commands.py'
+      - 'tests/acceptance/test_apple_service*.py'
+      - '.github/workflows/apple-service-permissions.yml'
+permissions:
+  contents: read
+jobs:
+  focused:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      ADMINME_TEST_MODE: '1'
+      PYTHONPATH: bridge
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTEST_ADDOPTS: '-o tmp_path_retention_policy=failed'
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.14.7'
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24.19.0'
+      - name: Install locked isolated environment
+        run: |
+          python -m pip install 'poetry==2.4.1'
+          poetry sync --with dev --no-interaction
+      - name: Check service permission and Notes composition
+        run: >-
+          poetry run pytest -p no:cacheprovider --runxfail -q -ra --maxfail=8
+          tests/acceptance/test_apple_service_permissions.py
+          tests/acceptance/test_apple_service_notes.py
+          tests/acceptance/test_apple_service_revocation.py
+          tests/acceptance/test_member_apple_approval.py
+          tests/acceptance/test_member_cos_approval.py
+          tests/acceptance/test_cos_member_bridge_acquisition.py
+          tests/acceptance/test_apple_messages_governed_reply.py
+          tests/unit/products/bridge/test_ingest_router.py
+          tests/unit/test_apple_service_permission_contract.py
+          tests/unit/test_apple_native_permission_boundary.py
+          tests/unit/test_apple_notes_commands.py
+          tests/unit/test_openclaw_approvals.py
+          tests/unit/bootstrap/test_member_bridge_runtime_repair.py
+          tests/unit/bootstrap/test_member_bridge_component.py
+          tests/unit/bootstrap/test_apple_service_write_upgrade_safety.py
+          tests/unit/bootstrap/test_communication_intake_upgrade_safety.py
+          tests/unit/test_capability_catalog.py
+          tests/unit/test_primary_surface_v2.py
+          tests/unit/bootstrap/test_source_identity.py::test_materializer_timeout_reaps_child_and_publisher_removes_stage
+      - name: Check isolated bridge write boundary
+        if: '!cancelled()'
+        run: >-
+          poetry run pytest -p no:cacheprovider --import-mode=importlib -q -ra
+          bridge/tests/unit/test_apple_notes_governed_writes.py
+          bridge/tests/unit/test_apple_revoked_attempt.py
+      - name: Check native approval relay contract
+        if: '!cancelled()'
+        run: |
+          npm ci --prefix openclaw/administrateme --ignore-scripts
+          npm run check --prefix openclaw/administrateme
+          npm test --prefix openclaw/administrateme
+      - name: Check focused member browser behavior
+        if: '!cancelled()'
+        run: |
+          npm ci --prefix tools/console-reference-harness --ignore-scripts
+          ADMINME_GATE7_APPLE_SERVICES_ONLY=1 ADMINME_GATE7_PYTHON="$(poetry env info --executable)" ADMINME_GATE7_EVIDENCE_DIR="$RUNNER_TEMP/adminme-apple-permissions" npm run test:gate7 --prefix tools/console-reference-harness
+      - name: Retain private-free rendered evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: apple-service-permissions-browser
+          path: ${{ runner.temp }}/adminme-apple-permissions
+          if-no-files-found: warn
+          retention-days: 7

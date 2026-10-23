@@ -13,6 +13,7 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import sqlite3
 import sys
 import time
 from typing import Any
@@ -47,6 +48,177 @@ UNCHANGED_TREES = (
 )
 
 
+# Reviewed additive write overlay. Both sides retain the identical read-only
+# enrollment/launch/configuration contract; authority is a separate audited grant.
+# Exact old/new bytes prevent this component repair from becoming a generic
+# runtime-interface bypass. Refresh a pair only with its affected checks.
+APPLE_SERVICE_WRITE_OVERLAY: dict[str, tuple[str | None, str]] = {
+    "adminme/apple_service_permissions.py": (
+        None,
+        "26a6413a1eb41f51a4276007d1a7f25ec2751fac6d4b76d79f22484f46acfee1",
+    ),
+    "adminme/apple_notes_writes.py": (
+        None,
+        "11a4e2fd3e3b2373fda37986d6ebf228726f0dffa020e900ee6aa9a31d164af5",
+    ),
+    "adminme/events/schemas/apple_service_permissions.py": (
+        None,
+        "dd8e7aa2544f4e5bde272cdf3ccc2c52c2236d3352d068d0f994d830a5cfb1c9",
+    ),
+    "adminme/events/schemas/external_sync.py": (
+        "b844efd28abe9e9de15af7ff62bc4d67b31906f76638a50e608ddc94d2c3b659",
+        "c9987b6b6dc753ff9990dd9ad37f22a6b9029920524617f3e14e1334ba273d07",
+    ),
+    "bridge/adminme_bridge/main.py": (
+        "07836c5334b87b53a5fec80aed9f325c591bd37995a38b71330dcac7ec707159",
+        "55bdf2c6c41e02c4db88bb2f014e7d4d3ba27c31d76c14f8ea5a19ed5dbc1746",
+    ),
+    "bridge/adminme_bridge/ingest_client.py": (
+        "1ca09adde4a2c23633bef66ef7f641c6e75b4194ba2e0489bd8bbe704a2f09c0",
+        "77e9d70d8bcf4822dc90d3dee0918650220ec958b579c8334b14b296c7ef5baf",
+    ),
+    "bridge/adminme_bridge/connector_packs/apple_notes/provider.py": (
+        "627ad16ce4e8559b2d0ff705c4b493cc71901eb71365cd760256ea9c82024de0",
+        "66d9d895be554dba3820cca81c8136678424bfd30bbf86384bdd2370ee738a20",
+    ),
+    "packs/adapters/calendaring/apple-calendar/adapter.py": (
+        "d508be2822271f8710fbb0843c799662fd49d3f7bfbecc53dab7713b33457e7c",
+        "830e04296d6f6a341c08ed324351c6a4cada39bf5e84c6bf5c67e1f3717bea5b",
+    ),
+    "packs/adapters/reminders/apple-eventkit/adapter.py": (
+        "c25e284adeaa872292ead2228d0e9b6d2024b837e3adeb09e28779f6bdddaa97",
+        "11a7113382f15cfbb45863a4ac54fae1b8d21f6b412fb6280377662a5cecda63",
+    ),
+}
+
+_DISPATCHER_PATH = "bridge/adminme_bridge/main.py"
+_APPLE_PROVIDERS = frozenset({"apple_calendar", "apple_reminders", "apple_notes"})
+
+
+def _retained_command_history_requires_aware_runtime(
+    paths: MemberBridgePaths, config: dict[str, Any]
+) -> bool:
+    """Read the sealed local ledger without creating/migrating or clearing it."""
+    database = paths.root / "adapter-cursors.db"
+    try:
+        if (
+            config.get("cursor_db_path") != str(database)
+            or paths.root.resolve() != paths.root
+            or not launch._owned(paths.root, directory=True, private=True)
+            or database.resolve() != database
+            or not launch._owned(database)
+        ):
+            raise ValueError("unsafe command history coordinate")
+        for suffix in ("-wal", "-shm", "-journal"):
+            sidecar = database.with_name(database.name + suffix)
+            if (sidecar.exists() or sidecar.is_symlink()) and not launch._owned(
+                sidecar
+            ):
+                raise ValueError("unsafe command history sidecar")
+        identity = database.stat()
+        connection = sqlite3.connect(
+            database.as_uri() + "?mode=ro", uri=True, timeout=1
+        )
+        try:
+            connection.execute("PRAGMA query_only=ON")
+            connection.execute("BEGIN")
+            expected = {
+                "bridge_command_attempts": [
+                    ("command_id", "TEXT", 1),
+                    ("request_fingerprint", "TEXT", 0),
+                    ("started_at", "TEXT", 0),
+                ],
+                "bridge_command_results": [
+                    ("command_id", "TEXT", 1),
+                    ("envelope_json", "TEXT", 0),
+                ],
+            }
+            for table, columns in expected.items():
+                kind = connection.execute(
+                    "SELECT type FROM sqlite_master WHERE name = ?", (table,)
+                ).fetchone()
+                actual = connection.execute(f"PRAGMA table_info({table})").fetchall()
+                if (
+                    kind != ("table",)
+                    or [(row[1], row[2], row[5]) for row in actual] != columns
+                ):
+                    raise ValueError("unknown command history schema")
+            # Attempts do not include provider/grant coordinates. Even an exact
+            # false-result pairing cannot erase one: old code could create that
+            # pairing by rejecting read-only authority before checking the attempt.
+            unsafe = (
+                connection.execute(
+                    "SELECT 1 FROM bridge_command_attempts LIMIT 1"
+                ).fetchone()
+                is not None
+            )
+            for command_id, encoded in connection.execute(
+                "SELECT command_id, envelope_json FROM bridge_command_results"
+            ):
+                envelope = json.loads(encoded)
+                payload = (
+                    envelope.get("payload") if isinstance(envelope, dict) else None
+                )
+                if (
+                    not isinstance(payload, dict)
+                    or envelope.get("schema_version") != 2
+                    or envelope.get("type")
+                    not in {
+                        "external_sync.write_completed",
+                        "external_sync.write_failed",
+                    }
+                    or not isinstance(command_id, str)
+                    or not command_id
+                    or payload.get("command_id") != command_id
+                    or not isinstance(payload.get("provider"), str)
+                    or not payload["provider"]
+                    or not isinstance(payload.get("provider_called"), bool)
+                    or re.fullmatch(
+                        r"[0-9a-f]{64}", str(payload.get("request_fingerprint"))
+                    )
+                    is None
+                ):
+                    raise ValueError("invalid command result history")
+                result = payload.get("result", {})
+                if not isinstance(result, dict):
+                    raise ValueError("invalid command outcome history")
+                if payload["provider"] in _APPLE_PROVIDERS and (
+                    payload["provider_called"]
+                    or result.get("outcome") in {"unknown", "ambiguous"}
+                ):
+                    unsafe = True
+            current = database.stat()
+            if (identity.st_dev, identity.st_ino) != (current.st_dev, current.st_ino):
+                raise ValueError("command history changed identity")
+            return unsafe
+        finally:
+            connection.close()
+    except (OSError, sqlite3.Error, TypeError, ValueError) as exc:
+        raise ValueError(
+            "bridge command history cannot be verified; runtime rollback refused"
+        ) from exc
+
+
+def _require_command_history_compatibility(
+    paths: MemberBridgePaths, target: Path, config: dict[str, Any]
+) -> None:
+    dispatcher = target / _DISPATCHER_PATH
+    pair = APPLE_SERVICE_WRITE_OVERLAY.get(_DISPATCHER_PATH)
+    if pair is None or not launch._owned(dispatcher):
+        raise ValueError("unsupported bridge dispatcher recovery coordinate")
+    target_digest = hashlib.sha256(dispatcher.read_bytes()).hexdigest()
+    if target_digest == pair[1]:
+        return
+    if target_digest != pair[0]:
+        raise ValueError("unsupported bridge dispatcher recovery coordinate")
+    if _retained_command_history_requires_aware_runtime(paths, config):
+        raise ValueError(
+            "retained bridge command attempts or Apple results require a write-aware "
+            "recovery target; keep the current runtime, revoke writes and settle "
+            "outstanding results without restoring command history"
+        )
+
+
 def _read(path: Path) -> bytes:
     if not launch._owned(path, private=True):
         raise ValueError("runtime repair requires owned private state")
@@ -65,7 +237,7 @@ def _write(path: Path, value: dict[str, Any]) -> None:
 
 
 def _inventory(root: Path, *, retained: bool) -> dict[str, str]:
-    paths = {root / name for name in UNCHANGED_FILES}
+    paths = {root / name for name in (*UNCHANGED_FILES, *APPLE_SERVICE_WRITE_OVERLAY)}
     for name in UNCHANGED_TREES:
         paths.update(
             path
@@ -78,6 +250,19 @@ def _inventory(root: Path, *, retained: bool) -> dict[str, str]:
     result = {}
     for path in paths:
         relative = path.relative_to(root).as_posix()
+        if relative in APPLE_SERVICE_WRITE_OVERLAY:
+            old_digest, new_digest = APPLE_SERVICE_WRITE_OVERLAY[relative]
+            if not path.exists() and retained and old_digest is None:
+                result[relative] = "absent-before-apple-write-overlay"
+                continue
+            if not launch._owned(path):
+                raise ValueError("Apple write overlay file missing or unsafe")
+            current_digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            accepted = {old_digest, new_digest} if retained else {new_digest}
+            if current_digest not in accepted:
+                raise ValueError("unreviewed Apple write overlay difference")
+            result[relative] = old_digest or "absent-before-apple-write-overlay"
+            continue
         if relative in ACQUISITION_PATHS:
             continue
         if not launch._owned(path):
@@ -155,11 +340,19 @@ def _restore(
     )
     if current is None:
         raise ValueError("launch definition changed; explicit reconciliation required")
+    config_raw, config = launch._configuration(candidate)
+    if hashlib.sha256(config_raw).hexdigest() != journal["config_sha256"]:
+        raise ValueError("configuration changed; explicit reconciliation required")
+    _require_command_history_compatibility(paths, old.root, config)
     current._stop()
     if launch._pending_path(candidate).exists():
         raise launch.LaunchFailure("launch_recovery_pending", unknown=True)
-    if hashlib.sha256(_read(paths.config_path)).hexdigest() != journal["config_sha256"]:
+    config_raw, config = launch._configuration(candidate)
+    if hashlib.sha256(config_raw).hexdigest() != journal["config_sha256"]:
         raise ValueError("configuration changed; explicit reconciliation required")
+    # A command may have begun after preflight but before the stop completed.
+    # Never restore an unaware selector over that newly durable local attempt.
+    _require_command_history_compatibility(paths, old.root, config)
     originals = []
     for name, destination in (
         ("pointer.json", paths.root / "app/current-release.json"),

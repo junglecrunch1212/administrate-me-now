@@ -129,7 +129,8 @@ function makeTool(
           ? definition.path(invocationParams)
           : definition.path;
       if (definition.pathParam) delete invocationParams[definition.pathParam];
-      if (definition.name === "administrateme_cos_response") {
+      if (definition.name === "administrateme_cos_response" ||
+          definition.name === "administrateme_execute_pending_provider_action") {
         await waitForApprovalPublication(runtime, invocationParams.openclaw_approval_receipt_id);
       }
       const result = await runtime.transport.request(path, {
