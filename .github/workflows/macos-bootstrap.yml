@@ -388,6 +388,30 @@ jobs:
           python -m pip install 'poetry==2.4.1'
           poetry sync --with dev --no-interaction
           npm ci --prefix openclaw/administrateme --ignore-scripts
+      - name: Prove native Reminders app identity and callback boundary
+        if: ${{ needs.release-scope.outputs.scope != 'member-google-settings' }}
+        run: |
+          poetry run pytest -p no:cacheprovider --runxfail -q -ra \
+            --basetemp="$RUNNER_TEMP/cos-reminders-native-tests" \
+            --junitxml="$RUNNER_TEMP/cos-reminders-native.xml" \
+            tests/unit/bootstrap/test_cos_reminders_helper.py \
+            tests/unit/bootstrap/test_cos_reminders_helper_app.py \
+            tests/unit/bootstrap/test_cos_reminders_helper_app_macos.py \
+            tests/unit/bootstrap/test_cos_reminders_helper_macos.py
+          python - "$RUNNER_TEMP/cos-reminders-native.xml" <<'CHECK'
+          import sys
+          import xml.etree.ElementTree as ET
+          suites = list(ET.parse(sys.argv[1]).getroot().iter('testsuite'))
+          assert sum(int(s.get('tests', '0')) for s in suites) > 0
+          assert all(int(s.get(k, '0')) == 0 for s in suites for k in ('skipped', 'failures', 'errors'))
+          CHECK
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: ${{ !cancelled() && needs.release-scope.outputs.scope != 'member-google-settings' }}
+        with:
+          name: cos-reminders-native-macos
+          path: ${{ runner.temp }}/cos-reminders-native.xml
+          if-no-files-found: error
+          retention-days: 7
       - name: Validate member Google Settings and consent
         if: ${{ needs.release-scope.outputs.scope == 'member-google-settings' }}
         env:

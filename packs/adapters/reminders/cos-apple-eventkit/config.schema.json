@@ -1,28 +1,117 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "type": "object", "additionalProperties": false,
-  "required": ["selection", "provider_account_id", "service_principal_id", "workspace", "binding_provenance", "ownership_attested", "permission_scope", "read_only"],
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "selection",
+    "provider_account_id",
+    "service_principal_id",
+    "workspace",
+    "binding_provenance",
+    "ownership_attested",
+    "permission_scope",
+    "read_only"
+  ],
   "properties": {
     "selection": {
-      "type": "object", "additionalProperties": false,
-      "required": ["adapter_id", "source_id", "list_id", "source_kind", "device_identity_sha256", "os_uid", "source_ownership_evidence_sha256", "owner_authorization_sha256"],
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "adapter_id",
+        "source_id",
+        "list_id",
+        "source_kind",
+        "device_identity_sha256",
+        "os_uid",
+        "source_ownership_evidence_sha256",
+        "owner_authorization_sha256",
+        "native_helper"
+      ],
       "properties": {
-        "adapter_id": {"type": "string", "minLength": 1, "maxLength": 240},
-        "source_id": {"type": "string", "minLength": 1, "maxLength": 1000},
-        "list_id": {"type": "string", "minLength": 1, "maxLength": 1000},
-        "source_kind": {"enum": ["local", "icloud"]},
-        "device_identity_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-        "os_uid": {"type": "integer", "minimum": 0},
-        "source_ownership_evidence_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-        "owner_authorization_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+        "adapter_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 240
+        },
+        "source_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000
+        },
+        "list_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000
+        },
+        "source_kind": {
+          "enum": [
+            "local",
+            "icloud"
+          ]
+        },
+        "device_identity_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "os_uid": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "source_ownership_evidence_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "owner_authorization_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "native_helper": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "app_path",
+            "artifact_sha256",
+            "bundle_identifier"
+          ],
+          "properties": {
+            "app_path": {
+              "type": "string",
+              "pattern": "^/.*\\.app$"
+            },
+            "artifact_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "bundle_identifier": {
+              "const": "com.administrateme.cos-reminders-helper"
+            }
+          }
+        }
       }
     },
-    "provider_account_id": {"type": "string", "pattern": "^provider-account:[0-9a-f]{64}$"},
-    "service_principal_id": {"const": "service-principal:chief-of-staff"},
-    "workspace": {"const": "service"},
-    "binding_provenance": {"const": "service-device-authorization"},
-    "ownership_attested": {"const": true},
-    "permission_scope": {"const": ["eventkit.reminders.read"]},
-    "read_only": {"const": true}
+    "provider_account_id": {
+      "type": "string",
+      "pattern": "^provider-account:[0-9a-f]{64}$"
+    },
+    "service_principal_id": {
+      "const": "service-principal:chief-of-staff"
+    },
+    "workspace": {
+      "const": "service"
+    },
+    "binding_provenance": {
+      "const": "service-device-authorization"
+    },
+    "ownership_attested": {
+      "const": true
+    },
+    "permission_scope": {
+      "const": [
+        "eventkit.reminders.read"
+      ]
+    },
+    "read_only": {
+      "const": true
+    }
   }
 }

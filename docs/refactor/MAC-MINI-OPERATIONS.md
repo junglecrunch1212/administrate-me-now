@@ -908,46 +908,93 @@ that actual signed-in Apple account and its selected list. EventKit's CalDAV
 source type or a display name does not establish account ownership. Signing in
 later does not migrate, replace or broaden the existing local selection.
 
-The private `CoSRemindersSelection` document contains `adapter_id`, `source_id`,
-`list_id`, `source_kind` (`local` or `icloud`), `device_identity_sha256`, `os_uid`,
-`source_ownership_evidence_sha256`, and `owner_authorization_sha256`. The device
-digest is `local_device_identity()` from the deployed module; the ownership
-and authorization hashes identify the operator's exact private reviewed
-records. To resolve IDs, create an owner-only lookup file containing the exact
-`list_name` and `source_kind`; optionally supply a previously verified `source_id`
-to disambiguate identical list titles. Run the deployed setup inspector:
+The permission-bearing process is the native executable
+`CoS Reminders Helper.app/Contents/MacOS/CoSRemindersHelper`, bundle identifier
+`com.administrateme.cos-reminders-helper`. It embeds the selected protected
+release's Python 3.14 interpreter in process, with Reminders usage descriptions
+in its signed main bundle. It does not launch a generic Python child to acquire
+EventKit permission. Setup and ordinary polling both launch this same app.
+
+The earlier generic-Python setup returned not-determined status, then timed out
+without a dialog or source output. Its Python bundle lacked Reminders usage
+metadata; that fact alone does not prove the timeout's sole cause. The repaired
+app validates its actual main bundle, usage keys, signed component, device and
+release before permission handling. Its main run loop stays available while a
+bounded background operation waits for EventKit callbacks. A Codex, Terminal,
+member-bridge or generic-Python grant never substitutes for this app's grant.
+
+Install the immutable component from the new protected source while the healthy
+central runtime stays running. From that protected checkout, use its compatible
+Python 3.14 environment and the explicit protected commit:
 
 ```text
-python -m bootstrap.cos_apple_reminders --inspect <private-lookup.json> --output <new-private-resource.json>
+python -m bootstrap.cos_reminders_helper_app --source <protected-helper-source> --expected-commit <protected-commit> --destination <new-absolute-helper.app>
 ```
 
-This inspects only EventKit list metadata, filters to the requested title/type,
-rejects zero or multiple matches and reads no reminder content. The new private
-file contains only that source/list and the device/Unix-user binding. It is a
-resource proposal, not an ownership proof or activation input: review it against
-the actual Apple account/source UI and add the exact private ownership and owner
-authorization evidence when forming the selection. This does not update Reminders
-formats, move lists, or migrate a local source to iCloud. EventKit's catalog API
-is used only by this explicit setup command; runtime polling never enumerates
-accounts/lists or uses a default list.
+Save the returned `app_path`, `artifact_sha256` and `bundle_identifier` as an
+owner-only helper receipt. The installer verifies protected source and code
+signing, atomically installs a new app and reuses an existing exact artifact
+without recompiling or re-signing. It never updates central LaunchAgents or
+system Python. The signed component contains no central release coordinates;
+compatible central updates keep the same app and consent identity. Changed
+helper bytes need a new reviewed artifact and may need new OS consent. Signing
+is ad hoc, not a Developer ID/notarization claim; no identifier-only designated
+requirement weakens the exact signature to retain permission.
 
-Run the deployed helper with owner-only files:
+The setup controller can use `--runtime-release <current-protected-release>`
+to bind its native worker to the compatible already-installed release before a
+central maintenance cycle. The a10 exact-list reader contract is supported;
+release marker, interpreter/library digest, device and reader module origins
+are verified. The helper carries its worker, so this setup does not depend on
+activating the new central client. Status is read-only and cannot prompt:
 
 ```text
-python -m bootstrap.cos_apple_reminders --selection <private-selection.json> --previous-config <private-adapters.json> --output <new-private-prepared.json>
+python -m bootstrap.cos_apple_reminders --status --helper-receipt <private-helper.json> --runtime-release <current-protected-release> --output <new-private-status.json>
+python -m bootstrap.cos_apple_reminders --inspect <private-lookup.json> --helper-receipt <private-helper.json> --runtime-release <current-protected-release> --request-permission --output <new-private-resource.json>
 ```
 
-This checks the device/user, current Reminders permission, exact native source
-and selected existing list, then writes a new private activation input. It
-prints only proof flags/counts and never writes active configuration. Add
-`--request-permission` only for an explicitly authorized setup consent handoff;
-ordinary preparation and runtime polling never request permission. A helper's
-TCC grant does not establish the runtime executable's grant. The runtime must
-independently pass its own current permission and selected-list read-back.
-Apple documents the authorization boundary in
-[EKEventStore](https://developer.apple.com/documentation/EventKit/EKEventStore)
-and distinct native source types in
-[EKSourceType](https://developer.apple.com/documentation/eventkit/eksourcetype).
+The owner-only lookup contains exact `list_name` and `source_kind` (`local` or
+`icloud`), optionally a previously verified `source_id` to disambiguate. Only
+explicit `--request-permission` requests OS consent. Inspect the actual OS
+prompt identity before accepting it; do not claim usability from a prompt or a
+saved setting. A denied, timed-out or differently attributed operation produces
+no activation input. Omit that flag for later read-only inspection.
+
+Inspection reads list metadata, rejects zero/multiple matches and returns only
+that source/list plus the device/Unix-user binding and pinned helper receipt.
+It reads no reminder content. Review the result against actual Apple source UI;
+a title or CalDAV type is not account ownership. It does not upgrade Reminders
+formats, move lists or migrate a local source to iCloud. Runtime polling never
+enumerates accounts/lists or uses a default list.
+
+The private `CoSRemindersSelection` contains `native_helper` (the exact receipt),
+`adapter_id`, `source_id`, `list_id`, `source_kind`, `device_identity_sha256`,
+`os_uid`, `source_ownership_evidence_sha256` and `owner_authorization_sha256`.
+The last two hashes identify the operator's exact private reviewed records.
+Prepare and read back through the same app before enabling the client:
+
+```text
+python -m bootstrap.cos_apple_reminders --selection <private-selection.json> --previous-config <private-adapters.json> --runtime-release <current-protected-release> --output <new-private-prepared.json>
+```
+
+This writes a new private activation input only after same-app current permission
+and exact existing-list read-back. The content-free evidence includes the pinned
+helper artifact and item count; `item_count: 0` is a verified empty list only
+when all native proof checks pass. Missing lists and nil/failed fetches fail.
+Ordinary preparation/polling never prompt. Private single-use request directories,
+bounded expiry and exact response nonce/operation/identity reject stale, replayed,
+foreign-process and unexpected responses. Provider bodies stay in owner-only
+transient IPC files and the existing encrypted event path, not command arguments
+or logs. Setup failures retain only an allowlisted fixed native phase/error code
+(for example `python_initialization_failed` or `PermissionError`) after IPC cleanup,
+so diagnostics do not lose the failed boundary. Only after this proof should the operator deploy/enable the central
+client through the normal protected updater and guarded activation.
+
+Apple's [Reminders usage-description contract](https://developer.apple.com/documentation/bundleresources/information-property-list/nsremindersfullaccessusagedescription)
+and [EventKit migration guidance](https://developer.apple.com/documentation/technotes/tn3152-migrating-to-the-latest-calendar-access-levels)
+govern this affected native boundary. Hosted macOS checks prove actual embedding,
+LaunchServices identity and main-loop completion plumbing without requesting
+Reminders consent; real OS consent and exact-list read-back remain live proof.
 
 Use the prepared document as `ActivationRequest.adapter_config` through the
 existing journaled CoS channel activation. Only the exact selected source can
@@ -972,8 +1019,9 @@ receipt has been written; an older binary is not the default recovery for that
 history. Deployment alone does not enable or enroll this source.
 
 The `cos-apple-reminders` CI scope reuses the protected connections worker on
-Linux and macOS, adding native permission/resource fakes, actual loader/event-log
-polling, restart/tombstone/error recovery, legacy EventKit pack regressions and
-schema checks. Only these exact component/proof paths are excluded from its
+Linux and macOS, adding protocol/permission/resource negatives, actual helper-client
+loader/event-log polling, restart/tombstone/error recovery, legacy EventKit pack
+regressions and schema checks. macOS additionally requires the signed native
+embedding, LaunchServices, sealed production-worker status and callback tests. Only these exact component/proof paths are excluded from its
 dependency fingerprint. Unrelated source changes, missing proofs, deletions,
 symlinks and executable-mode drift retain the protected system fallback.
