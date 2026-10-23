@@ -173,6 +173,7 @@ BRIDGE_RUNTIME_PATHS = frozenset(
 )
 COS_REMINDER_PATHS = frozenset(
     {
+        "adminme/cos_reminder_work.py",
         ".github/workflows/cos-reply-development.yml",
         "adminme/cos_response_assurance.py",
         "adminme/events/schemas/cos_reminders.py",
@@ -213,6 +214,7 @@ COS_REMINDER_PATHS = frozenset(
 )
 COS_REMINDER_REQUIRED_PATHS = frozenset(
     {
+        "adminme/cos_reminder_work.py",
         "adminme/products/openclaw/cos_reminders.py",
         "adminme/events/schemas/cos_reminders.py",
         "openclaw/administrateme/src/self-reminders.ts",
@@ -295,6 +297,7 @@ COS_SERVICE_WORK_COMPONENT_PATHS = frozenset(
         "openclaw/administrateme/src/provenance.ts",
         "openclaw/administrateme/src/service-private.ts",
         "openclaw/administrateme/workspace/service-private/AGENTS.md",
+        "openclaw/administrateme/workspace/service-private/IDENTITY.md",
         "openclaw/administrateme/scripts/validate-contract.mjs",
         COS_SERVICE_WORK_NATIVE_INSTALL,
     }

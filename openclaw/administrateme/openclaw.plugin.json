@@ -29,6 +29,7 @@
     { "name": "adminme-forward", "kind": "runtime-slash" }
   ],
   "contracts": {
+    "serviceWorkspaceFiles": ["AGENTS.md", "IDENTITY.md"],
     "tools": [
       "administrateme_state",
       "administrateme_what_now",
