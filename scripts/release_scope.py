@@ -47,6 +47,39 @@ HELPER_TEST_PATHS = frozenset(
         "tests/acceptance/test_member_bridge_permission_recovery.py",
     }
 )
+BRIDGE_SETUP_SHARED = frozenset(
+    {
+        "adminme/runtime/application.py",
+        "adminme/products/member/assets/member.js",
+        "bootstrap/bridge_enrollment.py",
+        "bridge/adminme_bridge/main.py",
+    }
+)
+BRIDGE_SETUP_REQUIRED = (
+    frozenset(
+        {
+            "adminme/bridge_helper_distribution.py",
+            "adminme/products/member/bridge_setup.py",
+            "adminme/tailscale_local.py",
+            "bootstrap/member_bridge_distribution.py",
+            "bootstrap/member_bridge_runtime_repair.py",
+            "tests/unit/bootstrap/test_member_bridge_runtime_repair.py",
+            "bootstrap/member_bridge_helper_app.py",
+            "bootstrap/member_bridge_permission_controller.py",
+            "bootstrap/install-member-bridge.sh",
+            "tests/unit/test_bridge_helper_distribution.py",
+            "tests/unit/bootstrap/test_member_bridge_mac_preparation.py",
+            "tests/acceptance/test_self_service_member_bridge_enrollment.py",
+            "tools/console-reference-harness/bridge-enrollment.mjs",
+            "tools/console-reference-harness/run-gate7.mjs",
+            "tools/gate7_visual_server.py",
+        }
+    )
+    | BRIDGE_SETUP_SHARED
+)
+BRIDGE_SETUP_PATHS = BRIDGE_SETUP_REQUIRED | HELPER_COMPONENT_PATHS | HELPER_TEST_PATHS
+
+
 ENROLLMENT_INGEST_PATH = "adminme/products/bridge/routers/ingest.py"
 GOOGLE_MODULE = "adminme/adapters/member_google_connections.py"
 GOOGLE_WIRING = "scripts/google_connection_wiring.json"
@@ -313,6 +346,7 @@ SCOPES = frozenset(
         "bridge-helper",
         "bridge-enrollment",
         "bridge-runtime",
+        "bridge-setup",
         "google-connections",
         "cos-google-workspace",
         "cos-recovery-history",
@@ -377,6 +411,7 @@ def choose_scope(
     cos_reminder_interfaces_equal: bool = False,
     updater_interfaces_equal: bool = False,
     cos_service_work_interfaces_equal: bool = False,
+    bridge_setup_interfaces_equal: bool = False,
 ) -> str:
     if not changes:
         return "system-wide"
@@ -384,6 +419,17 @@ def choose_scope(
         return "system-wide"
     if all(_prose(path) and status in {"A", "M", "D"} for status, path in changes):
         return "documentation" if interfaces_equal else "system-wide"
+    if (
+        bridge_setup_interfaces_equal
+        and all(
+            status in {"A", "M"}
+            and (path in BRIDGE_SETUP_PATHS | POLICY_PATHS or _prose(path))
+            and path_modes.get(path) == {_bridge_setup_mode(path)}
+            for status, path in changes
+        )
+        and any(path in BRIDGE_SETUP_REQUIRED for _, path in changes)
+    ):
+        return "bridge-setup"
     if (
         cos_service_work_interfaces_equal
         and all(
@@ -523,6 +569,135 @@ def choose_scope(
     ):
         return "bridge-enrollment"
     return "system-wide"
+
+
+def _bridge_setup_mode(path: str) -> str:
+    return "100755" if path == "bootstrap/install-member-bridge.sh" else "100644"
+
+
+def _bridge_setup_shared_source(path: str, source: str) -> tuple[str, bool] | None:
+    """Only the setup function, direct router wiring and exact CLI call may vary."""
+    if path.endswith("member.js"):
+        start, end = (
+            "function bridgeSettings(data) {",
+            "function privacySettings(data) {",
+        )
+        if source.count(start) != 1 or source.count(end) != 1:
+            return None
+        before, rest = source.split(start)
+        if end not in rest:
+            return None
+        _, after = rest.split(end)
+        return before + start + "\n}\n" + end + after, True
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return None
+    if path == "adminme/runtime/application.py":
+        imported = ast.parse(
+            "from adminme.products.member.bridge_setup import router as member_bridge_setup_router"
+        ).body[0]
+        included = ast.parse("app.include_router(member_bridge_setup_router)").body[0]
+        functions = [
+            n
+            for n in tree.body
+            if isinstance(n, ast.FunctionDef) and n.name == "create_application"
+        ]
+        if len(functions) != 1:
+            return None
+        containers = [tree.body, functions[0].body]
+        shapes = [ast.dump(imported), ast.dump(included)]
+        matches = [
+            [n for n in body if ast.dump(n) == shape]
+            for body, shape in zip(containers, shapes, strict=True)
+        ]
+        if [len(items) for items in matches] not in ([0, 0], [1, 1]):
+            return None
+        wired = bool(matches[0])
+        for body, matches_here in zip(containers, matches, strict=True):
+            for node in matches_here:
+                body.remove(node)
+    else:
+        imported = ast.parse(
+            "from adminme.tailscale_local import tailscale_executable"
+        ).body[0]
+        imports = [n for n in tree.body if ast.dump(n) == ast.dump(imported)]
+        if len(imports) > 1:
+            return None
+        function_name = (
+            "_tailscale_identity"
+            if path.startswith("bootstrap/")
+            else "_local_device_identity"
+        )
+        functions = [
+            n
+            for n in ast.walk(tree)
+            if isinstance(n, ast.FunctionDef) and n.name == function_name
+        ]
+        if len(functions) != 1:
+            return None
+        new_args = ast.parse(
+            '[tailscale_executable(), "status", "--json"]', mode="eval"
+        ).body
+        old_args = ast.parse('["tailscale", "status", "--json"]', mode="eval").body
+        env = ast.parse('{**os.environ, "TAILSCALE_BE_CLI": "1"}', mode="eval").body
+        calls = [
+            n
+            for n in ast.walk(functions[0])
+            if isinstance(n, ast.Call)
+            and ast.dump(n.func)
+            == ast.dump(ast.parse("subprocess.run", mode="eval").body)
+        ]
+        changed = [
+            n for n in calls if n.args and ast.dump(n.args[0]) == ast.dump(new_args)
+        ]
+        wired = bool(imports)
+        if len(changed) != len(imports):
+            return None
+        if wired:
+            call = changed[0]
+            environment = [
+                k
+                for k in call.keywords
+                if k.arg == "env" and ast.dump(k.value) == ast.dump(env)
+            ]
+            if len(environment) != 1:
+                return None
+            call.args[0] = old_args
+            call.keywords.remove(environment[0])
+            tree.body.remove(imports[0])
+    return ast.dump(tree, include_attributes=False), wired
+
+
+def _bridge_setup_dependency_fingerprint(
+    repository: Path, revision: str, entries: tuple[GitTreeEntry, ...]
+) -> tuple[str, bool] | None:
+    normalized: dict[str, str] = {}
+    wired: list[bool] = []
+    for path in BRIDGE_SETUP_SHARED:
+        entry = next((entry for entry in entries if entry.path == path), None)
+        if entry is None or entry.mode != "100644":
+            return None
+        result = _bridge_setup_shared_source(
+            path, _git(repository, "show", f"{revision}:{path}")
+        )
+        if result is None:
+            return None
+        normalized[path], present = result
+        wired.append(present)
+    allowed = BRIDGE_SETUP_PATHS | POLICY_PATHS
+    coordinates = sorted(
+        (entry.path, entry.mode, normalized.get(entry.path, entry.object_id))
+        for entry in entries
+        if entry.path in BRIDGE_SETUP_SHARED
+        or not (
+            entry.mode == _bridge_setup_mode(entry.path)
+            and (entry.path in allowed or _prose(entry.path))
+        )
+    )
+    return hashlib.sha256(
+        json.dumps(coordinates, separators=(",", ":")).encode()
+    ).hexdigest(), all(wired)
 
 
 def _enrollment_interface_fingerprint(entries: tuple[GitTreeEntry, ...]) -> str:
@@ -821,12 +996,24 @@ def select_scope(
     reminder_sources_present: dict[str, bool] = {}
     updater_fingerprints: dict[str, str] = {}
     updater_sources_present: dict[str, bool] = {}
+    setup_fingerprints: dict[str, str] = {}
+    setup_sources_present: dict[str, bool] = {}
     workspace_fingerprints: dict[str, str] = {}
     workspace_sources_present: dict[str, bool] = {}
     service_work_fingerprints: dict[str, str] = {}
     service_work_sources_present: dict[str, bool] = {}
     for revision in {base, head, checkout}:
         entries, _ = load_git_tree(repository, revision)
+        setup = _bridge_setup_dependency_fingerprint(repository, revision, entries)
+        setup_fingerprints[revision] = setup[0] if setup else ""
+        setup_paths = {
+            entry.path
+            for entry in entries
+            if entry.mode == _bridge_setup_mode(entry.path)
+        }
+        setup_sources_present[revision] = setup is not None and (
+            revision == base or (setup[1] and BRIDGE_SETUP_REQUIRED <= setup_paths)
+        )
         updater_fingerprints[revision] = _updater_dependency_fingerprint(entries)
         regular_paths = {entry.path for entry in entries if entry.mode == "100644"}
         workspace_fingerprints[revision] = _cos_google_workspace_dependency_fingerprint(
@@ -908,6 +1095,10 @@ def select_scope(
         ),
         bridge_runtime_interfaces_equal=len(set(bridge_runtime_fingerprints.values()))
         == 1,
+        bridge_setup_interfaces_equal=(
+            all(setup_sources_present.values())
+            and len(set(setup_fingerprints.values())) == 1
+        ),
         cos_service_work_interfaces_equal=(
             all(service_work_sources_present.values())
             and len(set(service_work_fingerprints.values())) == 1
@@ -938,6 +1129,7 @@ def select_scope(
         "cos_reminder_dependency_sha256": reminder_fingerprints[checkout],
         "updater_dependency_sha256": updater_fingerprints[checkout],
         "cos_service_work_dependency_sha256": service_work_fingerprints[checkout],
+        "bridge_setup_dependency_sha256": setup_fingerprints[checkout],
         "cos_google_workspace_dependency_sha256": workspace_fingerprints[checkout],
         "changes": [{"status": status, "path": path} for status, path in changes],
     }
@@ -951,6 +1143,7 @@ def required_workers(scope: str, platform: str) -> tuple[str, ...]:
         "bridge-helper": "bridge-helper-validation",
         "bridge-enrollment": "bridge-development",
         "bridge-runtime": "bridge-development",
+        "bridge-setup": "bridge-development",
         "google-connections": "google-connections-validation",
         "cos-google-workspace": "google-connections-validation",
         "cos-recovery-history": "cos-recovery-history-validation",
@@ -966,6 +1159,7 @@ def required_workers(scope: str, platform: str) -> tuple[str, ...]:
         "bridge-helper",
         "bridge-enrollment",
         "bridge-runtime",
+        "bridge-setup",
         "system-wide",
     }:
         workers += ("bridge-installed-runtime",)

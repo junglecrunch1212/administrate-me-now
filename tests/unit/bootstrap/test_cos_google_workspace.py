@@ -166,6 +166,7 @@ def test_shared_calendar_is_not_reattributed_to_cos() -> None:
         {"grant_purpose": "gmail-read-send"},
         {"scopes": ["https://www.googleapis.com/auth/tasks"]},
         {"scopes": []},
+        {"scopes": ["openid", "https://www.googleapis.com/auth/userinfo.email"]},
     ],
 )
 def test_member_mail_or_write_grants_never_gain_workspace_authority(

@@ -36,7 +36,12 @@ ROOT = Path(__file__).resolve().parents[3]
 
 def test_retained_interface_bytes_match_the_explicit_component_contract() -> None:
     for relative, expected in RUNTIME_INTERFACE_HASHES.items():
-        assert len(expected) == (2 if relative == "adminme/bridge_enrollment.py" else 1)
+        assert len(expected) == (
+            2
+            if relative
+            in {"adminme/bridge_enrollment.py", "bootstrap/bridge_enrollment.py"}
+            else 1
+        )
         assert hashlib.sha256((ROOT / relative).read_bytes()).hexdigest() in expected
     assert (
         "96caaabe2320f19a2201d94dd53bf93b06f2d12957d634519637cb1cbd6f220a"
@@ -44,11 +49,13 @@ def test_retained_interface_bytes_match_the_explicit_component_contract() -> Non
     )
 
 
-@pytest.mark.parametrize("changed", tuple(RUNTIME_INTERFACE_HASHES))
+@pytest.mark.parametrize(
+    "changed", (*RUNTIME_INTERFACE_HASHES, "adminme/tailscale_local.py")
+)
 def test_unknown_interface_bytes_are_refused_even_with_same_runtime_commit(
     tmp_path: Path, changed: str
 ) -> None:
-    for relative in RUNTIME_INTERFACE_HASHES:
+    for relative in [*RUNTIME_INTERFACE_HASHES, "adminme/tailscale_local.py"]:
         destination = tmp_path / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_bytes((ROOT / relative).read_bytes())
