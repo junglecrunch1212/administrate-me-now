@@ -77,6 +77,22 @@ static NSString *digestFile(int fd) {
     return result;
 }
 
+static NSString *libraryLoadFailure(const char *error) {
+    // dyld diagnostics can contain private paths and symbols. Classify only;
+    // never persist, print or return the original diagnostic.
+    NSString *detail = error ? [[NSString stringWithUTF8String:error] lowercaseString] : nil;
+    if ([detail containsString:@"code signature"] || [detail containsString:@"code signing"] ||
+        [detail containsString:@"library validation"] || [detail containsString:@"invalid info.plist"])
+        return @"python_library_dlopen_signature_rejected";
+    if ([detail containsString:@"incompatible architecture"] || [detail containsString:@"wrong architecture"])
+        return @"python_library_dlopen_architecture_mismatch";
+    if ([detail containsString:@"symbol not found"] || [detail containsString:@"undefined symbol"])
+        return @"python_library_dlopen_symbol_missing";
+    if ([detail containsString:@"library not loaded"] || [detail containsString:@"image not found"])
+        return @"python_library_dlopen_dependency_missing";
+    return @"python_library_dlopen_failed";
+}
+
 static BOOL canonicalDirectory(NSString *path) {
     char resolved[PATH_MAX];
     struct stat metadata;
@@ -206,8 +222,12 @@ static int launch(NSString *path) {
         close(libraryFD); return failure(parent, @"python_library_digest_invalid");
     }
     void *handle = dlopen(realLibrary, RTLD_NOW | RTLD_GLOBAL);
-    if (!handle || stat(realLibrary, &libraryAfter) || !unchanged(libraryBefore, libraryAfter)) {
-        close(libraryFD); return failure(parent, @"python_library_load_failed");
+    if (!handle) {
+        NSString *phase = libraryLoadFailure(dlerror());
+        close(libraryFD); return failure(parent, phase);
+    }
+    if (stat(realLibrary, &libraryAfter) || !unchanged(libraryBefore, libraryAfter)) {
+        close(libraryFD); return failure(parent, @"python_library_changed_during_load");
     }
     close(libraryFD);
     // Resolve the version check first, before using the pinned PyConfig ABI.

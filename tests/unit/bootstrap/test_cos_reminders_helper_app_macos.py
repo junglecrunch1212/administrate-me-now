@@ -96,6 +96,60 @@ def _library() -> Path:
     raise AssertionError("hosted macOS CPython has no shared library")
 
 
+def _copy_runtime_library(private_runtime: Path) -> Path:
+    original = _library()
+    framework = next(
+        (parent for parent in original.parents if parent.suffix == ".framework"),
+        None,
+    )
+    if framework is None:
+        library = private_runtime / "Python"
+        shutil.copyfile(original, library)
+        library.chmod(0o600)
+    else:
+        relative = original.relative_to(framework)
+        assert len(relative.parts) == 3 and relative.parts[0] == "Versions"
+        version = relative.parts[1]
+        copied_framework = private_runtime / framework.name
+        versions = copied_framework / "Versions"
+        versions.mkdir(parents=True, mode=0o700)
+        # A framework binary's signature includes its versioned Info.plist.
+        # Flattening Python into a standalone file invalidates that signature.
+        # Preserve vendor bytes and the complete selected version, without
+        # copying other installed versions or re-signing the test interpreter.
+        shutil.copytree(original.parent, versions / version, symlinks=True)
+        for path in copied_framework.rglob("*"):
+            if not path.is_symlink():
+                path.chmod(stat.S_IMODE(path.stat().st_mode) & ~0o022)
+        (versions / "Current").symlink_to(version)
+        for name in (original.name, "Headers", "Resources"):
+            assert (versions / version / name).exists()
+            (copied_framework / name).symlink_to(Path("Versions/Current") / name)
+        library = copied_framework / relative
+        (private_runtime / "Python").symlink_to(library.relative_to(private_runtime))
+        # setup-python legitimately adds pip/certificates to the installed
+        # resource tree. Verify the binary pages and signed Info.plist, which
+        # remain vendor-sealed; actual native dlopen is tested below.
+        subprocess.run(
+            [
+                "/usr/bin/codesign",
+                "--verify",
+                "--strict",
+                "--ignore-resources",
+                str(library),
+            ],
+            check=True,
+            capture_output=True,
+        )
+    assert (
+        hashlib.sha256(library.read_bytes()).digest()
+        == hashlib.sha256(original.read_bytes()).digest()
+    )
+    assert not library.stat().st_mode & 0o022
+    assert library.stat().st_uid == os.getuid()
+    return library
+
+
 @pytest.fixture(scope="module")
 def native_app(tmp_path_factory: pytest.TempPathFactory) -> Path:
     directory = tmp_path_factory.mktemp("native-reminders-app").resolve()
@@ -126,14 +180,7 @@ def release(tmp_path_factory: pytest.TempPathFactory) -> Path:
     )
     private_runtime = release / "native-fixture-runtime"
     private_runtime.mkdir(mode=0o700)
-    library_bytes = _library().read_bytes()
-    library = private_runtime / "Python"
-    library.write_bytes(library_bytes)
-    library.chmod(0o600)
-    assert (
-        hashlib.sha256(library.read_bytes()).digest()
-        == hashlib.sha256(library_bytes).digest()
-    )
+    _copy_runtime_library(private_runtime)
     (release / ".venv/pyvenv.cfg").chmod(0o600)
     for path in (release, release / ".venv", release / ".venv/bin"):
         path.chmod(0o700)
@@ -148,7 +195,7 @@ def _request(
 ) -> tuple[Path, dict[str, object]]:
     directory = tmp_path.resolve() / "private-request"
     directory.mkdir(mode=0o700)
-    library = release / "native-fixture-runtime/Python"
+    library = (release / "native-fixture-runtime/Python").resolve()
     now = int(time.time() * 1000)
     value = {
         "contract": "cos-reminders-helper-request-v1",
@@ -391,3 +438,26 @@ def test_writable_interpreter_coordinates_remain_rejected(
         }
     finally:
         target.chmod(original_mode)
+
+
+def test_native_library_loader_failure_is_fixed_and_redacted(
+    native_app: Path, release: Path, tmp_path: Path
+) -> None:
+    invalid = tmp_path.resolve() / "private-invalid-library"
+    invalid.write_bytes(b"This is not a Mach-O library.\n")
+    invalid.chmod(0o600)
+    request, _ = _request(
+        tmp_path,
+        release,
+        python_library=str(invalid),
+        python_library_sha256=hashlib.sha256(invalid.read_bytes()).hexdigest(),
+    )
+    completed = _execute(native_app, request)
+    assert completed.returncode != 0
+    result = json.loads(request.with_name("result.json").read_bytes())
+    assert result == {
+        "contract": "cos-reminders-helper-error-v1",
+        "status": "failed",
+        "error": "python_library_dlopen_failed",
+    }
+    assert not completed.stdout and not completed.stderr

@@ -367,6 +367,17 @@ def test_worker_supports_pre_client_protected_selection_contract(monkeypatch, tm
         ("python_initialization_failed", False, "python_initialization_failed"),
         ("PermissionError", False, "PermissionError"),
         ("TimeoutError", False, "TimeoutError"),
+        *[
+            (code, False, code)
+            for code in (
+                "python_library_dlopen_signature_rejected",
+                "python_library_dlopen_dependency_missing",
+                "python_library_dlopen_architecture_mismatch",
+                "python_library_dlopen_symbol_missing",
+                "python_library_dlopen_failed",
+                "python_library_changed_during_load",
+            )
+        ],
         ("private provider detail", False, "unexpected_native_response"),
         ("PermissionError", True, "unexpected_native_response"),
     ],
@@ -398,6 +409,7 @@ def test_every_fixed_native_failure_remains_diagnosable():
     root = Path(__file__).parents[3]
     source = (root / "bootstrap/native/cos_reminders_launcher.m").read_text()
     codes = set(re.findall(r'failure\(parent, @"([a-z_]+)"', source))
+    codes.update(re.findall(r'return @"(python_library_[a-z_]+)"', source))
     assert codes and codes <= client.NATIVE_ERROR_CODES
     for code in codes:
         assert client.NativeHelperError(code).code == code
