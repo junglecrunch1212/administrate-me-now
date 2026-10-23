@@ -44,13 +44,16 @@ export function registerHooks(api: OpenClawPluginApi, runtime: PluginRuntime): v
            event.params.channel === "imessage" || event.params.channel === "bluebubbles")) {
         return { block: true, blockReason: "Reply normally for an authorized private self reply; other sends require exact AdministrateMe approval." };
       }
-      if (event.toolName === "administrateme_self_reminder") {
+      if (event.toolName === "administrateme_service_follow_up" && !runtime.transport.config.serviceWorkEnabled) {
+        return { block: true, blockReason: "CoS internal work is disabled." };
+      }
+      if (event.toolName === "administrateme_self_reminder" || event.toolName === "administrateme_service_follow_up") {
         if (!bindReminderTool(runtime, {
           runId: typeof context.runId === "string" ? context.runId : undefined,
           sessionKey: typeof context.sessionKey === "string" ? context.sessionKey : undefined,
           agentId: typeof context.agentId === "string" ? context.agentId : undefined,
         }, typeof context.toolCallId === "string" ? context.toolCallId : event.toolCallId)) {
-          return { block: true, blockReason: "A reminder requires this turn's acknowledged private member request." };
+          return { block: true, blockReason: "This action requires this turn's acknowledged private member request." };
         }
         return;
       }

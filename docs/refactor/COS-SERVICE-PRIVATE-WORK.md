@@ -102,7 +102,7 @@ accepted execution, not completed work. Read back the work/history through the
 service state tool to establish the actual result. The internal `webchat`
 channel sentinel is accepted only without recipient, sender or account routing.
 A member cannot select this authority by adding a field to a chat request.
-Automatic intake and progress receipts from member chats remain a follow-up.
+The bounded private iMessage intake and progress receipt below use current member authority; they do not admit member sessions to these four private tools.
 
 ## Effective capability matrix
 
@@ -165,8 +165,9 @@ permission, credential or provider destination is changed by implementation.
    provider acquisition/current-state indexing not already supported. Own Gmail
    metadata and policy-permitted plaintext snippets are implemented below; Apple/Drive and wider provider content remain later slices; own Calendar/Tasks
    current facts are implemented below.
-2. Authorized member instruction → bounded CoS work with explicit provenance
-   and audience-aware progress receipts; no automatic private-history copy.
+2. Broader member-channel intake and automatic internal execution. The private
+   iMessage instruction → internal follow-up → same-member status path below is
+   implemented; portal/group inputs and automatic background starts remain later.
 3. One exact service-owned provider workspace at a time, with supported verbs,
    read-back, consent and reconciliation; retain all personal integrations.
 4. One useful durable workflow using existing OpenClaw trigger/wait facilities:
@@ -289,3 +290,42 @@ use that same signed app; another process grant does not authorize acquisition.
 Install/consent/read back the independent component before central activation,
 as described in `MAC-MINI-OPERATIONS.md`. This does not configure Apple Calendar
 or Notes, schedule notifications, or enable Reminders writes.
+
+## Private member instructions into internal follow-up
+
+**MODERNIZE** the existing native private iMessage intake and `task.created@4`
+service work, preserving the delegated-work and requested-reminder workflows.
+`administrateme_service_follow_up` creates one internal follow-up from an exact
+excerpt (at most 2,000 characters) of the current acknowledged member instruction.
+Use existing delegated work/obligation tools when they already satisfy the request.
+For a requested scheduled text, use `administrateme_self_reminder`; internal work
+never substitutes for its timer or claims delivery.
+
+The native message hook and current-turn/tool-call binding supply provenance; the
+model cannot choose another source, member, scope or recipient. The Python route
+independently checks the durable exact inbound receipt, member agent/session,
+current standing read delegation and effective source policy. Service-self work
+ownership does not require a broader delegated create/manage grant. A send grant
+is not required for internal organization and is not created by this tool. The
+service owns the new canonical task; the original encrypted member instruction
+stays member-private, and its exact source/grant/audience/sensitivity restrictions
+remain on the derived work. No private transcript is copied wholesale.
+
+A repeated identical instruction receipt returns the same work; a conflicting
+excerpt is rejected. CoS can read and continue it with her existing private work
+tools after restart/replay. The member can request status with the returned
+`follow_up_source_id` from a fresh private message. That receipt contains only
+identifiers, workflow status and the original requester audience, never canonical
+private descriptions, notes or source unions. Knowing the reference does not
+authorize another member. Source-policy or original-grant loss blocks reuse.
+
+This registers no timer, background agent run or provider action, and retains no
+new permission. A normal final answer still follows existing independent reply
+authority. Recovery uses the existing `serviceWorkEnabled=false` native control
+and Gateway restart; already-written v4 records remain readable by the existing
+schema-aware runtime. No new persistent schema is introduced. Focused production
+router tests cover real forwarded intake, restart/replay, native-service
+continuation, wrong-member/source/session denial, policy/grant revocation and
+zero provider effects. Native plugin hook tests cover current-input binding, no
+new approval form, disabled work and no borrowed send authority; the existing
+reminder/native service suites remain in the affected hosted lane.
