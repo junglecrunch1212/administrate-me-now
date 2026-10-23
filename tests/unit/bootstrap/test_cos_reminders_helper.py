@@ -1,0 +1,361 @@
+"""Real client/worker/native-reader composition with isolated OS transport fakes."""
+
+from __future__ import annotations
+
+import json
+import os
+import time
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
+
+import pytest
+from pydantic import ValidationError
+
+from adminme.adapters import cos_reminders_helper as client
+from bootstrap import cos_reminders_helper_app as package
+from bootstrap import cos_reminders_native_worker as worker
+from tests.unit.bootstrap import test_cos_apple_reminders as acquisition
+
+
+def _transport(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    selected = acquisition._selection().model_copy(update={"os_uid": os.getuid()})
+    coordinates = {
+        "release_root": "/fixture/protected",
+        "release_commit": "e" * 40,
+        "python_executable": "/fixture/protected/.venv/bin/python",
+        "python_library": "/fixture/Python",
+        "python_library_sha256": "f" * 64,
+    }
+    state: Any = SimpleNamespace(
+        calls=[], request=None, output=None, permission=3, mutation=None
+    )
+    monkeypatch.setattr(client.sys, "platform", "darwin")
+    monkeypatch.setattr(client, "release_coordinates", lambda root=None: coordinates)
+    monkeypatch.setattr(
+        client, "local_device_identity", lambda: ("a" * 64, os.getuid())
+    )
+    monkeypatch.setattr(
+        package, "verify_helper_app", lambda path: selected.native_helper.model_dump()
+    )
+    monkeypatch.setattr(worker, "permission_status", lambda: state.permission)
+    monkeypatch.setattr(worker, "run_with_main_loop", worker.perform)
+
+    def identity(request):
+        return {
+            **selected.native_helper.model_dump(),
+            "native_executable": selected.native_helper.app_path
+            + "/Contents/MacOS/"
+            + package.EXECUTABLE,
+            "native_pid": 123,
+            **{
+                key: request[key]
+                for key in (
+                    "python_executable",
+                    "release_root",
+                    "release_commit",
+                    "python_library_sha256",
+                    "device_identity_sha256",
+                    "os_uid",
+                )
+            },
+        }
+
+    monkeypatch.setattr(worker, "native_identity", identity)
+
+    def launch(args, **kwargs):
+        assert args[:6] == [
+            "/usr/bin/open",
+            "-W",
+            "-n",
+            "-a",
+            selected.native_helper.app_path,
+            "--args",
+        ]
+        assert kwargs["timeout"] == 115
+        path = Path(args[6])
+        assert path.stat().st_mode & 0o777 == 0o600
+        assert path.parent.stat().st_mode & 0o777 == 0o700
+        request = json.loads(path.read_text())
+        state.calls.append(request["operation"])
+        state.request = request
+        claimed = path.with_name("claimed.json")
+        path.rename(
+            claimed
+        )  # native claim is separately proved by the macOS process test.
+        code = worker.run(claimed)
+        output = path.with_name("result.json")
+        state.output = json.loads(output.read_text())
+        if state.mutation:
+            state.mutation(state.output)
+            output.write_text(json.dumps(state.output))
+        return SimpleNamespace(returncode=code)
+
+    monkeypatch.setattr(client.subprocess, "run", launch)
+    return selected, state
+
+
+def test_status_never_requests_permission_or_reads_provider(monkeypatch, tmp_path):
+    selected, state = _transport(monkeypatch, tmp_path)
+    monkeypatch.setattr(acquisition, "_selection", lambda: selected)
+    native, os_state = acquisition._native_reader(monkeypatch)
+    monkeypatch.setattr(
+        native,
+        "request_reminders_permission",
+        lambda: pytest.fail("status requested permission"),
+    )
+    state.permission = 0
+    assert client.invoke(selected.native_helper, "status", {}) == {
+        "authorization_status": 0
+    }
+    assert os_state.allocated == 0 and os_state.calls == []
+    with pytest.raises(PermissionError):
+        client.HelperRemindersReader().read(selected)
+    assert os_state.allocated == 0
+
+
+def test_same_helper_exact_read_and_empty_snapshot_are_proved(monkeypatch, tmp_path):
+    selected, state = _transport(monkeypatch, tmp_path)
+    native, os_state = acquisition._native_reader(monkeypatch)
+    reader = client.HelperRemindersReader()
+    snapshot = reader.read(selected)
+    assert snapshot.list_id == selected.list_id and len(snapshot.items) == 1
+    assert snapshot.items[0].last_modified_at.isoformat() == "2026-10-01T00:00:00+00:00"
+    monkeypatch.setattr(
+        native.NativeRemindersReader,
+        "read",
+        lambda self, selection: acquisition.SelectedSnapshot(
+            selection.source_id, selection.list_id, "Fixture list", ()
+        ),
+    )
+    evidence = acquisition.read_back(
+        selected,
+        reader_factory=lambda: reader,
+        identity=lambda: ("a" * 64, os.getuid()),
+    )
+    assert evidence["item_count"] == 0
+    assert evidence["permission_verified_for_native_helper"] is True
+    assert state.calls == ["read", "read"] and os_state.converted == 1
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "nonce",
+        "operation",
+        "bundle",
+        "executable",
+        "artifact",
+        "release",
+        "uid",
+        "status",
+        "extra",
+    ],
+)
+def test_other_process_and_unexpected_replies_fail_closed(monkeypatch, tmp_path, fault):
+    selected, state = _transport(monkeypatch, tmp_path)
+    acquisition._native_reader(monkeypatch)
+
+    def mutate(output):
+        if fault == "nonce":
+            output["nonce"] = "0" * 32
+        elif fault == "operation":
+            output["operation"] = "request"
+        elif fault == "bundle":
+            output["identity"]["bundle_identifier"] = "org.python.python"
+        elif fault == "executable":
+            output["identity"]["native_executable"] = (
+                "/fixture/Other.app/Contents/MacOS/main"
+            )
+        elif fault == "artifact":
+            output["identity"]["artifact_sha256"] = "0" * 64
+        elif fault == "release":
+            output["identity"]["release_commit"] = "0" * 40
+        elif fault == "uid":
+            output["identity"]["os_uid"] += 1
+        elif fault == "status":
+            output["result"]["authorization_status"] = 0
+        else:
+            output["unexpected"] = True
+
+    state.mutation = mutate
+    with pytest.raises((PermissionError, ValidationError)):
+        client.HelperRemindersReader().read(selected)
+
+
+@pytest.mark.parametrize("fault", ["permission", "device", "source", "foreign-item"])
+def test_request_does_not_emit_unverified_snapshot(monkeypatch, tmp_path, fault):
+    selected, state = _transport(monkeypatch, tmp_path)
+    native, os_state = acquisition._native_reader(monkeypatch)
+    if fault == "permission":
+        os_state.permission = 0
+    elif fault == "device":
+        selected = selected.model_copy(update={"device_identity_sha256": "0" * 64})
+    elif fault == "source":
+        os_state.source_id = "unreviewed-source"
+    else:
+        monkeypatch.setattr(
+            native.NativeRemindersReader,
+            "read",
+            lambda self, selected: acquisition.SelectedSnapshot(
+                selected.source_id,
+                selected.list_id,
+                "Fixture",
+                (acquisition._item(list_identifier="unreviewed-list"),),
+            ),
+        )
+    with pytest.raises(PermissionError):
+        client.HelperRemindersReader().read(selected)
+
+
+def test_explicit_request_alone_never_counts_as_exact_source_read(
+    monkeypatch, tmp_path
+):
+    selected, state = _transport(monkeypatch, tmp_path)
+    native, os_state = acquisition._native_reader(monkeypatch)
+    state.permission = 0
+    calls = []
+    monkeypatch.setattr(
+        native, "request_reminders_permission", lambda: calls.append("requested")
+    )
+    with pytest.raises(PermissionError):
+        client.invoke(selected.native_helper, "request", {})
+    assert calls == ["requested"] and os_state.allocated == 0
+    state.permission = 3
+    assert client.invoke(selected.native_helper, "request", {}) == {
+        "authorization_status": 3
+    }
+    assert os_state.allocated == 0
+
+
+def _request():
+    now = int(time.time() * 1000)
+    return {
+        "contract": "cos-reminders-helper-request-v1",
+        "nonce": "a" * 32,
+        "issued_at_ms": now,
+        "expires_at_ms": now + 100000,
+        "operation": "status",
+        "release_root": "/fixture/protected",
+        "release_commit": "b" * 40,
+        "python_executable": "/fixture/protected/.venv/bin/python",
+        "python_library": "/fixture/Python",
+        "python_library_sha256": "c" * 64,
+        "device_identity_sha256": "d" * 64,
+        "os_uid": os.getuid(),
+        "payload": {},
+    }
+
+
+@pytest.mark.parametrize(
+    "fault",
+    ["stale", "future", "ttl", "uid", "type", "route", "payload", "extra", "release"],
+)
+def test_worker_rejects_invalid_requests_before_identity_or_provider(fault):
+    request = _request()
+    if fault == "stale":
+        request["expires_at_ms"] = request["issued_at_ms"] - 1
+    elif fault == "future":
+        request["issued_at_ms"] += 10000
+    elif fault == "ttl":
+        request["expires_at_ms"] += 120000
+    elif fault == "uid":
+        request["os_uid"] += 1
+    elif fault == "type":
+        request["os_uid"] = True
+    elif fault == "route":
+        request["operation"] = "execute"
+    elif fault == "payload":
+        request["payload"] = {"script": "unreviewed"}
+    elif fault == "extra":
+        request["command"] = "unreviewed"
+    else:
+        request["python_executable"] = "/fixture/other/.venv/bin/python"
+    with pytest.raises((ValueError, PermissionError)):
+        worker.validate_request(request)
+
+
+def test_worker_claim_prevents_replay_and_redacts_failure(monkeypatch, tmp_path):
+    tmp_path.chmod(0o700)
+    path = tmp_path / "claimed.json"
+    path.write_text(json.dumps(_request()))
+    path.chmod(0o600)
+    calls = []
+
+    def wrong_identity(request):
+        calls.append("identity")
+        raise PermissionError("private provider detail that must not leave the helper")
+
+    monkeypatch.setattr(worker, "native_identity", wrong_identity)
+    assert worker.run(path) == 1
+    first = (tmp_path / "result.json").read_text()
+    assert "private provider" not in first and "PermissionError" in first
+    (tmp_path / "result.json").unlink()
+    assert worker.run(path) == 1
+    assert calls == ["identity"]
+    assert "FileExistsError" in (tmp_path / "result.json").read_text()
+
+
+def test_missing_helper_configuration_never_falls_back_to_generic_python():
+    value = acquisition._selection().model_dump()
+    del value["native_helper"]
+    with pytest.raises(ValidationError):
+        acquisition.CoSRemindersSelection.model_validate(value)
+
+
+@pytest.mark.asyncio
+async def test_actual_helper_client_adapter_persists_facts_then_denial_preserves_history(
+    monkeypatch, tmp_path, runtime
+):
+    selected, state = _transport(monkeypatch, tmp_path)
+    monkeypatch.setattr(acquisition, "_selection", lambda: selected)
+    native, os_state = acquisition._native_reader(monkeypatch)
+    ctx, log = runtime
+    adapter = acquisition._adapter(tmp_path, acquisition.Reader())
+    adapter._device_identity = lambda: ("a" * 64, os.getuid())
+    adapter._reader_factory = client.HelperRemindersReader
+    try:
+        await adapter.start(ctx=ctx)
+        facts = await acquisition._facts(log)
+        assert [row["type"] for row in facts] == ["list.created", "list_item.added"]
+        assert facts[-1]["payload"]["member_id"] is None
+        state.permission = 0
+        with pytest.raises(PermissionError):
+            await adapter._poll_once(ctx=ctx)
+        assert await acquisition._facts(log) == facts
+    finally:
+        await adapter.stop()
+
+
+# Reuse the production encrypted-log composition; no alternate persistence fixture.
+runtime = acquisition.runtime
+
+
+def test_native_string_subclasses_preserve_notes():
+    class NativeString(str):
+        pass
+
+    result = worker._wire({"notes": NativeString("Private fixture text")})
+    assert result == {"notes": "Private fixture text"}
+    assert type(result["notes"]) is str
+
+
+def test_worker_supports_pre_client_protected_selection_contract(monkeypatch, tmp_path):
+    from pydantic import create_model
+    from adminme.adapters import cos_apple_reminders as binding
+
+    selected, state = _transport(monkeypatch, tmp_path)
+    acquisition._native_reader(monkeypatch)
+    legacy = create_model(
+        "LegacySelection",
+        __config__={"extra": "forbid", "strict": True},
+        **{
+            key: (field.annotation, field)
+            for key, field in binding.CoSRemindersSelection.model_fields.items()
+            if key != "native_helper"
+        },
+    )
+    monkeypatch.setattr(binding, "CoSRemindersSelection", legacy)
+    result = client.HelperRemindersReader().read(selected)
+    assert result.list_id == selected.list_id and len(result.items) == 1
+    assert state.calls == ["read"]

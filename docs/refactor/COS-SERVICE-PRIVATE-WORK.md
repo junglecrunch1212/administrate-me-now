@@ -283,6 +283,9 @@ does not erase already-authorized history. Production proof is
 loaded adapter into the encrypted application and reads context and a private
 follow-up through the native service API.
 
-Setup still requires an exact source/list selection and current permission for
-the service runtime on its own computer. This does not configure Apple Calendar
+Setup requires an exact source/list selection and current permission for the
+pinned native CoS Reminders helper on its own computer. Setup and normal polling
+use that same signed app; another process grant does not authorize acquisition.
+Install/consent/read back the independent component before central activation,
+as described in `MAC-MINI-OPERATIONS.md`. This does not configure Apple Calendar
 or Notes, schedule notifications, or enable Reminders writes.

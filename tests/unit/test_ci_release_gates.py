@@ -1104,6 +1104,8 @@ def test_google_release_requires_production_packaged_privacy_recovery_and_types(
         "test_member_google_connections.py",
         "test_cos_google_workspace.py",
         "test_cos_apple_reminders.py",
+        "test_cos_reminders_helper.py",
+        "test_cos_reminders_helper_app.py",
         "test_cos_apple_reminders_context.py",
         "test_cos_service_planning_context.py",
         "test_cos_service_working_context.py",
@@ -2637,6 +2639,7 @@ def test_cos_apple_reminders_never_exempts_outside_contracts_or_tests(
         "none",
         "missing-proof",
         "missing-context-proof",
+        "missing-native-proof",
         "mode",
         "unknown-test",
         "runtime",
@@ -2653,6 +2656,8 @@ def test_cos_apple_reminders_checks_exact_merge_tree_and_required_proof(
         target.unlink()
     elif defect == "missing-context-proof":
         (path / "tests/acceptance/test_cos_apple_reminders_context.py").unlink()
+    elif defect == "missing-native-proof":
+        (path / "tests/unit/bootstrap/test_cos_reminders_helper_macos.py").unlink()
     elif defect == "mode":
         target.chmod(0o755)
     elif defect == "unknown-test":
@@ -2720,3 +2725,14 @@ def test_cos_apple_reminders_fingerprint_binds_every_other_byte_and_mode() -> No
         assert _cos_apple_reminders_dependency_fingerprint(
             base
         ) != _cos_apple_reminders_dependency_fingerprint((*base, executable))
+
+
+def test_cos_native_process_proof_is_required_only_on_macos_worker() -> None:
+    for filename, *_ in RELEASE_JOBS:
+        job = _workflow(filename)["jobs"]["google-connections-validation"]
+        commands = "\n".join(step.get("run", "") for step in job["steps"])
+        for name in (
+            "test_cos_reminders_helper_app_macos.py",
+            "test_cos_reminders_helper_macos.py",
+        ):
+            assert (name in commands) == ("macos" in filename)

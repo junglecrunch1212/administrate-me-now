@@ -396,6 +396,8 @@ jobs:
             --junitxml="$RUNNER_TEMP/google-connections.xml" \
             tests/unit/bootstrap/test_cos_google_workspace.py \
             tests/unit/bootstrap/test_cos_apple_reminders.py \
+            tests/unit/bootstrap/test_cos_reminders_helper.py \
+            tests/unit/bootstrap/test_cos_reminders_helper_app.py \
             tests/acceptance/test_cos_apple_reminders_context.py \
             tests/acceptance/test_cos_service_planning_context.py \
             tests/acceptance/test_cos_service_working_context.py \

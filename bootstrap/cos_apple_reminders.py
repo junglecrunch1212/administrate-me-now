@@ -1,6 +1,6 @@
 """Prepare one reviewed CoS Reminders list for existing guarded activation.
 
-Run only the deployed helper with private exact source/list/device evidence.
+Run the protected setup controller with private exact source/list/device evidence.
 This reads the selected source. Only --request-permission opens OS consent;
 no command changes provider data.
 """
@@ -21,15 +21,13 @@ from adminme.adapters.cos_apple_reminders import (
     CoSRemindersLookup,
     CoSRemindersPolicy,
     CoSRemindersSelection,
+    NativeHelperBinding,
     local_device_identity,
     policy_from_config,
     selected_entries,
     verify_device,
 )
-from adminme.adapters.cos_apple_reminders_native import (
-    NativeRemindersReader,
-    request_reminders_permission,
-)
+from adminme.adapters.cos_reminders_helper import HelperRemindersReader, invoke
 
 
 def prepare_configuration(
@@ -64,7 +62,7 @@ def prepare_configuration(
 def read_back(
     selection: CoSRemindersSelection,
     *,
-    reader_factory: Callable[[], Any] = NativeRemindersReader,
+    reader_factory: Callable[[], Any] = HelperRemindersReader,
     identity: Callable[[], tuple[str, int]] = local_device_identity,
 ) -> dict[str, Any]:
     verify_device(selection, identity())
@@ -80,7 +78,8 @@ def read_back(
         "device_verified": True,
         "native_source_verified": True,
         "selected_list_verified": True,
-        "permission_verified_for_this_process": True,
+        "permission_verified_for_native_helper": True,
+        "native_helper_artifact_sha256": selection.native_helper.artifact_sha256,
         "item_count": len(snapshot.items),
         "provider_write_count": 0,
     }
@@ -89,15 +88,25 @@ def read_back(
 def inspect_selection(
     lookup: CoSRemindersLookup,
     *,
-    reader_factory: Callable[[], Any] = NativeRemindersReader,
+    native_helper: NativeHelperBinding | None = None,
+    release_root: Path | None = None,
+    reader_factory: Callable[[], Any] | None = None,
     identity: Callable[[], tuple[str, int]] = local_device_identity,
 ) -> dict[str, Any]:
     device_digest, uid = identity()
-    resource = reader_factory().inspect_selection(lookup)
+    if reader_factory is not None:
+        resource = reader_factory().inspect_selection(lookup)
+    else:
+        if native_helper is None:
+            raise ValueError("inspection requires the reviewed native helper receipt")
+        resource = HelperRemindersReader(release_root=release_root).inspect_selection(
+            lookup, native_helper
+        )
     return {
         "contract": "cos-apple-reminders-inspection-v1",
         "requires_source_ownership_review": True,
         "resource": resource,
+        "native_helper": native_helper.model_dump() if native_helper else None,
         "device_identity_sha256": device_digest,
         "os_uid": uid,
         "provider_write_count": 0,
@@ -127,21 +136,44 @@ def main() -> None:
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--selection", type=Path)
     mode.add_argument(
+        "--status",
+        action="store_true",
+        help="Native app permission status; never prompts",
+    )
+    mode.add_argument(
         "--inspect",
         type=Path,
         help="Private exact-title/type metadata request; no content or activation",
     )
     parser.add_argument("--previous-config", type=Path)
+    parser.add_argument("--helper-receipt", type=Path)
+    parser.add_argument(
+        "--runtime-release",
+        type=Path,
+        help="Compatible protected release used by the native app before central activation",
+    )
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument(
         "--request-permission",
         action="store_true",
-        help="Explicitly request Reminders access for this verified setup process",
+        help="Explicitly request Reminders access for the installed native app",
     )
     args = parser.parse_args()
     if args.output.exists() or args.output.is_symlink():
         raise ValueError("output must be a new private preparation file")
-    if args.inspect:
+    binding: NativeHelperBinding | None = None
+    if args.status or args.inspect:
+        if args.helper_receipt is None:
+            raise ValueError("native setup requires --helper-receipt")
+        binding = NativeHelperBinding.model_validate(_private_json(args.helper_receipt))
+    if args.status:
+        assert binding is not None
+        if args.request_permission or args.previous_config:
+            raise ValueError("status never prompts or prepares configuration")
+        prepared = invoke(binding, "status", {}, release_root=args.runtime_release)
+        evidence = {"status": "native_permission_status", **prepared}
+    elif args.inspect:
+        assert binding is not None
         if args.previous_config:
             raise ValueError(
                 "metadata inspection does not prepare adapter configuration"
@@ -149,8 +181,10 @@ def main() -> None:
         lookup = CoSRemindersLookup.model_validate(_private_json(args.inspect))
         local_device_identity()  # Confirm this is a macOS work-user process before consent.
         if args.request_permission:
-            request_reminders_permission()
-        prepared = inspect_selection(lookup)
+            invoke(binding, "request", {}, release_root=args.runtime_release)
+        prepared = inspect_selection(
+            lookup, native_helper=binding, release_root=args.runtime_release
+        )
         evidence = {
             "status": "inspected_not_authorized",
             "matched_list_count": 1,
@@ -163,8 +197,21 @@ def main() -> None:
         prepared = prepare_configuration(_private_json(args.previous_config), selection)
         if args.request_permission:
             verify_device(selection, local_device_identity())
-            request_reminders_permission()
-        evidence = {"status": "prepared_not_activated", **read_back(selection)}
+            invoke(
+                selection.native_helper,
+                "request",
+                {},
+                release_root=args.runtime_release,
+            )
+        evidence = {
+            "status": "prepared_not_activated",
+            **read_back(
+                selection,
+                reader_factory=lambda: HelperRemindersReader(
+                    release_root=args.runtime_release
+                ),
+            ),
+        }
     descriptor = os.open(
         args.output, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600
     )

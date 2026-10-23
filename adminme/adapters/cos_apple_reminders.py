@@ -8,6 +8,7 @@ import os
 import plistlib
 import subprocess
 import sys
+from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
@@ -57,9 +58,27 @@ class CoSRemindersLookup(BaseModel):
     source_id: str | None = Field(default=None, min_length=1, max_length=1000)
 
 
+class NativeHelperBinding(BaseModel):
+    """An immutable, separately installed permission-bearing native app."""
+
+    model_config = {"extra": "forbid", "strict": True, "frozen": True}
+    app_path: str = Field(min_length=1, max_length=4096)
+    artifact_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    bundle_identifier: Literal["com.administrateme.cos-reminders-helper"]
+
+    @field_validator("app_path")
+    @classmethod
+    def exact_app_path(cls, value: str) -> str:
+        path = Path(value)
+        if not path.is_absolute() or str(path) != value or path.suffix != ".app":
+            raise ValueError("native helper requires an exact absolute app path")
+        return value
+
+
 class CoSRemindersSelection(BaseModel):
     model_config = {"extra": "forbid", "strict": True, "frozen": True}
 
+    native_helper: NativeHelperBinding
     adapter_id: str = Field(min_length=1, max_length=240)
     source_id: str = Field(min_length=1, max_length=1000)
     list_id: str = Field(min_length=1, max_length=1000)
