@@ -900,3 +900,20 @@ def test_recovery_rechecks_state_after_quiescence(
     manager._services.stop = stop  # noqa: SLF001
     assert manager.reuse_recovery_evidence(pending=pending, candidate=candidate) is None
     assert calls == ["stop", "start"]
+
+
+@pytest.mark.parametrize("key", ["backup", "events"])
+def test_recovery_rechecks_keys_after_quiescence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, key: str
+) -> None:
+    manager, _paths, candidate, pending, _receipt, _artifact, keys, calls, _ = (
+        _reusable_recovery_fixture(tmp_path, monkeypatch)
+    )
+
+    def stop() -> None:
+        calls.append("stop")
+        keys[key] = b"r" * 32
+
+    manager._services.stop = stop  # noqa: SLF001
+    assert manager.reuse_recovery_evidence(pending=pending, candidate=candidate) is None
+    assert calls == ["stop", "start"]

@@ -1779,6 +1779,16 @@ class BackupManager:
                 watermark_sha,
             ):
                 return None
+            references = self._references()
+            if not hmac.compare_digest(
+                key_binding,
+                _recovery_key_binding(
+                    self.store.get(references["backup"]),
+                    self.store.get(references["event_log"]),
+                    current_backup,
+                ),
+            ):
+                return None
             return (
                 {
                     "status": "reused",
