@@ -221,6 +221,13 @@ def reconcile_member_topology(paths: DeploymentPaths) -> dict[str, Any]:
             isinstance(row, dict) and str(row.get("id") or "").startswith("adminme-")
         )
     ]
+    existing_member_defaults = {
+        row["id"]: row["default"]
+        for row in existing_agents
+        if isinstance(row, dict)
+        and str(row.get("id") or "").startswith("adminme-")
+        and "default" in row
+    }
     openclaw_root = paths.instance_dir / "openclaw"
     template_workspace = openclaw_root / "workspace"
     member_agents: list[dict[str, Any]] = []
@@ -240,11 +247,27 @@ def reconcile_member_topology(paths: DeploymentPaths) -> dict[str, Any]:
                 "workspace": str(member_workspace),
             }
         )
+        if member_agents[-1]["id"] in existing_member_defaults:
+            member_agents[-1]["default"] = existing_member_defaults[
+                member_agents[-1]["id"]
+            ]
         if isinstance(adapter_config.get("cos_channel_acquisition"), dict):
             from bootstrap.cos_imessage import MEMBER_TOOLS
 
             member_agents[-1]["tools"] = {"allow": list(MEMBER_TOOLS)}
-    if not retained_agents and member_agents:
+    # A service agent must not displace the member default on the next upgrade.
+    # Also repair the prior reconciler's lost flag when the only retained agent
+    # is the canonical CoS and nobody has an explicit default selection.
+    only_service_retained = all(
+        isinstance(row, dict)
+        and row.get("id") == service_agent_id(COS_SERVICE_PRINCIPAL_ID)
+        for row in retained_agents
+    )
+    has_default = any(
+        isinstance(row, dict) and row.get("default") is True
+        for row in [*retained_agents, *member_agents]
+    )
+    if only_service_retained and member_agents and not has_default:
         member_agents[0]["default"] = True
     agents["list"] = retained_agents + member_agents
 
