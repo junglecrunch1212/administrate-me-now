@@ -8193,10 +8193,17 @@ async def chat_history(
 ) -> dict[str, Any]:
     runtime = _runtime(request)
     _, session_key = _require_chat(runtime, session)
+    from adminme.finance.disclosure import FinanceDisclosureError, check_disclosure
+
     try:
+        await check_disclosure(runtime, session, session_key)
         items = await runtime.member_chat.history(
             session_key=session_key, limit=min(max(limit, 1), 50)
         )
+        await check_disclosure(runtime, session, session_key)
+        _require_chat(runtime, session)
+    except FinanceDisclosureError as exc:
+        raise HTTPException(403, str(exc)) from None
     except MemberChatError as exc:
         runtime.member_chat_last_failure = {
             "code": exc.code,
@@ -8225,23 +8232,92 @@ async def chat_stream(
     correlation_id = session.correlation_id or str(uuid.uuid4())
 
     async def generate() -> AsyncIterator[bytes]:
+        from adminme.finance.disclosure import (
+            FinanceDisclosureError,
+            check_disclosure,
+            session_has_finance,
+            session_marked_in_memory,
+        )
+
         lock = runtime.member_chat_locks.setdefault(
             session.auth_member_id, asyncio.Lock()
         )
         try:
             async with lock:
+                marked = await session_has_finance(runtime, session, session_key)
+                await check_disclosure(runtime, session, session_key)
+                buffer_text = marked or bool(
+                    runtime.settings.finance_publications_enabled
+                    and session.auth_member_id in runtime.settings.finance_model_members
+                )
+                pending_text = ""
+                run_id = None
+                saw_final = False
                 async for chunk in runtime.member_chat.stream(
                     session_key=session_key,
                     message=body.message,
                     idempotency_key=f"member:{session.auth_member_id}:{body.request_id}",
                 ):
                     runtime.member_chat_last_failure = None
+                    if chunk.run_id is not None:
+                        if run_id is not None and chunk.run_id != run_id:
+                            raise FinanceDisclosureError(
+                                "finance_disclosure_run_changed"
+                            )
+                        run_id = chunk.run_id
+                    buffer_text = buffer_text or session_marked_in_memory(
+                        runtime, session, session_key
+                    )
+                    if buffer_text and chunk.kind == "delta":
+                        pending_text = (
+                            (chunk.text or "")
+                            if chunk.replace
+                            else pending_text + (chunk.text or "")
+                        )
+                        if len(pending_text.encode("utf-8")) > 24_000:
+                            raise FinanceDisclosureError(
+                                "finance_disclosure_answer_too_large"
+                            )
+                        continue
+                    if chunk.kind == "final":
+                        await check_disclosure(
+                            runtime,
+                            session,
+                            session_key,
+                            run_id=run_id,
+                            require_run=True,
+                        )
+                        _require_chat(runtime, session)
+                        saw_final = True
+                        if pending_text:
+                            yield _sse(
+                                {
+                                    "kind": "delta",
+                                    "text": pending_text,
+                                    "replace": True,
+                                    "retryable": False,
+                                    "correlation_id": correlation_id,
+                                }
+                            )
+                            pending_text = ""
                     public = chunk.public()
                     public["correlation_id"] = correlation_id
                     yield _sse(public)
                     if await request.is_disconnected():
                         await runtime.member_chat.abort(session_key=session_key)
                         return
+                if buffer_text and pending_text and not saw_final:
+                    raise FinanceDisclosureError("finance_disclosure_final_required")
+        except FinanceDisclosureError as exc:
+            await runtime.member_chat.abort(session_key=session_key)
+            yield _sse(
+                {
+                    "kind": "error",
+                    "code": str(exc),
+                    "retryable": False,
+                    "correlation_id": correlation_id,
+                }
+            )
         except asyncio.CancelledError:
             await runtime.member_chat.abort(session_key=session_key)
             raise

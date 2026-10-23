@@ -175,6 +175,7 @@ export function registerSelfReplies(api: OpenClawPluginApi, runtime: PluginRunti
           "/api/openclaw/v1/cos-responses/self-reply", {
             provenance: input.provenance, source_message_event_id: sourceId,
             host_binding: input.binding, body: parts[index], reply_index: index,
+            finance_run_id: runId,
           });
         const dispatch = result.transport_dispatch as Record<string, unknown> | undefined;
         if (!dispatch) {

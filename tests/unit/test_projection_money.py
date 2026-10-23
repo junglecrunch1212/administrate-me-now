@@ -801,9 +801,10 @@ async def test_historical_workbook_receipt_without_scope_is_denied(
     rig: dict[str, Any],
 ) -> None:
     conn = rig["runner"].connection("money")
-    # Older installations had these nine fields only. Migration defaults for
-    # the newly added scopes deliberately carry no authority until replay.
-    conn.execute(
+    # Use the isolated compatibility-fixture write seam. Runtime readers remain
+    # query-only; migration defaults deliberately carry no authority until replay.
+    fixture_conn = rig["runner"]._unsafe_maintenance_connection("money")
+    fixture_conn.execute(
         "INSERT INTO finance_workbook_state (tenant_id,workbook_name,workbook_sha256,"
         "workbook_schema_version,published_at,published_by_party_id,validation_state,"
         "validation_failures_json,last_event_id) VALUES (?,?,?,?,?,?,?,?,?)",

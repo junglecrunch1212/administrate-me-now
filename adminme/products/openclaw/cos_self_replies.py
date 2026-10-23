@@ -31,6 +31,7 @@ class SelfReplyRequest(seam.ContextRequest):
     host_binding: str = Field(pattern=r"^[0-9a-f]{64}$")
     body: str = Field(min_length=1, max_length=3500)
     reply_index: int = Field(default=0, ge=0, le=15)
+    finance_run_id: str | None = Field(default=None, min_length=1, max_length=200)
 
     @model_validator(mode="after")
     def bounded_text(self) -> SelfReplyRequest:
@@ -131,6 +132,18 @@ async def _context(
         raise HTTPException(
             403, "domain standing reply permission is absent or revoked"
         )
+    from adminme.finance.disclosure import FinanceDisclosureError, check_disclosure
+
+    try:
+        await check_disclosure(
+            runtime,
+            session,
+            p.session_key or "",
+            run_id=body.finance_run_id,
+            require_run=not scheduled,
+        )
+    except FinanceDisclosureError as exc:
+        raise HTTPException(403, str(exc)) from None
     return runtime, session, activation, binding
 
 

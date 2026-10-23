@@ -4145,6 +4145,31 @@ class FinanceJobRequest(ContextRequest):
     job_id: str | None = Field(default=None, min_length=1, max_length=120)
 
 
+def _finance_admission_identity(
+    request: Request, provenance: Provenance
+) -> tuple[str, str]:
+    """Authenticate/map without projection work before the low-priority lane.
+
+    This only assigns a bounded waiting slot. Full current domain authority is
+    resolved inside the lane before reads and again before delivery.
+    """
+    _authenticate(request)
+    runtime = _runtime(request)
+    key = (
+        f"{provenance.channel_id}|{provenance.account_id or '-'}|{provenance.actor_id}"
+    )
+    member = runtime.settings.openclaw_actor_identities.get(key)
+    if (
+        member is None
+        and provenance.channel_id == "administrateme-portal"
+        and provenance.account_id == "member-portal"
+    ):
+        member = runtime.resolve_member_chat_actor(provenance.actor_id)
+    if not member:
+        raise HTTPException(403, "OpenClaw actor is not mapped to a household member")
+    return runtime.settings.instance.tenant_id, member
+
+
 def _finance_private_context(
     runtime: Any, session: Session, provenance: Provenance
 ) -> bool:
@@ -4220,6 +4245,7 @@ async def _finance_delivery(
     private_result: bool = False,
 ) -> dict[str, Any]:
     from adminme.finance.budgets import FinanceBudgetError
+    from adminme.finance.disclosure import FinanceDisclosureError, record_disclosure
 
     runtime = _runtime(request)
     await _record_tool_call(request, session, body.provenance, operation=operation)
@@ -4239,7 +4265,7 @@ async def _finance_delivery(
     result["provider_effect_count"] = 0
     if receipt is not None:
         try:
-            return runtime._finance_turn_budgets.charge(receipt, result)
+            result = runtime._finance_turn_budgets.charge(receipt, result)
         except FinanceBudgetError as exc:
             return {
                 "state": "temporarily_unavailable",
@@ -4247,6 +4273,17 @@ async def _finance_delivery(
                 "next_step": "Request a smaller report or one capability.",
                 "provider_effect_count": 0,
             }
+        if private_result:
+            try:
+                await record_disclosure(
+                    runtime,
+                    latest,
+                    body.provenance,
+                    result,
+                    slot=receipt.call_number,
+                )
+            except FinanceDisclosureError as exc:
+                raise HTTPException(403, str(exc)) from None
     return result
 
 
@@ -4280,15 +4317,18 @@ async def finance_status(
     )
     from adminme.finance.calculators import calculator_metadata
     from adminme.finance.queries import publication_status
+    from adminme.finance.readiness import publication_readiness_context
     from adminme.finance.workflows import compound_readiness, preparation_workflow
 
-    session = _session(request, body.provenance)
     runtime = _runtime(request)
     from adminme.finance.admission import admission_busy_result
 
     async with runtime.finance_admission.slot(
-        (session.tenant_id, session.auth_member_id)
+        _finance_admission_identity(request, body.provenance)
     ) as admitted:
+        # Scope resolution touches the projection executor: defer even this work
+        # until ordinary household requests have finished.
+        session = _session(request, body.provenance)
         if not admitted:
             return await _finance_delivery(
                 request,
@@ -4297,8 +4337,6 @@ async def finance_status(
                 admission_busy_result(),
                 operation="finance.status",
             )
-        # Admission can wait: resolve current domain authority before private reads.
-        session = _session(request, body.provenance)
         receipt = None
         permitted = _finance_permitted(runtime, session, body.provenance)
         enabled = bool(getattr(runtime.settings, "finance_publications_enabled", False))
@@ -4369,9 +4407,19 @@ async def finance_status(
                 else:
                     item = capability(body.capability_id)
                     models = calculator_metadata()
+                    evidence = (
+                        publication_readiness_context(
+                            runtime.projections.connection("money"),
+                            session,
+                            body.capability_id,
+                            book_id=body.book_id,
+                        )
+                        if not blocked
+                        else {"dependencies": {}, "report_availability": []}
+                    )
                     checked = readiness(
                         body.capability_id,
-                        dependencies={},
+                        dependencies=evidence["dependencies"],
                         available_calculators=frozenset(models),
                         permitted=permitted,
                         enabled=enabled,
@@ -4383,6 +4431,7 @@ async def finance_status(
                         "implementation_state_applies_to": "routing_and_preparation",
                         "readiness": checked["readiness"],
                         "reason": checked["reason"],
+                        "report_availability": evidence["report_availability"],
                         "missing_evidence": checked.get("missing_evidence", []),
                         "unavailable_models": checked.get("unavailable_models", []),
                         "professional_review_required": item.professional_review,
@@ -4440,13 +4489,15 @@ async def finance_query(body: FinanceQueryRequest, request: Request) -> dict[str
     from adminme.finance.budgets import FinanceBudgetError
     from adminme.finance.queries import query_publication
 
-    session = _session(request, body.provenance)
     runtime = _runtime(request)
     from adminme.finance.admission import admission_busy_result
 
     async with runtime.finance_admission.slot(
-        (session.tenant_id, session.auth_member_id)
+        _finance_admission_identity(request, body.provenance)
     ) as admitted:
+        # Scope resolution touches the projection executor: defer even this work
+        # until ordinary household requests have finished.
+        session = _session(request, body.provenance)
         if not admitted:
             return await _finance_delivery(
                 request,
@@ -4455,8 +4506,6 @@ async def finance_query(body: FinanceQueryRequest, request: Request) -> dict[str
                 admission_busy_result(),
                 operation="finance.query",
             )
-        # Admission can wait: resolve current domain authority before private reads.
-        session = _session(request, body.provenance)
         receipt = None
         private_result = False
         try:
@@ -4504,13 +4553,15 @@ async def finance_calculate(
         calculator_metadata,
     )
 
-    session = _session(request, body.provenance)
     runtime = _runtime(request)
     from adminme.finance.admission import admission_busy_result
 
     async with runtime.finance_admission.slot(
-        (session.tenant_id, session.auth_member_id)
+        _finance_admission_identity(request, body.provenance)
     ) as admitted:
+        # Scope resolution touches the projection executor: defer even this work
+        # until ordinary household requests have finished.
+        session = _session(request, body.provenance)
         if not admitted:
             return await _finance_delivery(
                 request,
@@ -4519,8 +4570,6 @@ async def finance_calculate(
                 admission_busy_result(),
                 operation="finance.calculate",
             )
-        # Admission can wait: resolve current domain authority before private reads.
-        session = _session(request, body.provenance)
         receipt = None
         private_result = False
         try:
@@ -4575,13 +4624,15 @@ async def finance_job(body: FinanceJobRequest, request: Request) -> dict[str, An
     from adminme.finance.budgets import FinanceBudgetError
     from adminme.finance.jobs import finance_job_status
 
-    session = _session(request, body.provenance)
     runtime = _runtime(request)
     from adminme.finance.admission import admission_busy_result
 
     async with runtime.finance_admission.slot(
-        (session.tenant_id, session.auth_member_id)
+        _finance_admission_identity(request, body.provenance)
     ) as admitted:
+        # Scope resolution touches the projection executor: defer even this work
+        # until ordinary household requests have finished.
+        session = _session(request, body.provenance)
         if not admitted:
             return await _finance_delivery(
                 request,
@@ -4590,8 +4641,6 @@ async def finance_job(body: FinanceJobRequest, request: Request) -> dict[str, An
                 admission_busy_result(),
                 operation=f"finance.job.{body.operation}",
             )
-        # Admission can wait: resolve current domain authority before private reads.
-        session = _session(request, body.provenance)
         receipt = None
         try:
             receipt = _finance_admit(runtime, session, body.provenance)

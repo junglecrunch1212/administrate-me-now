@@ -524,7 +524,10 @@ describe("native OpenClaw contract fixture", () => {
   it("exposes tools without starting services during tool discovery", () => {
     const runtime = fakeApi({}, "tool-discovery");
     expect([...runtime.gateways]).toHaveLength(14);
-    expect([...runtime.tools]).toHaveLength(29);
+    expect([...runtime.tools]).toHaveLength(33);
+    for (const name of ["status", "query", "calculate", "job"]) {
+      expect(runtime.tools.has(`administrateme_finance_${name}`)).toBe(true);
+    }
     expect(runtime.services).toHaveLength(0);
   });
 

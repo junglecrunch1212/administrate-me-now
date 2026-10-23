@@ -34,6 +34,10 @@ sharing, financial actions or professional contact follow from this ledger.
 
 The following common test locations establish the intended validation paths:
 
+- `tests/unit/test_finance_readiness.py`: pinned, owner-scoped metadata proofs,
+  exact report basis/release/quality, incomplete clocks and no semantic inference
+  from report names. Accepted metadata supplies qualified report pointers while
+  complete/current question evidence remains independently required.
 - `tests/unit/test_finance_workflows.py`: exact decision quorum, changed
   baseline/audience/policy, expiry/revocation, attribution, minimum output,
   professional preparation and compound dependencies.

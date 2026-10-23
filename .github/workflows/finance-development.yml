@@ -46,6 +46,7 @@ jobs:
           poetry run pytest -q --runxfail
           tests/unit/test_finance_capabilities.py
           tests/unit/test_finance_resources.py
+          tests/unit/test_finance_readiness.py
           tests/unit/test_finance_admission.py
           tests/unit/test_finance_workflows.py
           tests/unit/test_finance_calculators.py
@@ -54,6 +55,9 @@ jobs:
           tests/unit/test_xlsx_finance_workbook.py
           tests/acceptance/test_finance_publications.py
           tests/acceptance/test_finance_native_facade.py
+          tests/acceptance/test_finance_disclosure.py
+          tests/acceptance/test_member_chat_subscription.py
+          tests/acceptance/test_cos_self_replies.py
           tests/acceptance/test_gate7_household_experience.py
       - name: Static checks
         if: always()

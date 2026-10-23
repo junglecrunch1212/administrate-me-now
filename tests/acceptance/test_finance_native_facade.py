@@ -325,6 +325,7 @@ def test_grant_revocation_during_answer_suppresses_delivery(
                     schema_version=1,
                     occurred_at=now.isoformat(),
                     source_adapter="synthetic_acceptance",
+                    actor_identity=PRINCIPAL,
                     source_account_id="synthetic",
                     owner_scope=scope,
                     visibility_scope=scope,
@@ -338,6 +339,15 @@ def test_grant_revocation_during_answer_suppresses_delivery(
                 )
             )
             await runtime.wait_for_projection("parties", event_id)
+            row = (
+                runtime.projections.connection("parties")
+                .execute(
+                    "SELECT revoked_at FROM service_delegation_grants WHERE tenant_id=? AND grant_id=?",
+                    (session.tenant_id, grant),
+                )
+                .fetchone()
+            )
+            assert row is not None and row[0] is not None
 
         monkeypatch.setattr(native, "_record_tool_call", revoke_after_read)
         response = _post(
