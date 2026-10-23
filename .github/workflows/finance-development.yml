@@ -98,3 +98,8 @@ jobs:
         env:
           ADMINME_FINANCE_BENCHMARK: '1'
         run: poetry run pytest -q -s tests/acceptance/test_finance_mixed_load.py
+      - name: Profile shared request cost in a separate synthetic server
+        if: always()
+        env:
+          ADMINME_FINANCE_PROFILE: '1'
+        run: poetry run pytest -q -s tests/acceptance/test_finance_mixed_load.py::test_profile_light_finance_request_cost

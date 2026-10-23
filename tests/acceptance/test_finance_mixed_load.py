@@ -85,9 +85,48 @@ class _SyntheticServerTiming:
         await self.app(scope, receive, observed)
 
 
-def _serve(root: Path, listener: socket.socket, ready) -> None:
+class _SyntheticCpuProfile:
+    """Diagnostic only: never used by the latency acceptance measurement."""
+
+    def __init__(self, app):
+        import cProfile
+
+        self.app = app
+        self.profile = cProfile.Profile()
+        self.count = 0
+        self.started = False
+
+    async def __call__(self, scope, receive, send):
+        finance = scope["type"] == "http" and scope.get("path", "").startswith(
+            "/api/openclaw/v1/tools/finance-"
+        )
+        if finance and not self.started:
+            self.started = True
+            self.profile.enable()
+        await self.app(scope, receive, send)
+        if finance:
+            self.count += 1
+            if self.count == 50:
+                import pstats
+
+                self.profile.disable()
+                print(
+                    "SYNTHETIC_FINANCE_CPU_PROFILE: diagnostic, not latency evidence",
+                    flush=True,
+                )
+                pstats.Stats(self.profile).strip_dirs().sort_stats(
+                    "tottime"
+                ).print_stats(45)
+                pstats.Stats(self.profile).strip_dirs().sort_stats(
+                    "cumulative"
+                ).print_stats("main.py|disclosure.py|runner.py|bus.py|log.py")
+
+
+def _serve(root: Path, listener: socket.socket, ready, profile: bool = False) -> None:
     app = create_application(_settings(root))
     app.add_middleware(_SyntheticServerTiming)
+    if profile:
+        app.add_middleware(_SyntheticCpuProfile)
     original = app.router.lifespan_context
 
     @asynccontextmanager
@@ -381,3 +420,72 @@ async def test_light_finance_mixed_load_p95_gate(tmp_path: Path) -> None:
         if process.is_alive():
             process.kill()
             await asyncio.to_thread(process.join, 5)
+
+
+@pytest.mark.skipif(
+    os.getenv("ADMINME_FINANCE_PROFILE") != "1",
+    reason="Isolated hosted diagnostic only",
+)
+async def test_profile_light_finance_request_cost(tmp_path):
+    context = multiprocessing.get_context("spawn")
+    receive, send = context.Pipe(duplex=False)
+    listener = socket.socket()
+    listener.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(128)
+    port = listener.getsockname()[1]
+    server = context.Process(
+        target=_serve, args=(tmp_path / "profile-instance", listener, send, True)
+    )
+    server.start()
+    send.close()
+    try:
+        assert await asyncio.to_thread(receive.poll, 45)
+        actor, session = receive.recv()
+        async with (
+            _client(f"http://127.0.0.1:{port}") as finance,
+            _client(f"http://127.0.0.1:{port}") as core,
+        ):
+            grant = await core.post(
+                "/api/member/v1/cos/delegations",
+                headers=HEADERS,
+                json={
+                    "request_id": "synthetic-profile-grant",
+                    "context_scope": "member_private",
+                    "permissions": ["read_context"],
+                },
+            )
+            assert grant.status_code in {200, 201}, grant.text
+
+            async def finance_calls():
+                started = time.perf_counter()
+                for index in range(50):
+                    await _finance_call(finance, actor, session, index + 500)
+                    await asyncio.sleep(
+                        max(0, started + (index + 1) * 0.1 - time.perf_counter())
+                    )
+
+            async def core_calls():
+                started = time.perf_counter()
+                for index in range(100):
+                    response = await core.get(
+                        "/api/core/v1/what-now"
+                        if index % 2 == 0
+                        else "/api/core/v1/commitments/active",
+                        headers=HEADERS,
+                    )
+                    assert response.status_code == 200
+                    await asyncio.sleep(
+                        max(0, started + (index + 1) * 0.05 - time.perf_counter())
+                    )
+
+            await asyncio.gather(finance_calls(), core_calls())
+            await asyncio.sleep(0.1)
+    finally:
+        receive.close()
+        listener.close()
+        server.terminate()
+        await asyncio.to_thread(server.join, 5)
+        if server.is_alive():
+            server.kill()
+            await asyncio.to_thread(server.join, 5)
