@@ -25,10 +25,12 @@ PURPOSES = {
 }
 
 
-def grant_scopes(purpose: str) -> tuple[str, str]:
+def grant_scopes(purpose: str) -> tuple[str, str, str]:
     if purpose not in PURPOSES:
         raise ValueError("unsupported CoS Google grant purpose")
-    return PURPOSES[purpose][2], IDENTITY_SCOPE
+    # Google returns OpenID Connect identity alongside the verified email scope.
+    # Request it explicitly so oauthlib can still enforce exact consent scopes.
+    return PURPOSES[purpose][2], "openid", IDENTITY_SCOPE
 
 
 class CoSGoogleSelection(BaseModel):
