@@ -11,16 +11,31 @@ from bootstrap.prepared_runtime import (
 )
 
 
-def test_fingerprint_tracks_link_targets_without_following_them(tmp_path: Path) -> None:
-    runtime = tmp_path / ".venv"
-    runtime.mkdir(mode=0o700)
-    link = runtime / "python"
-    link.symlink_to("/not-opened/first-python")
-    before = runtime_artifact_fingerprint(tmp_path)
-    assert runtime_artifact_fingerprint(tmp_path) == before
-    link.unlink()
-    link.symlink_to("/not-opened/second-python")
-    assert runtime_artifact_fingerprint(tmp_path) != before
+def test_fingerprint_tracks_internal_links_and_pinned_interpreter_bytes(
+    tmp_path: Path,
+) -> None:
+    release = tmp_path / "release"
+    runtime = release / ".venv" / "bin"
+    runtime.mkdir(mode=0o700, parents=True)
+    interpreter = tmp_path / "pinned-python"
+    interpreter.write_bytes(b"first interpreter")
+    (runtime / "python").symlink_to(interpreter)
+    (runtime / "python3").symlink_to("python")
+    before = runtime_artifact_fingerprint(release)
+    assert runtime_artifact_fingerprint(release) == before
+    interpreter.write_bytes(b"changed interpreter")
+    assert runtime_artifact_fingerprint(release) != before
+
+
+def test_fingerprint_rejects_external_dependency_link(tmp_path: Path) -> None:
+    release = tmp_path / "release"
+    runtime = release / ".venv"
+    runtime.mkdir(mode=0o700, parents=True)
+    external = tmp_path / "external-dependency.py"
+    external.write_text("unbound code")
+    (runtime / "dependency.py").symlink_to(external)
+    with pytest.raises(PreparedRuntimeError, match="dependency link"):
+        runtime_artifact_fingerprint(release)
 
 
 @pytest.mark.parametrize("unsafe", ["root-link", "parent-link", "fifo", "writable"])

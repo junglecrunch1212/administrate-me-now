@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import stat
 from pathlib import Path
 
@@ -73,7 +74,45 @@ def runtime_artifact_fingerprint(release: Path) -> str:
             if before.st_uid != os.getuid():
                 raise PreparedRuntimeError("prepared runtime ownership is unsafe")
             if stat.S_ISLNK(before.st_mode):
-                record([path, "link", os.readlink(name, dir_fd=descriptor)])
+                target = os.readlink(name, dir_fd=descriptor)
+                resolved = (release / path).resolve(strict=True)
+                if not resolved.is_relative_to(release.resolve()):
+                    if (
+                        re.fullmatch(r"\.venv/bin/python(?:3(?:\.[0-9]+)?)?", path)
+                        is None
+                    ):
+                        raise PreparedRuntimeError(
+                            "prepared dependency link leaves its release"
+                        )
+                    # The caller separately proves the interpreter is the pinned
+                    # formula. Bind its external bytes too, including patches
+                    # which report the same version string.
+                    fd = os.open(resolved, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+                    try:
+                        interpreter = os.fstat(fd)
+                        if (
+                            not stat.S_ISREG(interpreter.st_mode)
+                            or interpreter.st_mode & 0o022
+                        ):
+                            raise PreparedRuntimeError("prepared interpreter is unsafe")
+                        content = hashlib.sha256()
+                        while chunk := os.read(fd, 1024 * 1024):
+                            size += len(chunk)
+                            if size > _MAX_BYTES:
+                                raise PreparedRuntimeError(
+                                    "prepared runtime exceeds size limit"
+                                )
+                            content.update(chunk)
+                        if _coordinate(os.fstat(fd)) != _coordinate(interpreter):
+                            raise PreparedRuntimeError(
+                                "prepared interpreter changed during read"
+                            )
+                        record(
+                            [path, "interpreter", str(resolved), content.hexdigest()]
+                        )
+                    finally:
+                        os.close(fd)
+                record([path, "link", target])
             elif stat.S_ISDIR(before.st_mode):
                 child = os.open(
                     name,
@@ -89,7 +128,9 @@ def runtime_artifact_fingerprint(release: Path) -> str:
                 finally:
                     os.close(child)
             elif stat.S_ISREG(before.st_mode) and not before.st_mode & 0o022:
-                child = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=descriptor)
+                child = os.open(
+                    name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=descriptor
+                )
                 try:
                     if _coordinate(os.fstat(child)) != _coordinate(before):
                         raise PreparedRuntimeError(
@@ -168,6 +209,6 @@ def runtime_artifact_fingerprint(release: Path) -> str:
                     )
         finally:
             os.close(root)
-    except OSError as exc:
+    except (OSError, RuntimeError) as exc:
         raise PreparedRuntimeError("prepared runtime inventory is unavailable") from exc
     return digest.hexdigest()
