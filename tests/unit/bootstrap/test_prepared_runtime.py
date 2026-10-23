@@ -27,6 +27,15 @@ def test_fingerprint_tracks_internal_links_and_pinned_interpreter_bytes(
     assert runtime_artifact_fingerprint(release) == before
     interpreter.write_bytes(b"changed interpreter")
     assert runtime_artifact_fingerprint(release) != before
+    # Pinned system tools may be group-managed (including hosted macOS).
+    interpreter.chmod(0o775)
+    group_managed = runtime_artifact_fingerprint(release)
+    assert runtime_artifact_fingerprint(release) == group_managed
+    interpreter.chmod(0o755)
+    assert runtime_artifact_fingerprint(release) != group_managed
+    interpreter.chmod(0o777)
+    with pytest.raises(PreparedRuntimeError, match="interpreter is unsafe"):
+        runtime_artifact_fingerprint(release)
 
 
 def test_fingerprint_rejects_external_dependency_link(tmp_path: Path) -> None:
