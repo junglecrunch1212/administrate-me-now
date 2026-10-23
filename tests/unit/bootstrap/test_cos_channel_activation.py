@@ -1509,3 +1509,65 @@ def test_workspace_preflight_refuses_custom_generated_instructions_before_mainte
     assert [path.read_bytes() for path in files] == before
     assert not controller.journal_path.exists()
     assert controller.services.runtime_diagnostics()["observation_active"] is False
+
+
+def test_real_plugin_replacement_preserves_maintenance_restoration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from bootstrap.cos_guard_release import COORDINATES, prepare_rebind, snapshot_bytes
+    from bootstrap.openclaw_activation import reconcile_member_topology
+    from bootstrap.openclaw_tools import reconcile_administrateme_plugin
+    from tests.unit.bootstrap.test_openclaw_plugin_reconciliation import (
+        _destructive_plugin_cli,
+    )
+
+    controller, request = _maintenance_controller(tmp_path, monkeypatch)
+    paths = controller.paths
+    # Begin with the same fully reconciled topology that an installed release has.
+    reconcile_member_topology(paths)
+    gateway_path = paths.instance_dir / COORDINATES["gateway"]
+    guard_path = paths.instance_dir / COORDINATES["guard"]
+    # This composition crosses the updater's immutable-file guard as well as
+    # activation. Bind that real verifier to an inert synthetic provider file.
+    guard = json.loads(guard_path.read_bytes())
+    provider = Path(guard["cli_path"])
+    atomic_write(provider, b"nonexecutable synthetic provider")
+    pin = hashlib.sha256(provider.read_bytes()).hexdigest()
+    monkeypatch.setattr("bootstrap.cos_imessage.BINARY_SHA256", pin)
+    guard["cli_sha256"] = pin
+    _write(guard_path, guard)
+    before = json.loads(gateway_path.read_bytes())["plugins"]["entries"][
+        "administrateme"
+    ]
+    assert before["config"]["forwardIntakeAccounts"]
+    plan = _prepare_maintenance(controller, request)
+    controller.pause_maintenance(plan)
+    candidate = tmp_path / "candidate"
+
+    def validate(gateway: dict[str, Any]) -> None:
+        # The actual failed production boundary: all enrollment and authority
+        # survives native uninstall before configuration validation or restoration.
+        assert gateway["plugins"]["entries"]["administrateme"] == before
+
+    commands = _destructive_plugin_cli(paths, candidate, monkeypatch, validate=validate)
+    rebind = prepare_rebind(
+        guard_payload=guard_path.read_bytes(),
+        gateway_payload=gateway_path.read_bytes(),
+        adapter_config=request.adapter_config,
+        source_release=ROOT,
+        target_release=candidate,
+    )
+    for name, relative in COORDINATES.items():
+        atomic_write(
+            paths.instance_dir / relative, snapshot_bytes(rebind[name]["after"])
+        )
+    assert reconcile_administrateme_plugin(paths, candidate)["ok"] is True
+    assert any(command[1:3] == ["plugins", "uninstall"] for command in commands)
+    monkeypatch.setattr(controller, "_selection", lambda: ("b" * 40, candidate))
+    result = controller.activate(plan, enable_live=True)
+    assert result["observation_active"] is False
+    assert result["provider_test_messages_sent"] == 0
+    after = json.loads(gateway_path.read_bytes())["plugins"]["entries"][
+        "administrateme"
+    ]
+    assert after == before

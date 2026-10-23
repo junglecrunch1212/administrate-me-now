@@ -260,3 +260,62 @@ def test_wrapper_tamper_or_broader_journal_delta_is_refused(
     with pytest.raises(ActivationJournalError, match="CoS guard"):
         manager.activation_journal.create(changed)
     assert not manager.activation_journal.path.exists()
+
+
+def test_real_plugin_replacement_keeps_reverse_guard_preparation_available(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from bootstrap.openclaw_activation import reconcile_member_topology
+    from bootstrap.openclaw_tools import reconcile_administrateme_plugin
+    from tests.unit.bootstrap.test_openclaw_plugin_reconciliation import (
+        _destructive_plugin_cli,
+    )
+
+    from adminme.service_identities import DEFAULT_SERVICE_IDENTITY_CONFIG
+
+    manager, value, adapters = _fixture(tmp_path, monkeypatch)
+    # The guard-only fixture omits the service inventory. This composition also
+    # runs topology validation, so use a complete synthetic enrolled identity.
+    identities = copy.deepcopy(DEFAULT_SERVICE_IDENTITY_CONFIG)
+    identities["channels"][0].update(adapters["service_identities"]["channels"][0])
+    identities["channels"][0].update(
+        channel_id="fixture-cos-imessage-channel", state="observation"
+    )
+    adapters["service_identities"] = identities
+    atomic_write(
+        manager.paths.instance_dir / "config/adapters.json",
+        json.dumps(adapters).encode(),
+    )
+    source, target = Path(value["predecessor_path"]), Path(value["target_path"])
+    _destructive_plugin_cli(manager.paths, target, monkeypatch)
+    gateway_path = manager.paths.instance_dir / COORDINATES["gateway"]
+    gateway = json.loads(gateway_path.read_bytes())
+    config = gateway["plugins"]["entries"]["administrateme"]["config"]
+    config.pop("existing_preference")  # Guard-only fixture's untyped sentinel.
+    config["baseUrl"] = "http://127.0.0.1:3330"
+    atomic_write(gateway_path, json.dumps(gateway).encode())
+    reconcile_member_topology(manager.paths)
+    before = json.loads(gateway_path.read_bytes())["plugins"]["entries"][
+        "administrateme"
+    ]
+    assert before["config"]["forwardIntakeAccounts"]
+    forward = manager._prepare_cos_guard_rebind(
+        adapter_config=adapters, source_release=source, target_release=target
+    )
+    assert forward is not None
+    for name, relative in COORDINATES.items():
+        atomic_write(
+            manager.paths.instance_dir / relative,
+            snapshot_bytes(forward[name]["after"]),
+        )
+    assert reconcile_administrateme_plugin(manager.paths, target)["ok"] is True
+    assert (
+        json.loads(gateway_path.read_bytes())["plugins"]["entries"]["administrateme"]
+        == before
+    )
+    reverse = manager._prepare_cos_guard_rebind(
+        adapter_config=adapters, source_release=target, target_release=source
+    )
+    assert reverse is not None
+    restored_gateway = json.loads(snapshot_bytes(reverse["gateway"]["after"]))
+    assert restored_gateway["plugins"]["entries"]["administrateme"] == before
