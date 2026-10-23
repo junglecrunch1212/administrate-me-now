@@ -1,0 +1,41 @@
+subkind: state-mirror
+deployment_targets: [central]
+pack:
+  id: adapter:reminders-cos-apple-eventkit
+  name: CoS selected Apple Reminders reader
+  version: 1.0.0
+  kind: adapter
+  family: reminders
+  author: built-in
+  license: Apache-2.0
+  min_platform: 0.4.0
+runtime:
+  language: python
+  python_version: ">=3.14,<3.15"
+  entrypoint: adapter.py
+  class: CoSAppleRemindersAdapter
+sensitivity_floor: normal
+triggers:
+  kind: external_poll
+  poll_interval_seconds: 30
+depends_on:
+  event_types: [adapter.error, adapter.authenticated, list.created, list.updated, list.deleted, list_item.added, list_item.updated, list_item.completed, list_item.uncompleted, list_item.deleted]
+events_emitted: [adapter.error, adapter.authenticated, list.created, list.updated, list.deleted, list_item.added, list_item.updated, list_item.completed, list_item.uncompleted, list_item.deleted]
+config:
+  schema: config.schema.json
+  example: config.example.yaml
+capabilities:
+  - kind: Cat-B
+    runtime: central
+    event_families: [list.created, list.updated, list.deleted, list_item.added, list_item.updated, list_item.completed, list_item.uncompleted, list_item.deleted]
+write_capabilities: []
+sensitivity_default: normal
+sharing_model_discriminator: owner_service_principal_id
+supported_owner_kinds: [service_principal]
+observation_mode_required: true
+dedup_strategy:
+  kind: external_id
+source_assurance:
+  - source_events: [list.created, list.updated, list.deleted, list_item.added, list_item.updated, list_item.completed, list_item.uncompleted, list_item.deleted]
+    mode: canonical_projection
+    projections: [lists]

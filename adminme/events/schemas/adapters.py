@@ -83,6 +83,20 @@ class AdapterAuthenticatedV2(AdapterAuthenticatedV1):
     provider_account_id: str = Field(pattern=r"^provider-account:[0-9a-f]{32,64}$")
 
 
+class ServiceOSAuthenticatedV3(BaseModel):
+    """Actual local OS authority without inventing an OAuth/Keychain token."""
+
+    model_config = {"extra": "forbid"}
+    adapter_name: Literal["reminders-cos-apple-eventkit"]
+    adapter_family: Literal["reminders"]
+    authorization_kind: Literal["os-permission"]
+    authenticated_at: str = Field(min_length=1)
+    configuration_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    device_identity_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    source_ownership_evidence_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    scopes: list[Literal["eventkit.reminders.read"]] = Field(min_length=1, max_length=1)
+
+
 class AdapterCursorAdvancedV1(BaseModel):
     model_config = {"extra": "forbid"}
 
@@ -111,5 +125,6 @@ class AdapterRecordQuarantinedV1(BaseModel):
 registry.register("adapter.error", 1, AdapterErrorV1)
 registry.register("adapter.authenticated", 1, AdapterAuthenticatedV1)
 registry.register("adapter.authenticated", 2, AdapterAuthenticatedV2)
+registry.register("adapter.authenticated", 3, ServiceOSAuthenticatedV3)
 registry.register("adapter.cursor_advanced", 1, AdapterCursorAdvancedV1)
 registry.register("adapter.record.quarantined", 1, AdapterRecordQuarantinedV1)

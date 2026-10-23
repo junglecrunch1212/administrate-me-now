@@ -143,8 +143,12 @@ def restrict_cos_adapter_config(value: dict[str, Any]) -> dict[str, Any]:
         selected_entries as service_entries,
     )
 
+    from adminme.adapters.cos_apple_reminders import (
+        selected_entries as reminders_entries,
+    )
+
     member_sources = selected_entries(result)
-    service_sources = service_entries(result)
+    service_sources = service_entries(result) | reminders_entries(result)
     for item in entries:
         if not isinstance(item, dict):
             raise ValueError("CoS acquisition adapter inventory is malformed")

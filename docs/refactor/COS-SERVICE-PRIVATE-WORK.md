@@ -263,3 +263,26 @@ producer → production service-route → private follow-up tests. Live usabilit
 still requires authorized acquisition and native service-tool read-back after
 activation. Recover through the existing service-work feature disable on the
 schema-aware runtime; no provider effect or enrollment is introduced here.
+
+### Selected CoS Apple Reminders context
+
+**MODERNIZE:** an exact service-owned Apple Reminders list acquired by
+`reminders-cos-apple-eventkit` now feeds the same private working-context tool.
+Only the `apple_reminders` provider with that adapter and the existing list v2 /
+item v4 schemas is admitted. The original service owner, provider account and
+source restrictions remain attached to each source receipt and private follow-up.
+The tool exposes typed list/item facts, not reminder notes or provider bodies,
+and grants no outside disclosure or provider-write authority.
+
+The existing current-pointer tables handle completion, item deletion and parent
+list deletion without copying source content or changing the storage schema.
+Replaying history does not restore deleted or superseded snapshots. Effective
+context policy also governs retained derived work; pausing acquisition alone
+does not erase already-authorized history. Production proof is
+`tests/acceptance/test_cos_apple_reminders_context.py`, which polls the actual
+loaded adapter into the encrypted application and reads context and a private
+follow-up through the native service API.
+
+Setup still requires an exact source/list selection and current permission for
+the service runtime on its own computer. This does not configure Apple Calendar
+or Notes, schedule notifications, or enable Reminders writes.

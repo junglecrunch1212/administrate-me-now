@@ -29,7 +29,12 @@ from adminme.google_tasks_execution import (
 
 WORKSPACES = frozenset({"personal", "work", "service"})
 PROVENANCE_KINDS = frozenset(
-    {"oauth-subject", "service-account-delegation", "member-bridge-enrollment"}
+    {
+        "oauth-subject",
+        "service-account-delegation",
+        "member-bridge-enrollment",
+        "service-device-authorization",
+    }
 )
 ACCOUNT_KEYS = (
     "provider_account_id",
@@ -50,6 +55,7 @@ SERVICE_OWNER_ADAPTER_KINDS = frozenset(
         "messaging-gmail-api",
         "calendaring-google-calendar",
         "tasks-google-tasks",
+        "reminders-cos-apple-eventkit",
     }
 )
 SERVICE_OWNER_READONLY_SCOPES = {
@@ -339,6 +345,15 @@ def _validate_provider_binding_inventory(
             and kind in {row[0] for row in PURPOSES.values()}
             and provenance == "oauth-subject"
         )
+        cos_reminders = kind == "reminders-cos-apple-eventkit"
+        if cos_reminders:
+            from adminme.adapters.cos_apple_reminders import validate_adapter_config
+
+            validate_adapter_config(adapter_config)
+        elif provenance == "service-device-authorization":
+            raise ValueError(
+                "device authorization is limited to reviewed CoS Reminders"
+            )
         cos_writes = False
         b03 = adapter_config.get("b03_google_tasks_create")
         if b03 is not None and not isinstance(b03, dict):
@@ -409,7 +424,9 @@ def _validate_provider_binding_inventory(
                 raise ValueError(
                     f"enabled provider adapter {index} requires service workspace"
                 )
-            if cos_oauth:
+            if cos_reminders:
+                pass  # Exact OS/source authority was validated before construction.
+            elif cos_oauth:
                 if (
                     b03 is not None
                     or frozenset(permission_scope) != COS_GMAIL_OAUTH_SCOPES
@@ -519,7 +536,7 @@ def _validate_provider_binding_inventory(
                     raise ValueError(
                         "B03 binding requires a positive reviewed revision"
                     )
-            if not (cos_oauth or workspace_oauth) and (
+            if not (cos_oauth or workspace_oauth or cos_reminders) and (
                 provenance != "service-account-delegation"
                 or not isinstance(adapter_config.get("service_account_key_ref"), str)
             ):

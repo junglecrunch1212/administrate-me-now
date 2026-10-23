@@ -133,6 +133,11 @@ def restrict_adapter_config(value: dict[str, Any]) -> dict[str, Any]:
     )
 
     workspace_policy(value)
+    from adminme.adapters.cos_apple_reminders import (
+        policy_from_config as reminders_policy,
+    )
+
+    reminders_policy(value)
     if COS_CONFIG_KEY in value:
         return restrict_cos_adapter_config(value)
     policy = policy_from_adapter_config(value)

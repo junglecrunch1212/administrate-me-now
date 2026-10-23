@@ -283,7 +283,8 @@ class PyObjCEventStore:
             raise LookupError(f"EventKit reminder list not found: {identifier}")
         return calendar
 
-    def _record(self, reminder: Any) -> ReminderRecord:
+    @staticmethod
+    def _record(reminder: Any) -> ReminderRecord:
         calendar = _call(reminder, "calendar")
         due_components = _components_dict(_call(reminder, "dueDateComponents"))
         due_at: str | None = None
