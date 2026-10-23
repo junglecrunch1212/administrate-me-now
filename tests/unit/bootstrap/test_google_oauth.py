@@ -95,7 +95,7 @@ def test_enroll_requests_only_three_readonly_scopes_and_uses_member_key(
             "port": 0,
             "authorization_prompt_message": "",
             "success_message": (
-                "AdministrateMe authorization complete. You may close this tab."
+                "Authorization returned. Check the setup result to confirm the connection."
             ),
             "open_browser": False,
             "access_type": "offline",
