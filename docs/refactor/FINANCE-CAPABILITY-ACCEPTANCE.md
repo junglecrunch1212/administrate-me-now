@@ -34,6 +34,9 @@ sharing, financial actions or professional contact follow from this ledger.
 
 The following common test locations establish the intended validation paths:
 
+- `tests/unit/test_finance_answers.py`: exact current-result selection and
+  deterministic rendering; changed values, units, periods, models, missing
+  caveats, extra narrative and stale references are rejected.
 - `tests/acceptance/test_finance_disclosure.py`: durable private disclosure receipts,
   revocation after retrieval/audit, buffered streaming, pinned publication change
   and qualified report availability through production endpoints. New coverage
@@ -163,3 +166,29 @@ contacts a professional or creates an always-on specialist agent.
   or consequential claims become supported.
 - **Deployment owner:** separately request guarded activation after code gates,
   private acceptance and backup/rollback prerequisites pass.
+
+## Grounded answer boundary
+
+Finance tool results carry an opaque `answer_ref`. The model's final finance
+reply contains only `{"finance_answer":{"result_refs":["answer_ref"]}}` with up
+to three current references. The domain renderer supplies values, units, basis,
+period, model/publication, assumptions, omissions and next steps from encrypted
+owner-private receipts. Arbitrary financial prose and model-supplied numbers
+cannot replace these facts. Portal delivery and native self-reply/claim recheck
+current authority and pinned publication/model dependencies. Native transport
+binds the exact rendered content before any provider effect.
+
+Pinned OpenClaw `tool_result_persist` and `before_message_write` hooks remove
+financial tool values, hypothetical tool arguments and unverified assistant
+prose from the general transcript. Only bounded result references remain. The
+SDK shapes and persistence transform were inspected at commit
+`ce67ffb70e83e5ebb56ea02e814e577153f84f61`; hosted integration and installed-hook
+verification remain separate evidence. Structured finance results are retained
+only in encrypted private domain history, never a shared vector or global memory.
+A marked conversation needs a fresh finance result before another finance
+answer; a reference is not a timeless permission or a substitute for fresh data.
+
+The supported card is intentionally deterministic. Free-form personalized
+recommendations, durable operational workflow integration and authorized app
+source drilldown remain unfinished work; a grounded calculation card does not
+establish those broader capabilities.

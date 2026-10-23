@@ -4275,6 +4275,10 @@ async def _finance_delivery(
     ):
         raise HTTPException(403, "finance_processing_disabled")
     result["provider_effect_count"] = 0
+    if receipt is not None and private_result:
+        from adminme.finance.answers import answer_reference
+
+        result["answer_ref"] = answer_reference(result)
     if receipt is not None:
         try:
             result = runtime._finance_turn_budgets.charge(receipt, result)

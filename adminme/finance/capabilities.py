@@ -460,7 +460,7 @@ def core_pointer(*, enabled: bool) -> dict[str, Any]:
         "contract": REGISTRY_VERSION,
         "status": "available_to_check" if enabled else "disabled",
         "tool": "administrateme_finance_status",
-        "boundary": "Owner authority, accepted evidence and validated model required; reading grants no action. No financial facts in generic memory.",
+        "boundary": 'Use current finance tools; no facts in generic memory. Final finance reply must be JSON {"finance_answer":{"result_refs":["answer_ref"]}} only; the server renders verified values and caveats.',
     }
     enforce_context(result, kind="core")
     return result

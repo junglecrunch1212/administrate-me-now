@@ -211,6 +211,9 @@ export type OpenClawPluginApi = {
   ) => void;
   registerService: (service: OpenClawPluginService) => void;
   on: {
+    // src/plugins/hook-types.ts at the exact pinned commit: synchronous hooks.
+    (hook: "tool_result_persist", handler: (event: { toolName?: string; toolCallId?: string; message: Record<string, unknown>; isSynthetic?: boolean }, context: { agentId?: string; sessionKey?: string; toolName?: string; toolCallId?: string }) => { message?: Record<string, unknown> } | void): void;
+    (hook: "before_message_write", handler: (event: { message: Record<string, unknown>; sessionKey?: string; agentId?: string }, context: { agentId?: string; sessionKey?: string }) => { block?: boolean; message?: Record<string, unknown> } | void): void;
     (hook: "before_agent_reply", handler: (event: { cleanedBody: string }, context: PluginHookAgentContext) => void | Promise<void>, options?: { eligibleTriggers?: readonly ["user", ...Array<"user" | "cron" | "heartbeat">] }): void;
     (
       hook: "agent_end",

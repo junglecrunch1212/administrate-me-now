@@ -12,6 +12,48 @@ type Audience = { sessionKey: string; agentId: string; actorId: string; accountI
 type Binding = Audience & { runId: string; expiresAt: number };
 const runs = new WeakMap<PluginRuntime, Map<string, Binding>>();
 const calls = new WeakMap<PluginRuntime, Map<string, Binding>>();
+const activeFinance = new WeakMap<PluginRuntime, Map<string, string>>();
+
+function retainedReference(text: unknown): string | undefined {
+  if (typeof text !== "string" || text.length > 6000) return;
+  try {
+    const value = JSON.parse(text);
+    const ref = value.answer_ref;
+    if (typeof ref === "string" && /^[0-9a-f]{64}$/.test(ref)) return ref;
+  } catch { /* Malformed results retain no financial content. */ }
+  return;
+}
+
+export function privateFinanceTranscript(message: Record<string, unknown>, toolResult: boolean): Record<string, unknown> {
+  const content = Array.isArray(message.content) ? message.content : [];
+  if (toolResult) {
+    const refs = content.map((item: any) => retainedReference(item?.text)).filter((ref): ref is string => ref !== undefined);
+    return { role: "toolResult", toolCallId: message.toolCallId, toolName: message.toolName,
+      timestamp: message.timestamp, isError: message.isError,
+      content: [{ type: "text", text: JSON.stringify({ finance_result_refs: [...new Set(refs)],
+        boundary: "Private values are held in the authorized finance service. Re-read current evidence before another answer." }) }] };
+  }
+  const safeContent = content.map((item: any) => {
+    if (item?.type === "toolCall") {
+      return { type: "toolCall", id: item.id, name: item.name, arguments: {} };
+    }
+    if (item?.type === "text") {
+      try {
+        const value = JSON.parse(item.text);
+        const refs = value.finance_answer?.result_refs;
+        if (Object.keys(value).length === 1 && Object.keys(value.finance_answer).length === 1 &&
+            Array.isArray(refs) && refs.length > 0 && refs.length <= 3 && refs.every((ref: unknown) => typeof ref === "string" && /^[0-9a-f]{64}$/.test(ref))) {
+          return { type: "text", text: JSON.stringify({ finance_answer: { result_refs: refs } }) };
+        }
+      } catch { /* Narrative finance output is unverified and is not retained. */ }
+    }
+    return { type: "text", text: "[Private finance content omitted; retrieve current authorized evidence.]" };
+  });
+  return { role: "assistant", api: message.api, provider: message.provider, model: message.model,
+    usage: message.usage, stopReason: message.stopReason, timestamp: message.timestamp,
+    content: safeContent };
+}
+
 
 function privateAudience(runtime: PluginRuntime, context: HostContext): Audience | undefined {
   const sessionKey = context.sessionKey;
@@ -50,15 +92,31 @@ export function registerFinanceTurns(api: OpenClawPluginApi, runtime: PluginRunt
     let admitted = runs.get(runtime);
     if (!admitted) { admitted = new Map(); runs.set(runtime, admitted); }
     prune(admitted);
+    for (const [session, activeRun] of activeFinance.get(runtime) ?? []) if (!admitted.has(activeRun)) activeFinance.get(runtime)?.delete(session);
     admitted.delete(context.runId);
     const audience = privateAudience(runtime, context);
     if (!audience || admitted.size >= 256) return;
     admitted.set(context.runId, { ...audience, runId: context.runId, expiresAt: Date.now() + 30_000 });
   }, { eligibleTriggers: ["user"] });
+  api.on("tool_result_persist", (event, context) => {
+    if (FINANCE_TOOLS.has(event.toolName ?? context.toolName ?? String(event.message.toolName))) {
+      return { message: privateFinanceTranscript(event.message, true) };
+    }
+    return;
+  });
+  api.on("before_message_write", (event, context) => {
+    const session = event.sessionKey ?? context.sessionKey;
+    const invokesFinance = Array.isArray(event.message.content) && event.message.content.some((part: any) => part?.type === "toolCall" && FINANCE_TOOLS.has(part.name));
+    if (event.message.role === "assistant" && (invokesFinance || (session && activeFinance.get(runtime)?.has(session)))) {
+      return { message: privateFinanceTranscript(event.message, false) };
+    }
+    return;
+  });
   api.on("agent_end", (event, context) => {
     const runId = event.runId ?? context.runId;
     if (!runId) return;
     runs.get(runtime)?.delete(runId);
+    for (const [session, activeRun] of activeFinance.get(runtime) ?? []) if (activeRun === runId) activeFinance.get(runtime)?.delete(session);
     for (const [key, value] of calls.get(runtime) ?? []) if (value.runId === runId) calls.get(runtime)?.delete(key);
   });
 }
@@ -73,6 +131,10 @@ export function bindFinanceTurn(runtime: PluginRuntime, context: HostContext, ca
   prune(bindings);
   if (bindings.size >= 256) return false;
   bindings.set(callId, admitted);
+  let active = activeFinance.get(runtime);
+  if (!active) { active = new Map(); activeFinance.set(runtime, active); }
+  // At most the already bounded 256 active run bindings can be represented.
+  active.set(admitted.sessionKey, admitted.runId);
   return true;
 }
 

@@ -3,7 +3,8 @@
 Durable private session markers survive runtime restart and protect historical
 finance context. Short-lived run receipts pin the authority and calculation /
 publication dependencies delivered to the model. They contain no financial
-values, raw source links or bearer session keys.
+raw source links or bearer session keys. Bounded typed results remain encrypted
+and owner-private so final answers can be rendered without model arithmetic.
 """
 
 from __future__ import annotations
@@ -190,7 +191,9 @@ async def record_disclosure(
             )
         _remember_marker(runtime, session_hash)
         key = _run_key(session_hash, run_hash, slot)
-        result_hash = _digest(result)
+        from adminme.finance.answers import answer_reference
+
+        result_hash = answer_reference(result)
         prior = await _read(runtime, session, key)
         if prior is not None:
             if prior["result_sha256"] != result_hash:
@@ -207,6 +210,12 @@ async def record_disclosure(
                     "run_sha256": run_hash,
                     "slot": slot,
                     "result_sha256": result_hash,
+                    "result_json": json.dumps(
+                        result,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                        ensure_ascii=False,
+                    ),
                     "book_id": publication.get("book_id"),
                     "publication_id": publication.get("publication_id"),
                     "head_publication_id": publication.get(
@@ -237,7 +246,8 @@ async def check_disclosure(
     *,
     run_id: str | None = None,
     require_run: bool = False,
-) -> None:
+    answer_text: str | None = None,
+) -> str | None:
     """Called for history, final portal content, and each native send/claim.
 
     A historical finance session retains its original exact grant boundary.
@@ -247,7 +257,8 @@ async def check_disclosure(
     session_hash = _session_digest(session, session_key)
     marker = await _read(runtime, session, _marker_key(session_hash))
     if marker is None:
-        return
+        return answer_text
+    receipts: list[dict[str, Any]] = []
     if require_run and run_id is None:
         raise FinanceDisclosureError("finance_disclosure_run_required")
     expected = marker["authority_sha256"]
@@ -264,6 +275,7 @@ async def check_disclosure(
             if receipt is None:
                 continue
             found = True
+            receipts.append(receipt)
             if receipt["authority_sha256"] != expected or datetime.fromisoformat(
                 receipt["expires_at"]
             ) <= datetime.now(timezone.utc):
@@ -289,5 +301,14 @@ async def check_disclosure(
                     raise FinanceDisclosureError("finance_disclosure_model_changed")
         if require_run and not found:
             raise FinanceDisclosureError("finance_disclosure_receipt_required")
+    rendered = answer_text
+    if answer_text is not None:
+        from adminme.finance.answers import FinanceAnswerError, verify_answer
+
+        try:
+            rendered = verify_answer(answer_text, receipts)
+        except FinanceAnswerError as exc:
+            raise FinanceDisclosureError(str(exc)) from None
     # The awaited reads above are not themselves a permission guarantee.
     validate_current_authority(runtime, session, expected)
+    return rendered

@@ -50,6 +50,7 @@ jobs:
           tests/unit/test_finance_admission.py
           tests/unit/test_finance_workflows.py
           tests/unit/test_finance_calculators.py
+          tests/unit/test_finance_answers.py
           tests/unit/daemons/test_adapter_supervisor.py
           tests/unit/test_projection_money.py
           tests/unit/test_xlsx_finance_workbook.py

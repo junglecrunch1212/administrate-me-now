@@ -1,4 +1,4 @@
-"""Private disclosure provenance; no evidence values or bearer session keys."""
+"""Encrypted private disclosure results; never source documents or bearer keys."""
 
 from typing import Literal
 
@@ -16,6 +16,7 @@ class FinanceDisclosureV1(BaseModel):
     run_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     slot: int | None = Field(default=None, ge=1, le=6)
     result_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    result_json: str | None = Field(default=None, max_length=2000)
     book_id: str | None = Field(default=None, max_length=240)
     publication_id: str | None = Field(default=None, max_length=240)
     head_publication_id: str | None = Field(default=None, max_length=240)
@@ -26,7 +27,13 @@ class FinanceDisclosureV1(BaseModel):
 
     @model_validator(mode="after")
     def bound_receipt(self) -> "FinanceDisclosureV1":
-        run_fields = (self.run_sha256, self.slot, self.result_sha256, self.expires_at)
+        run_fields = (
+            self.run_sha256,
+            self.slot,
+            self.result_sha256,
+            self.result_json,
+            self.expires_at,
+        )
         if self.kind == "run":
             if any(value is None for value in run_fields):
                 raise ValueError(

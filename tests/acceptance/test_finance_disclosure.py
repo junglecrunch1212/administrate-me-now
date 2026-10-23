@@ -1,5 +1,6 @@
 """Final finance delivery uses current grants and durable private provenance."""
 
+import json
 from dataclasses import replace
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -109,6 +110,7 @@ def test_tool_delivery_records_private_receipts_and_revoked_history_fails(tmp_pa
         "disabled",
         "changed_run",
         "unrecognized_run",
+        "invented_claim",
         "missing_final",
         "oversized",
         "none",
@@ -117,14 +119,20 @@ def test_tool_delivery_records_private_receipts_and_revoked_history_fails(tmp_pa
 def test_stream_buffers_finance_until_final_authorization(tmp_path, fault):
     with TestClient(create_application(enabled_settings(tmp_path))) as client:
         grant = _grant_cos(client, "stream-grant")
-        assert calculate(client, "stream-run").status_code == 200
+        result = calculate(client, "stream-run")
+        assert result.status_code == 200, result.text
+        answer = json.dumps(
+            {"finance_answer": {"result_refs": [result.json()["answer_ref"]]}}
+        )
+        if fault == "invented_claim":
+            answer = answer[:-1] + ', "cash_available": 999999}'
         runtime = client.app.state.runtime
         aborted = []
 
         async def stream(**kwargs):
             run_id = "unrecognized" if fault == "unrecognized_run" else "stream-run"
             yield MemberChatChunk(kind="status", phase="starting_model", run_id=run_id)
-            yield MemberChatChunk(kind="delta", text="Protected finance answer")
+            yield MemberChatChunk(kind="delta", text=answer)
             if fault == "revoked":
                 await revoke(runtime, grant)
             if fault == "disabled":
@@ -150,14 +158,15 @@ def test_stream_buffers_finance_until_final_authorization(tmp_path, fault):
         )
         assert response.status_code == 200, response.text
         if fault == "none":
-            assert "Protected finance answer" in response.text
+            assert "4.000000 months" in response.text
+            assert "Caller-supplied inputs" in response.text
             assert (
                 '"kind": "final"' in response.text or '"kind":"final"' in response.text
             )
             assert not aborted
         else:
-            assert "Protected finance answer" not in response.text
-            assert "finance_disclosure_" in response.text
+            assert "4.000000 months" not in response.text
+            assert "finance_" in response.text
             assert aborted
         assert "stream-run" not in response.text
 
@@ -288,3 +297,62 @@ def test_receipt_write_cannot_extend_query_deadline(tmp_path, monkeypatch):
         assert response.json()["reason"] == "finance_query_deadline"
         assert "120000" not in response.text
         assert "values" not in response.json()
+
+
+@pytest.mark.parametrize("revoke_before_claim", [False, True])
+def test_native_reply_renders_current_result_and_rechecks_at_claim(
+    tmp_path, monkeypatch, revoke_before_claim
+):
+    from tests.acceptance import test_cos_self_replies as native
+    from tests.unit.test_finance_calculators import inputs
+
+    settings = replace(
+        native._settings(tmp_path),
+        finance_publications_enabled=True,
+        finance_model_members=frozenset({native.A}),
+    )
+    with TestClient(create_application(settings)) as client:
+        native._activate(client, monkeypatch)
+        body = native._inbound(client)
+        provenance = {
+            **body["provenance"],
+            "call_kind": "tool",
+            "message_id": "finance-run:native-finance",
+        }
+        result = client.post(
+            "/api/openclaw/v1/tools/finance-calculate",
+            headers=native.AUTH,
+            json={
+                "provenance": provenance,
+                "calculator_id": "reserve_coverage",
+                "version": "1",
+                "hypothetical": True,
+                "inputs": inputs()["reserve_coverage"],
+            },
+        )
+        assert result.status_code == 200, result.text
+        body.update(
+            finance_run_id="native-finance",
+            body=json.dumps(
+                {"finance_answer": {"result_refs": [result.json()["answer_ref"]]}}
+            ),
+        )
+        response = client.post(
+            native.ENDPOINT + "/self-reply", headers=native.AUTH, json=body
+        )
+        assert response.status_code == 200, response.text
+        dispatch = response.json()["transport_dispatch"]
+        assert "4.000000 months" in dispatch["body"]
+        assert "Caller-supplied inputs" in dispatch["body"]
+        assert "finance_verified_input_sha256" in response.json()
+        if revoke_before_claim:
+            runtime = client.app.state.runtime
+            runtime.settings = replace(
+                runtime.settings, finance_publications_enabled=False
+            )
+        claim = client.post(
+            native.ENDPOINT + "/claim",
+            headers=native.AUTH,
+            json={key: dispatch[key] for key in ("account_id", "recipient", "body")},
+        )
+        assert claim.status_code == (403 if revoke_before_claim else 200), claim.text

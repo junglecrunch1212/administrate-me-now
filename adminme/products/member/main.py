@@ -8280,13 +8280,16 @@ async def chat_stream(
                             )
                         continue
                     if chunk.kind == "final":
-                        await check_disclosure(
+                        verified_text = await check_disclosure(
                             runtime,
                             session,
                             session_key,
                             run_id=run_id,
                             require_run=True,
+                            answer_text=pending_text if buffer_text else None,
                         )
+                        if buffer_text:
+                            pending_text = verified_text or ""
                         _require_chat(runtime, session)
                         saw_final = True
                         if pending_text:
