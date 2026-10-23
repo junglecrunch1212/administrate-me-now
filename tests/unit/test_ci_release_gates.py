@@ -16,6 +16,11 @@ import yaml
 
 from scripts.release_scope import (
     CONTRACT,
+    UPDATER_COMPONENT_PATHS,
+    UPDATER_TEST_PATHS,
+    UPDATER_REQUIRED_PATHS,
+    UPDATER_CHECK_SCRIPT,
+    UPDATER_OPTIONAL_MODULE_TESTS,
     COS_REMINDER_PATHS,
     COS_REMINDER_REQUIRED_PATHS,
     BRIDGE_RUNTIME_PATHS,
@@ -109,6 +114,7 @@ def _needs(proof: dict[str, Any], platform: str) -> dict[str, Any]:
         "google-connections",
         "cos-recovery-history",
         "cos-reminders",
+        "updater-delivery",
         "system-wide",
     ],
 )
@@ -141,7 +147,13 @@ def test_scope_gate_requires_exact_corresponding_success(
 @pytest.mark.parametrize("defect", ["draft", "scope", "interface", "contract"])
 @pytest.mark.parametrize(
     "scope",
-    ["bridge-helper", "bridge-enrollment", "cos-recovery-history", "cos-reminders"],
+    [
+        "bridge-helper",
+        "bridge-enrollment",
+        "cos-recovery-history",
+        "cos-reminders",
+        "updater-delivery",
+    ],
 )
 def test_gate_refuses_development_or_reinterpreted_evidence(
     defect: str, scope: str
@@ -600,6 +612,7 @@ def test_stable_protected_job_recomputes_scope_and_requires_real_worker_results(
         "google-connections-validation",
         "cos-recovery-history-validation",
         "cos-reminder-validation",
+        "updater-delivery-validation",
         system,
     }
     if platform == "macos":
@@ -1530,3 +1543,242 @@ def test_reminder_release_worker_requires_the_real_affected_checks(
     assert "check-self-reminder-gateway.mjs" in native
     assert "check-cos-approval-gateway.mjs" in native
     assert "check-cos-imessage-text.mjs" in native
+
+
+def _updater_candidate(path: Path) -> tuple[str, str]:
+    for required in sorted(UPDATER_REQUIRED_PATHS - {UPDATER_CHECK_SCRIPT}):
+        _commit(path, required, "# Retained updater contract\n")
+    base = _git(path, "rev-parse", "HEAD")
+    head = _commit(path, UPDATER_CHECK_SCRIPT, "# Reviewed updater checks\n")
+    return base, head
+
+
+def test_updater_scope_binds_closed_paths_and_optional_feature_proof(
+    repository: tuple[Path, str],
+) -> None:
+    path, _ = repository
+    base, head = _updater_candidate(path)
+    # The scope can ship independently before any optional feature exists.
+    assert (
+        select_scope(path, _event(base, head), checkout_sha=head)["scope"]
+        == "updater-delivery"
+    )
+    for module, test in UPDATER_OPTIONAL_MODULE_TESTS.items():
+        _commit(path, module, "# Reviewed optional delivery feature\n")
+        head = _commit(path, test, "# Required feature proof\n")
+    for allowed in sorted(UPDATER_COMPONENT_PATHS | UPDATER_TEST_PATHS):
+        head = _commit(path, allowed, "# Reviewed updater behavior\n")
+    (path / "adminme/runtime.py").write_text("UNCOMMITTED = True\n")
+    proof = select_scope(path, _event(base, head), checkout_sha=head)
+    assert proof["scope"] == "updater-delivery"
+    assert len(proof["updater_dependency_sha256"]) == 64
+    for platform in ("linux", "macos"):
+        assert required_workers("updater-delivery", platform) == (
+            "release-scope",
+            "updater-delivery-validation",
+        )
+        verify_gate(proof, _needs(proof, platform), platform=platform)
+
+
+@pytest.mark.parametrize(
+    "other",
+    [
+        "bootstrap/versions.json",
+        "bootstrap/services.py",
+        "bootstrap/recovery_readiness.py",
+        "bootstrap/openclaw_activation.py",
+        "bootstrap/update.sh",
+        "adminme/events/log.py",
+        "adminme/settings_control.py",
+        "poetry.lock",
+        "openclaw/administrateme/package-lock.json",
+        "bootstrap/openclaw/programs/requested_workflows.md",
+        "bridge/adminme_bridge/main.py",
+        "tests/unreviewed.py",
+        "unknown.py",
+    ],
+)
+def test_updater_scope_rejects_changed_dependencies_or_caller_claims(
+    repository: tuple[Path, str],
+    other: str,
+) -> None:
+    path, _ = repository
+    _commit(path, other, "RETAINED = True\n")
+    base, _ = _updater_candidate(path)
+    head = _commit(path, other, "CHANGED = True\n")
+    event = _event(base, head)
+    event.update(updater_interfaces_equal=True, changed_paths=[])
+    assert select_scope(path, event, checkout_sha=head)["scope"] == "system-wide"
+
+
+@pytest.mark.parametrize("module", sorted(UPDATER_OPTIONAL_MODULE_TESTS))
+def test_updater_feature_requires_its_test_before_focused_release(
+    repository: tuple[Path, str],
+    module: str,
+) -> None:
+    path, _ = repository
+    base, _ = _updater_candidate(path)
+    head = _commit(path, module, "# Missing feature proof\n")
+    assert (
+        select_scope(path, _event(base, head), checkout_sha=head)["scope"]
+        == "system-wide"
+    )
+
+
+@pytest.mark.parametrize("status", ["D", "T", "U"])
+@pytest.mark.parametrize(
+    "path", sorted(UPDATER_COMPONENT_PATHS | {UPDATER_CHECK_SCRIPT})
+)
+def test_updater_scope_refuses_removed_or_retyped_inputs(
+    status: str, path: str
+) -> None:
+    assert (
+        choose_scope(
+            [(status, path)],
+            interfaces_equal=False,
+            updater_interfaces_equal=True,
+            path_modes={path: {"100644"}},
+        )
+        == "system-wide"
+    )
+
+
+@pytest.mark.parametrize("modes", [{"100755"}, {"120000"}, {"100644", "100755"}, set()])
+def test_updater_scope_requires_regular_non_executable_inputs(modes: set[str]) -> None:
+    assert (
+        choose_scope(
+            [("M", "bootstrap/upgrade.py")],
+            interfaces_equal=False,
+            updater_interfaces_equal=True,
+            path_modes={"bootstrap/upgrade.py": modes},
+        )
+        == "system-wide"
+    )
+
+
+@pytest.mark.parametrize(
+    "drift",
+    ["none", "runtime", "mode", "missing-test", "unknown-test", "missing-module-proof"],
+)
+def test_updater_scope_checks_exact_test_merge_tree(
+    repository: tuple[Path, str],
+    drift: str,
+) -> None:
+    path, _ = repository
+    base, head = _updater_candidate(path)
+    if drift == "runtime":
+        (path / "adminme/runtime.py").write_text("MERGE_ONLY = True\n")
+    elif drift == "mode":
+        (path / "adminme/runtime.py").chmod(0o755)
+    elif drift == "missing-test":
+        (path / "tests/acceptance/test_upgrade_deadline_rollback.py").unlink()
+    elif drift == "unknown-test":
+        (path / "tests/unreviewed.py").write_text("UNREVIEWED = True\n")
+    elif drift == "missing-module-proof":
+        (path / "bootstrap/prepared_runtime.py").write_text("UNPROVED = True\n")
+    _git(path, "add", "-A")
+    merge = _git(
+        path,
+        "commit-tree",
+        _git(path, "write-tree"),
+        "-p",
+        base,
+        "-p",
+        head,
+        "-m",
+        "Synthetic exact-parent updater merge",
+    )
+    _git(path, "checkout", "--detach", merge)
+    proof = select_scope(path, _event(base, head), checkout_sha=merge)
+    assert proof["scope"] == ("updater-delivery" if drift == "none" else "system-wide")
+
+
+@pytest.mark.parametrize(("filename", "protected", "platform", "system"), RELEASE_JOBS)
+def test_updater_worker_requires_recovery_and_supported_process_checks(
+    filename: str,
+    protected: str,
+    platform: str,
+    system: str,
+) -> None:
+    job = _workflow(filename)["jobs"]["updater-delivery-validation"]
+    assert job["if"] == "${{ needs.release-scope.outputs.scope == 'updater-delivery' }}"
+    assert job["steps"][-1]["id"] == "validated"
+    assert "if" not in job["steps"][-1]
+    commands = "\n".join(step.get("run", "") for step in job["steps"])
+    assert f"bash {UPDATER_CHECK_SCRIPT} {platform}" in commands
+    script = (ROOT / UPDATER_CHECK_SCRIPT).read_text()
+    for required in (
+        "set -euo pipefail",
+        '"${GITHUB_ACTIONS:-}" == true',
+        "--runxfail",
+        "test_source_identity.py",
+        "test_activation_transaction.py",
+        "test_cos_channel_activation.py",
+        "test_backup_rehearsal.py",
+        "test_candidate_readiness.py",
+        "test_recovery_readiness.py",
+        "test_phase5_operations.py",
+        "test_openclaw_plugin_reconciliation.py",
+        "test_upgrade_deadline_rollback.py",
+        "test_upgrade_readiness_blackout.py",
+        "test_recovery_readiness_baseline.py",
+        "test_cos_live_maintenance.py",
+        "test_macos_bootstrap_operations.py::test_credential_free_bootstrap_doctor_backup_restore_round_trip",
+        "test_ci_release_gates.py",
+        "prepared_runtime workspace_instructions",
+        'test -f "tests/unit/bootstrap/test_$module.py"',
+        "poetry run mypy bootstrap bridge/adminme_bridge scripts/release_scope.py",
+        "poetry run pyright bootstrap scripts/release_scope.py",
+        "scripts/verify_invariants.sh",
+        "poetry run ruff check",
+        "poetry run ruff format --check",
+        "poetry check --lock",
+    ):
+        assert required in script
+    for unrelated in (
+        "openclaw-source-install.sh",
+        "release-candidate.sh",
+        "ADMINME_RUN_BRIDGE_INSTALLER_RUNTIME",
+        "-k ",
+    ):
+        assert unrelated not in script
+    assert '"${tests[@]}"' in script
+
+
+@pytest.mark.parametrize(
+    "defect",
+    ["none", "missing", "empty", "missing-count", "skipped", "failure", "wrong-count"],
+)
+def test_actual_updater_junit_gate_rejects_missing_or_partial_evidence(
+    defect: str,
+    tmp_path: Path,
+) -> None:
+    script = (
+        (ROOT / UPDATER_CHECK_SCRIPT)
+        .read_text()
+        .split("<<'PY_CHECK'\n", 1)[1]
+        .split("\nPY_CHECK", 1)[0]
+    )
+    report = tmp_path / "updater.xml"
+    payload = '<testsuites><testsuite tests="1" skipped="0" failures="0" errors="0"><testcase name="fixture"/></testsuite></testsuites>'
+    if defect == "empty":
+        payload = "<testsuites/>"
+    elif defect == "missing-count":
+        payload = payload.replace(' errors="0"', "")
+    elif defect in {"skipped", "failure"}:
+        payload = payload.replace(
+            '<testcase name="fixture"/>',
+            f'<testcase name="fixture"><{defect}/></testcase>',
+        )
+    elif defect == "wrong-count":
+        payload = payload.replace('tests="1"', 'tests="2"')
+    if defect != "missing":
+        report.write_text(payload)
+    result = subprocess.run(
+        [sys.executable, "-c", script, str(report)],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert (result.returncode == 0) is (defect == "none")

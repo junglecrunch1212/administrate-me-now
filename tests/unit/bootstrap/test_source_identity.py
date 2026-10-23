@@ -105,6 +105,47 @@ def _repository(tmp_path: Path) -> tuple[Path, str, str]:
     return repository, first, second
 
 
+@pytest.mark.parametrize("reader", ["control", "tree"])
+def test_git_reader_drains_output_when_exit_races_select_timeout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reader: str
+) -> None:
+    repository, _first, commit = _repository(tmp_path)
+    original_popen = subprocess.Popen
+    original_select = source_identity.select.select
+    processes: list[subprocess.Popen[bytes]] = []
+    raced = False
+
+    def launch(*args, **kwargs):
+        process = original_popen(*args, **kwargs)
+        processes.append(process)
+        return process
+
+    def select_after_exit(readers, writers, errors, timeout):
+        nonlocal raced
+        if not raced:
+            # Deterministically place the process exit between select's empty
+            # result and a caller's poll, with its complete stdout still unread.
+            assert processes[-1].wait(timeout=10) == 0
+            raced = True
+            return [], [], []
+        return original_select(readers, writers, errors, timeout)
+
+    monkeypatch.setattr(source_identity.subprocess, "Popen", launch)
+    monkeypatch.setattr(source_identity.select, "select", select_after_exit)
+    if reader == "control":
+        result = source_identity._run_git(repository, ["rev-parse", "HEAD"])
+        assert result.stdout == (commit + "\n").encode()
+    else:
+        records = source_identity._run_git_tree_records(repository, commit)
+        assert {record.split(b"\t", 1)[1] for record in records} == {
+            b"adminme/sample.py",
+            b"scripts/run",
+            b"later.txt",
+        }
+    assert raced
+    assert all(process.returncode == 0 for process in processes)
+
+
 def _upgrade_repository(tmp_path: Path) -> tuple[Path, str]:
     repository = tmp_path / "upgrade-repository"
     repository.mkdir(mode=0o700)
