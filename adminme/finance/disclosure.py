@@ -44,12 +44,7 @@ def _session_digest(session: Session, session_key: str) -> str:
     return _digest([session.tenant_id, session.auth_member_id, session_key])
 
 
-def validate_current_authority(
-    runtime: Any,
-    session: Session,
-    expected_digest: str | None = None,
-) -> str:
-    """Synchronous final check: do not await between this check and disclosure."""
+def _check_current_owner(runtime: Any, session: Session) -> None:
     if (
         session.auth_role != "principal"
         or session.is_view_as
@@ -59,6 +54,33 @@ def validate_current_authority(
         or session.auth_member_id not in runtime.settings.finance_model_members
     ):
         raise FinanceDisclosureError("finance_disclosure_authority_changed")
+
+
+def _authority_digest(session: Session, context: Any) -> str:
+    if (
+        "read_context" not in context.permissions
+        or f"private:{session.auth_member_id}" not in context.allowed_scopes
+        or (session.service_context is not None and session.service_context != context)
+    ):
+        raise FinanceDisclosureError("finance_disclosure_authority_changed")
+    return _digest(
+        {
+            "tenant_id": session.tenant_id,
+            "member_id": session.auth_member_id,
+            "audience": f"private:{session.auth_member_id}",
+            "grant": context.audit_payload(),
+            "permissions": sorted(context.permissions),
+        }
+    )
+
+
+def validate_current_authority(
+    runtime: Any,
+    session: Session,
+    expected_digest: str | None = None,
+) -> str:
+    """Synchronous final check: do not await between this check and disclosure."""
+    _check_current_owner(runtime, session)
     try:
         context = resolve_service_delegation(
             runtime.projections.connection("parties"),
@@ -70,21 +92,7 @@ def validate_current_authority(
         )
     except Exception:
         raise FinanceDisclosureError("finance_disclosure_authority_changed") from None
-    if (
-        "read_context" not in context.permissions
-        or f"private:{session.auth_member_id}" not in context.allowed_scopes
-        or (session.service_context is not None and session.service_context != context)
-    ):
-        raise FinanceDisclosureError("finance_disclosure_authority_changed")
-    digest = _digest(
-        {
-            "tenant_id": session.tenant_id,
-            "member_id": session.auth_member_id,
-            "audience": f"private:{session.auth_member_id}",
-            "grant": context.audit_payload(),
-            "permissions": sorted(context.permissions),
-        }
-    )
+    digest = _authority_digest(session, context)
     if expected_digest is not None and digest != expected_digest:
         raise FinanceDisclosureError("finance_disclosure_authority_changed")
     return digest
@@ -170,9 +178,17 @@ async def record_disclosure(
     if not run_id or len(run_id) > 200:
         raise FinanceDisclosureError("finance_disclosure_run_required")
     run_hash = _digest(run_id)
-    authority_hash = await runtime.projections.read(
-        "parties", lambda _conn: validate_current_authority(runtime, session)
-    )
+    _check_current_owner(runtime, session)
+    if session.service_context is not None:
+        # The HTTP caller has just resolved this exact immutable Session after
+        # its audit append. Bind that authority to the receipt; the synchronous
+        # check after persistence still queries the current grant before release.
+        # A direct human/internal caller without that context resolves it here.
+        authority_hash = _authority_digest(session, session.service_context)
+    else:
+        authority_hash = await runtime.projections.read(
+            "parties", lambda _conn: validate_current_authority(runtime, session)
+        )
     async with runtime.settings_command_locks.setdefault(
         f"finance-disclosure:{session_hash}", asyncio.Lock()
     ):

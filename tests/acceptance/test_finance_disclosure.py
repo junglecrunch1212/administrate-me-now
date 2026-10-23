@@ -491,3 +491,36 @@ def test_binding_or_transport_revoked_during_receipt_append_blocks_delivery(
         response = calculate(client, "receipt-binding-race")
         assert response.status_code in {401, 403}, response.text
         assert "values" not in response.text and "answer_ref" not in response.text
+
+
+@pytest.mark.parametrize("change", ["revoke_grant", "remove_owner_role"])
+def test_authority_change_after_receipt_snapshot_blocks_release(
+    tmp_path, monkeypatch, change
+):
+    """The receipt's already-resolved authority never replaces its final check."""
+    with TestClient(create_application(enabled_settings(tmp_path))) as client:
+        grant = _grant_cos(client, "receipt-authority-snapshot")
+        runtime = client.app.state.runtime
+        original = runtime.event_log.get_by_idempotency_keys
+        changed = False
+
+        async def read_then_change(tenant, keys):
+            nonlocal changed
+            found = await original(tenant, keys)
+            if not changed and any(
+                k.startswith("finance-disclosure-run:") for k in keys
+            ):
+                changed = True
+                if change == "revoke_grant":
+                    await revoke(runtime, grant)
+                else:
+                    runtime.settings = replace(runtime.settings, member_roles={})
+            return found
+
+        monkeypatch.setattr(
+            runtime.event_log, "get_by_idempotency_keys", read_then_change
+        )
+        response = calculate(client, "receipt-authority-snapshot")
+        assert changed
+        assert response.status_code == 403, response.text
+        assert "values" not in response.text and "answer_ref" not in response.text
