@@ -1,90 +1,151 @@
-> Current owner policy (2026-10-22): the fast delivery policy in `AGENTS.md`
-> supersedes blanket validation/readiness ceremonies in this document. Select
-> checks for changed contracts and actual protected gates, reuse valid evidence,
-> and verify the requested workflow. Privacy, ownership, encryption, append-only
-> history, credential handling, independent approvals, and audited effects remain
-> mandatory. Executable updater/CI guards remain enforced until legitimately
-> updated through a protected PR.
-
 # Release acceptance contract
 
-Targeted development amendment (2026-10-21), **MODERNIZE** for AC-21 under
-the owner's standing testing instruction: development iterations use relevant
-regressions and their dependencies, including production composition for
-cross-boundary behavior, plus formatting, type, invariant, and privacy/security
-checks. These behavioral checks run only in hosted CI or an authorized
-disposable lab. A family Mac, member acceptance device, or live instance never
-becomes a candidate test target.
+## Fast delivery policy — 2026-10-23
 
-Draft PRs run the explicitly selected development jobs. The current bridge
-selection covers enrollment, installed-release identity, the native helper,
-bridge authorization/ingest, runtime composition, and a focused enrollment
-browser slice. Select or expand those jobs for subsequent changes according to
-behavior and risk. A failed iteration must reproduce and fix the concrete
-cause, batch related corrections, and pass the relevant regressions before
-another final release run; return the PR to draft before publishing those
-development commits. Development evidence is not release evidence.
+Owner-directed **SUPERSEDE/MODERNIZE** amendment to AC-21, refining the
+2026-10-22 policy from observed deliveries. The owner accepts
+occasional reversible runtime and workflow failures to ship faster and spend
+less time and tokens on process. This section and [AGENTS.md](../../AGENTS.md)
+override conflicting blanket release, readiness, deployment-validation and
+reporting language below and in older change orders/runbooks. The executable
+rows remain the inventory of behavior to preserve, not a checklist to rerun
+for every release. Runtime privacy, authorization and data-integrity contracts
+remain enforced.
 
-Risk-based release amendment (2026-10-21), **SUPERSEDE** for the earlier blanket
-full-Linux-and-macOS requirement under the owner's standing instruction:
+| Change | Required scope under this policy |
+|---|---|
+| Documentation and non-executable instructions | Relevant document/static checks; no application release or behavioral suite. |
+| Ordinary reversible fix or bounded feature | Focused behavior/dependency checks, relevant syntax/type/build checks and a small realistic smoke test; these can be final evidence. |
+| Permission, ownership, privacy, credentials, sending, persistent state or recovery behavior | Fresh checks for the complete affected security/data contract, including relevant production boundaries; do not sweep unrelated contracts. |
+| Concrete system-wide effects or an irreversible risk that focused checks cannot bound | Expanded or full-system validation, with a brief explanation of the actual dependency or risk. |
 
-- Documentation and non-executable changes require relevant document/static
-  checks, without an application release or behavioral suite.
-- A bounded reversible component can release after final scoped validation of
-  its behavior, dependencies/interfaces, privacy/security contract and realistic
-  installation/use on its affected platform. A bridge-helper SDK, installer or
-  diagnostics fix normally uses this scope, including actual packaged install,
-  integrity, interrupted recovery, secret cleanup and compatibility with the
-  deployed enrollment interface.
-- Shared composition, storage/schema/migration, cross-member authority,
-  external-write governance and broadly shared dependencies require expanded
-  coverage. Run full-system validation when effects are system-wide or cannot
-  be credibly bounded; document the concrete reason. A sensitive localized fix
-  still needs its full affected security/data contract. A filename or new commit
-  alone does not justify unrelated suites.
+A small diff is not proof of low risk, but a shared file, bootstrap path, unknown
+path mapping or uncertainty alone is not a reason for a full suite. Inspect the
+affected path and choose enough coverage to support the specific change. For a
+local reversible edit, use an existing check or focused regression; a new
+production-composition test is needed when the behavior crosses a real boundary,
+not merely because the project has a composition root. Use packaged install,
+restart, revocation, historical-data or restore cases when those behaviors are
+affected. A compatible helper component uses its supported independent install
+path and retains the unchanged central runtime.
 
-The ordinary draft-to-ready transition requests final validation for the
-selected scope. Stable `deterministic-consistency` and
-`credential-free-rehearsal` protected names remain mandatory aggregates. They
-derive scope from the actual fixed Git inputs and require explicit success of
-every selected worker; missing, failed, cancelled, skipped, stale or partial
-required results fail. Draft development results cannot approve release. No
-label, status forgery, protection bypass, separate review artifact or additional
-owner approval selects a lighter scope. Selection and gate changes require
-focused positive and negative tests. Unknown or unbounded inputs conservatively
-select system-wide validation. Existing full workers retain the full contract
-below when that scope is selected.
+One short paragraph in the existing PR can record change, checks and rollback.
+No mandatory impact map, lifecycle matrix, subsystem-exclusion essay, separate
+review chat, readiness approval or draft/ready loop. Draft status remains useful
+when current CI uses it to avoid broad iterations. Fix concrete failures and
+rerun their regressions plus affected dependencies; expand to equivalent paths
+only when a shared defect warrants it. Do not repeat passed unrelated suites,
+require a second promotion run of equivalent checks, or create an evidence-only
+follow-up. Nonblocking limitations can remain disclosed; failing required
+checks or an affected privacy/data/send contract cannot be called a pass.
 
-Evidence binds the tested component/artifact, relevant toolchain, lockfiles,
-dependencies and interface versions. Unchanged evidence can be reused only
-when those inputs demonstrably match; changed behavior and new interactions
-need fresh checks. An unrelated documentation commit does not invalidate all
-evidence. Preserve useful running checks; retire an unnecessary broad run only
-after a legitimate scoped gate exists and its required evidence passes.
-Independent jobs may run in parallel; caches remain keyed to relevant locked
-inputs, and no test-result cache is accepted as validation. Report development,
-scoped release and full-system results distinctly, with failures and gaps.
+Evidence is reusable when the tested source/artifact, relevant toolchain,
+lockfiles, dependencies and interfaces still match. Changed behavior and new
+interactions need fresh relevant checks; unrelated documentation does not reset
+every result. Reuse genuine results, not an unverified cache entry. Parallelize
+independent checks, preserve useful running work and avoid duplicate runs.
+Candidate behavior tests stay in hosted CI or an authorized disposable lab.
 
-Deploy only immutable protected-main artifacts through the applicable supported
-procedure. Retain a known-working predecessor and concrete rollback. A compatible
-helper component preserves the existing central runtime and enrollment identity;
-it does not require a central maintenance, backup or redeployment cycle for
-unchanged behavior. Verify backup/restore compatibility before changing
-persistent state and perform bounded component health/use checks after install,
-rolling back on regression. Central runtime deployment retains the full guarded
-updater, encrypted backup, observation, settlement, Doctor, isolation and
-zero-unintended-effect requirements. All scopes preserve ownership, encryption,
-append-only history, recipient restrictions, independent approvals, credentials
-and audited effects; rollback cannot undo a disclosure or send.
+## Small deliverables and observed lessons
 
-The CO027 permission-controller component extends the helper scope only when the
-central and retained bridge runtime inputs remain unchanged and its explicit
-interface contract matches. Its selected gate includes signed permission retry,
-production source admission, historical ownership and readiness, uncertainty and
-revocation, plus the actual packaged native entrypoint. Native ABI/denied-access
-smoke, synthetic granted-access composition and final member-owned permission
-and daemon settlement are separate evidence categories. A UI permission toggle
-or helper exit code alone cannot establish usable bridge observation.
+Policy improves a working prompt by converting intent into an outcome, a
+specific proof and a recoverable next action. The owner should not have to
+supply an implementation plan or approve the agent's choice of a narrow path.
+Preserve the full request, split its delivery, and ask only for an unresolved
+choice or genuinely missing authority. These examples are reconstructed from
+the task records reviewed on 2026-10-23; they are not a controlled measurement
+of time or token savings. Repository changes substantiate the implementation;
+private task evidence substantiates the reported live outcomes.
+
+| Task | Observed change in how the work was shaped | Result and lesson for the next request |
+|---|---|---|
+| Fix Google connections safely | Valid credentials moved the diagnosis from repeated OAuth to acquisition policy. The task preserved Gmail read-only/no extraction and Calendar/Tasks write capability, implemented a protected Google scope in [PR 455](https://github.com/junglecrunch1212/administrate-me-now/pull/455), and prepared activation while coordinating the one actual central-release dependency. | Sync and member-visible data were verified. Blank sync timestamps and unavailable individual Gmail records were disclosed without reopening working reconnection. Google initially waited on Apple enrollment; coordination removed the unrelated consent dependency. The remaining recovery-history defect required [PR 461](https://github.com/junglecrunch1212/administrate-me-now/pull/461), not more sign-in attempts. |
+| Troubleshoot CoS nonresponse | The task distinguished receipt/generation from delivery. A saved standing grant did not enable the pinned host's reply hook; [PR 458](https://github.com/junglecrunch1212/administrate-me-now/pull/458) fixed that real boundary. The replacement policy explicitly removed an unnecessary member-browser round and waiting for an unrelated macOS aggregate after affected native checks and actual protected checks passed. | A fresh owner message received one audited reply, and the owner confirmed receipt. Generic readiness had been an inadequate proxy. Check hook admission, exact grants, recipient restrictions and terminal delivery early; stop reopening a completed reply repair for subsequent features. |
+| Refactor obligation intake workflow | The original forwarded-intake/CoS outcome completed before the owner added bridge setup, then Apple writes and Settings. Later work used bounded helper repairs (for example, [PR 464](https://github.com/junglecrunch1212/administrate-me-now/pull/464)) and a separate write capability ([PR 465](https://github.com/junglecrunch1212/administrate-me-now/pull/465)); [PR 467](https://github.com/junglecrunch1212/administrate-me-now/pull/467) corrected native Calendar date handling. | Intake remained complete while bridge reading and then authorized service writes were verified. An empty selected calendar was reported as unverified event transfer, not repaired by inventing data. Packaged startup, native provider values and expiring device handoffs caused real failures and repeated work. Split by service/outcome earlier, preserve enrollment and working reads, and request short-lived access only once the exact replacement and checks are ready. |
+
+Useful working prompts derived from those cases:
+
+- **Reconnect:** Restore the named account's existing Calendar/Tasks capabilities
+  and Gmail read-only access with extraction off. Diagnose authentication versus
+  acquisition policy first; finish when permitted data syncs and is visible.
+  Preserve other integrations and recover through the supported configuration
+  or release operation if this repair regresses them.
+- **Reply:** Restore one ordinary private reply through the existing grant.
+  Reproduce the pinned host hook/permission failure, then verify one fresh
+  authorized exchange and its terminal audit. Keep new reminder or channel
+  features separate; restore the known working reply state on regression.
+- **Forwarded intake and expansion:** First make one authorized forward reach
+  extraction and Triage with automatic personal-inbox mining off. Deliver new
+  bridge reading next, then a complete approved action for each requested Apple
+  service, with destination selection, read-back and authorized cleanup. Keep
+  unfinished requested services visible without blocking completed ones.
+
+These are examples of the agent's working scope, not extra text the owner must
+paste. A short request such as "reconnect my Google data" is enough when the
+account, intended capabilities and authority are already established. Unresolved
+account or scope choices still need clarification; a convenient read-only
+substitute must never silently replace requested read/write functionality.
+
+### Rules for selecting the next deliverable
+
+Choose a complete user behavior that can be verified and recovered independently.
+A whole feature may cross UI, API, permission and audit layers; those necessary
+pieces belong together. An enabling compatibility change can ship first when it
+has its own concrete proof and unlocks a named next outcome. Avoid horizontal
+slices that leave the user with a button that cannot finish its action.
+
+Keep a short ordered list of requested outcomes in the existing task. Detail
+only the current one. New services, devices, permissions, persistent formats or
+deployment components trigger a scope review: include only what the current
+outcome actually needs; sequence the rest. One PR per independently shippable
+change does not mean one user-created chat or permission ceremony per PR.
+Continue through authorized work, close each milestone and report the remaining
+scope honestly. Do not stop at the first small slice and call the ambition done.
+
+Coordinate only real shared contracts and live mutation conflicts. Combine
+already-ready compatible changes when one update saves disruption, but do not
+make a repaired account wait for another service's permission prompt. Keep one
+operator and monitor for shared activation, and prepare independent work in
+parallel within the existing authorization. Prefer component installation when
+compatible. A prose-only policy merge requires no central runtime deployment.
+
+### Learn from failure without expanding every release
+
+A bounded smoke test must target the production boundary that failed: real hook
+registration, packaged service startup, native provider read-back, or loaded
+agent tools/instructions. Name the failure signal and supported recovery before
+activation. A new regression calls for prompt recovery, one redacted failure
+record, a focused reproduction and a corrected release. Do not repeat an
+unchanged failed attempt, reopen unrelated completed work, refresh consent while
+still building, or restart every suite after a local correction.
+
+The later reminder repair ([PR 466](https://github.com/junglecrunch1212/administrate-me-now/pull/466))
+provided two additional lessons. The updater left existing workspace instructions
+unchanged, so the reviewed policy needed its documented workspace installation;
+a merged template was not a loaded policy. Its activation request also had to
+explicitly restore the already-authorized reply grant after observation mode.
+Verify effective installed state, and prepare restoration of existing operation
+alongside the new feature rather than discovering it during downtime. The
+reminder release's timer/catalog checks were not evidence of an actual timed
+message: that delivery remained unverified in this task's deployment record.
+
+Recovery is not always an older binary. After new send-authorization history is
+written, an older runtime may not understand it. Use an independently reversible
+feature or permission switch on the schema-aware runtime where required; keep
+ordinary replies/reads usable and retain append-only receipts. Test this changed
+recovery boundary before enabling effects. Reversible runtime failures are
+acceptable; disclosure, lost history, duplicate sends and unknown effects are
+not made harmless by a rollback plan.
+
+Keep policy short and evidence-driven. Replace a recurring wrong assumption with
+one rule or regression; do not add a checklist for every incident. Future process
+improvement should use existing task/CI timestamps to identify repeated waits,
+retries and consent rounds, not create new telemetry, reports or claim unmeasured
+savings. This follows the [OpenAI guidance on updating AGENTS.md](https://learn.chatgpt.com/docs/customization/overview#when-to-update-agentsmd):
+correct repeated mistakes, give reading directions and pair instructions with
+executable enforcement.
+
+## Bridge enrollment release scope
 
 The narrowly bounded `bridge-enrollment` scope is a **SUPERSEDE** of the earlier
 blanket system-suite requirement for localized ingress/controller recovery,
@@ -112,26 +173,79 @@ This scope is a central release and retains the guarded updater, fresh encrypted
 backup/restore rehearsal, Doctor and real member acceptance. It does not change
 retained-edge compatibility or weaken deployment authorization.
 
-Readiness-before-release amendment (2026-10-21), **MODERNIZE** under the
-owner's standing instruction: finish a bounded production-workflow impact map
-in the existing PR/task before draft-to-ready. Map each affected contract to a
-concrete test/evidence and any open gap; consider identity/permission,
-acquisition, event/projection state, historical ownership, readiness,
-restart/revocation and upgrade/restore/rollback where affected. Justify excluded
-subsystems. Use installed-release composition with retained configuration and
-events, disabled/revoked sources, and relevant recovery paths, not merely a
-successful setup response. A late defect requires checking its finite equivalent
-paths and batching corrections before focused validation and another final run.
+Check the exact failure boundary early: a hook-registration refusal needs the
+real pinned host contract; failed first startup needs packaged service-start
+and recovery tests. Running thousands of unrelated tests cannot substitute for
+that missing scenario. A passing focused scenario plus its affected safeguards
+can be the final scope evidence when the protected gate implements that scope.
 
-Supported read-only diagnostics must establish discoverable deployment/device
-prerequisites before readiness promises or maintenance. Candidate experiments
-remain isolated. Resolve known blockers, actionable review and focused failures
-before declaring a settled candidate or requesting its final scope checks. Distinguish
-development pass, scoped/full release pass, deployment and verified usability; list outstanding
-dependencies separately from test duration. Record late defects and new coverage
-in the same PR. No extra approval ceremony, separate tracking task, invented
-behavioral test or new release cycle is required solely for policy prose, and
-valid running release checks are not interrupted to synchronize instructions.
+Release coupling must follow actual dependencies. Historical compatibility
+fixtures must read their pinned historical inputs; current-package smoke tests
+must read the candidate. Tests should not compare changing checkout bytes to
+unrelated historical hashes. Maintain exact artifact integrity, and bind
+compatibility to the relevant protocol/runtime contract. Changes to that
+binding need focused compatibility tests, not an exemption to force a pass.
+Until the supported contract changes, honor existing pins and serialize only
+the incompatible deployment steps; do not duplicate another task's release.
+
+## Deployment and recovery
+
+With owner authorization, deploy the immutable protected-main artifact using
+the supported updater/component installer. Identify the known-working
+predecessor, state compatibility and supported rollback command before switching.
+Reuse valid unchanged backup/recovery evidence within its freshness rules;
+verify restore compatibility before a persistence or recovery change. Do not
+require a new recovery rehearsal, central maintenance cycle or repeated full
+Doctor solely for an unrelated component correction.
+
+After activation, check liveness/readiness and the changed user outcome during
+a bounded observation window. For changed UI, use authenticated read-only
+member acceptance under the member-device procedure. On a new runtime or
+workflow regression, roll back promptly and check predecessor health. That
+rollback is included in the deployment authorization. Diagnose in isolation,
+add the failing-path regression and any coverage its cause warrants, fix, then
+redeploy within the owner's authorized scope. Record the candidate/configuration,
+expected and observed outcome, redacted error or log reference, and rollback
+result in the existing task. Do not delay recovery to assemble evidence. If the
+original fault remains but no new regression occurred, report an incomplete
+repair and preserve the healthiest supported state; rollback to an already
+broken predecessor is not success. Do not continue debugging by editing an
+installed release or turn the household into a candidate experiment.
+
+Permission, ownership, encryption, append-only history, credentials, recipient
+restrictions, independent sending approvals and audited effects remain enforced.
+Keep existing observation controls during maintenance; changes to enrollment,
+permissions, runtime baselines or live sending require explicit owner authority.
+One request may authorize merge and deployment; do not demand another phrase
+or confirmation if that authorization is already clear. Rollback can recover a
+reversible software failure, but cannot undo a disclosure, lost history or send.
+
+## Current enforcement and implementation gap
+
+This policy-only update changes no workflow, selector, runtime or updater.
+The implemented scope inventory lives in `scripts/release_scope.py`, with workers
+in `.github/workflows/administrateme-consistency.yml` and
+`.github/workflows/macos-bootstrap.yml`. Google, CoS recovery/reminders and bridge
+paths now have scoped implementations; the old three-scope description is stale.
+Inspect current code and GitHub protection rather than copying a scope/status
+list into every prompt. On 2026-10-23 the required merge status remained
+`deterministic-consistency`; affected platform contracts still need their checks.
+An unrelated unrequired aggregate is not an extra gate.
+
+The supported central updater still enforces backup, settlement, Doctor and
+synthetic-proof prerequisites. The reminder rollout reused the valid rehearsal
+already produced by its observation transition, but still incurred the updater's
+own work. Prose cannot remove that coupling. Unknown paths still use the protected
+fallback; never replace a missing, failed, cancelled, stale or skipped required
+result with a claimed pass.
+
+Remaining implementation improvements should themselves be separate deliverables:
+reuse compatible preparation/recovery evidence in the supported updater, make
+workspace-policy installation part of the supported update when relevant, and
+prepare exact restoration/enablement requests before maintenance. Each needs its
+own affected positive/negative compatibility and recovery proof before use. They
+are not prerequisites for unrelated product releases, and this policy update
+does not implement or authorize new live operations for them.
 
 Retired-provider history amendment (2026-10-20), **MODERNIZE** under CO-031:
 `tests/acceptance/test_retired_provider_history.py` must prove historical
@@ -694,13 +808,13 @@ iCloud propagation remain explicit live activation evidence.
 
 ## Rules
 
-A row passes only from a clean checkout using production composition and
-credential-free deterministic boundaries. There may be no unexpected skip or
+For a selected executable row, a pass requires a clean checkout using its
+named production composition and credential-free deterministic boundaries. There may be no unexpected skip or
 xfail. Fakes may stand in for provider credentials and household data, but not
 for the event log, bus, projections, authorization, HTTP composition, backup,
 restore, OpenClaw protocol, or browser rendering boundary named by a row.
 
-The release environment is macOS 14 on Apple silicon, Python 3.14.7 from the
+The full-system installation rehearsal uses macOS 14 on Apple silicon, Python 3.14.7 from the
 lockfile, Node 24.19.0 (the preferred bootstrap pin), OpenClaw API
 and Gateway `2026.7.2` at commit
 `ce67ffb70e83e5ebb56ea02e814e577153f84f61`, installed from the exact
@@ -838,7 +952,8 @@ effect.
 
 ## Full-system aggregate release command
 
-For system-wide release scope, on the supported macOS checkout:
+Only when system-wide scope is justified above (or current CI still requires
+it), run on the supported isolated macOS checkout:
 
 ```bash
 bash scripts/acceptance/release-candidate.sh
@@ -854,11 +969,16 @@ test:gate7`.
 
 ## Evidence standard
 
-The final report records commit, dirty state, UTC time, OS/architecture,
-runtime and pinned OpenClaw versions, command, exit status, duration/counts,
-unexpected skips/xfails, credential-free fixture boundary, coverage,
-performance, retained artifact hashes, and redacted failures. Human visual and
-live-provider review supplement but never replace authorization or behavior
-tests. A component report additionally names its selected scope, runtime/interface
-compatibility bindings, retained predecessor and supported rollback. Separate
-development, final scope validation, deployment and actual-use evidence.
+For a narrow change, the existing PR and CI results are the record: state what
+changed, the relevant checks and outcomes, any material gap, and the supported
+rollback for an executable release. Link existing output instead of duplicating
+it into reports. Separate checked, merged, deployed and verified usable claims.
+Document-only changes do not need a deployment or rollback report.
+
+Keep artifact/source identity, toolchain/interface bindings, counts, skips,
+failures and integrity hashes in automated results where they are needed for
+reproducibility or genuine reuse. Do not create a separate dossier for each
+commit or invalidate unchanged evidence because an unrelated file changed.
+Full-system and sensitive-contract runs retain the detailed evidence needed
+for their actual contracts. Never present a skipped, partial or failed check
+as passing, or credential-free fixtures as proof of live provider access.
