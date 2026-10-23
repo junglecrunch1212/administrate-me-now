@@ -29,6 +29,9 @@ CREATE TABLE IF NOT EXISTS tasks (
     service_assignment_role TEXT,
     service_party_id TEXT,
     authority_grant_id TEXT,
+    record_kind TEXT NOT NULL DEFAULT 'work'
+                      CHECK (record_kind IN ('work','note','scratchpad')),
+    source_authorities_json TEXT NOT NULL DEFAULT '[]',
     on_behalf_of_member_id TEXT,
     delegated_by_member_id TEXT,
     service_work_type TEXT,

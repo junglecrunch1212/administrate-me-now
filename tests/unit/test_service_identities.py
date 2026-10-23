@@ -37,7 +37,6 @@ def test_typed_service_context_keeps_actor_operator_member_and_scope_distinct() 
         permissions=frozenset({"read_context"}),
     )
     assert context.allowed_scopes == {
-        f"service-private:{COS_SERVICE_PRINCIPAL_ID}",
         "private:member-a",
     }
     assert "private:member-b" not in context.allowed_scopes
@@ -75,7 +74,7 @@ def test_unresolved_service_context_has_no_member_private_scope() -> None:
         represented_service_principal_id=COS_SERVICE_PRINCIPAL_ID,
         context_scope="unresolved",
     )
-    assert context.allowed_scopes == {f"service-private:{COS_SERVICE_PRINCIPAL_ID}"}
+    assert context.allowed_scopes == frozenset()
     assert not any(scope.startswith("private:") for scope in context.allowed_scopes)
 
 
@@ -94,7 +93,7 @@ def test_non_read_delegation_cannot_expose_member_private_scope() -> None:
         approval_quorum="member_owner",
         permissions=frozenset({"create_internal_work"}),
     )
-    assert context.allowed_scopes == {f"service-private:{COS_SERVICE_PRINCIPAL_ID}"}
+    assert context.allowed_scopes == frozenset()
 
 
 def test_external_delegation_schema_requires_the_exact_member_resource_owner() -> None:

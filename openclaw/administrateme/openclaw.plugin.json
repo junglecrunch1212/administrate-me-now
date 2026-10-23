@@ -54,7 +54,11 @@
       "administrateme_cos_response",
       "administrateme_standing_order",
       "administrateme_self_reminder",
-      "administrateme_self_reminder_fire"
+      "administrateme_self_reminder_fire",
+      "administrateme_service_private_work",
+      "administrateme_service_private_work_state",
+      "administrateme_service_private_state",
+      "administrateme_service_context"
     ]
   },
   "toolMetadata": {
@@ -80,7 +84,11 @@
     "administrateme_cos_response": { "optional": true },
     "administrateme_standing_order": { "optional": true },
     "administrateme_self_reminder": { "optional": true },
-    "administrateme_self_reminder_fire": { "optional": true }
+    "administrateme_self_reminder_fire": { "optional": true },
+    "administrateme_service_private_work": { "optional": true },
+    "administrateme_service_private_work_state": { "optional": true },
+    "administrateme_service_private_state": { "optional": true },
+    "administrateme_service_context": { "optional": true }
   },
   "dashboard": {
     "dataBindings": [
@@ -223,6 +231,7 @@
         },
         "description": "Reviewed dedicated CoS intake endpoints. Every member message arriving at this exact channel/account is submitted for review; other conversation channels remain unchanged. Domain service channel must independently allow member_submission intake."
       },
+      "serviceWorkEnabled": { "type": "boolean", "default": true },
       "bridgeEnabled": { "type": "boolean" },
       "bridgeChannels": {
         "type": "array",

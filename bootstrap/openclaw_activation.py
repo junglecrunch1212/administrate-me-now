@@ -14,13 +14,17 @@ from typing import Any
 import yaml
 
 from adminme.openclaw_topology import (
+    SERVICE_PRIVATE_TOOLS,
     binding_fingerprints,
     inspect_runtime_topology,
     member_agent_id,
     member_workspace_path,
+    service_agent_id,
+    service_workspace_path,
 )
 from adminme.deployment_readiness import REQUIRED_DM_SCOPE
 from adminme.service_identities import (
+    COS_SERVICE_PRINCIPAL_ID,
     cos_message_channel_for_account,
     validate_service_identity_config,
 )
@@ -392,6 +396,159 @@ def remove_unsupported_member_topology(paths: DeploymentPaths) -> dict[str, Any]
     }
 
 
+def _service_release_instructions(release: Path) -> bytes | None:
+    plugin_root = release / "openclaw" / "administrateme"
+    manifest_path = plugin_root / "openclaw.plugin.json"
+    if manifest_path.is_symlink() or not manifest_path.is_file():
+        raise RuntimeError("service topology requires the reviewed plugin manifest")
+    manifest = json.loads(manifest_path.read_text("utf-8"))
+    if not set(SERVICE_PRIVATE_TOOLS) <= set(
+        manifest.get("contracts", {}).get("tools", [])
+    ):
+        return None
+    source = plugin_root / "workspace" / "service-private" / "AGENTS.md"
+    if (
+        source.is_symlink()
+        or not source.is_file()
+        or not source.resolve().is_relative_to(plugin_root.resolve())
+    ):
+        raise RuntimeError("release service instructions are unavailable")
+    instructions = source.read_bytes()
+    if not 0 < len(instructions) <= 65536:
+        raise RuntimeError("release service instructions exceed their bound")
+    return instructions
+
+
+def _prepare_service_topology(
+    gateway: dict[str, Any], paths: DeploymentPaths, instructions: bytes | None
+) -> dict[str, Any]:
+    config = copy.deepcopy(gateway)
+    agents = config.get("agents", {}).get("list", [])
+    bindings = config.get("bindings", [])
+    if not isinstance(agents, list) or not isinstance(bindings, list):
+        raise RuntimeError("service topology is invalid")
+    expected_agent = service_agent_id(COS_SERVICE_PRINCIPAL_ID)
+    retained = [
+        row
+        for row in agents
+        if not (isinstance(row, dict) and row.get("id") == expected_agent)
+    ]
+    retained_bindings = [
+        row
+        for row in bindings
+        if not (isinstance(row, dict) and row.get("agentId") == expected_agent)
+    ]
+    if instructions is not None:
+        adapter_config = json.loads(
+            (paths.instance_dir / "config" / "adapters.json").read_text("utf-8")
+        )
+        members = set((adapter_config.get("openclaw_actor_identities") or {}).values())
+        members.update(adapter_config.get("member_chat_enabled_members") or [])
+        service_config = copy.deepcopy(adapter_config.get("service_identities"))
+        if isinstance(service_config, dict):
+            for channel in service_config.get("channels") or []:
+                if isinstance(channel, dict):
+                    channel["routes"] = []
+        principals, _ = validate_service_identity_config(
+            service_config, member_ids=members, household_party_ids=set()
+        )
+        service = [
+            principal
+            for principal in principals
+            if principal.service_principal_id == COS_SERVICE_PRINCIPAL_ID
+            and principal.kind == "chief_of_staff"
+        ]
+        if len(service) != 1:
+            raise RuntimeError(
+                "service topology requires one configured Chief of Staff"
+            )
+        workspace = service_workspace_path(
+            paths.instance_dir / "openclaw",
+            COS_SERVICE_PRINCIPAL_ID,
+            instructions=instructions,
+        )
+        for directory in [workspace, *list(workspace.parents)[:2]]:
+            if directory.is_symlink() or (
+                directory.exists()
+                and (not directory.is_dir() or directory.resolve() != directory)
+            ):
+                raise RuntimeError("service workspace must be a private directory")
+        target = workspace / "AGENTS.md"
+        if target.is_symlink() or (
+            target.exists()
+            and (not target.is_file() or target.read_bytes() != instructions)
+        ):
+            raise RuntimeError("immutable service instructions changed")
+        retained.append(
+            {
+                "id": expected_agent,
+                "workspace": str(workspace),
+                "tools": {"allow": list(SERVICE_PRIVATE_TOOLS)},
+            }
+        )
+    config.setdefault("agents", {})["list"] = retained
+    config["bindings"] = retained_bindings
+    return config
+
+
+def prepare_service_topology(
+    gateway: dict[str, Any], paths: DeploymentPaths, release: Path
+) -> dict[str, Any]:
+    """Derive the exact reviewed target topology without writing any live state.
+
+    Maintenance records this complete expected configuration before downtime.
+    The installer uses the same transformation; no agent, tool or grant field
+    is omitted from the later compatibility comparison.
+    """
+    return _prepare_service_topology(
+        gateway, paths, _service_release_instructions(release)
+    )
+
+
+def reconcile_service_topology(paths: DeploymentPaths, release: Path) -> dict[str, Any]:
+    """Select immutable service instructions and preserve member state/history."""
+    instructions = _service_release_instructions(release)
+    config_path = paths.instance_dir / "openclaw" / "runtime" / "openclaw.json"
+    if config_path.is_symlink() or not config_path.is_file():
+        raise RuntimeError("service topology requires the runtime configuration")
+    config = _prepare_service_topology(
+        json.loads(config_path.read_text("utf-8")), paths, instructions
+    )
+    if instructions is not None:
+        workspace = service_workspace_path(
+            paths.instance_dir / "openclaw",
+            COS_SERVICE_PRINCIPAL_ID,
+            instructions=instructions,
+        )
+        for directory in reversed([workspace, *list(workspace.parents)[:2]]):
+            if directory.is_symlink():
+                raise RuntimeError("service workspace cannot be a symlink")
+            directory.mkdir(exist_ok=True, mode=0o700)
+            if not directory.is_dir() or directory.resolve() != directory:
+                raise RuntimeError("service workspace must be a private directory")
+            directory.chmod(0o700)
+        target = workspace / "AGENTS.md"
+        if target.is_symlink() or (
+            target.exists()
+            and (not target.is_file() or target.read_bytes() != instructions)
+        ):
+            raise RuntimeError("immutable service instructions changed")
+        if not target.exists():
+            atomic_write(target, instructions, mode=0o600)
+    atomic_write(
+        config_path, json.dumps(config, indent=2, sort_keys=True).encode(), mode=0o600
+    )
+    return {
+        "service_agent_count": int(instructions is not None),
+        "service_tool_count": len(SERVICE_PRIVATE_TOOLS)
+        if instructions is not None
+        else 0,
+        "member_authority": False,
+        "provider_authority": False,
+        "content_exposed": False,
+    }
+
+
 def activate(
     paths: DeploymentPaths,
     *,
@@ -446,6 +603,7 @@ def activate(
         env=environment,
     )
     topology = reconcile_member_topology(paths)
+    reconcile_service_topology(paths, root or repository_root())
     subprocess.run([executable, "config", "validate"], check=True, env=environment)
     subprocess.run(
         [executable, "models", "status", "--probe"], check=True, env=environment
@@ -504,5 +662,7 @@ __all__ = [
     "activation_path",
     "model_provider_configured",
     "reconcile_member_topology",
+    "reconcile_service_topology",
+    "prepare_service_topology",
     "remove_unsupported_member_topology",
 ]

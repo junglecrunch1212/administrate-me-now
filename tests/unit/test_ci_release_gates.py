@@ -16,6 +16,12 @@ import yaml
 
 from scripts.release_scope import (
     CONTRACT,
+    COS_SERVICE_WORK_APPLICATION,
+    COS_SERVICE_WORK_CHECK_SCRIPT,
+    COS_SERVICE_WORK_NATIVE_INSTALL,
+    COS_SERVICE_WORK_COMPONENT_PATHS,
+    COS_SERVICE_WORK_REQUIRED_PATHS,
+    _service_work_application,
     UPDATER_COMPONENT_PATHS,
     UPDATER_TEST_PATHS,
     UPDATER_REQUIRED_PATHS,
@@ -115,6 +121,7 @@ def _needs(proof: dict[str, Any], platform: str) -> dict[str, Any]:
         "cos-recovery-history",
         "cos-reminders",
         "updater-delivery",
+        "cos-service-work",
         "system-wide",
     ],
 )
@@ -153,6 +160,7 @@ def test_scope_gate_requires_exact_corresponding_success(
         "cos-recovery-history",
         "cos-reminders",
         "updater-delivery",
+        "cos-service-work",
     ],
 )
 def test_gate_refuses_development_or_reinterpreted_evidence(
@@ -613,6 +621,7 @@ def test_stable_protected_job_recomputes_scope_and_requires_real_worker_results(
         "cos-recovery-history-validation",
         "cos-reminder-validation",
         "updater-delivery-validation",
+        "cos-service-work-validation",
         system,
     }
     if platform == "macos":
@@ -1793,12 +1802,16 @@ def test_updater_worker_requires_recovery_and_supported_process_checks(
     "defect",
     ["none", "missing", "empty", "missing-count", "skipped", "failure", "wrong-count"],
 )
-def test_actual_updater_junit_gate_rejects_missing_or_partial_evidence(
+@pytest.mark.parametrize(
+    "check_script", [UPDATER_CHECK_SCRIPT, COS_SERVICE_WORK_CHECK_SCRIPT]
+)
+def test_actual_component_junit_gate_rejects_missing_or_partial_evidence(
+    check_script: str,
     defect: str,
     tmp_path: Path,
 ) -> None:
     script = (
-        (ROOT / UPDATER_CHECK_SCRIPT)
+        (ROOT / check_script)
         .read_text()
         .split("<<'PY_CHECK'\n", 1)[1]
         .split("\nPY_CHECK", 1)[0]
@@ -1826,3 +1839,251 @@ def test_actual_updater_junit_gate_rejects_missing_or_partial_evidence(
         timeout=10,
     )
     assert (result.returncode == 0) is (defect == "none")
+
+
+_SERVICE_IMPORT = "    from adminme.products.openclaw.service_work import router as service_work_router\n"
+_SERVICE_INCLUDE = "    app.include_router(service_work_router)\n"
+_SERVICE_RUNTIME = "def create_application():\n    app = factory()\n    return app\n"
+_SERVICE_WIRED_RUNTIME = _SERVICE_RUNTIME.replace(
+    "    return app\n", _SERVICE_IMPORT + _SERVICE_INCLUDE + "    return app\n"
+)
+
+
+def _service_work_candidate(path: Path) -> tuple[str, str]:
+    base = _commit(path, COS_SERVICE_WORK_APPLICATION, _SERVICE_RUNTIME)
+    for relative in COS_SERVICE_WORK_REQUIRED_PATHS:
+        target = path / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(
+            _SERVICE_WIRED_RUNTIME
+            if relative == COS_SERVICE_WORK_APPLICATION
+            else "# Reviewed service-work component\n"
+        )
+        if relative == COS_SERVICE_WORK_NATIVE_INSTALL:
+            target.chmod(0o755)
+    _git(path, "add", "-A")
+    _git(path, "commit", "-m", "Service-owned work with exact runtime wiring")
+    return base, _git(path, "rev-parse", "HEAD")
+
+
+def test_service_work_scope_binds_exact_runtime_wiring_and_component_proof(
+    repository: tuple[Path, str],
+) -> None:
+    path, _ = repository
+    base, head = _service_work_candidate(path)
+    # Working files and caller claims cannot alter immutable scope evidence.
+    (path / COS_SERVICE_WORK_APPLICATION).write_text("UNCOMMITTED = True\n")
+    proof = select_scope(path, _event(base, head), checkout_sha=head)
+    assert proof["scope"] == "cos-service-work"
+    assert len(proof["cos_service_work_dependency_sha256"]) == 64
+    for platform in ("linux", "macos"):
+        assert required_workers("cos-service-work", platform) == (
+            "release-scope",
+            "cos-service-work-validation",
+        )
+        verify_gate(proof, _needs(proof, platform), platform=platform)
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        _SERVICE_RUNTIME,
+        _SERVICE_WIRED_RUNTIME.replace(_SERVICE_INCLUDE, ""),
+        _SERVICE_WIRED_RUNTIME.replace(_SERVICE_IMPORT, ""),
+        _SERVICE_WIRED_RUNTIME.replace(_SERVICE_INCLUDE, _SERVICE_INCLUDE * 2),
+        _SERVICE_WIRED_RUNTIME.replace(
+            _SERVICE_IMPORT + _SERVICE_INCLUDE, _SERVICE_INCLUDE + _SERVICE_IMPORT
+        ),
+        _SERVICE_WIRED_RUNTIME.replace("service_work_router)", "unrelated_router)"),
+        _SERVICE_WIRED_RUNTIME.replace(
+            "    app = factory()", "    app = unsafe_factory()"
+        ),
+        _SERVICE_WIRED_RUNTIME + "UNRELATED = True\n",
+        _SERVICE_WIRED_RUNTIME.replace(
+            "def create_application():", "def other_application():"
+        ),
+        "unparseable python [",
+    ],
+)
+def test_service_work_scope_rejects_missing_or_broader_runtime_edits(
+    repository: tuple[Path, str], source: str
+) -> None:
+    path, _ = repository
+    base, _head = _service_work_candidate(path)
+    head = _commit(path, COS_SERVICE_WORK_APPLICATION, source)
+    assert (
+        select_scope(path, _event(base, head), checkout_sha=head)["scope"]
+        == "system-wide"
+    )
+
+
+def test_service_work_runtime_normalization_is_limited_to_direct_router_statements() -> (
+    None
+):
+    baseline = _service_work_application(_SERVICE_RUNTIME)
+    wired = _service_work_application(_SERVICE_WIRED_RUNTIME)
+    assert baseline is not None and wired is not None
+    assert baseline == (wired[0], False)
+    assert wired[1] is True
+    nested = _SERVICE_WIRED_RUNTIME.replace(
+        _SERVICE_IMPORT + _SERVICE_INCLUDE,
+        "    if enabled:\n" + "    " + _SERVICE_IMPORT + "    " + _SERVICE_INCLUDE,
+    )
+    assert _service_work_application(nested) != wired
+    # Invalid syntax and duplicate entry points fail closed, not a broad exemption.
+    assert _service_work_application("def [") is None
+    assert _service_work_application(_SERVICE_WIRED_RUNTIME * 2) is None
+
+
+@pytest.mark.parametrize(
+    "other",
+    [
+        "adminme/events/log.py",
+        "adminme/lib/session.py",
+        "adminme/runtime/unreviewed.py",
+        "adminme/products/openclaw/routers.py",
+        "bootstrap/upgrade.py",
+        "bootstrap/backup_restore.py",
+        "bootstrap/versions.json",
+        "poetry.lock",
+        "openclaw/administrateme/package-lock.json",
+        "openclaw/administrateme/src/transport.ts",
+        "tests/unreviewed.py",
+    ],
+)
+def test_service_work_scope_freezes_other_contracts_and_dependencies(
+    repository: tuple[Path, str], other: str
+) -> None:
+    path, _ = repository
+    _commit(path, other, "RETAINED = True\n")
+    base, _head = _service_work_candidate(path)
+    head = _commit(path, other, "CHANGED = True\n")
+    event = _event(base, head)
+    event.update(cos_service_work_interfaces_equal=True, changed_paths=[])
+    assert select_scope(path, event, checkout_sha=head)["scope"] == "system-wide"
+
+
+@pytest.mark.parametrize("status", ["D", "T", "U"])
+@pytest.mark.parametrize("path", sorted(COS_SERVICE_WORK_COMPONENT_PATHS))
+def test_service_work_scope_rejects_deleted_or_retyped_sources(
+    status: str, path: str
+) -> None:
+    assert (
+        choose_scope(
+            [(status, path)],
+            interfaces_equal=False,
+            cos_service_work_interfaces_equal=True,
+            path_modes={path: {"100644"}},
+        )
+        == "system-wide"
+    )
+
+
+@pytest.mark.parametrize(
+    "drift",
+    ["none", "runtime", "unknown", "missing-proof", "mode", "native-mode", "symlink"],
+)
+def test_service_work_scope_checks_actual_merge_tree(
+    repository: tuple[Path, str], drift: str
+) -> None:
+    path, _ = repository
+    base, head = _service_work_candidate(path)
+    target = path / "tests/acceptance/test_cos_service_private_work.py"
+    if drift == "runtime":
+        (path / COS_SERVICE_WORK_APPLICATION).write_text(
+            _SERVICE_WIRED_RUNTIME + "SIDE_EFFECT = True\n"
+        )
+    elif drift == "unknown":
+        (path / "tests/unreviewed.py").write_text("UNREVIEWED = True\n")
+    elif drift == "missing-proof":
+        target.unlink()
+    elif drift == "mode":
+        target.chmod(0o755)
+    elif drift == "native-mode":
+        (path / COS_SERVICE_WORK_NATIVE_INSTALL).chmod(0o644)
+    elif drift == "symlink":
+        target.unlink()
+        target.symlink_to("../unit/test_service_work_principal.py")
+    _git(path, "add", "-A")
+    merge = _git(
+        path,
+        "commit-tree",
+        _git(path, "write-tree"),
+        "-p",
+        base,
+        "-p",
+        head,
+        "-m",
+        "Exact-parent service work merge",
+    )
+    _git(path, "checkout", "--detach", merge)
+    proof = select_scope(path, _event(base, head), checkout_sha=merge)
+    assert proof["scope"] == ("cos-service-work" if drift == "none" else "system-wide")
+
+
+@pytest.mark.parametrize(("filename", "protected", "platform", "system"), RELEASE_JOBS)
+def test_service_work_worker_requires_affected_identity_replay_and_recovery_checks(
+    filename: str, protected: str, platform: str, system: str
+) -> None:
+    job = _workflow(filename)["jobs"]["cos-service-work-validation"]
+    assert job["if"] == "${{ needs.release-scope.outputs.scope == 'cos-service-work' }}"
+    assert job["steps"][-1]["id"] == "validated"
+    assert "if" not in job["steps"][-1]
+    assert job["steps"][-1]["run"].count('"$GITHUB_SHA"') == 1
+    commands = "\n".join(step.get("run", "") for step in job["steps"])
+    assert f"bash {COS_SERVICE_WORK_CHECK_SCRIPT} {platform}" in commands
+    script = (ROOT / COS_SERVICE_WORK_CHECK_SCRIPT).read_text()
+    for required in (
+        '"${GITHUB_ACTIONS:-}" == true',
+        "--runxfail",
+        "--junitxml=",
+        "PY_CHECK",
+        "test_cos_service_private_work.py",
+        "test_cos_service_working_context.py",
+        "test_service_work_principal.py",
+        "test_service_identities.py",
+        "test_operating_agreements.py",
+        "test_source_policy_v2.py",
+        "test_scope.py",
+        "test_session.py",
+        "test_event_validation.py",
+        "test_event_schemas.py",
+        "test_schema_registry.py",
+        "test_projection_tasks.py",
+        "test_projection_rebuild.py::",
+        "test_projection_scope_canary.py",
+        "test_cos_identity_delegation_kernel.py",
+        "test_cos_work_coordination_operating_agreements.py",
+        "test_openclaw_native_seam.py",
+        "test_member_chat_subscription.py",
+        "test_member_cos_approval.py",
+        "test_cos_self_replies.py",
+        "test_cos_self_reminders.py",
+        "test_cos_service_topology.py",
+        "test_cos_member_topology.py",
+        "test_cos_channel_activation.py",
+        "test_openclaw_plugin_reconciliation.py",
+        "test_cos_guard_release.py",
+        "test_ci_release_gates.py",
+        "npm run check",
+        "npm run build",
+        "npm test",
+        "poetry run mypy",
+        "poetry run pyright",
+        "scripts/verify_invariants.sh",
+        "scripts/generate_event_lifecycle_catalog.py --check",
+        "openclaw-source-install.sh --service-work",
+    ):
+        assert required in script
+    for unrelated in (
+        "release-candidate.sh",
+        "ADMINME_RUN_BRIDGE_INSTALLER_RUNTIME",
+        "-k ",
+    ):
+        assert unrelated not in script
+    assert 'if [[ "$1" == macos ]]; then' in script
+    native = (ROOT / COS_SERVICE_WORK_NATIVE_INSTALL).read_text()
+    assert '"${1:-}" == --service-work' in native
+    assert "check-service-work-gateway.mjs" in native
+    assert "install-openclaw-source.sh" in native
+    assert "reviewed_source_status" in native

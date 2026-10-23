@@ -14,8 +14,10 @@ from adminme.service_identities import COS_PARTY_ID, COS_SERVICE_PRINCIPAL_ID
 
 
 CONSTITUTIONAL_AGREEMENT_ID = "constitutional:household-cos-safety"
-CONSTITUTIONAL_AGREEMENT_REVISION = 1
-CONSTITUTIONAL_AGREEMENT_VERSION = "household-cos-safety-v1"
+# Register a new revision rather than rewriting the rule behind historical
+# references. The parties projection retains and supersedes prior revisions.
+CONSTITUTIONAL_AGREEMENT_REVISION = 2
+CONSTITUTIONAL_AGREEMENT_VERSION = "household-cos-safety-v2"
 
 
 def _release_commit(repository_root: Path, definition_digest: str) -> str:
@@ -79,6 +81,8 @@ def constitutional_agreement_payload(
             "exact_scope",
             "fresh_authority_grant",
             "privacy_classification",
+            "source_provenance",
+            "explicit_client_confidentiality",
         ],
         "maximum_fact_age_seconds": 300,
         "required_fact_coverage": "complete",
@@ -87,11 +91,20 @@ def constitutional_agreement_payload(
             "deterministic_projection",
             "typed_coordination",
             "bounded_openclaw_llm_task",
+            "routine_cross_source_coordination_with_current_source_grants",
+            "service_private_notes_memory_and_scratchpad_with_source_provenance",
+            "reuse_current_standing_authority_without_repeat_approval",
         ],
-        "permitted_disclosures": ["minimum_typed_coordination_fields"],
+        "permitted_disclosures": [
+            "minimum_typed_coordination_fields",
+            "authorized_disclosure_with_exact_source_and_audience_authority",
+        ],
         "permitted_proposal_preparation": ["propose", "prepare", "hold"],
         "prohibitions": [
-            "cross_member_private_evidence_disclosure",
+            "unauthorized_cross_member_private_evidence_disclosure",
+            "disclosure_contrary_to_explicit_client_confidentiality",
+            "technical_access_or_work_computer_treated_as_disclosure_authority",
+            "derived_work_losing_source_restrictions",
             "provider_execution_without_independent_domain_and_openclaw_approval",
             "service_principal_impersonating_member",
             "self_activating_policy_or_trust_expansion",
@@ -110,10 +123,13 @@ def constitutional_agreement_payload(
         "verification_requirements": [
             "terminal_result_if_execution_is_later_authorized",
             "privacy_and_scope_verification",
+            "current_grant_for_each_source_and_destination",
+            "inherited_confidentiality_and_provenance_for_derived_work",
         ],
         "reconciliation_requirements": [
             "later_observation_if_execution_is_later_authorized",
             "suspend_on_missing_or_conflicting_result",
+            "recheck_source_authority_on_reuse_after_revocation_or_expiry",
         ],
         "trust_scope": {
             "granting_member_ids": adults,

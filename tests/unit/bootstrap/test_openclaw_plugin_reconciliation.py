@@ -11,7 +11,13 @@ from typing import Any, Callable
 import jsonschema
 import pytest
 
-from adminme.openclaw_topology import member_agent_id
+from adminme.openclaw_topology import (
+    SERVICE_PRIVATE_INSTRUCTIONS,
+    SERVICE_PRIVATE_TOOLS,
+    member_agent_id,
+    service_agent_id,
+)
+from adminme.service_identities import COS_SERVICE_PRINCIPAL_ID
 from bootstrap.contracts import DeploymentPaths, atomic_write
 from bootstrap.openclaw_activation import remove_unsupported_member_topology
 from bootstrap.openclaw_tools import (
@@ -75,11 +81,13 @@ def test_plugin_status_rejects_a_loaded_stale_release(
 
 @pytest.mark.parametrize("standing_supported", [False, True])
 @pytest.mark.parametrize("permitted", [False, True])
+@pytest.mark.parametrize("service_supported", [False, True])
 def test_reconcile_replaces_stale_registration_and_proves_runtime_source(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     standing_supported: bool,
     permitted: bool,
+    service_supported: bool,
 ) -> None:
     paths = DeploymentPaths.from_root(tmp_path / "instance")
     release = tmp_path / "releases" / "candidate"
@@ -89,6 +97,9 @@ def test_reconcile_replaces_stale_registration_and_proves_runtime_source(
     (plugin / "openclaw.plugin.json").write_text(
         json.dumps(
             {
+                "contracts": {
+                    "tools": list(SERVICE_PRIVATE_TOOLS) if service_supported else []
+                },
                 "configSchema": {
                     "type": "object",
                     "properties": {
@@ -97,17 +108,22 @@ def test_reconcile_replaces_stale_registration_and_proves_runtime_source(
                         "memberAgentIds": {},
                         "forwardIntakeAccounts": {},
                         "scheduledSelfReminderBindings": {},
+                        **({"serviceWorkEnabled": {}} if service_supported else {}),
                         **(
                             {"standingSelfReplyBindings": {}}
                             if standing_supported
                             else {}
                         ),
                     },
-                }
+                },
             }
         ),
         encoding="utf-8",
     )
+    if service_supported:
+        source = plugin / "workspace/service-private/AGENTS.md"
+        source.parent.mkdir(parents=True)
+        source.write_text(SERVICE_PRIVATE_INSTRUCTIONS)
     config_dir = paths.instance_dir / "config"
     runtime_dir = paths.instance_dir / "openclaw" / "runtime"
     config_dir.mkdir(parents=True)
@@ -147,6 +163,11 @@ def test_reconcile_replaces_stale_registration_and_proves_runtime_source(
                             "enabled": True,
                             "hooks": {"allowConversationAccess": permitted},
                             "config": {
+                                **(
+                                    {"serviceWorkEnabled": False}
+                                    if service_supported
+                                    else {}
+                                ),
                                 "forwardIntakeAccounts": [
                                     {"channelId": "imessage", "accountId": "fixture"}
                                 ],
@@ -221,11 +242,17 @@ def test_reconcile_replaces_stale_registration_and_proves_runtime_source(
     assert entry["config"]["scheduledSelfReminderBindings"] == (
         ["f" * 64] if permitted else []
     )
-    assert {row["id"] for row in stored["agents"]["list"]} == {
+    expected_agents = {
         "operator",
         member_agent_id("member-a"),
         member_agent_id("member-b"),
     }
+    if service_supported:
+        expected_agents.add(service_agent_id(COS_SERVICE_PRINCIPAL_ID))
+    assert {row["id"] for row in stored["agents"]["list"]} == expected_agents
+    assert status["service_topology"]["service_agent_count"] == int(service_supported)
+    if service_supported:
+        assert entry["config"]["serviceWorkEnabled"] is False
     assert all(
         row["agentId"] != "adminme-stale0000000000" for row in stored["bindings"]
     )
@@ -239,6 +266,19 @@ def test_reconcile_replaces_stale_registration_and_proves_runtime_source(
         str(plugin.resolve()),
     ] in commands
     assert ["/reviewed/openclaw", "config", "validate"] in commands
+    if service_supported:
+        manifest_path = plugin / "openclaw.plugin.json"
+        older_manifest = json.loads(manifest_path.read_text())
+        older_manifest["contracts"]["tools"] = []
+        manifest_path.write_text(json.dumps(older_manifest))
+        rolled_back = reconcile_administrateme_plugin(paths, release)
+        assert rolled_back["service_topology"]["service_agent_count"] == 0
+        restored = json.loads((runtime_dir / "openclaw.json").read_text())
+        assert restored["plugins"]["entries"] == stored["plugins"]["entries"]
+        assert all(
+            not row["id"].startswith("am-service-")
+            for row in restored["agents"]["list"]
+        )
 
 
 def test_reconcile_legacy_plugin_removes_only_unsupported_candidate_topology(
@@ -480,7 +520,11 @@ def _destructive_plugin_cli(
     root = Path(__file__).resolve().parents[3]
     plugin = release / "openclaw/administrateme"
     atomic_write(plugin / "dist/index.js", b"export default {};")
-    for relative in ("openclaw.plugin.json", "bin/cos-imsg-guard.mjs"):
+    for relative in (
+        "openclaw.plugin.json",
+        "bin/cos-imsg-guard.mjs",
+        "workspace/service-private/AGENTS.md",
+    ):
         atomic_write(
             plugin / relative,
             (root / "openclaw/administrateme" / relative).read_bytes(),

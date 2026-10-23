@@ -14,6 +14,7 @@ from typing import Any
 
 from bootstrap.contracts import DeploymentPaths, atomic_write, load_versions
 from bootstrap.openclaw_activation import (
+    reconcile_service_topology,
     reconcile_member_topology,
     remove_unsupported_member_topology,
 )
@@ -302,6 +303,7 @@ def reconcile_administrateme_plugin(
             if supports_member_topology
             else remove_unsupported_member_topology(paths)
         )
+        service_topology = reconcile_service_topology(paths, release)
         validated = run(["config", "validate"])
         if validated.returncode:
             raise RuntimeError("OpenClaw rejected the reviewed plugin configuration")
@@ -311,6 +313,7 @@ def reconcile_administrateme_plugin(
                 "OpenClaw did not load AdministrateMe from the selected release"
             )
         status["member_topology"] = topology
+        status["service_topology"] = service_topology
         return status
     except Exception:
         try:

@@ -12,6 +12,7 @@ import { prepareApproval } from "./approval.js";
 import type { PluginRuntime } from "./runtime.js";
 import { rememberSelfReply, registerSelfReplies, bindReminderTool } from "./self-replies.js";
 import { TransportError } from "./transport.js";
+import { provenanceFromServiceTool, SERVICE_PRIVATE_TOOL_NAMES } from "./service-private.js";
 
 type BridgeMarker = {
   consent?: unknown;
@@ -24,6 +25,16 @@ export function registerHooks(api: OpenClawPluginApi, runtime: PluginRuntime): v
   api.on(
     "before_tool_call",
     async (event, context) => {
+      if ((SERVICE_PRIVATE_TOOL_NAMES as readonly string[]).includes(event.toolName)) {
+        try {
+          provenanceFromServiceTool(context, runtime.transport.config.sharedSecretEnv, runtime.transport.config.serviceWorkEnabled);
+        } catch {
+          return { block: true, blockReason: "Service-private work requires its dedicated internal service session." };
+        }
+        // Standing service-self authority covers only private internal state.
+        // All member and provider actions retain their independent approvals.
+        return;
+      }
       // Generic delivery tools cannot borrow CoS account authority. The
       // final-answer hook handles explicitly authorized self replies. Other
       // sends use the exact approval tool; the native wrapper guards both.

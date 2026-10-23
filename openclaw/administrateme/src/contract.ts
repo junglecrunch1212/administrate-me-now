@@ -32,6 +32,7 @@ export type PluginConfig = {
   sharedSecretEnv: string;
   timeoutMs: number;
   bridgeEnabled: boolean;
+  serviceWorkEnabled: boolean;
   bridgeChannels: readonly string[];
   bridgeEventKinds: readonly BridgeEventKind[];
   forwardIntakeAccounts: readonly { channelId: "imessage" | "bluebubbles"; accountId: string }[];
@@ -73,6 +74,10 @@ export const TOOL_NAMES = [
   "administrateme_standing_order",
   "administrateme_self_reminder",
   "administrateme_self_reminder_fire",
+  "administrateme_service_private_work",
+  "administrateme_service_private_work_state",
+  "administrateme_service_private_state",
+  "administrateme_service_context",
 ] as const;
 
 export const SIDE_EFFECT_TOOL_NAMES = new Set<string>([
