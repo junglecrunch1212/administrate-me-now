@@ -21,7 +21,9 @@ from bootstrap.workspace_instructions import (
 
 REPO = Path(__file__).resolve().parents[3]
 MEMBER = "member-fixture"
-ADAPTERS = {"actor_identities": {"fixture": MEMBER}}
+ADAPTERS = {
+    "openclaw_actor_identities": {"imessage|fixture-account|fixture-actor": MEMBER}
+}
 
 
 def fixture_workspace(tmp_path: Path):
@@ -118,6 +120,7 @@ def test_unchanged_sources_need_no_workspace_write(tmp_path: Path) -> None:
         "hardlink",
         "writable",
         "missing",
+        "fifo",
     ],
 )
 def test_preflight_rejects_unsafe_or_custom_generated_content_without_any_write(
@@ -145,6 +148,9 @@ def test_preflight_rejects_unsafe_or_custom_generated_content_without_any_write(
         files[1].chmod(0o666)
     elif damage == "missing":
         files[1].unlink()
+    elif damage == "fifo":
+        files[1].unlink()
+        os.mkfifo(files[1], 0o600)
     with pytest.raises(WorkspaceInstructionsError):
         prepare(paths, source, target)
     assert files[0].read_bytes() == original_template
@@ -209,3 +215,75 @@ def test_journal_transition_rejects_corruption(tmp_path: Path, damage: str) -> N
         plan["files"] = plan["files"][1:]
     with pytest.raises(WorkspaceInstructionsError):
         validate_transition(plan)
+
+
+def test_distinct_member_overlays_are_never_copied_between_workspaces(
+    tmp_path: Path,
+) -> None:
+    paths, source, target, files = fixture_workspace(tmp_path)
+    other = (
+        paths.instance_dir
+        / "openclaw/member-workspaces"
+        / member_agent_id("other-fixture-member")
+    )
+    other.mkdir(mode=0o700)
+    other_file = other / "AGENTS.md"
+    other_file.write_bytes(
+        b"Other member private prefix.\n" + compile_instructions(source)
+    )
+    other_file.chmod(0o600)
+    adapters = {
+        "openclaw_actor_identities": {"imessage|fixture-account|fixture-actor": MEMBER},
+        "member_chat_enabled_members": ["other-fixture-member"],
+    }
+    plan = prepare_transition(
+        paths, source_release=source, target_release=target, adapter_config=adapters
+    )
+    apply_transition(paths, plan)
+    assert (
+        other_file.read_bytes()
+        == b"Other member private prefix.\n" + compile_instructions(target)
+    )
+    assert all(b"Other member" not in file.read_bytes() for file in files)
+    assert b"Private suffix" not in other_file.read_bytes()
+
+
+def test_recovery_preserves_unknown_later_edits_and_refuses_to_claim_success(
+    tmp_path: Path,
+) -> None:
+    paths, source, target, files = fixture_workspace(tmp_path)
+    plan = prepare(paths, source, target)
+    apply_transition(paths, plan)
+    selected_template = files[0].read_bytes()
+    files[1].write_bytes(b"Unexpected later content.\n")
+    with pytest.raises(WorkspaceInstructionsError, match="after preparation"):
+        apply_transition(paths, plan, recover=True)
+    assert files[0].read_bytes() == selected_template
+    assert files[1].read_bytes() == b"Unexpected later content.\n"
+
+
+def test_updater_covers_workspaces_selected_by_production_member_topology(
+    tmp_path: Path,
+) -> None:
+    from bootstrap.openclaw_activation import reconcile_member_topology
+
+    paths, source, target, _ = fixture_workspace(tmp_path)
+    adapters = {**ADAPTERS, "member_chat_enabled_members": ["portal-fixture-member"]}
+    configuration = paths.instance_dir / "config"
+    configuration.mkdir(mode=0o700)
+    (configuration / "adapters.json").write_text(json.dumps(adapters))
+    topology = reconcile_member_topology(paths)
+    assert topology["member_agent_count"] == 2
+    gateway = json.loads(
+        (paths.instance_dir / "openclaw/runtime/openclaw.json").read_text()
+    )
+    actual_workspaces = [Path(row["workspace"]) for row in gateway["agents"]["list"]]
+    plan = prepare_transition(
+        paths, source_release=source, target_release=target, adapter_config=adapters
+    )
+    apply_transition(paths, plan)
+    for workspace in actual_workspaces:
+        assert compile_instructions(target) in (workspace / "AGENTS.md").read_bytes()
+        assert (
+            compile_instructions(source) not in (workspace / "AGENTS.md").read_bytes()
+        )

@@ -102,7 +102,9 @@ def _workspace(paths: DeploymentPaths, coordinate: str) -> Iterator[int]:
 
 def _read(descriptor: int) -> tuple[bytes, int]:
     fd = os.open(
-        "AGENTS.md", os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=descriptor
+        "AGENTS.md",
+        os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK,
+        dir_fd=descriptor,
     )
     try:
         before = os.fstat(fd)
@@ -204,9 +206,9 @@ def prepare_transition(
     after_generated = compile_instructions(target_release)
     if before_generated == after_generated:
         return None
-    members = set((adapter_config.get("actor_identities") or {}).values()) | set(
-        adapter_config.get("member_chat_enabled_members") or []
-    )
+    members = set(
+        (adapter_config.get("openclaw_actor_identities") or {}).values()
+    ) | set(adapter_config.get("member_chat_enabled_members") or [])
     coordinates = ["workspace/AGENTS.md"] + [
         f"member-workspaces/{member_agent_id(member)}/AGENTS.md"
         for member in sorted(members)
