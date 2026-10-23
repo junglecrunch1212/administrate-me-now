@@ -7,12 +7,12 @@ The accepted-publication finance contract is disabled pending activation.
 ## Implemented boundaries
 
 `adminme.finance.admission` gives ordinary HTTP work priority over light
-finance requests. After authenticating and resolving the member, finance
+finance requests. After authenticating and mapping the actor without projection reads, finance
 waits for a five-millisecond foreground quiet interval, with one active
 finance request and at most four FIFO waiters (one waiting slot per member).
 Admission expires after 250 milliseconds with a typed busy result. Busy
 responses still traverse the existing audit path; private data is not read
-before admission, and authority is resolved again after waiting. Cancellation
+before admission, and current domain authority is resolved after waiting. Cancellation
 and failures release the lane. Non-finance requests never acquire this lane.
 The observer releases at response headers, so long chat streams cannot block
 their own tools. This is bounded HTTP admission, not preemption of synchronous
@@ -108,3 +108,18 @@ separate shared TestClient/portal contention from application work. Those
 diagnostics do not replace the original baseline, relax its assertion or
 establish live hardware performance. New admission behavior requires a fresh
 hosted result before any passing claim.
+
+The second v1 measurement at `684f12f1` also failed: core p95 1.907 ms
+baseline versus 2.895 ms mixed (ratio 1.518). Its empty HTTP control alone
+regressed 29.7%, exposing shared TestClient/portal overhead. The v2 harness
+therefore runs the real application in an isolated spawned HTTP server and
+uses independent asynchronous HTTP clients. It retains the raw 10% p95 gate,
+100/500 ms finance targets, bracketing baseline and alternating concurrent
+launch order. Five hundred requests per phase improve sampling. The earlier
+failures remain evidence, not passing results; v2 still needs hosted results.
+
+Budget funding outlook, dated bank-cash projections, debt payoff and noncash
+offsets are different contracts. Neither the resource layer nor the reader
+converts an offset into liquidity or debt principal into expense. The validated
+Books funding-outlook publication and any required semantic schema extension
+remain an integration-review dependency; the v1 interchange stays unchanged.

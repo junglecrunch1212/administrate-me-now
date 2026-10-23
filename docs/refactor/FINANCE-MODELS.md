@@ -29,6 +29,7 @@ result; the service must still enforce its actor/policy/publication cache key.
 
 | Model | Supported calculation | Boundary and independent oracle |
 |---|---|---|
+| `budget_variance` | Same-period comparable spending minus chosen budget; signed remaining budget and ratio | Accounting expense net of matched refunds only; excludes principal, transfers, card settlements and noncash offsets. Zero budget yields an unknown ratio. Independent signed-difference and refund cases. |
 | `cash_ladder` | At most 100 dated flows over 366 days; independent early/late settlement bounds, minimum and closing cash, reserve breach date | Reconciled opening and complete mandatory flows required. No intraday/holiday inference. Hand-worked early bill/late income ledger tests. |
 | `reserve_coverage` | Liquid cash divided by positive selected monthly spending; gap to chosen floor | No universal reserve prescription or dated safety verdict. Exact ratio and zero-denominator tests. |
 | `fixed_debt` | Fixed nominal APR/12, monthly rounded interest, principal, extra principal, fees, remaining liability and payoff | At most 720 months; no daily accrual, promotional or variable terms, escrow or unknown fees. Hand-worked monthly interest and principal ledgers. |

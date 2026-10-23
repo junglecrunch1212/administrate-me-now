@@ -176,6 +176,7 @@ def publication_readiness_context(
         }
     return {
         "publication_id": metadata["publication_id"],
+        "book_id": metadata["book_id"],
         "content_hash": metadata["content_sha256"],
         "dependencies": dependencies,
         "report_availability": [

@@ -66,6 +66,7 @@ def publication_status(
         "schema_version": p["contract"],
         "content_hash": p["content_sha256"],
         "book_id": p["book_id"],
+        "current_head_publication_id": p["publication_id"],
         "as_of": p["accepted_at"],
         "reports": p["reports"],
         "source_clock_summary": p["source_clock_summary"],
@@ -125,6 +126,10 @@ def query_publication(
             "metrics": [],
             "provider_effect_count": 0,
         }
+    head = conn.execute(
+        "SELECT publication_id FROM finance_publication_heads WHERE tenant_id=? AND owner_id=? AND book_id=?",
+        (session.tenant_id, _owner(session), book_id),
+    ).fetchone()
     report = next((r for r in p["reports"] if r["report_id"] == report_id), None)
     if report is not None and horizon_days is not None:
         report = {
@@ -199,6 +204,8 @@ def query_publication(
         if report["release_state"] == "unavailable"
         else report["release_state"],
         "publication_id": publication_id,
+        "book_id": book_id,
+        "current_head_publication_id": head[0] if head else None,
         "content_hash": p["content_sha256"],
         "source_clock_summary": p["source_clock_summary"],
         "report": report,

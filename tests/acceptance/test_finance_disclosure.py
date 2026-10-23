@@ -26,6 +26,7 @@ def enabled_settings(tmp_path):
         finance_publications_enabled=True,
         finance_model_members=frozenset({PRINCIPAL}),
         deterministic_member_chat_fixture=True,
+        openclaw_model_configured=True,
     )
 
 
@@ -170,3 +171,89 @@ def test_disclosure_rechecks_after_durable_append(tmp_path, monkeypatch):
         response = calculate(client)
         assert response.status_code == 403
         assert "values" not in response.text
+
+
+def import_fixture(client):
+    from tests.acceptance.test_finance_publications import publication
+    from adminme.finance.publication import content_hash
+    from adminme.finance.importer import import_publication
+
+    runtime = client.app.state.runtime
+    value = publication(runtime.settings.instance.tenant_id)
+    value["owner_id"] = PRINCIPAL
+    for report in value["reports"]:
+        for metric in report["metrics"]:
+            metric["owner_id"] = PRINCIPAL
+    value["content_sha256"] = content_hash(value)
+    owner = build_internal_session(PRINCIPAL, "principal", value["tenant_id"])
+    client.portal.call(import_publication, runtime, owner, value)
+    return value, owner
+
+
+def test_readiness_exposes_qualified_report_without_inventing_dependencies(tmp_path):
+    with TestClient(create_application(enabled_settings(tmp_path))) as client:
+        _grant_cos(client, "readiness-grant")
+        value, _ = import_fixture(client)
+        response = _post(
+            client, "status", "readiness", capability_id="F01", book_id=value["book_id"]
+        )
+        assert response.status_code == 200, response.text
+        data = response.json()
+        assert data["readiness"] == "missing_evidence", data
+        assert "category_totals" in data["missing_evidence"]
+        report = data["report_availability"][0]
+        assert report["readiness"] == "qualified"
+        assert report["numeric_conclusion_supported"] is False
+        assert report["next_query"]["publication_id"] == value["publication_id"]
+        assert "value_minor" not in response.text
+
+
+def test_new_publication_invalidates_inflight_result_but_allows_pinned_history(
+    tmp_path,
+):
+    from adminme.finance.publication import content_hash
+    from adminme.finance.importer import import_publication
+    from copy import deepcopy
+
+    with TestClient(create_application(enabled_settings(tmp_path))) as client:
+        _grant_cos(client, "publication-grant")
+        value, owner = import_fixture(client)
+        runtime = client.app.state.runtime
+        _, key = runtime.member_chat_binding(PRINCIPAL)
+        response = _post(
+            client,
+            "query",
+            "before-change",
+            book_id=value["book_id"],
+            publication_id=value["publication_id"],
+            report_id="actuals",
+            limit=1,
+        )
+        assert response.status_code == 200 and response.json().get("metrics"), (
+            response.text
+        )
+        successor = deepcopy(value)
+        successor["prior_publication_id"] = value["publication_id"]
+        successor["publication_id"] = "publication-next"
+        successor["content_sha256"] = content_hash(successor)
+        client.portal.call(import_publication, runtime, owner, successor)
+
+        async def check(run):
+            await check_disclosure(runtime, owner, key, run_id=run, require_run=True)
+
+        with pytest.raises(FinanceDisclosureError, match="publication_changed"):
+            client.portal.call(check, "before-change")
+        response = _post(
+            client,
+            "query",
+            "historical",
+            book_id=value["book_id"],
+            publication_id=value["publication_id"],
+            report_id="actuals",
+            limit=1,
+        )
+        assert response.status_code == 200 and response.json().get("metrics"), (
+            response.text
+        )
+        assert response.json()["state"] == "qualified"
+        client.portal.call(check, "historical")

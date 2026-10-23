@@ -209,6 +209,9 @@ async def record_disclosure(
                     "result_sha256": result_hash,
                     "book_id": publication.get("book_id"),
                     "publication_id": publication.get("publication_id"),
+                    "head_publication_id": publication.get(
+                        "current_head_publication_id"
+                    ),
                     "calculator_id": result.get("calculator_id"),
                     "model_version": result.get("model_version"),
                     "expires_at": (
@@ -272,7 +275,7 @@ async def check_disclosure(
                     )
                     .fetchone()
                 )
-                if head is None or head[0] != receipt["publication_id"]:
+                if head is None or head[0] != receipt.get("head_publication_id"):
                     raise FinanceDisclosureError(
                         "finance_disclosure_publication_changed"
                     )

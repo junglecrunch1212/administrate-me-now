@@ -34,6 +34,10 @@ sharing, financial actions or professional contact follow from this ledger.
 
 The following common test locations establish the intended validation paths:
 
+- `tests/acceptance/test_finance_disclosure.py`: durable private disclosure receipts,
+  revocation after retrieval/audit, buffered streaming, pinned publication change
+  and qualified report availability through production endpoints. New coverage
+  remains candidate until its exact hosted revision passes.
 - `tests/unit/test_finance_readiness.py`: pinned, owner-scoped metadata proofs,
   exact report basis/release/quality, incomplete clocks and no semantic inference
   from report names. Accepted metadata supplies qualified report pointers while

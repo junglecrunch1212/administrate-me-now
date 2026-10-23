@@ -4365,6 +4365,7 @@ async def finance_status(
                         "as_of",
                         "content_hash",
                         "schema_version",
+                        "current_head_publication_id",
                     )
                     if key in publication
                 }
@@ -4439,6 +4440,13 @@ async def finance_status(
                             "next_step", checked["partial_answer"]
                         ),
                     }
+                    if evidence.get("publication_id"):
+                        result["publication"] = {
+                            "book_id": evidence["book_id"],
+                            "publication_id": evidence["publication_id"],
+                            "current_head_publication_id": evidence["publication_id"],
+                            "content_hash": evidence["content_hash"],
+                        }
                     result["models"] = {
                         name: {
                             "version": models[name]["version"],

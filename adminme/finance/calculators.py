@@ -117,6 +117,47 @@ def _rate(value: str, *, minimum: Decimal = Decimal(0)) -> Decimal:
     return rate
 
 
+class BudgetVarianceInput(CurrencyInput):
+    period_start: IsoDate
+    period_end: IsoDate
+    actual_spending_minor: SignedMoney
+    chosen_budget_minor: Money
+    comparable_categories_confirmed: Confirmed
+    actual_basis: Literal["accounting_expense_net_of_matched_refunds"]
+    exclusion_policy: Literal[
+        "exclude_principal_transfers_card_settlements_noncash_offsets"
+    ]
+
+    @model_validator(mode="after")
+    def valid_period(self) -> BudgetVarianceInput:
+        if not 0 <= (self.period_end - self.period_start).days <= 366:
+            raise ValueError("budget_period_outside_supported_range")
+        return self
+
+
+class BudgetVarianceOutput(Contract):
+    spending_variance_minor: int
+    budget_remaining_minor: int
+    spending_to_budget_ratio: str | None
+    overspent: bool
+
+
+def _budget_variance(body: BudgetVarianceInput) -> BudgetVarianceOutput:
+    variance = _minor(body.actual_spending_minor - body.chosen_budget_minor)
+    return BudgetVarianceOutput(
+        spending_variance_minor=variance,
+        budget_remaining_minor=-variance,
+        spending_to_budget_ratio=(
+            _text(
+                Decimal(body.actual_spending_minor) / Decimal(body.chosen_budget_minor)
+            )
+            if body.chosen_budget_minor
+            else None
+        ),
+        overspent=variance > 0,
+    )
+
+
 class CashEvent(Contract):
     event_id: Identifier
     earliest_date: IsoDate
@@ -1003,6 +1044,21 @@ class _Spec:
 
 
 _SPECS: dict[str, _Spec] = {
+    "budget_variance": _Spec(
+        "C01",
+        BudgetVarianceInput,
+        BudgetVarianceOutput,
+        _budget_variance,
+        "accounting_actual",
+        (
+            "Same stated period and comparable categories; positive variance means spending exceeds the chosen budget.",
+            "Net matched refunds can make period spending negative. A zero budget has no meaningful spending ratio.",
+        ),
+        (
+            "Not bank cash, a funding outlook, debt payoff, realized savings or a preference inference.",
+            "Principal, transfers, card settlements and noncash offsets are excluded from spending.",
+        ),
+    ),
     "cash_ladder": _Spec(
         "C03",
         CashLadderInput,
@@ -1286,7 +1342,7 @@ def calculator_catalog() -> dict[str, dict[str, Any]]:
 def _period(body: CurrencyInput) -> str:
     if isinstance(body, CashLadderInput):
         return f"{body.start_date.isoformat()}/{body.end_date.isoformat()}"
-    if isinstance(body, (SupportInput, RollForwardInput)):
+    if isinstance(body, (SupportInput, RollForwardInput, BudgetVarianceInput)):
         return f"{body.period_start.isoformat()}/{body.period_end.isoformat()}"
     if isinstance(body, (DebtInput, RefinanceInput)):
         return f"{body.horizon_months} months"

@@ -43,6 +43,16 @@ def inputs() -> dict[str, dict[str, Any]]:
         "value_minor": 10000,
     }
     return {
+        "budget_variance": {
+            "currency": "USD",
+            "period_start": "2030-01-01",
+            "period_end": "2030-01-31",
+            "actual_spending_minor": 12500,
+            "chosen_budget_minor": 10000,
+            "comparable_categories_confirmed": True,
+            "actual_basis": "accounting_expense_net_of_matched_refunds",
+            "exclusion_policy": "exclude_principal_transfers_card_settlements_noncash_offsets",
+        },
         "cash_ladder": {
             "currency": "USD",
             "opening_cash_minor": 10000,
@@ -314,7 +324,7 @@ def test_routing_metadata_does_not_build_schemas(monkeypatch):
         raise AssertionError("routing must not generate JSON schemas")
 
     monkeypatch.setattr(CurrencyInput, "model_json_schema", forbidden)
-    assert len(calculator_metadata()) == 16
+    assert len(calculator_metadata()) == 17
 
 
 @pytest.mark.parametrize("model", sorted(inputs()))
@@ -717,3 +727,25 @@ def test_result_identity_preserves_identifiers_and_periods():
     first = calculate("cash_ladder", "1", body)
     body["end_date"] = "2030-02-01"
     assert calculate("cash_ladder", "1", body)["result_id"] != first["result_id"]
+
+
+def test_budget_variance_independent_signed_difference_and_zero_basis():
+    result = values("budget_variance")
+    assert result == {
+        "spending_variance_minor": 2500,
+        "budget_remaining_minor": -2500,
+        "spending_to_budget_ratio": "1.250000",
+        "overspent": True,
+    }
+    zero = values("budget_variance", actual_spending_minor=0, chosen_budget_minor=0)
+    assert zero["spending_to_budget_ratio"] is None
+    assert zero["spending_variance_minor"] == 0 and not zero["overspent"]
+    refunds = values("budget_variance", actual_spending_minor=-500)
+    assert refunds["spending_variance_minor"] == -10500
+    assert refunds["spending_to_budget_ratio"] == "-0.050000"
+    with pytest.raises(CalculatorError):
+        calculate(
+            "budget_variance",
+            "1",
+            {**inputs()["budget_variance"], "actual_basis": "bank_cash"},
+        )
