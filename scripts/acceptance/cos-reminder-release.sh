@@ -7,6 +7,7 @@ case "${1:-}" in linux|macos) ;; *) echo "Expected linux or macos" >&2; exit 1 ;
 poetry run pytest -p no:cacheprovider --runxfail -q -ra \
   --basetemp="$RUNNER_TEMP/cos-reminder-release" \
   tests/acceptance/test_cos_self_reminders.py \
+  tests/acceptance/test_cos_service_private_work.py \
   tests/acceptance/test_cos_self_replies.py \
   tests/acceptance/test_cos_response_execution.py \
   tests/acceptance/test_cos_response_allowlist_settings.py \

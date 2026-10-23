@@ -156,6 +156,7 @@ from adminme.projections.xlsx_workbooks.query_context import XlsxQueryContext
 from adminme.reconciliation import ReconciliationAdmissionEvaluator
 from adminme.settings_control import SettingsControlStore, public_capability_summary
 from adminme.messages_reply_reconciliation import MessagesReplyReconciler
+from adminme.cos_reminder_work import ReminderWorkReconciler
 from adminme.google_tasks_execution_reconciliation import GoogleTasksExecutionReconciler
 from adminme.bridge_enrollment import BridgeEnrollmentCoordinator, BridgeIndexCommitter
 from adminme.source_policy import source_policy_event_types
@@ -921,6 +922,7 @@ class AdministrateMeRuntime:
             self.messages_reply_reconciler = MessagesReplyReconciler(
                 self.event_log, self.events
             )
+            self.reminder_work_reconciler = ReminderWorkReconciler(self)
             self.google_tasks_execution_reconciler = GoogleTasksExecutionReconciler(
                 self.event_log, self.events
             )
@@ -1190,6 +1192,19 @@ class AdministrateMeRuntime:
                 ],
                 self.google_tasks_execution_reconciler.handle,
                 consumer_version=self.google_tasks_execution_reconciler.CONSUMER_VERSION,
+                replay_on_version_change=True,
+            )
+
+            self.bus.subscribe(
+                "cos-reminders:work",
+                [
+                    "cos.reply.reminder_requested",
+                    "cos.reply.reminder_bound",
+                    "cos.reply.reminder_cancelled",
+                    "cos.response.result",
+                ],
+                self.reminder_work_reconciler.handle,
+                consumer_version=self.reminder_work_reconciler.CONSUMER_VERSION,
                 replay_on_version_change=True,
             )
 
