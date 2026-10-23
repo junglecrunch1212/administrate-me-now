@@ -381,3 +381,49 @@ def test_new_grant_requires_fresh_result_without_permanently_blocking_conversati
         fresh = calculate(client, "fresh-run")
         assert fresh.status_code == 200, fresh.text
         client.portal.call(check, "fresh-run")
+
+
+def test_publication_change_during_later_receipt_reads_blocks_earlier_result(
+    tmp_path, monkeypatch
+):
+    from copy import deepcopy
+    from adminme.finance import disclosure
+    from adminme.finance.publication import content_hash
+    from adminme.finance.importer import import_publication
+
+    with TestClient(create_application(enabled_settings(tmp_path))) as client:
+        _grant_cos(client, "publication-race-grant")
+        value, owner = import_fixture(client)
+        result = _post(
+            client,
+            "query",
+            "publication-race",
+            book_id=value["book_id"],
+            publication_id=value["publication_id"],
+            report_id="actuals",
+            limit=1,
+        )
+        assert result.status_code == 200 and result.json().get("metrics")
+        runtime = client.app.state.runtime
+        _, key = runtime.member_chat_binding(PRINCIPAL)
+        successor = deepcopy(value)
+        successor["prior_publication_id"] = value["publication_id"]
+        successor["publication_id"] = "publication-during-final-read"
+        successor["content_sha256"] = content_hash(successor)
+        original = disclosure._read
+
+        async def read_then_change(runtime, session, key):
+            found = await original(runtime, session, key)
+            if key.startswith("finance-disclosure-run:") and key.endswith(":6"):
+                await import_publication(runtime, owner, successor)
+            return found
+
+        monkeypatch.setattr(disclosure, "_read", read_then_change)
+
+        async def verify():
+            await check_disclosure(
+                runtime, owner, key, run_id="publication-race", require_run=True
+            )
+
+        with pytest.raises(FinanceDisclosureError, match="publication_changed"):
+            client.portal.call(verify)

@@ -77,7 +77,7 @@ withholding an unsupported numerical or professional conclusion.
 | F02 | Selected item unit-price comparison; receipt/return checklist | Item quantities, taxes/discount allocation and receipt matching; acquisition/returns remain external contracts |
 | F03 | Due-date, renewal and payment-status preparation | Confirmed obligations/service cadence and actual payment status; no cancellation or inferred unused-service claim |
 | F04 | Accepted cash-leg report and allocation preparation | Matched reimbursement evidence and shared agreement; expectations are not debts or received cash |
-| F05 | Bounded travel finance brief and option preparation | Dated quotes, refund terms and valid cash timing; integrated purchase model unavailable where not declared |
+| F05 | Bounded travel finance brief and option preparation | Dated quotes, refund terms and valid cash timing; candidate purchase-cost comparison requires matching terms and does not establish affordability |
 | F06 | Unit-cost/time comparison against chosen preferences | Explicit time/quality choices; no inferred value of an adult's time |
 | F07 | Candidate dated cash ladder | Known liquid opening, mandatory flows and timing rules; unknown mandatory inputs block a safety verdict |
 | F08 | Candidate reserve coverage | Chosen reserve policy and liquid cash; no home/retirement liquidity assumption or universal reserve target |
@@ -86,7 +86,7 @@ withholding an unsupported numerical or professional conclusion.
 | F11 | Narrow transaction-verification checklist | Accepted revisions and matched evidence; anomaly detection is not fraud adjudication |
 | F12 | Accepted source/revision/quality status and reconciliation preparation | Openings, statement totals and matching; complete roll-forward model/close gate required before reconciled claims |
 | F13 | Accepted observed-register report | Ownership, valuation dates and complete coverage; formal balance sheet remains unavailable without close/release evidence |
-| F14 | Home decision dependency checklist | Supported ownership/financing/exit/tax model and dated inputs; no equity-as-cash or professional conclusion |
+| F14 | Home decision dependency checklist | Candidate purchase-cost comparison excludes unsupported financing/exit/tax semantics; dated inputs and separate cash checks required; no equity-as-cash or professional conclusion |
 | F15 | Candidate ownership/lease total-cost comparison | Actual ownership/lease facts, costs and residual assumptions; lease payments do not create an owned asset |
 | F16 | Candidate pay-frequency bridge; unchanged accepted scenarios | Person-specific deductions and timing; gross conversion does not guarantee net take-home |
 | F17 | Candidate leave-gap comparison and benefit checklist | Accepted employer leave/benefit terms and timing; no eligibility or diagnosis inference |
@@ -115,7 +115,11 @@ not activate an ingestion route or a projection. Explicit private owner goals
 and preferences now have candidate member forms, governed ingestion and a
 replayable money projection. They require an accepted owner publication and
 optimistic predecessor, preserve immutable history, and grant no provider
-action. Hosted acceptance remains pending for this revision. Joint decisions,
+action. The native query can retrieve up to three explicit choices per page
+under current processing authority. Final delivery rejects a choice set changed
+since retrieval, including an initially empty set. Owner API/replay/restart
+coverage passed at `6b2930ef`; native choice and Chromium acceptance remain
+pending for the next revision. Joint decisions,
 outcomes and professional packets still lack production record integration.
 Existing legacy goal events remain distinct.
 

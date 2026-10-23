@@ -16589,6 +16589,20 @@
           "title": "Kind",
           "type": "string"
         },
+        "label": {
+          "anyOf": [
+            {
+              "maxLength": 120,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Label"
+        },
         "priority": {
           "default": "unranked",
           "enum": [

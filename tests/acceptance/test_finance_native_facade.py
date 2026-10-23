@@ -543,3 +543,45 @@ def test_model_contract_discovery_then_calculation_in_one_bound_turn(tmp_path):
         )
         assert calculated.status_code == 200, calculated.text
         assert calculated.json()["values"]["reference_months_covered"] == "4.000000"
+
+
+def test_unknown_model_discovery_preserves_precise_safe_reason(tmp_path):
+    from tests.acceptance.test_finance_disclosure import enabled_settings
+
+    with TestClient(create_application(enabled_settings(tmp_path))) as client:
+        _grant_cos(client, "unknown-model-discovery")
+        unknown = _post(client, "status", "unknown-model", calculator_id="unknown")
+        assert unknown.status_code == 200
+        assert unknown.json()["reason"] == "unsupported_calculator"
+        invalid = _post(
+            client,
+            "status",
+            "unknown-model-path",
+            calculator_id="reserve_coverage",
+            schema_path="#/properties/missing",
+        )
+        assert invalid.status_code == 200
+        assert invalid.json()["reason"] == "invalid_calculator_schema_path"
+
+
+def test_purchase_comparison_current_native_result_fits_reply_budget(tmp_path):
+    from tests.acceptance.test_finance_disclosure import enabled_settings
+    from tests.unit.test_finance_calculators import inputs
+
+    with TestClient(create_application(enabled_settings(tmp_path))) as client:
+        _grant_cos(client, "purchase-comparison")
+        compared = _post(
+            client,
+            "calculate",
+            "purchase-comparison",
+            calculator_id="purchase_comparison",
+            version="1",
+            hypothetical=True,
+            inputs=inputs()["purchase_comparison"],
+        )
+        assert compared.status_code == 200, compared.text
+        result = compared.json()
+        assert result["values"]["nominal_cost_change_minor"] == -3500
+        assert result["values"]["upfront_cash_change_minor"] == 7000
+        assert result["answer_ref"]
+        assert len(compared.content) <= 2000

@@ -571,3 +571,53 @@ async def test_start_is_idempotent_and_subscribe_rejected_while_running(rig) -> 
 def test_lag_warn_threshold_is_large_enough() -> None:
     # sanity: the constant is the documented threshold
     assert LAG_WARN_THRESHOLD >= 10_000
+
+
+async def test_typed_notification_wakes_only_matching_and_wildcard_consumers(rig):
+    _, bus, _ = rig
+
+    async def callback(event):
+        pass
+
+    bus.subscribe("foo-only", ["foo"], callback)
+    bus.subscribe("bar-only", ["bar"], callback)
+    bus.subscribe("all", "*", callback)
+    # Inspect wake hints before workers consume them; no checkpoints are changed.
+    bus._running = True
+    await bus.notify("committed-hint", event_types=frozenset({"foo"}))
+    assert bus._subscribers["foo-only"].trigger.is_set()
+    assert bus._subscribers["all"].trigger.is_set()
+    assert not bus._subscribers["bar-only"].trigger.is_set()
+    assert all(state.checkpoint is None for state in bus._subscribers.values())
+    await bus.notify("legacy-hint")
+    assert bus._subscribers["bar-only"].trigger.is_set()
+
+
+async def test_typed_writer_batch_delivers_every_matching_type_and_restart_recovers(
+    rig,
+):
+    from adminme.events.writer import EventWriter
+
+    log, bus, root = rig
+    received = []
+
+    async def callback(event):
+        received.append(event["payload"]["i"])
+
+    bus.subscribe("foo-only", ["foo"], callback)
+    await bus.start()
+    writer = EventWriter(log, bus)
+    await writer.write_batch(
+        [_event(1, type="foo"), _event(2, type="bar"), _event(3, type="foo")]
+    )
+    await _wait_for(lambda: received == [1, 3])
+    await bus.stop()
+    # A commit without a wake hint is recovered on startup from its checkpoint.
+    await log.append(_event(4, type="foo"))
+    replacement = EventBus(log, root / "bus.db")
+    replacement.subscribe("foo-only", ["foo"], callback)
+    try:
+        await replacement.start()
+        await _wait_for(lambda: received == [1, 3, 4])
+    finally:
+        await replacement.stop()

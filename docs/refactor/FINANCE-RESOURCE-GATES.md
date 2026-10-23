@@ -148,3 +148,12 @@ At `0e3c17ee`, the v3 independent-client run measured before/after core p95
 the final body send (SSE releases after headers) and batches two exact durable
 receipt reads to reduce shared event-log executor contention. These are runtime
 changes requiring new evidence, not a waiver or a passing performance claim.
+
+At `6b2930ef`, 389 functional Python and 96 native tests passed, while the
+mixed-load gate again failed: before/after core p95 3.842/3.906 ms, mixed
+4.916 ms (ratio 1.258718), with 251 finance calls. Status/calculation p95 were
+22.646/22.881 ms. Source inspection found each committed finance audit waking
+every durable subscriber, including unrelated projections. The next candidate
+uses committed-type wake hints while retaining wildcard, legacy-hint and
+startup recovery behavior, with focused delivery/restart regression coverage.
+No thresholds are relaxed and the performance gate remains unmet.

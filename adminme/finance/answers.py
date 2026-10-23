@@ -74,6 +74,18 @@ def render_result(result: dict[str, Any]) -> str:
         lines.append(
             "Next step: confirm the selected inputs and the model's limits; this authorizes no financial action."
         )
+    elif result.get("result_kind") == "owner_choices":
+        lines.append("Your explicitly saved private choices.")
+        lines.append(
+            "Basis: explicit owner intent. Amounts are targets in the stated currency's minor units; dates and priorities are your selections."
+        )
+        for choice in result["choices"]:
+            lines.append(_value(choice))
+        if not result["choices"]:
+            lines.append("No saved choices on this page; no preference is inferred.")
+        if result.get("next_offset") is not None:
+            lines.append("More saved choices are available; this page is incomplete.")
+        lines.append("Next step: " + result["next_step"])
     elif result.get("report") is not None:
         report = result["report"]
         lines.append(f"Finance report: {result['state']}.")

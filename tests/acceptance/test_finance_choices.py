@@ -198,3 +198,90 @@ def test_denied_write_audit_contains_no_private_choice_fields(tmp_path):
         ):
             assert private not in text
         assert client.get(BASE, headers=DEMO_HEADERS).json()["items"] == []
+
+
+def test_native_choice_query_is_private_current_and_revocable(tmp_path):
+    import pytest
+    from adminme.finance.disclosure import check_disclosure, FinanceDisclosureError
+    from adminme.lib.session import build_internal_session
+    from tests.acceptance.test_finance_native_facade import _post
+    from tests.acceptance.test_finance_disclosure import revoke
+    from tests.acceptance.test_openclaw_native_seam import PRINCIPAL, _grant_cos
+
+    with TestClient(create_application(enabled_settings(tmp_path))) as client:
+        grant = _grant_cos(client, "saved-choices-native")
+        publication, _ = import_fixture(client)
+        runtime = client.app.state.runtime
+        owner = build_internal_session(
+            PRINCIPAL, "principal", runtime.settings.instance.tenant_id
+        )
+        _, key = runtime.member_chat_binding(PRINCIPAL)
+
+        def query(run):
+            response = _post(
+                client,
+                "query",
+                run,
+                book_id=publication["book_id"],
+                publication_id=publication["publication_id"],
+                report_id="owner_choices",
+                limit=1,
+            )
+            assert response.status_code == 200, response.text
+            return response.json()
+
+        async def render(run, ref):
+            return await check_disclosure(
+                runtime,
+                owner,
+                key,
+                run_id=run,
+                require_run=True,
+                answer_text=json.dumps({"finance_answer": {"result_refs": [ref]}}),
+            )
+
+        empty = query("before-explicit-choice")
+        assert empty["choices"] == []
+        created = client.post(
+            BASE + "/goals/native-goal", headers=DEMO_HEADERS, json=goal(publication)
+        )
+        assert created.status_code == 200, created.text
+        with pytest.raises(FinanceDisclosureError, match="owner_choice_changed"):
+            client.portal.call(render, "before-explicit-choice", empty["answer_ref"])
+        read = query("after-explicit-choice")
+        assert read["choices"][0]["label"] == "Synthetic reserve goal"
+        assert read["choices"][0]["target_minor"] == 123456
+        assert "minor units" in client.portal.call(
+            render, "after-explicit-choice", read["answer_ref"]
+        )
+        paused = client.post(
+            BASE + "/goals/native-goal",
+            headers=DEMO_HEADERS,
+            json=goal(
+                publication,
+                request_id="native-goal-pause",
+                status="paused",
+                expected_event_id=created.json()["event_id"],
+            ),
+        )
+        assert paused.status_code == 200, paused.text
+        with pytest.raises(FinanceDisclosureError, match="owner_choice_changed"):
+            client.portal.call(render, "after-explicit-choice", read["answer_ref"])
+        fresh = query("after-pause-choice")
+        assert fresh["choices"][0]["status"] == "paused"
+        client.portal.call(revoke, runtime, grant)
+        with pytest.raises(FinanceDisclosureError, match="authority_changed"):
+            client.portal.call(render, "after-pause-choice", fresh["answer_ref"])
+        hidden = _post(
+            client,
+            "query",
+            "after-choice-revocation",
+            book_id=publication["book_id"],
+            publication_id=publication["publication_id"],
+            report_id="owner_choices",
+            limit=1,
+        )
+        assert hidden.status_code == 403
+        assert (
+            "123456" not in hidden.text and "Synthetic reserve goal" not in hidden.text
+        )

@@ -286,25 +286,6 @@ async def check_disclosure(
                 receipt["expires_at"]
             ) <= datetime.now(timezone.utc):
                 raise FinanceDisclosureError("finance_disclosure_receipt_expired")
-            if receipt.get("book_id") and receipt.get("publication_id"):
-                head = (
-                    runtime.projections.connection("money")
-                    .execute(
-                        "SELECT publication_id FROM finance_publication_heads WHERE tenant_id=? AND owner_id=? AND book_id=?",
-                        (session.tenant_id, session.auth_member_id, receipt["book_id"]),
-                    )
-                    .fetchone()
-                )
-                if head is None or head[0] != receipt.get("head_publication_id"):
-                    raise FinanceDisclosureError(
-                        "finance_disclosure_publication_changed"
-                    )
-            if receipt.get("calculator_id"):
-                from adminme.finance.calculators import calculator_metadata
-
-                model = calculator_metadata().get(receipt["calculator_id"])
-                if model is None or model["version"] != receipt.get("model_version"):
-                    raise FinanceDisclosureError("finance_disclosure_model_changed")
         if require_run and not found:
             raise FinanceDisclosureError("finance_disclosure_receipt_required")
     if any(
@@ -312,6 +293,36 @@ async def check_disclosure(
         for item in receipts
     ):
         raise FinanceDisclosureError("finance_disclosure_receipt_expired")
+    # No awaited work may follow dependency checks before final authorization.
+    for receipt in receipts:
+        if receipt.get("book_id") and receipt.get("publication_id"):
+            head = (
+                runtime.projections.connection("money")
+                .execute(
+                    "SELECT publication_id FROM finance_publication_heads WHERE tenant_id=? AND owner_id=? AND book_id=?",
+                    (session.tenant_id, session.auth_member_id, receipt["book_id"]),
+                )
+                .fetchone()
+            )
+            if head is None or head[0] != receipt.get("head_publication_id"):
+                raise FinanceDisclosureError("finance_disclosure_publication_changed")
+        result = json.loads(receipt["result_json"])
+        if result.get("result_kind") == "owner_choices":
+            from adminme.finance.choices import choice_head
+
+            current_head = choice_head(
+                runtime.projections.connection("money"),
+                session,
+                result["publication"]["book_id"],
+            )
+            if current_head != result.get("choice_head_event_id"):
+                raise FinanceDisclosureError("finance_disclosure_owner_choice_changed")
+        if receipt.get("calculator_id"):
+            from adminme.finance.calculators import calculator_metadata
+
+            model = calculator_metadata().get(receipt["calculator_id"])
+            if model is None or model["version"] != receipt.get("model_version"):
+                raise FinanceDisclosureError("finance_disclosure_model_changed")
     rendered = answer_text
     if answer_text is not None:
         from adminme.finance.answers import FinanceAnswerError, verify_answer

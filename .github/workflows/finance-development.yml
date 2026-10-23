@@ -44,6 +44,12 @@ jobs:
       - name: Finance synthetic process and numerical checks
         run: >-
           poetry run pytest -q --runxfail
+          tests/unit/test_event_bus.py
+          tests/unit/events/test_event_writer.py
+          tests/unit/test_governance.py
+          tests/unit/test_observation.py
+          tests/unit/test_skill_wrapper.py
+          tests/unit/test_historical_attribution.py
           tests/unit/test_finance_capabilities.py
           tests/unit/test_finance_resources.py
           tests/unit/test_finance_readiness.py

@@ -4136,6 +4136,7 @@ class FinanceQueryRequest(ContextRequest):
         "quality",
         "cash_projection",
         "cash_events",
+        "owner_choices",
     ]
     scenario_id: Literal["current", "expected", "chosen"] | None = None
     horizon_days: Literal[7, 30, 90, 180, 365] | None = None
@@ -4339,7 +4340,11 @@ async def finance_status(
         readiness,
         skill_bundle,
     )
-    from adminme.finance.calculators import calculator_metadata, describe_calculator
+    from adminme.finance.calculators import (
+        CalculatorError,
+        calculator_metadata,
+        describe_calculator,
+    )
     from adminme.finance.queries import publication_status
     from adminme.finance.readiness import publication_readiness_context
     from adminme.finance.workflows import compound_readiness, preparation_workflow
@@ -4504,6 +4509,12 @@ async def finance_status(
                 "reason": exc.code,
                 "next_step": "Start a new explicit question with a smaller scope.",
             }
+        except CalculatorError as exc:
+            result = {
+                "state": "missing_evidence",
+                "reason": exc.code,
+                "next_step": "Choose a declared calculator and one of its named schema fields.",
+            }
         except ValueError:
             result = {
                 "state": "missing_evidence",
@@ -4549,17 +4560,31 @@ async def finance_query(body: FinanceQueryRequest, request: Request) -> dict[str
             result = _finance_blocked(runtime, session, body.provenance)
             private_result = result is None
             if result is None:
-                result = query_publication(
-                    runtime.projections.connection("money"),
-                    session,
-                    book_id=body.book_id,
-                    publication_id=body.publication_id,
-                    report_id=body.report_id,
-                    offset=body.offset,
-                    limit=body.limit,
-                    scenario_id=body.scenario_id,
-                    horizon_days=body.horizon_days,
-                )
+                from adminme.finance.choices import query_choices
+
+                if body.report_id == "owner_choices":
+                    if body.scenario_id is not None or body.horizon_days is not None:
+                        raise ValueError("finance_choice_filter_invalid")
+                    result = query_choices(
+                        runtime.projections.connection("money"),
+                        session,
+                        body.book_id,
+                        body.publication_id,
+                        offset=body.offset,
+                        limit=body.limit,
+                    )
+                else:
+                    result = query_publication(
+                        runtime.projections.connection("money"),
+                        session,
+                        book_id=body.book_id,
+                        publication_id=body.publication_id,
+                        report_id=body.report_id,
+                        offset=body.offset,
+                        limit=body.limit,
+                        scenario_id=body.scenario_id,
+                        horizon_days=body.horizon_days,
+                    )
         except FinanceBudgetError as exc:
             result = {"state": "temporarily_unavailable", "reason": exc.code}
         except ValueError:

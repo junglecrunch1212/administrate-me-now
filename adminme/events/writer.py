@@ -111,7 +111,9 @@ class EventWriter(EventSink):
             )
             # One wake-up is sufficient because consumers drain the committed
             # log rather than consuming the id supplied to notify().
-            await self._bus.notify(event_ids[-1])
+            await self._bus.notify(
+                event_ids[-1], event_types=frozenset(event.type for event in envelopes)
+            )
             return event_ids
 
 

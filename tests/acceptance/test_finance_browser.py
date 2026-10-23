@@ -83,12 +83,14 @@ async def test_owner_saves_goal_and_preference_then_reloads(tmp_path):
     server.start()
     send.close()
     browser = None
+    browser_log = None
     try:
         assert await asyncio.to_thread(receive.poll, 30), (
             "synthetic application startup timed out"
         )
         assert receive.recv() is True
         profile = tmp_path / "isolated-browser"
+        browser_log = (tmp_path / "chromium-startup.log").open("w")
         browser = subprocess.Popen(
             [
                 chrome,
@@ -102,13 +104,19 @@ async def test_owner_saves_goal_and_preference_then_reloads(tmp_path):
                 "about:blank",
             ],
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stderr=browser_log,
         )
-        for _ in range(100):
+        for _ in range(300):
             if (profile / "DevToolsActivePort").exists():
                 break
-            assert browser.poll() is None, "isolated Chromium exited before startup"
+            assert browser.poll() is None, (
+                tmp_path / "chromium-startup.log"
+            ).read_text()[-4000:]
             await asyncio.sleep(0.1)
+        browser_log.flush()
+        assert (profile / "DevToolsActivePort").exists(), (
+            tmp_path / "chromium-startup.log"
+        ).read_text()[-4000:]
         coordinates = (profile / "DevToolsActivePort").read_text().splitlines()
         async with connect(
             f"ws://127.0.0.1:{coordinates[0]}{coordinates[1]}",
@@ -178,8 +186,19 @@ async def test_owner_saves_goal_and_preference_then_reloads(tmp_path):
                     if await evaluate(expression):
                         return
                     await asyncio.sleep(0.1)
+                diagnostic = await evaluate(
+                    "({url:location.href,text:document.body.innerText.slice(-4000),invalid:Array.from(document.querySelectorAll(':invalid')).map(e=>({tag:e.tagName,message:e.validationMessage}))})"
+                )
+                screenshot = await call("Page.captureScreenshot", {"format": "png"})
+                output = Path(
+                    os.environ.get("FINANCE_BROWSER_ARTIFACT_DIR", str(tmp_path))
+                )
+                output.mkdir(parents=True, exist_ok=True)
+                (output / "finance-choices-failure.png").write_bytes(
+                    base64.b64decode(screenshot["data"])
+                )
                 raise AssertionError(
-                    "synthetic finance UI did not reach its expected state"
+                    f"synthetic finance UI did not reach {expression}: {diagnostic}"
                 )
 
             await wait_for("Boolean(document.querySelector('.finance-choices'))")
@@ -246,6 +265,8 @@ async def test_owner_saves_goal_and_preference_then_reloads(tmp_path):
             except subprocess.TimeoutExpired:
                 browser.kill()
                 await asyncio.to_thread(browser.wait, 5)
+        if browser_log is not None:
+            browser_log.close()
         server.terminate()
         await asyncio.to_thread(server.join, 5)
         if server.is_alive():

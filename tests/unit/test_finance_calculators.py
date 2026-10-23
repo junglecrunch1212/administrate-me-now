@@ -43,6 +43,34 @@ def inputs() -> dict[str, dict[str, Any]]:
         "value_minor": 10000,
     }
     return {
+        "purchase_comparison": {
+            "currency": "USD",
+            "comparable_costs_confirmed": True,
+            "baseline": {
+                "currency": "USD",
+                "option_kind": "keep",
+                "upfront_minor": 5000,
+                "monthly_cost_minor": 1000,
+                "months": 12,
+                "terminal_receipt_minor": 0,
+                "terminal_cost_minor": 500,
+                "annual_discount_rate": "0",
+                "money_basis": "nominal",
+                "discount_convention": "nominal_annual_monthly",
+            },
+            "alternative": {
+                "currency": "USD",
+                "option_kind": "buy",
+                "upfront_minor": 12000,
+                "monthly_cost_minor": 500,
+                "months": 12,
+                "terminal_receipt_minor": 4000,
+                "terminal_cost_minor": 0,
+                "annual_discount_rate": "0",
+                "money_basis": "nominal",
+                "discount_convention": "nominal_annual_monthly",
+            },
+        },
         "budget_variance": {
             "currency": "USD",
             "period_start": "2030-01-01",
@@ -324,7 +352,7 @@ def test_routing_metadata_does_not_build_schemas(monkeypatch):
         raise AssertionError("routing must not generate JSON schemas")
 
     monkeypatch.setattr(CurrencyInput, "model_json_schema", forbidden)
-    assert len(calculator_metadata()) == 17
+    assert len(calculator_metadata()) == 18
 
 
 @pytest.mark.parametrize("model", sorted(inputs()))
@@ -769,3 +797,56 @@ def test_schema_discovery_preserves_bounds_and_resolves_only_declared_definition
     ):
         with pytest.raises(CalculatorError, match="invalid_calculator_schema_path"):
             describe_calculator("fixed_debt", path)
+
+
+def test_purchase_comparison_preserves_cost_signs_without_affordability_claim():
+    result = calculate("purchase_comparison", "1", inputs()["purchase_comparison"])
+    assert result["values"] == {
+        "nominal_cost_change_minor": -3500,
+        "baseline_present_cost_minor": 17500,
+        "alternative_present_cost_minor": 14000,
+        "present_cost_change_minor": -3500,
+        "upfront_cash_change_minor": 7000,
+    }
+    assert "12 months" == result["period"]
+    assert "Not affordability" in result["exclusions"][0]
+    assert all(metric["unit"] == "USD minor units" for metric in result["metrics"])
+
+
+def test_purchase_one_period_discount_matches_independent_cash_identity():
+    value = deepcopy(inputs()["purchase_comparison"])
+    for key in ("baseline", "alternative"):
+        value[key].update(
+            months=1,
+            annual_discount_rate="0.12",
+            upfront_minor=0,
+            terminal_receipt_minor=0,
+            terminal_cost_minor=0,
+        )
+    value["baseline"]["monthly_cost_minor"] = 10100
+    value["alternative"]["monthly_cost_minor"] = 20200
+    result = calculate("purchase_comparison", "1", value)["values"]
+    # 10100 / 1.01 = 10000; 20200 / 1.01 = 20000.
+    assert result["present_cost_change_minor"] == 10000
+    assert result["nominal_cost_change_minor"] == 10100
+
+
+@pytest.mark.parametrize(
+    "change", ["currency", "horizon", "rate", "confirmation", "real", "lease_resale"]
+)
+def test_purchase_rejects_incomparable_or_unsupported_assumptions(change):
+    value = deepcopy(inputs()["purchase_comparison"])
+    if change == "currency":
+        value["alternative"]["currency"] = "EUR"
+    elif change == "horizon":
+        value["alternative"]["months"] = 24
+    elif change == "rate":
+        value["alternative"]["annual_discount_rate"] = "0.05"
+    elif change == "confirmation":
+        value["comparable_costs_confirmed"] = False
+    elif change == "real":
+        value["alternative"]["money_basis"] = "real"
+    else:
+        value["alternative"]["option_kind"] = "lease"
+    with pytest.raises(CalculatorError, match="invalid_inputs"):
+        calculate("purchase_comparison", "1", value)

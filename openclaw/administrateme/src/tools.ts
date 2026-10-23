@@ -197,7 +197,7 @@ export function registerTools(api: OpenClawPluginApi, runtime: PluginRuntime): v
     },
     {
       name: "administrateme_finance_query",
-      description: "Read a bounded accepted finance report pinned to its private publication; never raw transactions, SQL or source links.",
+      description: "Read a bounded accepted finance report pinned to its private publication, or report_id owner_choices for explicit saved private goals/preferences (at most three per page). Never raw transactions, SQL or source links.",
       parameters: Type.Object({
         book_id: Type.String({ minLength: 1, maxLength: 120 }),
         publication_id: Type.String({ minLength: 1, maxLength: 120 }),

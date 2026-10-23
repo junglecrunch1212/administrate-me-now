@@ -510,6 +510,51 @@ def _ownership(body: OwnershipInput) -> OwnershipOutput:
     )
 
 
+class PurchaseInput(CurrencyInput):
+    baseline: OwnershipInput
+    alternative: OwnershipInput
+    comparable_costs_confirmed: Confirmed
+
+    @model_validator(mode="after")
+    def comparable_terms(self) -> PurchaseInput:
+        if (
+            self.baseline.currency != self.currency
+            or self.alternative.currency != self.currency
+            or self.baseline.months != self.alternative.months
+            or Decimal(self.baseline.annual_discount_rate)
+            != Decimal(self.alternative.annual_discount_rate)
+        ):
+            raise ValueError("purchase_options_require_matching_basis")
+        return self
+
+
+class PurchaseOutput(Contract):
+    baseline_present_cost_minor: int
+    alternative_present_cost_minor: int
+    nominal_cost_change_minor: int
+    present_cost_change_minor: int
+    upfront_cash_change_minor: int
+
+
+def _purchase(body: PurchaseInput) -> PurchaseOutput:
+    baseline = _ownership(body.baseline)
+    alternative = _ownership(body.alternative)
+    return PurchaseOutput(
+        baseline_present_cost_minor=baseline.discounted_net_cost_minor,
+        alternative_present_cost_minor=alternative.discounted_net_cost_minor,
+        nominal_cost_change_minor=_minor(
+            alternative.nominal_net_cost_minor - baseline.nominal_net_cost_minor
+        ),
+        present_cost_change_minor=_minor(
+            alternative.discounted_net_cost_minor - baseline.discounted_net_cost_minor
+        ),
+        upfront_cash_change_minor=(
+            alternative.initial_cash_required_minor
+            - baseline.initial_cash_required_minor
+        ),
+    )
+
+
 class PayInput(CurrencyInput):
     person_ref: Identifier
     pay_frequency: Literal["weekly_52", "biweekly_26", "semimonthly_24", "monthly_12"]
@@ -1059,6 +1104,21 @@ _SPECS: dict[str, _Spec] = {
             "Principal, transfers, card settlements and noncash offsets are excluded from spending.",
         ),
     ),
+    "purchase_comparison": _Spec(
+        "C05",
+        PurchaseInput,
+        PurchaseOutput,
+        _purchase,
+        "hypothetical_nominal_cost_comparison",
+        (
+            "Matching currency, horizon and nominal annual discount rate divided by 12; monthly end-period costs.",
+            "Positive difference means the alternative costs more. Each option rounds half-up to minor units before subtraction.",
+        ),
+        (
+            "Not affordability, realized savings, investment return or a recommendation; cash timing and chosen reserves require separate checks.",
+            "Taxes, financing, upkeep and residual values must be supplied explicitly in costs; no real-value conversion or inferred resale asset for a lease.",
+        ),
+    ),
     "cash_ladder": _Spec(
         "C03",
         CashLadderInput,
@@ -1392,6 +1452,8 @@ def _period(body: CurrencyInput) -> str:
         return f"{body.period_start.isoformat()}/{body.period_end.isoformat()}"
     if isinstance(body, (DebtInput, RefinanceInput)):
         return f"{body.horizon_months} months"
+    if isinstance(body, PurchaseInput):
+        return f"{body.baseline.months} months"
     if isinstance(body, OwnershipInput):
         return f"{body.months} months"
     if isinstance(body, GoalPathInput):

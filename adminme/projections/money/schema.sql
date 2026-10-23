@@ -238,3 +238,11 @@ CREATE TABLE IF NOT EXISTS finance_choices (
     last_event_id TEXT NOT NULL,
     PRIMARY KEY (tenant_id, owner_id, book_id, kind, choice_id)
 );
+
+CREATE TABLE IF NOT EXISTS finance_choice_heads (
+    tenant_id TEXT NOT NULL,
+    owner_id TEXT NOT NULL,
+    book_id TEXT NOT NULL,
+    last_event_id TEXT NOT NULL,
+    PRIMARY KEY (tenant_id, owner_id, book_id)
+);

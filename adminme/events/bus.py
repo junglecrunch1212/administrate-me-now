@@ -281,11 +281,25 @@ class EventBus:
             await asyncio.to_thread(self._ckpt_conn.close)
         self._closed = True
 
-    async def notify(self, event_id: str) -> None:
+    async def notify(
+        self, event_id: str, *, event_types: frozenset[str] | None = None
+    ) -> None:
+        """Wake matching consumers after commit, without advancing a checkpoint.
+
+        The writer knows the committed types. Legacy/untyped hints wake all
+        consumers; startup and reset still drain from durable checkpoints. A
+        skipped unrelated hint therefore neither loses an event nor acknowledges
+        delivery. Wildcard consumers always wake.
+        """
         if not self._running:
             return
         for state in self._subscribers.values():
-            if not state.degraded:
+            relevant = (
+                not event_types
+                or state.types == "*"
+                or bool(event_types.intersection(state.types))
+            )
+            if not state.degraded and relevant:
                 state.trigger.set()
 
     async def reset_subscriber(self, subscriber_id: str) -> None:

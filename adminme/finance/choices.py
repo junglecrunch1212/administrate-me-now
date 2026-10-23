@@ -144,3 +144,99 @@ def apply_choice(envelope: dict[str, Any], conn: Any) -> None:
             envelope["event_id"],
         ),
     )
+
+    conn.execute(
+        "INSERT INTO finance_choice_heads VALUES (?,?,?,?) ON CONFLICT(tenant_id,owner_id,book_id) DO UPDATE SET last_event_id=excluded.last_event_id",
+        (
+            envelope["tenant_id"],
+            scope["owner_member_id"],
+            scope["book_id"],
+            envelope["event_id"],
+        ),
+    )
+
+
+def query_choices(
+    conn: Any,
+    session: Session,
+    book: str,
+    publication: str,
+    *,
+    offset: int = 0,
+    limit: int = 1,
+) -> dict[str, Any]:
+    """Small model-facing read, separately authorized by the native facade.
+
+    Choices remain private human intent. An accepted publication provides the
+    accounting baseline; it does not turn an owner's preference into accounting.
+    """
+    from adminme.finance.queries import _owner, publication_status
+
+    owner = _owner(session)
+    status = publication_status(conn, session, book)
+    if status.get("publication_id") != publication:
+        raise FinanceChoiceError("finance_choices_require_current_publication")
+    if (
+        type(offset) is not int
+        or not 0 <= offset <= 1000
+        or type(limit) is not int
+        or not 1 <= limit <= 100
+    ):
+        raise FinanceChoiceError("finance_pagination_limit")
+    page_size = min(limit, 3)
+    rows = conn.execute(
+        "SELECT kind,payload_json,last_event_id FROM finance_choices WHERE tenant_id=? AND owner_id=? AND book_id=? ORDER BY kind,choice_id LIMIT ? OFFSET ?",
+        (session.tenant_id, owner, book, page_size + 1, offset),
+    ).fetchall()
+    head = choice_head(conn, session, book)
+    items = []
+    for kind, encoded, event_id in rows[:page_size]:
+        record = json.loads(encoded)
+        keys = (
+            (
+                "goal_id",
+                "label",
+                "kind",
+                "status",
+                "target_minor",
+                "currency",
+                "target_date",
+                "priority",
+            )
+            if kind == "goal"
+            else ("dimension", "selected_option_id")
+        )
+        items.append(
+            {
+                "choice_kind": kind,
+                **{key: record[key] for key in keys},
+                "recorded_at": record["recorded_at"],
+                "baseline_publication_id": record["scope"]["baseline_publication_id"],
+                "event_id": event_id,
+            }
+        )
+    return {
+        "state": "qualified",
+        "result_kind": "owner_choices",
+        "publication": {
+            key: status[key]
+            for key in ("book_id", "publication_id", "current_head_publication_id")
+        },
+        "choice_head_event_id": head,
+        "choices": items,
+        "next_offset": offset + page_size if len(rows) > page_size else None,
+        "basis": "explicit_private_owner_intent",
+        "next_step": "Confirm the selected intent before comparing options. Preferences do not schedule work or authorize sharing or financial actions.",
+        "provider_effect_count": 0,
+    }
+
+
+def choice_head(conn: Any, session: Session, book: str) -> str | None:
+    from adminme.finance.queries import _owner
+
+    owner = _owner(session)
+    row = conn.execute(
+        "SELECT last_event_id FROM finance_choice_heads WHERE tenant_id=? AND owner_id=? AND book_id=?",
+        (session.tenant_id, owner, book),
+    ).fetchone()
+    return row[0] if row else None
