@@ -17,6 +17,10 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Mapping
 
+from adminme.adapters.member_google_connections import (
+    CONFIG_KEY as MEMBER_GOOGLE_CONFIG_KEY,
+    selected_entries as selected_member_google_entries,
+)
 from adminme.provider_bindings import validate_provider_bindings
 from adminme.service_identities import validate_service_identity_config
 from bootstrap.contracts import DeploymentPaths
@@ -134,6 +138,52 @@ def _google_rows_for_member(
     ]
 
 
+def _explicit_google_account_groups(
+    source: Mapping[str, Any], rows: list[dict[str, Any]]
+) -> bool:
+    """Recognize retained self-service groups without rediscovering credentials.
+
+    Each account retains one row for all three services. Unselected services
+    stay disabled; multiple accounts do not make an old member-level credential
+    an enrollment request. Legacy one-account discovery remains unchanged.
+    """
+    if MEMBER_GOOGLE_CONFIG_KEY not in source:
+        return False
+    try:
+        selected = selected_member_google_entries(dict(source))
+        grouped: dict[str, list[dict[str, Any]]] = {}
+        seen_ids: set[str] = set()
+        for row in rows:
+            config = row["config"]
+            adapter_id = row.get("id")
+            if (
+                not isinstance(adapter_id, str)
+                or not adapter_id
+                or adapter_id in seen_ids
+                or not _BINDING_FIELDS.issubset(config)
+                or config.get("ownership_attested") is not True
+                or config.get("binding_provenance") != "oauth-subject"
+                or config.get("service_principal_id") is not None
+                or config.get("service_account_key_ref") is not None
+                or not isinstance(config.get("oauth_credentials_ref"), str)
+                or not config["oauth_credentials_ref"].startswith("keychain://")
+                or config.get("workspace") not in {"personal", "work"}
+                or (row.get("enabled") is not False and adapter_id not in selected)
+            ):
+                return False
+            seen_ids.add(adapter_id)
+            grouped.setdefault(_account_coordinate(config).casefold(), []).append(row)
+        return bool(grouped) and all(
+            len(group) == len(_GOOGLE_KINDS)
+            and {str(row["kind"]).removeprefix("adapter:") for row in group}
+            == _GOOGLE_KINDS
+            and len({row["config"]["workspace"] for row in group}) == 1
+            for group in grouped.values()
+        )
+    except (ValueError, TypeError, KeyError, ProviderBindingTransitionError):
+        return False
+
+
 def discover_readonly_google_enrollment(
     paths: DeploymentPaths,
     source: Mapping[str, Any],
@@ -168,7 +218,9 @@ def discover_readonly_google_enrollment(
                 str(item.get("kind") or "").removeprefix("adapter:")
                 for item in owned_rows
             }
-            if kinds != _GOOGLE_KINDS or len(owned_rows) != len(_GOOGLE_KINDS):
+            if (
+                kinds != _GOOGLE_KINDS or len(owned_rows) != len(_GOOGLE_KINDS)
+            ) and not _explicit_google_account_groups(source, owned_rows):
                 raise ProviderBindingTransitionError(
                     "existing member Google adapter inventory is incomplete or ambiguous"
                 )

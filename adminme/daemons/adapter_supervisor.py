@@ -354,17 +354,29 @@ class AdapterSupervisor:
         for managed in self._managed.values():
             await self._stop_managed(managed)
 
-    async def reconcile(self, config_data: dict[str, Any]) -> dict[str, Any]:
-        """Atomically replace configured adapter instances.
+    async def reconcile(
+        self,
+        config_data: dict[str, Any],
+        *,
+        affected_instance_ids: set[str] | None = None,
+    ) -> dict[str, Any]:
+        """Replace configured instances, optionally within exact instance IDs.
 
-        Candidate configuration is fully parsed and every adapter is
-        constructed before a running instance is touched.  This is the narrow
-        runtime seam used by Settings pause/resume; credentials remain secure
-        references and provider failures continue through normal backoff.
+        Construct and validate the candidate before touching a running adapter.
+        An explicit selection preserves unrelated adapter objects, tasks and
+        backoff state. It cannot smuggle in an unrelated configuration change.
+        Omitting the selection retains the existing full-reconciliation path.
         """
 
         async with self._reconcile_lock:
             candidate_config = dict(config_data)
+            selected = (
+                set(affected_instance_ids)
+                if affected_instance_ids is not None
+                else None
+            )
+            if selected is not None:
+                self._validate_selected_reconciliation(candidate_config, selected)
             candidates: dict[str, _ManagedAdapter] = {}
             for index, adapter in enumerate(self._loader(candidate_config)):
                 base = str(getattr(adapter, "instance_name", None) or adapter.name)
@@ -372,18 +384,129 @@ class AdapterSupervisor:
                 candidates[name] = _ManagedAdapter(adapter=adapter)
 
             old_managed = self._managed
-            for managed in old_managed.values():
+            retained: dict[str, _ManagedAdapter] = {}
+            if selected is None:
+                replaced = old_managed
+                next_managed = candidates
+                starts = candidates
+            else:
+                retained = {
+                    name: managed
+                    for name, managed in old_managed.items()
+                    if name not in selected
+                }
+                if set(retained) != set(candidates) - selected:
+                    raise ValueError(
+                        "selected reconciliation changed unrelated adapter instances"
+                    )
+                replaced = {
+                    name: managed
+                    for name, managed in old_managed.items()
+                    if name in selected
+                }
+                starts = {
+                    name: managed
+                    for name, managed in candidates.items()
+                    if name in selected
+                }
+                next_managed = {**retained, **starts}
+            if selected is not None:
+                # A revoked instance must leave dispatch before shutdown awaits.
+                self._managed = retained
+            for managed in replaced.values():
                 await self._stop_managed(managed)
 
-            self._managed = candidates
+            self._managed = next_managed
             self._config = candidate_config
             self._prepared = True
             if not self._stopping:
-                for name, managed in self._managed.items():
+                for name, managed in starts.items():
                     managed.task = asyncio.create_task(
                         self._run_adapter(managed), name=f"adapter:{name}"
                     )
                 await asyncio.sleep(0)
+            return self.snapshot()
+
+    def _validate_selected_reconciliation(
+        self, candidate_config: dict[str, Any], selected: set[str]
+    ) -> None:
+        """Only explicit, unique configured IDs may identify targeted rows."""
+
+        if any(not isinstance(value, str) or not value for value in selected):
+            raise ValueError("selected reconciliation requires nonempty instance IDs")
+
+        def without_selected(
+            config: dict[str, Any],
+        ) -> tuple[dict[str, Any], set[str]]:
+            entries = config.get("adapters") or []
+            if not isinstance(entries, list):
+                raise ValueError("adapter configuration must be a list")
+            retained: list[dict[str, Any]] = []
+            configured_ids: set[str] = set()
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    raise ValueError("adapter entry must be a mapping")
+                instance_id = entry.get("id")
+                if instance_id is not None:
+                    if (
+                        not isinstance(instance_id, str)
+                        or not instance_id
+                        or instance_id in configured_ids
+                    ):
+                        raise ValueError(
+                            "selected reconciliation requires unique configured IDs"
+                        )
+                    configured_ids.add(instance_id)
+                if instance_id not in selected:
+                    retained.append(entry)
+            from adminme.adapters.member_google_connections import (
+                CONFIG_KEY,
+                GoogleConnectionPolicy,
+            )
+
+            policy = GoogleConnectionPolicy.model_validate(
+                config.get(CONFIG_KEY, {"selections": []})
+            ).model_dump(mode="json")
+            policy["selections"] = sorted(
+                (
+                    row
+                    for row in policy["selections"]
+                    if row["adapter_id"] not in selected
+                ),
+                key=lambda row: row["adapter_id"],
+            )
+            return {
+                **config,
+                "adapters": retained,
+                CONFIG_KEY: policy,
+            }, configured_ids
+
+        old_remainder, old_ids = without_selected(self._config)
+        new_remainder, new_ids = without_selected(candidate_config)
+        if not selected <= old_ids | new_ids:
+            raise ValueError("selected reconciliation names an unconfigured instance")
+        if old_remainder != new_remainder:
+            raise ValueError(
+                "selected reconciliation changed unrelated adapter configuration"
+            )
+
+    async def stop_instances(self, instance_ids: set[str]) -> dict[str, Any]:
+        """Contain exact revoked instances without constructing replacements.
+
+        Remove them from dispatch as well as stopping polling. This supports
+        fail-closed recovery when permission history has already committed and
+        a selected reconciliation cannot start its replacement adapters.
+        """
+
+        selected = set(instance_ids)
+        if any(not isinstance(value, str) or not value for value in selected):
+            raise ValueError("stopping instances requires nonempty instance IDs")
+        async with self._reconcile_lock:
+            removed = [
+                self._managed.pop(name) for name in selected if name in self._managed
+            ]
+            for managed in removed:
+                await self._stop_managed(managed)
             return self.snapshot()
 
     @staticmethod

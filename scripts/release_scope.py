@@ -135,6 +135,55 @@ COS_GOOGLE_WORKSPACE_TEST_PATHS = frozenset(
 COS_GOOGLE_WORKSPACE_REQUIRED_PATHS = (
     COS_GOOGLE_WORKSPACE_COMPONENT_PATHS | COS_GOOGLE_WORKSPACE_TEST_PATHS
 )
+MEMBER_GOOGLE_SETTINGS_WIRING = "scripts/member_google_settings_wiring.json"
+MEMBER_GOOGLE_SETTINGS_CHECK_SCRIPT = "scripts/acceptance/member-google-settings.sh"
+MEMBER_GOOGLE_SETTINGS_SHARED_PATHS = frozenset(
+    {
+        "adminme/daemons/adapter_supervisor.py",
+        "adminme/products/member/assets/member.js",
+        "adminme/products/member/assets/member.css",
+        "adminme/reconciliation.py",
+        "adminme/runtime/application.py",
+        "adminme/settings_control.py",
+        "adminme/source_policy_shadow.py",
+        "bootstrap/bridge_readiness_transition.py",
+        "bootstrap/candidate_readiness.py",
+        "bootstrap/provider_binding_transition.py",
+        "bootstrap/runtime_service.py",
+    }
+)
+MEMBER_GOOGLE_SETTINGS_COMPONENT_PATHS = frozenset(
+    {
+        "adminme/member_google.py",
+        "adminme/google_oauth_transport.py",
+        "adminme/products/member/google_connections.py",
+        "adminme/events/schemas/member_google.py",
+        "adminme/adapters/member_google_connections.py",
+        "bootstrap/member_google_oauth.py",
+        "bootstrap/member_google_transition.py",
+        "docs/refactor/evidence/event-lifecycle-catalog.json",
+    }
+)
+MEMBER_GOOGLE_SETTINGS_TEST_PATHS = frozenset(
+    {
+        "tests/acceptance/test_member_google_settings.py",
+        "tests/acceptance/test_member_google_connections.py",
+        "tests/unit/test_member_google.py",
+        "tests/acceptance/test_member_google_readiness_transition.py",
+        "tests/unit/bootstrap/test_member_google_oauth.py",
+        "tests/unit/test_google_oauth_transport.py",
+        "tests/unit/daemons/test_adapter_supervisor.py",
+        "tests/unit/bootstrap/test_provider_binding_transition.py",
+        "tools/console-reference-harness/google-connections.mjs",
+        "tools/console-reference-harness/run-gate7.mjs",
+    }
+)
+MEMBER_GOOGLE_SETTINGS_REQUIRED_PATHS = (
+    MEMBER_GOOGLE_SETTINGS_SHARED_PATHS
+    | MEMBER_GOOGLE_SETTINGS_COMPONENT_PATHS
+    | MEMBER_GOOGLE_SETTINGS_TEST_PATHS
+    | {MEMBER_GOOGLE_SETTINGS_WIRING, MEMBER_GOOGLE_SETTINGS_CHECK_SCRIPT}
+)
 COS_APPLE_REMINDERS_COMPONENT_PATHS = frozenset(
     {
         "adminme/products/openclaw/service_context.py",
@@ -392,6 +441,7 @@ SCOPES = frozenset(
         "bridge-setup",
         "google-connections",
         "cos-google-workspace",
+        "member-google-settings",
         "cos-apple-reminders",
         "cos-recovery-history",
         "cos-reminders",
@@ -450,6 +500,7 @@ def choose_scope(
     enrollment_interfaces_equal: bool = False,
     google_interfaces_equal: bool = False,
     cos_google_workspace_interfaces_equal: bool = False,
+    member_google_settings_interfaces_equal: bool = False,
     cos_apple_reminders_interfaces_equal: bool = False,
     cos_recovery_interfaces_equal: bool = False,
     bridge_runtime_interfaces_equal: bool = False,
@@ -559,6 +610,20 @@ def choose_scope(
         )
     ):
         return "cos-recovery-history"
+    if (
+        member_google_settings_interfaces_equal
+        and all(
+            status in {"A", "M"}
+            and (
+                path in MEMBER_GOOGLE_SETTINGS_REQUIRED_PATHS | POLICY_PATHS
+                or _prose(path)
+            )
+            and path_modes.get(path) == {"100644"}
+            for status, path in changes
+        )
+        and any(path in MEMBER_GOOGLE_SETTINGS_COMPONENT_PATHS for _, path in changes)
+    ):
+        return "member-google-settings"
     if (
         cos_apple_reminders_interfaces_equal
         and all(
@@ -965,6 +1030,65 @@ def _cos_google_workspace_dependency_fingerprint(
     ).hexdigest()
 
 
+def _member_google_settings_shared_source(
+    path: str, source: str
+) -> tuple[str, bool] | None:
+    """Normalize only reviewed exact integration edits in otherwise frozen files."""
+    contract = json.loads(
+        (Path(__file__).parent / "member_google_settings_wiring.json").read_text()
+    )
+    if (
+        contract.get("contract") != "member-google-settings-wiring-v1"
+        or set(contract.get("paths", {})) != MEMBER_GOOGLE_SETTINGS_SHARED_PATHS
+    ):
+        raise ValueError("invalid member Google Settings integration boundary")
+    pairs = contract["paths"][path]
+    if not isinstance(pairs, list) or not pairs:
+        raise ValueError("member Google Settings integration edits are missing")
+    wired = True
+    for pair in pairs:
+        before, after = pair["before"], pair["after"]
+        if not before or not after or before == after:
+            raise ValueError("invalid member Google Settings integration edit")
+        if source.count(after) == 1:
+            source = source.replace(after, before, 1)
+        elif source.count(before) == 1:
+            wired = False
+        else:
+            return None
+    return source, wired
+
+
+def _member_google_settings_dependency_fingerprint(
+    repository: Path, revision: str, entries: tuple[GitTreeEntry, ...]
+) -> tuple[str, bool] | None:
+    normalized: dict[str, str] = {}
+    wired = []
+    for path in MEMBER_GOOGLE_SETTINGS_SHARED_PATHS:
+        entry = next((entry for entry in entries if entry.path == path), None)
+        if entry is None or entry.mode != "100644":
+            return None
+        result = _member_google_settings_shared_source(
+            path, _git(repository, "show", f"{revision}:{path}")
+        )
+        if result is None:
+            return None
+        normalized[path], present = result
+        wired.append(present)
+    allowed = MEMBER_GOOGLE_SETTINGS_REQUIRED_PATHS | POLICY_PATHS
+    coordinates = sorted(
+        (entry.path, entry.mode, normalized.get(entry.path, entry.object_id))
+        for entry in entries
+        if entry.path in MEMBER_GOOGLE_SETTINGS_SHARED_PATHS
+        or not (
+            entry.mode == "100644" and (entry.path in allowed or _prose(entry.path))
+        )
+    )
+    return hashlib.sha256(
+        json.dumps(coordinates, separators=(",", ":")).encode()
+    ).hexdigest(), all(wired)
+
+
 def _cos_apple_reminders_dependency_fingerprint(
     entries: tuple[GitTreeEntry, ...],
 ) -> str:
@@ -1078,6 +1202,8 @@ def select_scope(
     workspace_sources_present: dict[str, bool] = {}
     apple_fingerprints: dict[str, str] = {}
     apple_sources_present: dict[str, bool] = {}
+    member_google_fingerprints: dict[str, str] = {}
+    member_google_sources_present: dict[str, bool] = {}
     service_work_fingerprints: dict[str, str] = {}
     service_work_sources_present: dict[str, bool] = {}
     for revision in {base, head, checkout}:
@@ -1094,6 +1220,17 @@ def select_scope(
         )
         updater_fingerprints[revision] = _updater_dependency_fingerprint(entries)
         regular_paths = {entry.path for entry in entries if entry.mode == "100644"}
+        member_google = _member_google_settings_dependency_fingerprint(
+            repository, revision, entries
+        )
+        member_google_fingerprints[revision] = member_google[0] if member_google else ""
+        member_google_sources_present[revision] = member_google is not None and (
+            revision == base
+            or (
+                member_google[1]
+                and MEMBER_GOOGLE_SETTINGS_REQUIRED_PATHS <= regular_paths
+            )
+        )
         workspace_fingerprints[revision] = _cos_google_workspace_dependency_fingerprint(
             entries
         )
@@ -1173,6 +1310,10 @@ def select_scope(
             }
         )
         == 1,
+        member_google_settings_interfaces_equal=(
+            all(member_google_sources_present.values())
+            and len(set(member_google_fingerprints.values())) == 1
+        ),
         cos_google_workspace_interfaces_equal=(
             all(workspace_sources_present.values())
             and len(set(workspace_fingerprints.values())) == 1
@@ -1220,6 +1361,9 @@ def select_scope(
         "bridge_setup_dependency_sha256": setup_fingerprints[checkout],
         "cos_google_workspace_dependency_sha256": workspace_fingerprints[checkout],
         "cos_apple_reminders_dependency_sha256": apple_fingerprints[checkout],
+        "member_google_settings_dependency_sha256": member_google_fingerprints[
+            checkout
+        ],
         "changes": [{"status": status, "path": path} for status, path in changes],
     }
 
@@ -1235,6 +1379,7 @@ def required_workers(scope: str, platform: str) -> tuple[str, ...]:
         "bridge-setup": "bridge-development",
         "google-connections": "google-connections-validation",
         "cos-google-workspace": "google-connections-validation",
+        "member-google-settings": "google-connections-validation",
         "cos-apple-reminders": "google-connections-validation",
         "cos-recovery-history": "cos-recovery-history-validation",
         "cos-reminders": "cos-reminder-validation",
