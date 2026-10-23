@@ -1919,6 +1919,26 @@ def test_service_work_scope_rejects_missing_or_broader_runtime_edits(
     )
 
 
+@pytest.mark.parametrize(
+    "relative",
+    [
+        "adminme/events/schemas/openclaw.py",
+        "adminme/products/openclaw/service_context.py",
+        "adminme/projections/tasks/handlers.py",
+        "adminme/projections/tasks/schema.sql",
+    ],
+)
+def test_service_work_source_receipt_changes_keep_focused_proof(
+    repository: tuple[Path, str],
+    relative: str,
+) -> None:
+    path, _ = repository
+    _base, base = _service_work_candidate(path)
+    head = _commit(path, relative, "# Reviewed receipt or current-source change\n")
+    proof = select_scope(path, _event(base, head), checkout_sha=head)
+    assert proof["scope"] == "cos-service-work"
+
+
 def test_service_work_runtime_normalization_is_limited_to_direct_router_statements() -> (
     None
 ):
@@ -1941,6 +1961,7 @@ def test_service_work_runtime_normalization_is_limited_to_direct_router_statemen
     "other",
     [
         "adminme/events/log.py",
+        "adminme/events/schemas/messaging_unreviewed.py",
         "adminme/lib/session.py",
         "adminme/runtime/unreviewed.py",
         "adminme/products/openclaw/routers.py",

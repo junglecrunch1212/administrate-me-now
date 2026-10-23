@@ -1,8 +1,9 @@
-"""Standing-grant facts for the CoS working environment, never disclosure grants.
+"""Authorized facts for the CoS working environment, never disclosure grants.
 
 Keep ownership and each source's authority attached when information crosses
-an internal tool boundary. Provider bodies, credentials and arbitrary event
-payloads do not enter this bounded canonical-fact surface.
+an internal tool boundary. Only policy-permitted bounded plaintext from the
+service-owned Gmail mailbox enters this surface; arbitrary payloads, HTML and
+attachments stay out.
 """
 
 from __future__ import annotations
@@ -17,7 +18,7 @@ from adminme.projections.parties.queries import (
     ServiceDelegationResolutionError,
     resolve_service_delegation,
 )
-from adminme.service_identities import ServiceRequestContext
+from adminme.service_identities import COS_PARTY_ID, ServiceRequestContext
 from adminme.source_policy import source_coordinate_for_event
 
 CALENDAR_FIELDS = frozenset(
@@ -181,6 +182,40 @@ def _context_for(
     return matches[0] if len(matches) == 1 else None
 
 
+READ_RANK = {"metadata_only": 0, "typed_facts": 1, "typed_facts_safe_snippet": 2}
+SELF_MAIL_METADATA = frozenset(
+    {
+        "provider",
+        "provider_account_id",
+        "workspace",
+        "native_message_id",
+        "thread_id",
+        "source_channel",
+        "received_at",
+        "sent_at",
+        "message_state",
+        "delivery_status",
+    }
+)
+
+
+def _self_mail(event: dict[str, Any], session: ServiceSession) -> bool:
+    """Ownership is the acquired envelope, never a member route or browser label."""
+    payload = event["payload"]
+    return (
+        event["tenant_id"] == session.tenant_id
+        and event["type"] in {"messaging.received", "messaging.sent"}
+        and event["schema_version"] >= 6
+        and event["owner_scope"] == session.private_scope
+        and event["visibility_scope"] == session.private_scope
+        and payload.get("service_principal_id") == session.principal.principal_id
+        and payload.get("member_id") is None
+        and payload.get("provider") == "gmail"
+        and payload.get("workspace") == "service"
+        and payload.get("provider_account_id") == event["source_account_id"]
+    )
+
+
 def _source_authority(
     runtime: Any,
     session: ServiceSession,
@@ -188,7 +223,8 @@ def _source_authority(
     contexts: list[ServiceRequestContext],
 ) -> dict[str, Any] | None:
     context = _context_for(event, session, contexts)
-    if context is None:
+    own_mail = _self_mail(event, session)
+    if context is None and not own_mail:
         return None
     try:
         coordinate = source_coordinate_for_event(
@@ -199,6 +235,32 @@ def _source_authority(
     effective = runtime.settings_control.effective_source_policy_v2(
         coordinate.owner_principal_id, coordinate
     )
+    if own_mail:
+        mode = effective["policy"]["context_mode"]
+        if (
+            mode not in READ_RANK
+            or coordinate.owner_principal_id != session.principal.principal_id
+        ):
+            return None
+        return {
+            "source_event_id": event["event_id"],
+            "authority_kind": "service_self",
+            "authority_grant_id": None,
+            "context_scope": "service_private",
+            "context_member_id": None,
+            "owner_party_id": COS_PARTY_ID,
+            "source_owner_scope": event["owner_scope"],
+            "source_visibility_scope": event["visibility_scope"],
+            "source_sensitivity": event["sensitivity"],
+            "source_adapter": event["source_adapter"],
+            "source_account_id": event["source_account_id"],
+            "source_policy_key": coordinate.key,
+            "source_policy_owner_id": coordinate.owner_principal_id,
+            "source_audience": [],
+            "read_mode": mode,
+            "restriction": "internal_processing_only",
+        }
+    assert context is not None
     # This standing-context tool has no trusted explicit-demand receipt. Even
     # the more permissive snippet mode returns only the typed fields below.
     # Do not turn a model-supplied flag into permission to read provider bodies.
@@ -233,6 +295,31 @@ def _current_source(runtime: Any, event: dict[str, Any]) -> bool:
     resurrect an old source snapshot through an explicit event reference.
     """
     kind = event["type"]
+    payload = event["payload"]
+    if kind.startswith("messaging.") and payload.get("service_principal_id"):
+        # The existing native-message unique index selects the exact current
+        # snapshot without scanning unrelated mailbox bodies or member rows.
+        return (
+            runtime.projections.connection("interactions")
+            .execute(
+                "SELECT 1 FROM service_interactions WHERE tenant_id=? "
+                "AND service_principal_id=? AND provider=? AND provider_account_id=? "
+                "AND native_message_id=? AND owner_scope=? AND visibility_scope=? "
+                "AND last_event_id=?",
+                (
+                    event["tenant_id"],
+                    payload["service_principal_id"],
+                    payload.get("provider"),
+                    payload.get("provider_account_id"),
+                    payload.get("native_message_id"),
+                    event["owner_scope"],
+                    event["visibility_scope"],
+                    event["event_id"],
+                ),
+            )
+            .fetchone()
+            is not None
+        )
     if kind.startswith("calendar."):
         if event["schema_version"] < 2:
             # v1 updates are patches rather than complete calendar snapshots.
@@ -319,7 +406,21 @@ def fact_for(
     authority = _source_authority(runtime, session, event, contexts)
     if authority is None or not _current_source(runtime, event):
         return None
+    own_mail = _self_mail(event, session)
+    if own_mail and authority["read_mode"] == "metadata_only":
+        fields = SELF_MAIL_METADATA
     fact, truncated = _bounded_fact(event["payload"], fields)
+    body_included = False
+    if own_mail and authority["read_mode"] == "typed_facts_safe_snippet":
+        text = event["payload"].get("body_text")
+        if isinstance(text, str) and text:
+            # Plaintext only, control characters removed; no HTML conversion,
+            # attachment fetch, or claim that the bounded excerpt is complete.
+            text = "".join(c for c in text if c.isprintable() or c in "\n\t")
+            fact["body_snippet"] = text[:2000]
+            fact["body_snippet_truncated"] = len(text) > 2000
+            truncated |= len(text) > 2000
+            body_included = True
     return {
         "event_id": event["event_id"],
         "event_type": event["type"],
@@ -327,7 +428,7 @@ def fact_for(
         "authority": authority,
         "fact": fact,
         "fact_truncated": truncated,
-        "provider_body_included": False,
+        "provider_body_included": body_included,
         "outside_disclosure_authorized": False,
     }
 
@@ -344,7 +445,10 @@ async def validate_context_cursor(
     if (
         event is None
         or event["type"] not in FACT_FIELDS
-        or _context_for(event, session, contexts) is None
+        or (
+            _context_for(event, session, contexts) is None
+            and not _self_mail(event, session)
+        )
     ):
         raise HTTPException(404, "authorized context cursor not found")
 
@@ -379,6 +483,13 @@ async def work_authorized(
         authority = (
             _source_authority(runtime, session, event, contexts) if event else None
         )
+        if authority is not None and source.get("authority_kind") == "service_self":
+            if (
+                READ_RANK.get(authority["read_mode"], -1)
+                < READ_RANK[source["read_mode"]]
+            ):
+                return False
+            authority = {**authority, "read_mode": source["read_mode"]}
         if authority != source:
             return False
     return True
@@ -393,3 +504,43 @@ async def work_view(
     work["source_authorities"] = json.loads(work.pop("source_authorities_json", "[]"))
     work["outside_disclosure_authorized"] = False
     return work
+
+
+async def retained_sources(
+    runtime: Any,
+    session: ServiceSession,
+    session_digest: str,
+    explicit_sources: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """A model cannot omit a consumed source or lower its recorded read mode."""
+    sources = {source["source_event_id"]: source for source in explicit_sources}
+    rows = (
+        runtime.projections.connection("tasks")
+        .execute(
+            "SELECT authority_json FROM cos_source_read_receipts WHERE tenant_id=? "
+            "AND service_principal_id=? AND session_digest=? LIMIT 21",
+            (session.tenant_id, session.principal.principal_id, session_digest),
+        )
+        .fetchall()
+    )
+    for row in rows:
+        source = json.loads(row["authority_json"])
+        current = sources.get(source["source_event_id"])
+        # Keep the consumed grant/audience even when an explicit reference now
+        # resolves differently. Only the processing floor may become stricter.
+        if current is not None and source.get("authority_kind") == "service_self":
+            source["read_mode"] = max(
+                source["read_mode"],
+                current.get("read_mode", "typed_facts"),
+                key=READ_RANK.__getitem__,
+            )
+        sources[source["source_event_id"]] = source
+    if len(sources) > 20:
+        raise HTTPException(
+            409,
+            "private note exceeds 20 consumed sources; start a fresh narrowly scoped run",
+        )
+    result = list(sources.values())
+    if not await work_authorized(runtime, session, {"source_authorities": result}):
+        raise HTTPException(404, "consumed source authority is no longer available")
+    return result

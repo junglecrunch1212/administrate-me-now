@@ -205,6 +205,7 @@ COS_SERVICE_WORK_COMPONENT_PATHS = frozenset(
         "adminme/lib/scope.py",
         "adminme/service_identities.py",
         "adminme/events/schemas/domain.py",
+        "adminme/events/schemas/openclaw.py",
         "adminme/projections/tasks/__init__.py",
         "adminme/projections/tasks/handlers.py",
         "adminme/projections/tasks/schema.sql",

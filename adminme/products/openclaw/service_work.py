@@ -22,8 +22,10 @@ from adminme.openclaw_topology import service_agent_id, service_session_valid
 from adminme.products.openclaw import main as seam
 from adminme.products.openclaw.service_context import (
     FACT_FIELDS,
+    READ_RANK,
     active_contexts,
     fact_for,
+    retained_sources,
     source_facts,
     validate_context_cursor,
     work_view,
@@ -225,12 +227,19 @@ async def _append(
         ) from exc
 
 
+def _read_session_digest(provenance: seam.Provenance) -> str:
+    return hashlib.sha256(
+        ("cos-source-read:" + (provenance.session_key or "")).encode()
+    ).hexdigest()
+
+
 async def _audit(
     runtime: Any,
     session: ServiceSession,
     provenance: seam.Provenance,
     operation: str,
     result_event_ids: list[str],
+    source_authorities: list[dict[str, Any]] | None = None,
 ) -> None:
     payload = {
         "operation": operation,
@@ -254,22 +263,34 @@ async def _audit(
         "openclaw_version": provenance.openclaw_version,
         "openclaw_commit": provenance.openclaw_commit,
     }
+    if source_authorities is not None:
+        payload.update(
+            {
+                "source_read_session_digest": _read_session_digest(provenance),
+                "source_read_authorities": source_authorities,
+            }
+        )
     fingerprint = seam._fingerprint(payload)
     request_id = f"{operation}:{provenance.correlation_id}"
-    if await _prior(
+    prior = await _prior(
         runtime, session, "openclaw.tool_call.recorded", request_id, fingerprint
-    ):
+    )
+    if prior:
+        if source_authorities is not None:
+            await runtime.wait_for_projection("tasks", prior["event_id"])
         return
-    await _append(
+    audit_id = await _append(
         runtime,
         session,
         event_type="openclaw.tool_call.recorded",
-        version=2,
+        version=3 if source_authorities is not None else 2,
         payload=payload,
         request_id=request_id,
         fingerprint=fingerprint,
         causation_id=result_event_ids[-1] if result_event_ids else None,
     )
+    if source_authorities is not None:
+        await runtime.wait_for_projection("tasks", audit_id)
 
 
 async def _work(runtime: Any, session: ServiceSession, task_id: str) -> dict[str, Any]:
@@ -312,7 +333,12 @@ async def create_work(
             event_id = prior["event_id"]
         else:
             facts = await source_facts(runtime, session, body.source_event_ids)
-            authorities = [fact["authority"] for fact in facts]
+            authorities = await retained_sources(
+                runtime,
+                session,
+                _read_session_digest(body.provenance),
+                [fact["authority"] for fact in facts],
+            )
             sensitivity = cast(
                 Sensitivity,
                 max(
@@ -351,7 +377,12 @@ async def create_work(
                 runtime,
                 session,
                 event_type="task.created",
-                version=4,
+                version=5
+                if any(
+                    source.get("authority_kind") == "service_self"
+                    for source in authorities
+                )
+                else 4,
                 payload=payload,
                 request_id=body.request_id,
                 fingerprint=fingerprint,
@@ -553,7 +584,24 @@ async def read_work(body: ReadPrivateWorkRequest, request: Request) -> dict[str,
         if len(history) == body.limit or scanned == 1000:
             next_cursor = event["event_id"]
             break
-    await _audit(runtime, session, body.provenance, "tools.service-private-state", [])
+    # Reading a retained note carries its full original source chain into this
+    # run too. Re-saving its text cannot erase the original client restrictions.
+    read_sources: dict[str, dict[str, Any]] = {}
+    for item in [*work, *(entry["payload"] for entry in history)]:
+        for source in item.get("source_authorities", []):
+            prior_source = read_sources.get(source["source_event_id"])
+            if prior_source is None or READ_RANK.get(
+                source.get("read_mode", "typed_facts"), 1
+            ) > READ_RANK.get(prior_source.get("read_mode", "typed_facts"), 1):
+                read_sources[source["source_event_id"]] = source
+    await _audit(
+        runtime,
+        session,
+        body.provenance,
+        "tools.service-private-state",
+        [],
+        list(read_sources.values()),
+    )
     return {
         "principal_id": session.principal.principal_id,
         "party_id": session.principal.party_id,
@@ -582,7 +630,8 @@ async def read_context(
     scan_truncated = False
     if not body.source_event_ids:
         scopes = sorted(
-            {scope for context in contexts for scope in context.allowed_scopes}
+            {session.private_scope}
+            | {scope for context in contexts for scope in context.allowed_scopes}
         )
         scan_boundaries: list[str] = []
         for scope in scopes:
@@ -619,6 +668,7 @@ async def read_context(
         body.provenance,
         "tools.service-context",
         [fact["event_id"] for fact in facts],
+        [fact["authority"] for fact in facts],
     )
     return {
         "principal_id": session.principal.principal_id,
