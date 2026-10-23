@@ -1,4 +1,4 @@
-"""Lossless typed transport for Books-produced planning values, never a forecast.
+"""Typed transport for supported Books planning outputs, never a forecast.
 
 Accounting acceptance and projection verification are distinct. All arithmetic
 outputs arrive in producer-rounded minor units. Conditional estimates retain
@@ -73,12 +73,6 @@ def _context(context: dict[str, Any], chosen: str) -> None:
         raise PublicationError("projection_chosen_control_mismatch")
     _range(context["opening"])
     _range(context["encumbered"], nonnegative=True)
-    if context["opening_basis"] == "verified_unrestricted" and (
-        not _known(context["opening"])
-        or context["opening"]["lower_minor"] != context["opening"]["upper_minor"]
-        or not _known(context["encumbered"])
-    ):
-        raise PublicationError("projection_unverified_opening")
     if {h["days"] for h in context["horizons"]} != HORIZONS:
         raise PublicationError("projection_horizons_incomplete")
     for horizon in context["horizons"]:
@@ -88,6 +82,14 @@ def _context(context: dict[str, Any], chosen: str) -> None:
             days=horizon["days"] + 1
         ):
             raise PublicationError("projection_local_date_boundary")
+        if (
+            context["opening_basis"] == "verified_unrestricted"
+            and not _known(context["opening"])
+            and horizon["estimate_state"] != "UNAVAILABLE"
+        ):
+            raise PublicationError("projection_verified_opening_unavailable")
+        for name in ("cash_in", "cash_out"):
+            _range(horizon[name], nonnegative=True)
         for name in ("closing", "minimum"):
             _range(horizon[name])
             if horizon["estimate_state"] == "UNAVAILABLE" and any(
@@ -127,9 +129,33 @@ def _context(context: dict[str, Any], chosen: str) -> None:
             for name in ("negative_bank_cash", "checking_shortage")
         ):
             raise PublicationError("projection_funding_is_not_bank_cash")
+        for name in (
+            "minimum_date",
+            "first_negative_date",
+            "first_reserve_breach_date",
+            "first_zero_crossing_date",
+        ):
+            dated = horizon[name]
+            _nullable(dated["date"], dated["unknown_reason"])
+            if dated["date"] is not None and (
+                not date.fromisoformat(horizon["start_inclusive"])
+                <= date.fromisoformat(dated["date"])
+                < date.fromisoformat(horizon["end_exclusive"])
+                or horizon["estimate_state"] == "UNAVAILABLE"
+            ):
+                raise PublicationError("projection_signal_date_invalid")
+        for signal, dated in (
+            ("negative_bank_cash", "first_negative_date"),
+            ("reserve_breach", "first_reserve_breach_date"),
+        ):
+            if horizon[signal]["value"] is False and horizon[dated]["date"] is not None:
+                raise PublicationError("projection_signal_date_conflict")
         if horizon["safety_state"] == "SOURCE_VERIFIED" and (
             context["measure"] != BANK
             or context["opening_basis"] != "verified_unrestricted"
+            or not _known(context["opening"])
+            or context["opening"]["lower_minor"] != context["opening"]["upper_minor"]
+            or not _known(context["encumbered"])
             or context["mandatory_flow_coverage"] != "COMPLETE"
             or horizon["completeness_state"] != "COMPLETE"
             or horizon["estimate_state"] != "PROVIDED"
@@ -222,6 +248,34 @@ def validate_projection(value: dict[str, Any]) -> dict[str, Any]:
                 and datetime.fromisoformat(clock["value"]) > verified
             ):
                 raise PublicationError("projection_clock_order")
+        engines = {e["role"]: e for e in result["engines"]}
+        if set(engines) != {"dated", "funding", "income"}:
+            raise PublicationError("projection_engine_manifest_incomplete")
+        if any(
+            engines["dated"][k] != result[k]
+            for k in ("engine_id", "engine_version", "input_sha256")
+        ):
+            raise PublicationError("projection_dated_engine_mismatch")
+        sources = {source["source_id"]: source for source in result["sources"]}
+        if len(sources) != len(result["sources"]):
+            raise PublicationError("projection_source_identity_invalid")
+        for source in sources.values():
+            local_verified = verified.astimezone(ZoneInfo(source["timezone"])).date()
+            balance = source["balance_as_of"]
+            _nullable(balance["date"], balance["unknown_reason"])
+            if (
+                balance["date"] is not None
+                and date.fromisoformat(balance["date"]) > local_verified
+            ):
+                raise PublicationError("projection_future_balance_date")
+            for name in ("provider_as_of", "retrieved_at", "observed_at"):
+                clock = source[name]
+                _nullable(clock["value"], clock["unknown_reason"])
+                if (
+                    clock["value"] is not None
+                    and datetime.fromisoformat(clock["value"]) > verified
+                ):
+                    raise PublicationError("projection_clock_order")
         evidence = set(result["evidence_ids"])
         if len(evidence) != len(result["evidence_ids"]):
             raise PublicationError("projection_duplicate_evidence")
@@ -231,6 +285,11 @@ def validate_projection(value: dict[str, Any]) -> dict[str, Any]:
         coordinates: set[tuple[Any, ...]] = set()
         for context in contexts.values():
             _context(context, result["selected_plan_case_id"])
+            if (
+                date.fromisoformat(context["as_of_date"])
+                > verified.astimezone(ZoneInfo(context["timezone"])).date()
+            ):
+                raise PublicationError("projection_future_context_date")
             coordinate = tuple(
                 context[k]
                 for k in (
@@ -250,7 +309,62 @@ def validate_projection(value: dict[str, Any]) -> dict[str, Any]:
             for horizon in context["horizons"]:
                 if not set(horizon["evidence_ids"]) <= evidence:
                     raise PublicationError("projection_horizon_evidence_invalid")
+        records = {e["evidence_id"]: e for e in result["evidence"]}
+        gaps = {g["gap_id"]: g for g in result["gaps"]}
+        if (
+            set(records) != evidence
+            or len(records) != len(result["evidence"])
+            or len(gaps) != len(result["gaps"])
+        ):
+            raise PublicationError("projection_evidence_manifest_invalid")
+        for record in [*records.values(), *gaps.values()]:
+            if len(set(record["context_ids"])) != len(record["context_ids"]):
+                raise PublicationError("projection_evidence_context_duplicate")
+            if record["audience_member_ids"] != [result["owner_id"]] or not set(
+                record["context_ids"]
+            ) <= set(contexts):
+                raise PublicationError("projection_evidence_audience_invalid")
+            for name in ("description", "explanation", "required_input"):
+                if "://" in record.get(name, ""):
+                    raise PublicationError("projection_private_link_not_permitted")
+        for record in records.values():
+            if record["source_id"] not in sources:
+                raise PublicationError("projection_evidence_source_unknown")
+        for gap in gaps.values():
+            if not set(gap["evidence_ids"]) <= evidence:
+                raise PublicationError("projection_gap_evidence_unknown")
+            if any(
+                not set(gap["context_ids"]) <= set(records[e]["context_ids"])
+                for e in gap["evidence_ids"]
+            ):
+                raise PublicationError("projection_gap_evidence_context_invalid")
+        for context in contexts.values():
+            for horizon in context["horizons"]:
+                for gap_id in horizon["conditions"]:
+                    gap = gaps.get(gap_id)
+                    if (
+                        gap is None
+                        or context["context_id"] not in gap["context_ids"]
+                        or horizon["days"] not in gap["horizon_days"]
+                    ):
+                        raise PublicationError("projection_gap_scope_invalid")
+                if any(
+                    context["context_id"] not in records[e]["context_ids"]
+                    for e in horizon["evidence_ids"]
+                ):
+                    raise PublicationError("projection_evidence_context_invalid")
         grouped = _events(contexts, result["detail_events"], evidence)
+        for row in result["detail_events"]:
+            if any(
+                row["context_id"] not in records[e]["context_ids"]
+                for e in row["evidence_ids"]
+            ):
+                raise PublicationError("projection_evidence_context_invalid")
+            if any(
+                g not in gaps or row["context_id"] not in gaps[g]["context_ids"]
+                for g in row["conditions"]
+            ):
+                raise PublicationError("projection_gap_scope_invalid")
         manifests = {m["context_id"]: m for m in result["detail_manifest"]}
         if len(manifests) != len(result["detail_manifest"]) or set(manifests) != set(
             contexts

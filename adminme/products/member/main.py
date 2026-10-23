@@ -9674,9 +9674,16 @@ async def finance_planning(
     projection_id: str | None = Query(default=None, max_length=80),
     context_id: str | None = Query(default=None, max_length=80),
     report_id: Literal[
-        "planning_contexts", "planning_projection", "planning_events"
+        "planning_contexts",
+        "planning_projection",
+        "planning_events",
+        "planning_gaps",
+        "planning_evidence",
+        "planning_sources",
+        "planning_engines",
     ] = "planning_contexts",
-    horizon_days: Literal[7, 30, 90, 180, 365] = 30,
+    reference_id: str | None = Query(default=None, min_length=1, max_length=80),
+    horizon_days: int = Query(default=30, ge=7, le=365),
     offset: int = Query(default=0, ge=0, le=10000),
 ) -> dict[str, Any]:
     from adminme.finance.planning_store import query_projection
@@ -9696,6 +9703,7 @@ async def finance_planning(
                 horizon_days=horizon_days,
                 offset=offset,
                 limit=50,
+                reference_id=reference_id,
             ),
         )
     except ValueError:

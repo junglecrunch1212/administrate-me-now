@@ -73,7 +73,9 @@ def apply_projection(envelope: dict[str, Any], conn: Any) -> None:
     if (head[0] if head else None) != p["prior_projection_id"]:
         raise PublicationError("projection_prior_conflict")
     metadata = {
-        k: v for k, v in p.items() if k not in {"detail_events", "evidence_ids"}
+        k: v
+        for k, v in p.items()
+        if k not in {"detail_events", "evidence_ids", "gaps", "evidence", "sources"}
     }
     conn.execute(
         "INSERT INTO finance_dated_projections VALUES (?,?,?,?,?,?,?)",
@@ -85,6 +87,36 @@ def apply_projection(envelope: dict[str, Any], conn: Any) -> None:
             envelope["event_id"],
         ),
     )
+    for kind in ("gaps", "evidence", "sources"):
+        for ordinal, record in enumerate(p[kind]):
+            ref_id = record[
+                {"gaps": "gap_id", "evidence": "evidence_id", "sources": "source_id"}[
+                    kind
+                ]
+            ]
+            context_ids = record.get("context_ids")
+            if context_ids is None:
+                context_ids = sorted(
+                    {
+                        c
+                        for e in p["evidence"]
+                        if e["source_id"] == ref_id
+                        for c in e["context_ids"]
+                    }
+                )
+            for context_id in context_ids:
+                conn.execute(
+                    "INSERT INTO finance_dated_projection_refs VALUES (?,?,?,?,?,?,?,?,?)",
+                    (
+                        *key,
+                        p["projection_id"],
+                        kind,
+                        ref_id,
+                        context_id,
+                        ordinal,
+                        canonical_bytes(record).decode(),
+                    ),
+                )
     counts: dict[str, int] = {}
     for row in p["detail_events"]:
         context_id = row["context_id"]
@@ -232,6 +264,8 @@ def _summary(context: dict[str, Any], horizon: dict[str, Any]) -> dict[str, Any]
         ("encumbered", context["encumbered"]),
         ("closing", horizon["closing"]),
         ("minimum", horizon["minimum"]),
+        ("cash_in", horizon["cash_in"]),
+        ("cash_out", horizon["cash_out"]),
     ):
         for endpoint in ("lower", "upper"):
             reason = value[f"{endpoint}_unknown_reason"]
@@ -257,6 +291,8 @@ def _summary(context: dict[str, Any], horizon: dict[str, Any]) -> dict[str, Any]
         "encumbered": _compact_range(context["encumbered"]),
         "closing": _compact_range(horizon["closing"]),
         "minimum": _compact_range(horizon["minimum"]),
+        "cash_in": _compact_range(horizon["cash_in"]),
+        "cash_out": _compact_range(horizon["cash_out"]),
         "reserve_threshold": horizon["reserve_threshold"]["value_minor"],
         "checking_threshold": horizon["checking_threshold"]["value_minor"],
         "reserve_breach": horizon["reserve_breach"]["value"],
@@ -265,6 +301,10 @@ def _summary(context: dict[str, Any], horizon: dict[str, Any]) -> dict[str, Any]
         "unknowns": unknowns,
         "conditions": horizon["conditions"],
         "evidence_ids": horizon["evidence_ids"],
+        "minimum_date": horizon["minimum_date"],
+        "first_negative_date": horizon["first_negative_date"],
+        "first_zero_crossing_date": horizon["first_zero_crossing_date"],
+        "first_reserve_breach_date": horizon["first_reserve_breach_date"],
     }
 
 
@@ -279,6 +319,9 @@ def query_projection(
     report_id: str = "planning_contexts",
     offset: int = 0,
     limit: int = 1,
+    selector: dict[str, str] | None = None,
+    view: str = "all",
+    reference_id: str | None = None,
 ) -> dict[str, Any]:
     if (
         type(offset) is not int
@@ -289,6 +332,24 @@ def query_projection(
         raise PublicationError("projection_pagination_invalid")
     if horizon_days not in {7, 30, 90, 180, 365} or type(horizon_days) is not int:
         raise PublicationError("projection_horizon_invalid")
+    if view not in {"all", "balances", "signals", "provenance"}:
+        raise PublicationError("projection_view_invalid")
+    if reference_id is not None and report_id not in {
+        "planning_gaps",
+        "planning_evidence",
+        "planning_sources",
+    }:
+        raise PublicationError("projection_reference_filter_invalid")
+    selector = selector or {}
+    required_axes = {"measure", "scenario_id", "income_basis", "opening_basis"}
+    allowed_axes = required_axes | {
+        "plan_case_id",
+        "currency",
+        "timezone",
+        "as_of_date",
+    }
+    if not set(selector) <= allowed_axes or (context_id is not None and selector):
+        raise PublicationError("projection_selector_invalid")
     key = _coordinates(session, book_id)
     head_id = projection_head(conn, session, book_id)
     requested = projection_id or head_id
@@ -324,6 +385,9 @@ def query_projection(
         },
         "engine": [p["engine_id"], p["engine_version"], p["input_sha256"]],
         "refresh_state": p["refresh_state"],
+        "unsupported_collections": [
+            name for name, state in p["collections"].items() if state == "unsupported"
+        ],
         "source_clocks": p["source_clocks"],
         "limits": [
             "historical_projection",
@@ -333,6 +397,25 @@ def query_projection(
     }
     if accounting_head is None or accounting_head[0] != p["accounting_publication_id"]:
         result["limits"].append("accounting_baseline_superseded")
+    # Fixed view sections preserve their full conditions and provenance pins;
+    # they do not drop arbitrary fields to squeeze a result under its budget.
+    if view != "all":
+        # These fixed qualifications are rendered for every native planning
+        # card by domain code; they are not variable producer evidence.
+        result.pop("limits")
+        if (
+            accounting_head is None
+            or accounting_head[0] != p["accounting_publication_id"]
+        ):
+            result["baseline_state"] = "superseded"
+        result.pop("source_clocks")
+        result["engine"] = result["engine"][:2]
+    selected_contexts = [
+        c
+        for c in p["contexts"]
+        if (context_id is None or c["context_id"] == context_id)
+        and all(c[k] == v for k, v in selector.items())
+    ]
     if report_id == "planning_contexts":
         result["contexts"] = [
             {
@@ -341,14 +424,22 @@ def query_projection(
                 if k
                 not in {"opening", "encumbered", "mandatory_flow_coverage", "horizons"}
             }
-            for c in p["contexts"][offset : offset + limit]
+            for c in selected_contexts[offset : offset + limit]
         ]
         result["next_offset"] = (
-            offset + limit if offset + limit < len(p["contexts"]) else None
+            offset + limit if offset + limit < len(selected_contexts) else None
         )
-        result["total_contexts"] = len(p["contexts"])
+        result["total_contexts"] = len(selected_contexts)
         return result
-    context = next((c for c in p["contexts"] if c["context_id"] == context_id), None)
+    if context_id is None:
+        if not required_axes <= set(selector) or len(selected_contexts) != 1:
+            raise PublicationError("projection_exact_coordinates_required")
+        context = selected_contexts[0]
+        context_id = context["context_id"]
+    else:
+        context = next(
+            (c for c in p["contexts"] if c["context_id"] == context_id), None
+        )
     if context is None:
         raise PublicationError("projection_context_required")
     result["context"] = {
@@ -358,7 +449,101 @@ def query_projection(
     }
     if report_id == "planning_projection":
         horizon = next(h for h in context["horizons"] if h["days"] == horizon_days)
-        result["summary"] = _summary(context, horizon)
+        summary = _summary(context, horizon)
+        if view == "all":
+            result["summary"] = summary
+        else:
+            shared = {
+                "days",
+                "start_inclusive",
+                "end_exclusive",
+                "estimate_state",
+                "completeness_state",
+                "safety_state",
+                "conditions",
+                "evidence_ids",
+            }
+            balances = {
+                "opening",
+                "encumbered",
+                "closing",
+                "minimum",
+                "minimum_date",
+                "cash_in",
+                "cash_out",
+            }
+            signals = {
+                "reserve_threshold",
+                "checking_threshold",
+                "reserve_breach",
+                "negative_bank_cash",
+                "checking_shortage",
+                "first_negative_date",
+                "first_zero_crossing_date",
+                "first_reserve_breach_date",
+            }
+            fields = shared | (
+                balances
+                if view == "balances"
+                else signals
+                if view == "signals"
+                else set()
+            )
+            result["view"] = view
+            result["summary"] = {k: v for k, v in summary.items() if k in fields}
+            if view != "provenance":
+                result["summary"]["unknowns"] = {
+                    k: v
+                    for k, v in summary["unknowns"].items()
+                    if k.split(".")[0] in fields
+                }
+            else:
+                result["source_clocks"] = p["source_clocks"]
+                result["engine"] = [
+                    p["engine_id"],
+                    p["engine_version"],
+                    p["input_sha256"],
+                ]
+                result["verification"] = {
+                    "id": p["verification_id"],
+                    "published_at": p["published_at"],
+                    "verified_at": p["verified_at"],
+                }
+    elif report_id in {"planning_gaps", "planning_evidence", "planning_sources"}:
+        kind = report_id.removeprefix("planning_")
+        rows = conn.execute(
+            "SELECT record_json FROM finance_dated_projection_refs WHERE tenant_id=? AND owner_id=? AND book_id=? AND projection_id=? AND kind=? AND context_id=? AND (? IS NULL OR reference_id=?) AND (? != 'gaps' OR EXISTS(SELECT 1 FROM json_each(record_json,'$.horizon_days') WHERE value=?)) ORDER BY ordinal LIMIT ? OFFSET ?",
+            (
+                *key,
+                requested,
+                kind,
+                context_id,
+                reference_id,
+                reference_id,
+                kind,
+                horizon_days,
+                limit + 1,
+                offset,
+            ),
+        ).fetchall()
+        result["records"] = [
+            {
+                k: v
+                for k, v in json.loads(row[0]).items()
+                if k not in {"context_ids", "audience_member_ids"}
+            }
+            for row in rows[:limit]
+        ]
+        result["next_offset"] = offset + limit if len(rows) > limit else None
+        result["horizon_days"] = horizon_days
+    elif report_id == "planning_engines":
+        result["engines"] = p["engines"]
+        result["verification"] = {
+            "id": p["verification_id"],
+            "published_at": p["published_at"],
+            "verified_at": p["verified_at"],
+        }
+        result["horizon_days"] = horizon_days
     elif report_id == "planning_events":
         end = (
             date.fromisoformat(context["as_of_date"]) + timedelta(days=horizon_days + 1)

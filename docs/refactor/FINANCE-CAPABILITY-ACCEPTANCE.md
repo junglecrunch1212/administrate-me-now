@@ -45,6 +45,10 @@ The following common test locations establish the intended validation paths:
   exact report basis/release/quality, incomplete clocks and no semantic inference
   from report names. Accepted metadata supplies qualified report pointers while
   complete/current question evidence remains independently required.
+- `tests/acceptance/test_finance_planning.py`: separate source projection and
+  accounting anchors, conditional ranges, declared contexts, full detail
+  pagination, replay and current authority. The new transport/card remains a
+  candidate pending its hosted run and native Books mapping review.
 - `tests/acceptance/test_finance_choices.py`: private explicit owner goals and
   preferences through member APIs, duplicate/conflicting requests, denied-write
   redaction, projection rebuild and restart.
@@ -79,7 +83,7 @@ withholding an unsupported numerical or professional conclusion.
 | F04 | Accepted cash-leg report and allocation preparation | Matched reimbursement evidence and shared agreement; expectations are not debts or received cash |
 | F05 | Bounded travel finance brief and option preparation | Dated quotes, refund terms and valid cash timing; candidate purchase-cost comparison requires matching terms and does not establish affordability |
 | F06 | Unit-cost/time comparison against chosen preferences | Explicit time/quality choices; no inferred value of an adult's time |
-| F07 | Candidate dated cash ladder | Known liquid opening, mandatory flows and timing rules; unknown mandatory inputs block a safety verdict |
+| F07 | Candidate dated cash ladder and separate Books planning-context transport/card | Known liquid opening, mandatory flows and timing rules; unknown mandatory inputs block a safety verdict |
 | F08 | Candidate reserve coverage | Chosen reserve policy and liquid cash; no home/retirement liquidity assumption or universal reserve target |
 | F09 | Candidate fixed debt/refinance comparison | Complete supported rate/fee/term/payoff inputs; variable or unsupported terms require another validated model and lender review |
 | F10 | Credit-report/utilization preparation | Authorized dated limits/report details; score prediction, bureau access and unsupported score models unavailable |

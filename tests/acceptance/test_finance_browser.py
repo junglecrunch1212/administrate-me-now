@@ -27,7 +27,7 @@ from tests.acceptance.test_finance_disclosure import enabled_settings
 from tests.acceptance.test_finance_publications import publication
 from tests.acceptance.test_openclaw_native_seam import PRINCIPAL
 from adminme.finance.planning_store import import_projection
-from tests.fixtures.finance_planning import projection
+from tests.fixtures.finance_planning import projection, with_unavailable_openings
 
 
 def _serve_choices(root, listener, ready):
@@ -52,7 +52,7 @@ def _serve_choices(root, listener, ready):
             await import_projection(
                 runtime,
                 build_internal_session(PRINCIPAL, "principal", value["tenant_id"]),
-                projection(value, 24),
+                with_unavailable_openings(projection(value, 24)),
             )
             ready.send(True)
             ready.close()
@@ -220,7 +220,7 @@ async def test_owner_saves_goal_and_preference_then_reloads(tmp_path):
             )
             await evaluate("""(() => {
               const select=document.querySelector('[aria-label="Projection context"]');
-              if(select.options.length!==12) throw Error('context coverage lost');
+              if(select.options.length!==24) throw Error('context coverage lost');
               select.value='funding-chosen-plan';select.dispatchEvent(new Event('change'));
             })()""")
             await wait_for(
@@ -228,6 +228,20 @@ async def test_owner_saves_goal_and_preference_then_reloads(tmp_path):
             )
             assert await evaluate(
                 "document.querySelector('.finance-planning').textContent.includes('INCOMPLETE') && document.querySelector('.finance-planning').textContent.includes('Source refresh: OFF') && document.querySelector('.finance-planning').textContent.includes('Provider Clock Unknown')"
+            )
+            await evaluate("""(() => {
+              const select=document.querySelector('[aria-label="Projection context"]');
+              select.value='funding-chosen-plan-verified';select.dispatchEvent(new Event('change'));
+            })()""")
+            await wait_for(
+                "document.querySelector('.finance-planning').textContent.includes('UNAVAILABLE') && document.querySelector('.finance-planning').textContent.includes('Verified Opening Unavailable')"
+            )
+            await evaluate("""(() => {
+              const select=document.querySelector('[aria-label="Projection context"]');
+              select.value='funding-chosen-plan';select.dispatchEvent(new Event('change'));
+            })()""")
+            await wait_for(
+                "document.querySelector('.finance-planning').textContent.includes('800 USD minor units to 801 USD minor units') && document.querySelector('.finance-planning').textContent.includes('Minimum date: 2026-03-08')"
             )
             await evaluate(
                 "document.querySelector('.finance-planning').scrollIntoView({block:'start'})"

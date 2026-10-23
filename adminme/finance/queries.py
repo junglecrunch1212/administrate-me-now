@@ -60,8 +60,13 @@ def publication_status(
             "reports": [],
             "provider_effect_count": 0,
         }
+    projection = conn.execute(
+        "SELECT projection_id FROM finance_dated_projection_heads WHERE tenant_id=? AND owner_id=? AND book_id=?",
+        (session.tenant_id, _owner(session), p["book_id"]),
+    ).fetchone()
     return {
         "state": "qualified",
+        "planning_projection_id": projection[0] if projection else None,
         "publication_id": p["publication_id"],
         "schema_version": p["contract"],
         "content_hash": p["content_sha256"],

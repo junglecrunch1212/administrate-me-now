@@ -4012,7 +4012,7 @@ function financePlanningCard(books) {
   async function events(offset, generation) {
     const answer = await request("planning_events", { context_id: contextSelect.value, horizon_days: horizonSelect.value, offset: String(offset) });
     if (generation !== requestNumber || !section.isConnected) return;
-    detail.replaceChildren(text("h3", "Dated events"), text("p", `Full context manifest: ${answer.manifest.row_count} events. This page is filtered to ${answer.horizon_days} days.`, "state-note"));
+    detail.replaceChildren(text("h3", "Dated events"), text("p", `Full context manifest: ${answer.manifest.row_count} events. This page lists events whose earliest date is within ${answer.horizon_days} days.`, "state-note"));
     const table = document.createElement("table"); table.className = "finance-table";
     const head = document.createElement("tr"); for (const label of ["Dates / route", "Type", "Amount range", "Included"]) head.append(text("th", label)); table.append(head);
     for (const item of answer.events || []) {
@@ -4036,10 +4036,34 @@ function financePlanningCard(books) {
       content.append(text("p", `${titleCase(c.scenario_id)} · Plan case ${c.plan_case_id} · ${c.income_basis} · ${c.opening_basis}`, "state-note"));
       content.append(text("p", `${h.start_inclusive} inclusive to ${h.end_exclusive} exclusive · ${c.timezone}. Cash safety: ${h.safety_state === "SOURCE_VERIFIED" ? "historically verified by source; current safety unverified" : "not established"}.`, "state-note"));
       const stats = document.createElement("dl"); stats.className = "finance-scenario-stats";
-      for (const [label, value] of [["Opening range", h.opening], ["Closing range", h.closing], ["Minimum range", h.minimum], ["Encumbered range", h.encumbered]]) { const item = document.createElement("div"); item.append(text("dt", label), text("dd", range(value, c.currency))); stats.append(item); }
+      for (const [label, value] of [["Opening range", h.opening], ["Closing range", h.closing], ["Minimum range", h.minimum], ["Encumbered range", h.encumbered], ["Cash-in range", h.cash_in], ["Cash-out range", h.cash_out]]) { const item = document.createElement("div"); item.append(text("dt", label), text("dd", range(value, c.currency))); stats.append(item); }
       content.append(stats, text("p", "These measures cannot be added. Positive remainder is not available surplus. Modeled net funding is not payroll or guaranteed bank income.", "state-note"));
       for (const [label, value] of [["Reserve breach", h.reserve_breach], ["Negative bank cash", h.negative_bank_cash], ["Checking shortage", h.checking_shortage]]) content.append(text("p", `${label}: ${value == null ? "Unknown" : value ? "Yes" : "No"}.`, "state-note"));
-      for (const condition of h.conditions) content.append(text("p", `Condition: ${titleCase(condition)}`, "state-note"));
+      for (const [label, key] of [["Minimum date", "minimum_date"], ["First negative date", "first_negative_date"], ["First zero-crossing date", "first_zero_crossing_date"], ["First reserve-breach date", "first_reserve_breach_date"]]) { const dated = h[key]; content.append(text("p", `${label}: ${dated.date || `Unknown (${titleCase(dated.unknown_reason)})`}.`, "state-note")); }
+      const references = document.createElement("div"); references.className = "finance-gap-details";
+      async function reference(report, referenceId, target) {
+        const info = await request(report, { context_id:c.context_id, horizon_days:String(h.days), ...(referenceId ? {reference_id:referenceId} : {}) });
+        if (generation !== requestNumber || !section.isConnected) return;
+        target.replaceChildren();
+        for (const record of info.records || []) {
+          if (report === "planning_gaps") {
+            target.append(text("p", record.explanation), text("p", `Required input: ${record.required_input}`), text("p", `When: ${titleCase(record.timing)}`, "state-note"));
+            for (const evidenceId of record.evidence_ids) { const evidence = text("button", "Evidence details", "button button-quiet"); evidence.type = "button"; evidence.addEventListener("click", () => { void reference("planning_evidence", evidenceId, target).catch(() => { target.textContent = "Evidence details are unavailable in this private context."; }); }); target.append(evidence); }
+          } else {
+            if (record.description) target.append(text("p", record.description));
+            if (record.source_content_state === "not_included") target.append(text("p", "Source content is not included; this is its protected reference and declared hash.", "state-note"));
+            target.append(text("pre", JSON.stringify(record, null, 2), "notes-body"));
+          }
+        }
+      }
+      for (const condition of h.conditions) {
+        const item = document.createElement("details"); item.append(text("summary", `Resolve: ${titleCase(condition)}`)); const target = text("div", "Open to view the required input and evidence."); item.append(target); let loaded = false;
+        item.addEventListener("toggle", () => { if (item.open && !loaded) { loaded = true; void reference("planning_gaps", condition, target).catch(() => { loaded = false; target.textContent = "This gap is unavailable in the current private context."; }); } }); references.append(item);
+      }
+      content.append(references);
+      content.append(text("p", `Unsupported collections: ${(answer.unsupported_collections || []).map(titleCase).join(", ")}.`, "state-note"));
+      const sources = document.createElement("details"); sources.append(text("summary", "Per-source clocks and references")); const sourceBody = document.createElement("div"); sources.append(sourceBody); let sourcesLoaded = false;
+      sources.addEventListener("toggle", () => { if (sources.open && !sourcesLoaded) { sourcesLoaded = true; void reference("planning_sources", null, sourceBody).catch(() => { sourcesLoaded = false; sourceBody.textContent = "Source provenance is unavailable."; }); } }); content.append(sources);
       for (const [field, reason] of Object.entries(h.unknowns)) content.append(text("p", `${titleCase(field)}: ${titleCase(reason)}`, "state-note"));
       content.append(text("p", `Source refresh: ${answer.refresh_state}.`, "state-note"));
       for (const [name, clock] of Object.entries(answer.source_clocks)) content.append(text("p", `${titleCase(name)}: ${clock.value || `Unknown (${titleCase(clock.unknown_reason)})`}`, "meta"));

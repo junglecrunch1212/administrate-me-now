@@ -29,7 +29,12 @@
     "contexts",
     "detail_manifest",
     "detail_events",
-    "accounting_revision_ids"
+    "accounting_revision_ids",
+    "engines",
+    "sources",
+    "gaps",
+    "evidence",
+    "collections"
   ],
   "properties": {
     "contract": {
@@ -179,6 +184,66 @@
       },
       "maxItems": 10000,
       "uniqueItems": true
+    },
+    "engines": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/engine"
+      },
+      "maxItems": 3,
+      "minItems": 3
+    },
+    "sources": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/source"
+      },
+      "maxItems": 64,
+      "minItems": 1
+    },
+    "gaps": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/gap"
+      },
+      "maxItems": 128,
+      "minItems": 0
+    },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/evidence"
+      },
+      "maxItems": 10000,
+      "minItems": 1
+    },
+    "collections": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "cash_events",
+        "horizon_flows",
+        "daily_balances",
+        "card_debt_paths",
+        "account_shortfalls"
+      ],
+      "properties": {
+        "cash_events": {
+          "const": "included"
+        },
+        "horizon_flows": {
+          "const": "included"
+        },
+        "daily_balances": {
+          "const": "unsupported"
+        },
+        "card_debt_paths": {
+          "const": "unsupported"
+        },
+        "account_shortfalls": {
+          "const": "unsupported"
+        }
+      }
     }
   },
   "$defs": {
@@ -314,7 +379,13 @@
         "negative_bank_cash",
         "checking_shortage",
         "conditions",
-        "evidence_ids"
+        "evidence_ids",
+        "minimum_date",
+        "first_negative_date",
+        "first_reserve_breach_date",
+        "cash_in",
+        "cash_out",
+        "first_zero_crossing_date"
       ],
       "properties": {
         "days": {
@@ -390,6 +461,24 @@
           },
           "minItems": 0,
           "maxItems": 16
+        },
+        "minimum_date": {
+          "$ref": "#/$defs/dated_signal"
+        },
+        "first_negative_date": {
+          "$ref": "#/$defs/dated_signal"
+        },
+        "first_reserve_breach_date": {
+          "$ref": "#/$defs/dated_signal"
+        },
+        "cash_in": {
+          "$ref": "#/$defs/range"
+        },
+        "cash_out": {
+          "$ref": "#/$defs/range"
+        },
+        "first_zero_crossing_date": {
+          "$ref": "#/$defs/dated_signal"
         }
       }
     },
@@ -597,6 +686,245 @@
         "rows_sha256": {
           "type": "string",
           "pattern": "^[a-f0-9]{64}$"
+        }
+      }
+    },
+    "dated_signal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "date",
+        "unknown_reason"
+      ],
+      "properties": {
+        "date": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date"
+        },
+        "unknown_reason": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[a-z][a-z0-9_]{0,79}$"
+        }
+      }
+    },
+    "engine": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "role",
+        "engine_id",
+        "engine_version",
+        "input_sha256"
+      ],
+      "properties": {
+        "role": {
+          "enum": [
+            "dated",
+            "funding",
+            "income"
+          ]
+        },
+        "engine_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$"
+        },
+        "engine_version": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$"
+        },
+        "input_sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_id",
+        "content_sha256",
+        "timezone",
+        "balance_as_of",
+        "provider_as_of",
+        "retrieved_at",
+        "observed_at",
+        "refresh_state"
+      ],
+      "properties": {
+        "source_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$"
+        },
+        "content_sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "timezone": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "balance_as_of": {
+          "$ref": "#/$defs/dated_signal"
+        },
+        "provider_as_of": {
+          "$ref": "#/$defs/clock"
+        },
+        "retrieved_at": {
+          "$ref": "#/$defs/clock"
+        },
+        "observed_at": {
+          "$ref": "#/$defs/clock"
+        },
+        "refresh_state": {
+          "enum": [
+            "ON",
+            "OFF",
+            "UNKNOWN"
+          ]
+        }
+      }
+    },
+    "gap": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "gap_id",
+        "context_ids",
+        "horizon_days",
+        "audience_member_ids",
+        "explanation",
+        "required_input",
+        "timing",
+        "evidence_ids"
+      ],
+      "properties": {
+        "gap_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$"
+        },
+        "context_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$"
+          },
+          "maxItems": 48,
+          "minItems": 1
+        },
+        "horizon_days": {
+          "type": "array",
+          "items": {
+            "enum": [
+              7,
+              30,
+              90,
+              180,
+              365
+            ]
+          },
+          "maxItems": 5,
+          "minItems": 1
+        },
+        "audience_member_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$"
+          },
+          "maxItems": 1,
+          "minItems": 1
+        },
+        "explanation": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 240
+        },
+        "required_input": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 240
+        },
+        "timing": {
+          "enum": [
+            "before_safety_conclusion",
+            "before_source_refresh",
+            "before_selected_decision"
+          ]
+        },
+        "evidence_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$"
+          },
+          "maxItems": 8,
+          "minItems": 0
+        }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "evidence_id",
+        "context_ids",
+        "audience_member_ids",
+        "artifact_ref",
+        "content_sha256",
+        "source_id",
+        "description",
+        "source_content_state"
+      ],
+      "properties": {
+        "evidence_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$"
+        },
+        "context_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$"
+          },
+          "maxItems": 48,
+          "minItems": 1
+        },
+        "audience_member_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$"
+          },
+          "maxItems": 1,
+          "minItems": 1
+        },
+        "artifact_ref": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$"
+        },
+        "content_sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "source_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$"
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 240
+        },
+        "source_content_state": {
+          "const": "not_included"
         }
       }
     }

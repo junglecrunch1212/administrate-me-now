@@ -59,6 +59,26 @@ def projection(accounting, total_events=0):
                             "end_exclusive": (
                                 as_of + timedelta(days=days + 1)
                             ).isoformat(),
+                            "minimum_date": {
+                                "date": (as_of + timedelta(days=1)).isoformat(),
+                                "unknown_reason": None,
+                            },
+                            "first_negative_date": {
+                                "date": None,
+                                "unknown_reason": "not_in_horizon"
+                                if measure == BANK
+                                else "not_bank_cash",
+                            },
+                            "first_reserve_breach_date": {
+                                "date": (as_of + timedelta(days=1)).isoformat(),
+                                "unknown_reason": None,
+                            },
+                            "cash_in": bounds(closing, closing + 1),
+                            "cash_out": bounds(100, 101),
+                            "first_zero_crossing_date": {
+                                "date": None,
+                                "unknown_reason": "not_in_horizon",
+                            },
                             "estimate_state": "PROVIDED",
                             "completeness_state": "INCOMPLETE",
                             "safety_state": "NOT_ESTABLISHED",
@@ -148,6 +168,77 @@ def projection(accounting, total_events=0):
         "detail_manifest": [],
         "detail_events": rows,
     }
+    context_ids = [c["context_id"] for c in contexts]
+    value["engines"] = [
+        {
+            "role": role,
+            "engine_id": value["engine_id"] if role == "dated" else "synthetic-" + role,
+            "engine_version": "1.2",
+            "input_sha256": value["input_sha256"] if role == "dated" else "c" * 64,
+        }
+        for role in ("dated", "funding", "income")
+    ]
+    value["sources"] = [
+        {
+            "source_id": "source-synthetic",
+            "content_sha256": "a" * 64,
+            "timezone": "America/New_York",
+            "balance_as_of": {"date": None, "unknown_reason": "balance_clock_unknown"},
+            **value["source_clocks"],
+            "refresh_state": "OFF",
+        }
+    ]
+    value["evidence"] = [
+        {
+            "evidence_id": "evidence-synthetic",
+            "context_ids": context_ids[:],
+            "audience_member_ids": [value["owner_id"]],
+            "artifact_ref": "artifact-synthetic",
+            "content_sha256": "a" * 64,
+            "source_id": "source-synthetic",
+            "description": "Synthetic source reference; source content is not included.",
+            "source_content_state": "not_included",
+        }
+    ]
+    value["gaps"] = [
+        {
+            "gap_id": gap_id,
+            "context_ids": context_ids[:],
+            "horizon_days": [7, 30, 90, 180, 365],
+            "audience_member_ids": [value["owner_id"]],
+            "explanation": explanation,
+            "required_input": needed,
+            "timing": "before_safety_conclusion",
+            "evidence_ids": ["evidence-synthetic"],
+        }
+        for gap_id, explanation, needed in (
+            (
+                "flow_coverage_incomplete",
+                "Mandatory flow coverage is incomplete.",
+                "Confirm the dated mandatory inflows and outflows for this context.",
+            ),
+            (
+                "conditional_timing",
+                "The source has conditional timing for this event.",
+                "Confirm the earliest and latest settlement dates.",
+            ),
+            (
+                "encumbrance_unverified",
+                "Restricted or committed amounts are unknown.",
+                "Confirm encumbrances before treating balances as unrestricted.",
+            ),
+        )
+    ]
+    for c in contexts:
+        for h in c["horizons"]:
+            h["conditions"].append("encumbrance_unverified")
+    value["collections"] = {
+        "cash_events": "included",
+        "horizon_flows": "included",
+        "daily_balances": "unsupported",
+        "card_debt_paths": "unsupported",
+        "account_shortfalls": "unsupported",
+    }
     return seal(value)
 
 
@@ -165,3 +256,53 @@ def seal(value):
     ]
     value["content_sha256"] = content_hash(value)
     return value
+
+
+def with_unavailable_openings(value):
+    """Add the second opening selection without inventing a verified balance."""
+    from copy import deepcopy
+
+    extra = []
+    for original in value["contexts"]:
+        context = deepcopy(original)
+        context["context_id"] += "-verified"
+        context["opening_basis"] = "verified_unrestricted"
+        context["opening"] = bounds(None, reason="verified_opening_unavailable")
+        for horizon in context["horizons"]:
+            horizon["estimate_state"] = "UNAVAILABLE"
+            horizon["closing"] = bounds(None, reason="verified_opening_unavailable")
+            horizon["minimum"] = bounds(None, reason="verified_opening_unavailable")
+            horizon["conditions"].append("verified_opening_unavailable")
+            for name in ("reserve_breach", "negative_bank_cash", "checking_shortage"):
+                horizon[name] = {
+                    "value": None,
+                    "unknown_reason": "verified_opening_unavailable",
+                }
+            for name in (
+                "minimum_date",
+                "first_negative_date",
+                "first_reserve_breach_date",
+                "first_zero_crossing_date",
+            ):
+                horizon[name] = {
+                    "date": None,
+                    "unknown_reason": "verified_opening_unavailable",
+                }
+        extra.append(context)
+    extra_ids = [c["context_id"] for c in extra]
+    value["contexts"].extend(extra)
+    for record in [*value["gaps"], *value["evidence"]]:
+        record["context_ids"].extend(extra_ids)
+    value["gaps"].append(
+        {
+            "gap_id": "verified_opening_unavailable",
+            "context_ids": extra_ids,
+            "horizon_days": [7, 30, 90, 180, 365],
+            "audience_member_ids": [value["owner_id"]],
+            "explanation": "The verified-opening selection has no verified amount.",
+            "required_input": "Provide a dated verified unrestricted opening, with its source evidence.",
+            "timing": "before_safety_conclusion",
+            "evidence_ids": ["evidence-synthetic"],
+        }
+    )
+    return seal(value)

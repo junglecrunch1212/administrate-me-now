@@ -277,3 +277,17 @@ CREATE TABLE IF NOT EXISTS finance_dated_projection_events (
     PRIMARY KEY (tenant_id, owner_id, book_id, projection_id, context_id, ordinal),
     UNIQUE (tenant_id, owner_id, book_id, projection_id, context_id, event_id)
 );
+CREATE TABLE IF NOT EXISTS finance_dated_projection_refs (
+    tenant_id TEXT NOT NULL,
+    owner_id TEXT NOT NULL,
+    book_id TEXT NOT NULL,
+    projection_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    reference_id TEXT NOT NULL,
+    context_id TEXT NOT NULL,
+    ordinal INTEGER NOT NULL,
+    record_json TEXT NOT NULL,
+    PRIMARY KEY (tenant_id, owner_id, book_id, projection_id, kind, context_id, reference_id)
+);
+CREATE INDEX IF NOT EXISTS idx_finance_dated_projection_refs_page
+ON finance_dated_projection_refs(tenant_id,owner_id,book_id,projection_id,kind,context_id,ordinal);

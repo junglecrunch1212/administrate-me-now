@@ -4140,11 +4140,30 @@ class FinanceQueryRequest(ContextRequest):
         "planning_contexts",
         "planning_projection",
         "planning_events",
+        "planning_gaps",
+        "planning_evidence",
+        "planning_sources",
+        "planning_engines",
     ]
     scenario_id: Literal["current", "expected", "chosen"] | None = None
     horizon_days: Literal[7, 30, 90, 180, 365] | None = None
     projection_id: str | None = Field(default=None, min_length=1, max_length=80)
     context_id: str | None = Field(default=None, min_length=1, max_length=80)
+    measure: Literal["BANK_CASH_SUBSET", "CASH_EQUIVALENT_FUNDING_NOT_BANK"] | None = (
+        None
+    )
+    income_basis: (
+        Literal["OBSERVED_BASE_ONLY", "PLAN_MODELED_NET_FUNDING_NOT_PAYROLL"] | None
+    ) = None
+    opening_basis: (
+        Literal["verified_unrestricted", "observed_cash_hypothetical"] | None
+    ) = None
+    plan_case_id: str | None = Field(default=None, min_length=1, max_length=80)
+    currency: str | None = Field(default=None, pattern=r"^[A-Z]{3}$")
+    timezone: str | None = Field(default=None, min_length=1, max_length=64)
+    as_of_date: str | None = Field(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$")
+    reference_id: str | None = Field(default=None, min_length=1, max_length=80)
+    projection_view: Literal["balances", "signals", "provenance"] = "balances"
     offset: int = Field(default=0, ge=0, le=10000)
     limit: int = Field(default=50, ge=1, le=100)
 
@@ -4430,6 +4449,12 @@ async def finance_status(
                     )
                     if key in publication
                 }
+                if publication.get("planning_projection_id"):
+                    result["planning"] = {
+                        "projection_id": publication["planning_projection_id"],
+                        "report_id": "planning_contexts",
+                        "qualification": "Source planning views remain historical and conditional; select an exact context before reading values.",
+                    }
                 result["reports"] = [
                     {"id": row["report_id"], "state": row["release_state"]}
                     for row in publication.get("reports", [])
@@ -4597,8 +4622,20 @@ async def finance_query(body: FinanceQueryRequest, request: Request) -> dict[str
                 if body.report_id.startswith("planning_"):
                     from adminme.finance.planning_store import query_projection
 
-                    if body.scenario_id is not None:
-                        raise ValueError("projection_exact_context_required")
+                    selector = {
+                        key: value
+                        for key in (
+                            "measure",
+                            "scenario_id",
+                            "income_basis",
+                            "opening_basis",
+                            "plan_case_id",
+                            "currency",
+                            "timezone",
+                            "as_of_date",
+                        )
+                        if (value := getattr(body, key)) is not None
+                    }
                     result = await runtime.projections.read(
                         "money",
                         lambda conn: query_projection(
@@ -4611,6 +4648,9 @@ async def finance_query(body: FinanceQueryRequest, request: Request) -> dict[str
                             report_id=body.report_id,
                             offset=body.offset,
                             limit=min(body.limit, 1),
+                            selector=selector,
+                            view=body.projection_view,
+                            reference_id=body.reference_id,
                         ),
                     )
                     if (
@@ -4618,7 +4658,24 @@ async def finance_query(body: FinanceQueryRequest, request: Request) -> dict[str
                         != body.publication_id
                     ):
                         raise ValueError("projection_accounting_anchor_mismatch")
-                elif body.projection_id is not None or body.context_id is not None:
+                elif (
+                    body.projection_id is not None
+                    or body.context_id is not None
+                    or body.reference_id is not None
+                    or body.projection_view != "balances"
+                    or any(
+                        getattr(body, key) is not None
+                        for key in (
+                            "measure",
+                            "income_basis",
+                            "opening_basis",
+                            "plan_case_id",
+                            "currency",
+                            "timezone",
+                            "as_of_date",
+                        )
+                    )
+                ):
                     raise ValueError("projection_filter_invalid")
                 elif body.report_id == "owner_choices":
                     if body.scenario_id is not None or body.horizon_days is not None:

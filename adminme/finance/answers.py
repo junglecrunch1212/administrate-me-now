@@ -83,15 +83,21 @@ def render_result(result: dict[str, Any]) -> str:
             "Amounts are producer-rounded minor units in the context currency. Ranges retain both endpoints; null is unknown."
         )
         for key in (
+            "view",
+            "baseline_state",
             "context",
             "contexts",
             "summary",
             "events",
             "manifest",
+            "records",
+            "engines",
+            "unsupported_collections",
             "source_clocks",
             "refresh_state",
             "limits",
             "engine",
+            "verification",
             "publication",
             "projection",
         ):

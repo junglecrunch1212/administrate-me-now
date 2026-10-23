@@ -3862,8 +3862,8 @@
     "missing_source_candidate_cells": [],
     "object_lifecycles": 28,
     "source_candidate_cells": 143,
-    "technical_event_schemas": 381,
-    "technical_event_types": 302,
+    "technical_event_schemas": 382,
+    "technical_event_types": 303,
     "uncataloged_event_types": [],
     "unproved_exact_lifecycle_transitions": [],
     "unproved_supported_source_candidate_cells": []
@@ -16975,6 +16975,22 @@
         "dimension",
         "selected_option_id",
         "recorded_at"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "finance.projection_verified",
+      "family": "finance",
+      "properties": {
+        "projection": {
+          "additionalProperties": true,
+          "title": "Projection",
+          "type": "object"
+        }
+      },
+      "required": [
+        "projection"
       ],
       "schema_version": 1
     },

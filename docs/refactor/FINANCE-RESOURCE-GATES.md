@@ -157,3 +157,17 @@ extra-approval rejection, tenant/scope predicates, ambiguity and expiry checks.
 Final authority remains freshly queried; no grant or approval is cached. Shared
 identity-kernel acceptance and targeted crossed-approval regressions accompany
 this change. See the [diagnostic run](https://github.com/junglecrunch1212/administrate-me-now/actions/runs/40038039931).
+
+
+Subsequent hosted measurements remain inconsistent. At `7c731710`, 740 Python
+checks, 96 native checks and the synthetic browser passed, but raw p95 was
+2.564 → 3.074 ms (ratio 1.198774). At `42dafaa2`, the raw gate passed once:
+5.913/4.490 ms bracketing baselines, 5.476 ms mixed (ratio 0.926090 against the
+maximum baseline); a separate invalid role-removal fixture failed and was fixed.
+At `e8c57926`, raw p95 failed again: 4.735 → 5.615 ms (ratio 1.185864). Its two
+functional failures were a test portal keyword call and GET horizon parsing;
+the new planning browser hit the same parsing defect. Those source fixes need
+their next hosted result. The 42d pass is one bounded measurement, not stable
+performance proof. The e8 diagnostic reduced delegation resolution to 151
+calls/88.39 ms for 50 finance calls, without caching final authority. No limit
+was relaxed. See the [latest measured run](https://github.com/junglecrunch1212/administrate-me-now/actions/runs/40040387392).

@@ -4,7 +4,10 @@
 new projection interchange. Accepted-publication v1 and its hash are unchanged.
 This contract preserves producer outputs; it neither computes a forecast nor
 establishes correctness of the Books engine. Native field mapping, source
-adoption and private parity remain separate review dependencies. Synthetic
+adoption and private parity remain separate review dependencies. This supports
+a declared subset of Books v1.2 outputs; it is not lossless v1.2 support. Daily
+balances, card-debt paths and per-account shortfalls are explicitly unsupported
+in the contract and visible on every consumer result. Synthetic
 fixtures are not a representation of the actual twelve native context tuples.
 
 The owner-only file-adapter seam requires finance publication processing to be
@@ -22,7 +25,9 @@ Each declared context binds measure, scenario, income basis, opening basis,
 Plan case, currency, IANA timezone and as-of date. The manifest describes only
 explicit source contexts; the adapter does not generate a Cartesian product.
 `chosen` must match the captured `selected_plan_case_id`. It never defaults to a
-particular spending case. Bank contexts differing only in income basis must
+particular spending case. A selected `verified_unrestricted` context with an
+unknown opening stays selectable with `UNAVAILABLE` estimates and explicit
+reasons; it is neither omitted nor relabeled as hypothetical. Bank contexts differing only in income basis must
 have identical source paths. Funding contexts retain the producer's replacement
 income output without adding it to the observed base.
 
@@ -41,11 +46,19 @@ with known thresholds/signals. It remains a historical source assertion; all
 consumer cards are qualified and current safety stays unverified. Funding never
 carries a negative-bank-cash or checking-shortage assertion. Reserve breach,
 negative bank cash and checking shortage are separately typed. No available-
-surplus field is inferred from positive closing values.
+surplus field is inferred from positive closing values. Horizon cash-in/out
+ranges and minimum, first negative, reserve-breach and zero-crossing dates retain
+their source values or independent null reasons. Known dates must lie within
+the selected horizon, and context as-of dates cannot exceed verification in
+the context timezone.
 
 Provider-as-of, retrieval and observation clocks each carry an independent
 value or null reason. An unknown provider clock is not filled with a retrieval
-time. `refresh_state` remains visible, including `OFF`. Unknown encumbrances
+time. Each source separately retains its balance-as-of date, timezone, three
+clocks, declared content hash and refresh state. A three-role manifest identifies
+the dated, funding and income engines and their input hashes. The dated engine
+matches the top-level engine coordinates. `refresh_state` remains visible,
+including `OFF`. Unknown encumbrances
 and thresholds stay unknown. Accounting and projection head changes invalidate
 previous native answer receipts independently of current grant revocation.
 
@@ -55,7 +68,9 @@ An export may contain up to 48 explicitly declared contexts and 10,000 detail
 rows within 8 MiB. Each context has an exact row count and digest of its ordered
 rows. Validation rejects omissions, duplicate event identities, undeclared
 contexts and inconsistent manifests. The synthetic acceptance fixture contains
-12 contexts and 3,215 total rows; it tests transport coverage only.
+12 contexts and 3,215 total rows; it tests transport coverage only. A separate
+synthetic 24-context fixture adds unavailable verified-opening choices. Neither
+fixture establishes the actual native export mapping.
 
 Each row retains its date range, account/payment route, measure via context,
 direction, amount range, bank/debt effects, evidence and conditions. A card
@@ -69,6 +84,21 @@ its actual inclusion policy to these keys; the adapter cannot infer it.
 The member surface selects one context and horizon and pages detail 50 rows at
 a time. Native `finance-query` uses `planning_contexts`, `planning_projection`
 or `planning_events`, returning at most one item per page with `next_offset`.
+A typed measure/scenario/income/opening selector, optionally disambiguated by
+case/currency/timezone/as-of, reaches an exact context without scanning the
+index. Summary views (`balances`, `signals`, `provenance`) are fixed bounded
+sections that each retain the applicable conditions and exact publication pins.
+Status, selection and one summary fit the existing three sequential-call limit;
+separate follow-up turns retrieve other sections. The limits are unchanged.
+
+`planning_gaps`, `planning_evidence` and `planning_sources` resolve one scoped
+reference per native page; `planning_engines` returns the three-role manifest.
+Gap metadata provides an explanation, required input, timing and evidence IDs
+within its owner, context and horizon. Evidence drilldown returns a protected
+artifact reference and declared hash, with `source_content_state=not_included`.
+It does not return source bytes or independently verify the referenced file.
+Private URLs are not accepted in the explanation fields. References are indexed
+by context so bounded reads do not parse the complete detail/evidence arrays.
 The generic existing reports retain their previous pagination limits. No
 projection cache is enabled. If one fully qualified result exceeds the existing
 native result budget, it fails closed rather than dropping conditions. The
