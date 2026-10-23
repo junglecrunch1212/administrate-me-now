@@ -282,7 +282,9 @@ def _observed_source(
         schema_version=version,
         occurred_at=EventEnvelope.now_utc_iso(),
         source_adapter=f"fixture-{family}",
-        source_account_id=f"account-{member}",
+        source_account_id=str(
+            payload.get("provider_account_id") or f"account-{member}"
+        ),
         owner_scope=f"private:{member}",
         visibility_scope=f"private:{member}",
         sensitivity=sensitivity,
@@ -317,6 +319,7 @@ def _contact(member: str, **changes: Any) -> dict[str, Any]:
         "provider_account_id": f"contacts-{member}",
         "container_external_id": "fixture-address-book",
         "external_id": f"person-{member}",
+        "kind": "person",
         "display_name": "Appointment coordinator",
         "identifiers": [
             {
