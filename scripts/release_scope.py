@@ -137,6 +137,8 @@ COS_GOOGLE_WORKSPACE_REQUIRED_PATHS = (
 )
 COS_APPLE_REMINDERS_COMPONENT_PATHS = frozenset(
     {
+        "adminme/products/openclaw/service_context.py",
+        "adminme/projections/lists/handlers.py",
         "adminme/capability_catalog.py",
         "adminme/adapters/cos_apple_reminders.py",
         "adminme/adapters/cos_apple_reminders_native.py",
@@ -155,6 +157,11 @@ COS_APPLE_REMINDERS_COMPONENT_PATHS = frozenset(
 )
 COS_APPLE_REMINDERS_TEST_PATHS = frozenset(
     {
+        "tests/acceptance/test_cos_apple_reminders_context.py",
+        "tests/acceptance/test_cos_service_planning_context.py",
+        "tests/acceptance/test_cos_service_working_context.py",
+        "tests/acceptance/test_cos_service_private_work.py",
+        "tests/integration/test_lists_projection_runner.py",
         "tests/unit/test_capability_catalog.py",
         "tests/unit/bootstrap/test_cos_apple_reminders.py",
         "tests/unit/test_provider_bindings.py",

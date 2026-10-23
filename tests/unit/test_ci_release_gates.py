@@ -1104,6 +1104,11 @@ def test_google_release_requires_production_packaged_privacy_recovery_and_types(
         "test_member_google_connections.py",
         "test_cos_google_workspace.py",
         "test_cos_apple_reminders.py",
+        "test_cos_apple_reminders_context.py",
+        "test_cos_service_planning_context.py",
+        "test_cos_service_working_context.py",
+        "test_cos_service_private_work.py",
+        "test_lists_projection_runner.py",
         "test_capability_catalog.py",
         "test_adapter_schemas.py",
         "test_lists_schemas.py",
@@ -2606,6 +2611,8 @@ def test_cos_apple_reminders_scope_reuses_both_protected_google_workers(
         "adminme/runtime/application.py",
         "adminme/events/log.py",
         "adminme/events/schemas/ingest.py",
+        "adminme/projections/lists/schema.sql",
+        "adminme/products/openclaw/service_work.py",
         "adminme/service_identities.py",
         "bridge/adminme_bridge/daemon.py",
         "packs/adapters/messaging/gmail/adapter.py",
@@ -2625,7 +2632,16 @@ def test_cos_apple_reminders_never_exempts_outside_contracts_or_tests(
 
 
 @pytest.mark.parametrize(
-    "defect", ["none", "missing-proof", "mode", "unknown-test", "runtime", "symlink"]
+    "defect",
+    [
+        "none",
+        "missing-proof",
+        "missing-context-proof",
+        "mode",
+        "unknown-test",
+        "runtime",
+        "symlink",
+    ],
 )
 def test_cos_apple_reminders_checks_exact_merge_tree_and_required_proof(
     repository: tuple[Path, str], defect: str
@@ -2635,6 +2651,8 @@ def test_cos_apple_reminders_checks_exact_merge_tree_and_required_proof(
     target = path / "tests/unit/bootstrap/test_cos_apple_reminders.py"
     if defect == "missing-proof":
         target.unlink()
+    elif defect == "missing-context-proof":
+        (path / "tests/acceptance/test_cos_apple_reminders_context.py").unlink()
     elif defect == "mode":
         target.chmod(0o755)
     elif defect == "unknown-test":
