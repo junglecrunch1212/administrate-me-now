@@ -152,6 +152,41 @@ COS_REMINDER_REQUIRED_PATHS = frozenset(
         "scripts/acceptance/cos-reminder-release.sh",
     }
 )
+UPDATER_COMPONENT_PATHS = frozenset(
+    {
+        "bootstrap/upgrade.py",
+        "bootstrap/prepared_runtime.py",
+        "bootstrap/workspace_instructions.py",
+        "bootstrap/activation_transaction.py",
+        "bootstrap/cos_channel_activation.py",
+        "bootstrap/candidate_readiness.py",
+        "bootstrap/backup_restore.py",
+    }
+)
+UPDATER_TEST_PATHS = frozenset(
+    {
+        "tests/unit/bootstrap/test_source_identity.py",
+        "tests/unit/bootstrap/test_prepared_runtime.py",
+        "tests/unit/bootstrap/test_workspace_instructions.py",
+        "tests/unit/bootstrap/test_activation_transaction.py",
+        "tests/unit/bootstrap/test_cos_channel_activation.py",
+        "tests/unit/bootstrap/test_backup_rehearsal.py",
+        "tests/unit/bootstrap/test_candidate_readiness.py",
+        "tests/unit/bootstrap/test_recovery_readiness.py",
+        "tests/acceptance/test_upgrade_deadline_rollback.py",
+        "tests/acceptance/test_upgrade_readiness_blackout.py",
+        "tests/acceptance/test_recovery_readiness_baseline.py",
+        "tests/acceptance/test_cos_live_maintenance.py",
+    }
+)
+UPDATER_CHECK_SCRIPT = "scripts/acceptance/updater-delivery-release.sh"
+UPDATER_OPTIONAL_MODULE_TESTS = {
+    "bootstrap/prepared_runtime.py": "tests/unit/bootstrap/test_prepared_runtime.py",
+    "bootstrap/workspace_instructions.py": "tests/unit/bootstrap/test_workspace_instructions.py",
+}
+UPDATER_REQUIRED_PATHS = (
+    UPDATER_COMPONENT_PATHS | UPDATER_TEST_PATHS | {UPDATER_CHECK_SCRIPT}
+) - (UPDATER_OPTIONAL_MODULE_TESTS.keys() | UPDATER_OPTIONAL_MODULE_TESTS.values())
 SCOPES = frozenset(
     {
         "documentation",
@@ -161,6 +196,7 @@ SCOPES = frozenset(
         "google-connections",
         "cos-recovery-history",
         "cos-reminders",
+        "updater-delivery",
         "system-wide",
     }
 )
@@ -216,6 +252,7 @@ def choose_scope(
     cos_recovery_interfaces_equal: bool = False,
     bridge_runtime_interfaces_equal: bool = False,
     cos_reminder_interfaces_equal: bool = False,
+    updater_interfaces_equal: bool = False,
 ) -> str:
     if not changes:
         return "system-wide"
@@ -255,6 +292,24 @@ def choose_scope(
         and any(path in COS_REMINDER_REQUIRED_PATHS for _, path in changes)
     ):
         return "cos-reminders"
+    if (
+        updater_interfaces_equal
+        and all(
+            status in {"A", "M"}
+            and (
+                path in UPDATER_COMPONENT_PATHS | UPDATER_TEST_PATHS | POLICY_PATHS
+                or path == UPDATER_CHECK_SCRIPT
+                or _prose(path)
+            )
+            and path_modes.get(path) == {"100644"}
+            for status, path in changes
+        )
+        and any(
+            path in UPDATER_COMPONENT_PATHS or path == UPDATER_CHECK_SCRIPT
+            for _, path in changes
+        )
+    ):
+        return "updater-delivery"
     recovery_allowed = (
         COS_RECOVERY_COMPONENT_PATHS | COS_RECOVERY_TEST_PATHS | POLICY_PATHS
     )
@@ -362,6 +417,28 @@ def _cos_recovery_dependency_fingerprint(entries: tuple[GitTreeEntry, ...]) -> s
     # Every other tracked byte and mode, including tests and unknown inputs,
     # stays frozen across the protected base, head, and exact-parent test merge.
     allowed = COS_RECOVERY_COMPONENT_PATHS | COS_RECOVERY_TEST_PATHS | POLICY_PATHS
+    coordinates = sorted(
+        (entry.path, entry.mode, entry.object_id)
+        for entry in entries
+        if not (
+            entry.mode == "100644" and (entry.path in allowed or _prose(entry.path))
+        )
+    )
+    return hashlib.sha256(
+        json.dumps(coordinates, separators=(",", ":"), ensure_ascii=True).encode()
+    ).hexdigest()
+
+
+def _updater_dependency_fingerprint(entries: tuple[GitTreeEntry, ...]) -> str:
+    # This delivery controller boundary does not exempt toolchains, runtime,
+    # storage/crypto, permissions, provider code, or unknown tests. Bind every
+    # outside byte and mode in base, head and the exact-parent merge tree.
+    allowed = (
+        UPDATER_COMPONENT_PATHS
+        | UPDATER_TEST_PATHS
+        | POLICY_PATHS
+        | {UPDATER_CHECK_SCRIPT}
+    )
     coordinates = sorted(
         (entry.path, entry.mode, entry.object_id)
         for entry in entries
@@ -487,8 +564,22 @@ def select_scope(
     recovery_sources_present: dict[str, bool] = {}
     reminder_fingerprints: dict[str, str] = {}
     reminder_sources_present: dict[str, bool] = {}
+    updater_fingerprints: dict[str, str] = {}
+    updater_sources_present: dict[str, bool] = {}
     for revision in {base, head, checkout}:
         entries, _ = load_git_tree(repository, revision)
+        updater_fingerprints[revision] = _updater_dependency_fingerprint(entries)
+        regular_paths = {entry.path for entry in entries if entry.mode == "100644"}
+        required_updater_paths = UPDATER_REQUIRED_PATHS - (
+            {UPDATER_CHECK_SCRIPT} if revision == base else set()
+        )
+        updater_sources_present[revision] = (
+            required_updater_paths <= regular_paths
+            and all(
+                module not in regular_paths or test in regular_paths
+                for module, test in UPDATER_OPTIONAL_MODULE_TESTS.items()
+            )
+        )
         reminder_fingerprints[revision] = _cos_reminder_dependency_fingerprint(entries)
         reminder_sources_present[revision] = (
             revision == base
@@ -532,6 +623,10 @@ def select_scope(
         == 1,
         bridge_runtime_interfaces_equal=len(set(bridge_runtime_fingerprints.values()))
         == 1,
+        updater_interfaces_equal=(
+            all(updater_sources_present.values())
+            and len(set(updater_fingerprints.values())) == 1
+        ),
         cos_reminder_interfaces_equal=(
             all(reminder_sources_present.values())
             and len(set(reminder_fingerprints.values())) == 1
@@ -552,6 +647,7 @@ def select_scope(
         "enrollment_interface_sha256": enrollment_fingerprints[checkout],
         "cos_recovery_dependency_sha256": recovery_fingerprints[checkout],
         "cos_reminder_dependency_sha256": reminder_fingerprints[checkout],
+        "updater_dependency_sha256": updater_fingerprints[checkout],
         "changes": [{"status": status, "path": path} for status, path in changes],
     }
 
@@ -567,6 +663,7 @@ def required_workers(scope: str, platform: str) -> tuple[str, ...]:
         "google-connections": "google-connections-validation",
         "cos-recovery-history": "cos-recovery-history-validation",
         "cos-reminders": "cos-reminder-validation",
+        "updater-delivery": "updater-delivery-validation",
         "system-wide": "system-consistency"
         if platform == "linux"
         else "system-rehearsal",
