@@ -27,7 +27,11 @@ from adminme.adapters.cos_apple_reminders import (
     selected_entries,
     verify_device,
 )
-from adminme.adapters.cos_reminders_helper import HelperRemindersReader, invoke
+from adminme.adapters.cos_reminders_helper import (
+    HelperRemindersReader,
+    NativeHelperError,
+    invoke,
+)
 
 
 def prepare_configuration(
@@ -227,7 +231,15 @@ if __name__ == "__main__":
     except Exception as exc:
         print(
             json.dumps(
-                {"status": "failed_not_activated", "error_type": type(exc).__name__}
+                {
+                    "status": "failed_not_activated",
+                    "error_type": type(exc).__name__,
+                    **(
+                        {"error_code": exc.code}
+                        if isinstance(exc, NativeHelperError)
+                        else {}
+                    ),
+                }
             )
         )
         raise SystemExit(1) from None

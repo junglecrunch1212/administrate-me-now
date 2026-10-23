@@ -985,7 +985,9 @@ Ordinary preparation/polling never prompt. Private single-use request directorie
 bounded expiry and exact response nonce/operation/identity reject stale, replayed,
 foreign-process and unexpected responses. Provider bodies stay in owner-only
 transient IPC files and the existing encrypted event path, not command arguments
-or logs. Only after this proof should the operator deploy/enable the central
+or logs. Setup failures retain only an allowlisted fixed native phase/error code
+(for example `python_initialization_failed` or `PermissionError`) after IPC cleanup,
+so diagnostics do not lose the failed boundary. Only after this proof should the operator deploy/enable the central
 client through the normal protected updater and guarded activation.
 
 Apple's [Reminders usage-description contract](https://developer.apple.com/documentation/bundleresources/information-property-list/nsremindersfullaccessusagedescription)

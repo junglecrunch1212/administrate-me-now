@@ -15,7 +15,7 @@ from adminme.adapters.cos_apple_reminders import (
     validate_adapter_config,
     verify_device,
 )
-from adminme.adapters.cos_reminders_helper import HelperRemindersReader
+from adminme.adapters.cos_reminders_helper import HelperRemindersReader, redacted_error
 from adminme.adapters.emission import write_adapter_event
 from adminme.events.schemas.lists import ListItemV4
 from adminme.provider_bindings import adapter_owner_coordinate_id
@@ -86,7 +86,7 @@ class CoSAppleRemindersAdapter(ExternalStateMirrorAdapter):
         except Exception as exc:
             self._status.state = "crashed"
             raise RuntimeError(
-                "CoS Reminders startup read failed: " + type(exc).__name__
+                "CoS Reminders startup read failed: " + redacted_error(exc)
             ) from None
         await self._emit(
             ctx,
@@ -136,7 +136,7 @@ class CoSAppleRemindersAdapter(ExternalStateMirrorAdapter):
                     if isinstance(exc, PermissionError)
                     else "unknown",
                     "error_message": "Selected Reminders acquisition failed: "
-                    + type(exc).__name__,
+                    + redacted_error(exc),
                     "occurred_at": ctx.now_factory().isoformat(),
                 }
                 self._status.state = "backoff"

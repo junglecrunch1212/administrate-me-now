@@ -359,3 +359,34 @@ def test_worker_supports_pre_client_protected_selection_contract(monkeypatch, tm
     result = client.HelperRemindersReader().read(selected)
     assert result.list_id == selected.list_id and len(result.items) == 1
     assert state.calls == ["read"]
+
+
+@pytest.mark.parametrize(
+    "error,extra,expected",
+    [
+        ("python_initialization_failed", False, "python_initialization_failed"),
+        ("PermissionError", False, "PermissionError"),
+        ("TimeoutError", False, "TimeoutError"),
+        ("private provider detail", False, "unexpected_native_response"),
+        ("PermissionError", True, "unexpected_native_response"),
+    ],
+)
+def test_native_error_diagnostics_are_fixed_and_redacted(
+    monkeypatch, tmp_path, error, extra, expected
+):
+    selected, state = _transport(monkeypatch, tmp_path)
+    acquisition._native_reader(monkeypatch)
+
+    def mutation(output):
+        output.clear()
+        output.update(
+            contract="cos-reminders-helper-error-v1", status="failed", error=error
+        )
+        if extra:
+            output["private"] = "private provider detail"
+
+    state.mutation = mutation
+    with pytest.raises(client.NativeHelperError) as failure:
+        client.invoke(selected.native_helper, "status", {})
+    assert failure.value.code == expected
+    assert "private provider" not in client.redacted_error(failure.value)

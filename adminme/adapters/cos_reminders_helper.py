@@ -29,6 +29,51 @@ from adminme.adapters.cos_apple_reminders import (
 from adminme.adapters.cos_apple_reminders_native import SelectedSnapshot
 
 
+NATIVE_ERROR_CODES = frozenset(
+    {
+        "request_file_invalid",
+        "request_contract_invalid",
+        "request_already_claimed",
+        "helper_identity_invalid",
+        "release_coordinate_invalid",
+        "python_coordinate_invalid",
+        "release_marker_invalid",
+        "python_library_invalid",
+        "python_library_load_failed",
+        "python_version_invalid",
+        "python_api_invalid",
+        "python_initialization_failed",
+        "python_path_failed",
+        "PermissionError",
+        "TimeoutError",
+        "ValueError",
+        "RuntimeError",
+        "ImportError",
+        "ModuleNotFoundError",
+        "FileExistsError",
+        "FileNotFoundError",
+        "OSError",
+        "ResultTooLarge",
+        "helper_no_result",
+        "unexpected_native_response",
+    }
+)
+
+
+class NativeHelperError(PermissionError):
+    """Only fixed diagnostics may survive deletion of private IPC files."""
+
+    def __init__(self, code: str) -> None:
+        self.code = code if code in NATIVE_ERROR_CODES else "unexpected_native_response"
+        super().__init__(self.code)
+
+
+def redacted_error(exc: Exception) -> str:
+    return type(exc).__name__ + (
+        ":" + exc.code if isinstance(exc, NativeHelperError) else ""
+    )
+
+
 class StrictModel(BaseModel):
     model_config = {"extra": "forbid", "strict": True, "frozen": True}
 
@@ -159,9 +204,20 @@ def invoke(
             check=False,
             timeout=115,
         )
-        if process.returncode or not (directory / "result.json").is_file():
-            raise PermissionError("native helper did not complete a verified operation")
+        if not (directory / "result.json").is_file():
+            raise NativeHelperError("helper_no_result")
         raw = private_json(directory / "result.json", limit=16 * 1024 * 1024)
+        if raw.get("contract") == "cos-reminders-helper-error-v1":
+            if (
+                set(raw) == {"contract", "status", "error"}
+                and raw["status"] == "failed"
+                and isinstance(raw["error"], str)
+                and raw["error"] in NATIVE_ERROR_CODES
+            ):
+                raise NativeHelperError(raw["error"])
+            raise NativeHelperError("unexpected_native_response")
+        if process.returncode:
+            raise NativeHelperError("unexpected_native_response")
         response = NativeResult.model_validate(raw)
         if int(time.time() * 1000) >= request["expires_at_ms"]:
             raise PermissionError("native helper response expired")
