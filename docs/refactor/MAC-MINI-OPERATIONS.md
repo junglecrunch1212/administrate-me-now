@@ -872,3 +872,12 @@ will keep these unrecognized CoS sources disabled under its acquisition ceiling.
 
 Identity and scope references: [Google userinfo](https://developers.google.com/resources/api-libraries/documentation/oauth2/v2/python/latest/oauth2_v2.userinfo.html)
 and [Google OAuth scopes](https://developers.google.com/identity/protocols/oauth2/scopes).
+
+The `cos-google-workspace` release scope reuses the existing protected Google
+connections worker on both Linux and macOS. It runs separate-purpose enrollment,
+credential substitution and scope rejection, guarded setup/activation, actual
+Calendar/Tasks adapter polling into the encrypted event log, existing member/mail
+regressions, supervisor recovery, affected pack validators and type checks. The
+selector requires the component and its proof files as regular files in the head
+and actual merge tree, and binds every unrelated byte and mode; dependency,
+bridge, runtime, persistence or unknown-file changes retain system validation.
