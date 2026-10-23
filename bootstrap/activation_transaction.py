@@ -54,6 +54,8 @@ _ACTIVATE_PHASES = frozenset(
         "provider_config_selected",
         "cos_guard_selecting",
         "cos_guard_selected",
+        "workspace_instructions_selecting",
+        "workspace_instructions_selected",
         "plugin_selecting",
         "plugin_selected",
         "pointer_selecting",
@@ -88,6 +90,8 @@ _ROLLBACK_PHASES = frozenset(
         "provider_config_selected",
         "cos_guard_selecting",
         "cos_guard_selected",
+        "workspace_instructions_selecting",
+        "workspace_instructions_selected",
         "plugin_selecting",
         "plugin_selected",
         "pointer_selecting",
@@ -416,6 +420,7 @@ def validate_journal(value: object) -> dict[str, Any]:
             "initial_readiness_baseline",
             "restored_readiness",
             "cos_imessage_rebind",
+            "workspace_instructions",
             "submission_repair_manifest",
             "submission_repair",
             "submission_repair_request_event_ids",
@@ -473,6 +478,24 @@ def validate_journal(value: object) -> dict[str, Any]:
             ) from exc
     elif phase in {"cos_guard_selecting", "cos_guard_selected"}:
         raise ActivationJournalError("activation CoS guard transition is missing")
+    instructions = value.get("workspace_instructions")
+    if instructions is not None:
+        from bootstrap.workspace_instructions import (
+            WorkspaceInstructionsError,
+            validate_transition,
+        )
+
+        try:
+            validate_transition(instructions)
+        except WorkspaceInstructionsError as exc:
+            raise ActivationJournalError(
+                "activation workspace instructions are invalid"
+            ) from exc
+    elif phase in {
+        "workspace_instructions_selecting",
+        "workspace_instructions_selected",
+    }:
+        raise ActivationJournalError("activation workspace instructions are missing")
     if not isinstance(value.get("initial_pointer"), dict):
         raise ActivationJournalError("activation predecessor pointer is invalid")
     pointer_encoded = value.get("initial_pointer_bytes")
