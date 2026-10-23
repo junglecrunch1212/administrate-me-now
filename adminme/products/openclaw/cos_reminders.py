@@ -137,8 +137,14 @@ async def prepare(body: ReminderRequest, request: Request) -> dict[str, Any]:
                 {**options[0], "recipient": body.provenance.actor_id},
                 require_current=False,
             )
+            # Preparing future exact text uses the same response-approval
+            # governance contract as an immediate self reply. The additional
+            # timed host grant and durable request are checked independently.
             await seam._guard(
-                runtime, session, REQUESTED, {"member_id": session.auth_member_id}
+                runtime,
+                session,
+                "cos.response.approved",
+                {"member_id": session.auth_member_id, "self_reply_binding": binding},
             )
             reminder_id = await responses._receipt(
                 runtime,
