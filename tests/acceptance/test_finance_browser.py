@@ -40,7 +40,9 @@ def _serve_choices(root, listener, ready):
     async def lifespan(application):
         async with original(application):
             runtime = application.state.runtime
-            value, planned, package = fixture(runtime.settings.instance.tenant_id)
+            value, planned, package = fixture(
+                runtime.settings.instance.tenant_id, total_events=24
+            )
             planned = with_grouped_issues(
                 with_conservative_minima(
                     with_unavailable_openings(with_boundary_windows(planned))

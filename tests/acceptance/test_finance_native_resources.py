@@ -226,8 +226,12 @@ async def native_run(tmp_path, workload="light", *, qualification=False):
     os.getenv("ADMINME_FINANCE_NATIVE_SMOKE") != "1",
     reason="explicit hosted native smoke",
 )
-async def test_native_production_composition_resource_smoke(tmp_path):
-    output = await native_run(tmp_path)
+@pytest.mark.parametrize("workload", ["light", "planning"])
+async def test_native_production_composition_resource_smoke(tmp_path, workload):
+    # Verify both persisted-control startup paths before any sustained lab:
+    # planning includes the exact approved closed-package import used by its
+    # synthetic query workload. This remains short correctness-only evidence.
+    output = await native_run(tmp_path, workload)
     summary, raw = load_evidence(output)
     verdict = evaluate(
         summary, raw, **identity(), environment="hosted-correctness-only"

@@ -4250,7 +4250,7 @@ class FinanceQueryRequest(ContextRequest):
         "balances"
     )
     offset: int = Field(default=0, ge=0, le=10000)
-    limit: int = Field(default=50, ge=1, le=100)
+    limit: int = Field(default=1, ge=1, le=100)
 
 
 class FinanceBindingsRequest(ContextRequest):

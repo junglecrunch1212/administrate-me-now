@@ -219,7 +219,7 @@ async def import_approved_package(
     )
     if lock.locked():
         raise HTTPException(409, "finance_import_busy")
-    async with lock, control_lock(runtime, session):
+    async with lock:
         await current_control(runtime, session)
         approval = await _approval(runtime, session, approval_id)
         limit = approval.manifest.encoded_body_limit()
@@ -243,38 +243,43 @@ async def import_approved_package(
                 or publication["owner_id"] != session.auth_member_id
             ):
                 raise PublicationError("finance_import_owner_mismatch")
-            await _guard_member_write(
-                runtime,
-                session,
-                "finance.publication_accepted",
-                {"operation": "import_exact_owner_approved_books"},
-            )
-            require_owner(request, session)
-            await _approval(runtime, session, approval_id)
-            entered_ingress = True
-            accounting = await import_publication(
-                runtime, session, publication, provenance_package=package
-            )
-            if projection is not None:
-                dated = await import_projection(runtime, session, projection)
-            require_owner(request, session)
-            audit_id = await _audit(
-                runtime,
-                session,
-                approval_id,
-                approval.policy_revision,
-                "accepted",
-                "exact_approved_package",
-                accounting,
-                dated,
-            )
-            return {
-                "state": "accepted",
-                "accounting": accounting,
-                "dated": dated,
-                "audit_event_id": audit_id,
-                "provider_effect_count": 0,
-            }
+            # A slow upload/decoder must not prevent the owner from revoking
+            # access. Acquire the owner lock only for the bounded event writes,
+            # then re-read approval and policy after the unlocked decoding phase.
+            async with control_lock(runtime, session):
+                await current_control(runtime, session)
+                await _guard_member_write(
+                    runtime,
+                    session,
+                    "finance.publication_accepted",
+                    {"operation": "import_exact_owner_approved_books"},
+                )
+                require_owner(request, session)
+                await _approval(runtime, session, approval_id)
+                entered_ingress = True
+                accounting = await import_publication(
+                    runtime, session, publication, provenance_package=package
+                )
+                if projection is not None:
+                    dated = await import_projection(runtime, session, projection)
+                require_owner(request, session)
+                audit_id = await _audit(
+                    runtime,
+                    session,
+                    approval_id,
+                    approval.policy_revision,
+                    "accepted",
+                    "exact_approved_package",
+                    accounting,
+                    dated,
+                )
+                return {
+                    "state": "accepted",
+                    "accounting": accounting,
+                    "dated": dated,
+                    "audit_event_id": audit_id,
+                    "provider_effect_count": 0,
+                }
         except (PublicationError, TimeoutError) as exc:
             reason = (
                 str(exc)
@@ -305,6 +310,20 @@ async def import_approved_package(
                     "provider_effect_count": 0,
                 },
             ) from None
+        except HTTPException:
+            await await_settled(
+                _audit(
+                    runtime,
+                    session,
+                    approval_id,
+                    approval.policy_revision,
+                    "incomplete" if entered_ingress else "rejected",
+                    "finance_import_authorization_changed",
+                    accounting,
+                    dated,
+                )
+            )
+            raise
         except asyncio.CancelledError:
             # Native work has drained before this handler. Retain a terminal
             # receipt even if the caller repeats cancellation during the audit.

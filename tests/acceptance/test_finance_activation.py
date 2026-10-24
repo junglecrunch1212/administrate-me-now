@@ -54,9 +54,9 @@ def pins(raw):
     return {"sha256": hashlib.sha256(raw).hexdigest(), "bytes": len(raw)}
 
 
-def fixture(tenant, *, dated=True, witnessed=True, owner=PRINCIPAL):
+def fixture(tenant, *, dated=True, witnessed=True, owner=PRINCIPAL, total_events=0):
     publication, package = package_fixture(tenant, owner)
-    planned = projection(publication) if dated else None
+    planned = projection(publication, total_events) if dated else None
     if planned is not None and witnessed:
         witness = dict(planned["evidence"][0])
         witness.update(
@@ -179,10 +179,11 @@ def test_persisted_activation_import_disclosure_restart_and_disable(tmp_path):
             book_id=p["book_id"],
             publication_id=p["publication_id"],
             report_id="scenarios",
-            limit=1,
         )
         assert query.status_code == 200, query.text
-        assert "12500" in query.text
+        assert query.json()["metrics"][0]["value_minor"] == 12500
+        assert query.json()["next_offset"] == 1
+        assert len(query.json()["metrics"]) == 1
         owner = build_internal_session(PRINCIPAL, "principal", p["tenant_id"])
         _, session_key = runtime.member_chat_binding(PRINCIPAL)
 
@@ -411,13 +412,43 @@ def test_revocation_after_retrieval_before_disclosure_blocks_result(
         control(client, manifest["binding"], cos=True)
         assert upload(client, approve(client, manifest), packet).status_code == 200
         _grant_cos(client, "final-disclosure-grant")
-        seeded = _post(client, "status", "before-final-revocation")
+        seeded = _post(
+            client,
+            "query",
+            "before-final-revocation",
+            book_id=p["book_id"],
+            publication_id=p["publication_id"],
+            report_id="scenarios",
+            limit=1,
+        )
         assert seeded.status_code == 200 and "answer_ref" in seeded.json(), seeded.text
+        assert seeded.json()["metrics"][0]["value_minor"] == 12500
+        seeded_receipts = client.portal.call(
+            events, client.app.state.runtime, ["finance.disclosure_recorded"]
+        )
+        assert any(
+            row["payload"].get("kind") == "run"
+            and row["payload"].get("result_sha256") == seeded.json()["answer_ref"]
+            for row in seeded_receipts
+        )
+        from adminme.finance import queries
+
+        read_report = queries.query_publication
+        retrieved = []
+
+        def observe_read(*args, **kwargs):
+            result = read_report(*args, **kwargs)
+            assert result["metrics"][0]["value_minor"] == 12500
+            retrieved.append(result)
+            return result
+
+        monkeypatch.setattr(queries, "query_publication", observe_read)
         original = main._record_tool_call
 
         async def revoke_during_audit(request, session, provenance, **kwargs):
             result = await original(request, session, provenance, **kwargs)
             if kwargs["operation"] == "finance.query":
+                assert len(retrieved) == 1
                 # Simulate an already committed control whose cache notification
                 # is delayed. Final durable read must still block disclosure.
                 runtime = request.app.state.runtime
@@ -454,6 +485,7 @@ def test_revocation_after_retrieval_before_disclosure_blocks_result(
             limit=1,
         )
         assert result.status_code == 403, result.text
+        assert len(retrieved) == 1
         assert "12500" not in result.text
         runtime = client.app.state.runtime
         owner = build_internal_session(PRINCIPAL, "principal", p["tenant_id"])
@@ -506,7 +538,7 @@ def test_one_owner_control_failure_does_not_abort_runtime(
             )
 
 
-@pytest.mark.parametrize("interruption", ["cancel", "timeout"])
+@pytest.mark.parametrize("interruption", ["cancel", "timeout", "revoke"])
 def test_cancelled_decoder_keeps_admission_until_settled_and_never_imports(
     tmp_path, monkeypatch, interruption
 ):
@@ -549,8 +581,24 @@ def test_cancelled_decoder_keeps_admission_until_settled_and_never_imports(
                         await asyncio.sleep(0)
                         first.cancel()
                         await asyncio.sleep(0)
-                    else:
+                    elif interruption == "timeout":
                         await asyncio.sleep(0.05)
+                    else:
+                        revoked = await asyncio.wait_for(
+                            http.put(
+                                CONTROL,
+                                headers=DEMO_HEADERS,
+                                json={
+                                    "request_id": str(uuid4()),
+                                    "expected_revision": 1,
+                                    "binding": manifest["binding"],
+                                    "books_enabled": False,
+                                    "cos_analysis_enabled": False,
+                                },
+                            ),
+                            2,
+                        )
+                        assert revoked.status_code == 200, revoked.text
                     assert not first.done()
                     second = await http.post(
                         IMPORTS + approval, headers=DEMO_HEADERS, json=packet
@@ -571,7 +619,9 @@ def test_cancelled_decoder_keeps_admission_until_settled_and_never_imports(
                             await first
                     else:
                         response = await first
-                        assert response.status_code == 422, response.text
+                        assert response.status_code in (
+                            {422} if interruption == "timeout" else {403, 409}
+                        ), response.text
                 assert len(held_buffers[0]) == 0
                 assert not client.app.state.runtime.settings_command_locks[
                     "finance-closed-package-import"
