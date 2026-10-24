@@ -209,9 +209,14 @@ def test_real_gmail_and_dashboard_chat_private_draft_and_cross_channel_readback(
         settings,
     )
     from tests.acceptance.test_forwarded_channel_intake import AUTH as CHANNEL_AUTH
-    from tests.acceptance.test_native_apple_reminder import SECRET, _grant as grant
+    from tests.acceptance.test_native_apple_reminder import (
+        SECRET,
+        _grant as grant,
+        _normal_operation,
+    )
 
     with TestClient(create_application(settings(tmp_path / channel))) as client:
+        _normal_operation(client)
         grant(client)
         grant(client, other=True)
         intake = gmail_instruction if channel == "gmail" else portal_instruction

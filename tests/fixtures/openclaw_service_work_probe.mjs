@@ -1,10 +1,33 @@
 /** Hosted-only synthetic model + domain endpoints; never a production adapter. */
 import assert from "node:assert/strict";
 import http from "node:http";
+import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+
+function inventoryDocument(value) {
+  if (typeof value === "string") { try { return inventoryDocument(JSON.parse(value)); } catch { return null; } }
+  if (value && typeof value === "object") {
+    if (value.contract === "administrateme-workstation-inventory-v2") return value;
+    for (const child of Object.values(value)) { const found = inventoryDocument(child); if (found) return found; }
+  }
+  return null;
+}
 import { createHash, createHmac } from "node:crypto";
 
 export async function startServiceWorkFixtures({ secret, agent, sessions, validSession, conversations = new Map() }) {
   assert.equal(process.env.GITHUB_ACTIONS, "true");
+  // Exercise the production formatter, not a hand-written tiny catalog result.
+  const inventoryPages = JSON.parse(execFileSync("poetry", ["run", "python", "-c", `
+import json
+from adminme.workstation_inventory import inventory_page
+from tests.unit.test_workstation_inventory import realistic_inventory
+source = realistic_inventory()
+overview = inventory_page(source)
+detail = inventory_page(source, view="details", section="identities", binding_id="fixture-route-17")
+next_page = inventory_page(source, view="details", section="identities", binding_id="fixture-route-17", offset=detail["page"]["next_offset"], snapshot=detail["snapshot"])
+print(json.dumps([overview, detail, next_page]))
+`], { cwd: fileURLToPath(new URL("../../", import.meta.url)), encoding: "utf8", timeout: 30000 }));
+  const inventoryObserved = [];
   const receipts = [];
   const conversationReceipts = [];
   const conversationReplies = [];
@@ -15,6 +38,8 @@ export async function startServiceWorkFixtures({ secret, agent, sessions, validS
   const sourceEvent = "fixture-source-event";
   const steps = [
     ["administrateme_workstation_inventory", {}],
+    ["administrateme_workstation_inventory", { view: "details", section: "identities", binding_id: "fixture-route-17" }],
+    ["administrateme_workstation_inventory", { view: "details", section: "identities", binding_id: "fixture-route-17", offset: inventoryPages[1].page.next_offset, snapshot: inventoryPages[1].snapshot }],
     ["administrateme_service_context", { limit: 2 }],
     ["administrateme_service_private_work", { request_id: "fixture-private-note", title: "Prepare an internal brief", record_kind: "note", source_event_ids: [sourceEvent] }],
     ["administrateme_service_private_work_state", { task_id: "cos-task:fixture", request_id: "fixture-complete-work", expected_last_event_id: "fixture-created", action: "complete", reason_code: "completed" }],
@@ -55,6 +80,17 @@ export async function startServiceWorkFixtures({ secret, agent, sessions, validS
           return;
         }
         const freshRead = JSON.stringify(input).includes("PROBE_FRESH_READ");
+        if (!freshRead) {
+          const results = input.filter((entry) => entry.type === "function_call_output");
+          for (let index = inventoryObserved.length; index < Math.min(results.length, 3); index++) {
+            const output = results[index].output;
+            assert(JSON.stringify(output).length < 10000, "native inventory projection exceeded complete-read budget");
+            const observed = inventoryDocument(output);
+            assert(observed, "native model did not receive complete valid inventory JSON");
+            assert.deepEqual(observed, inventoryPages[index], "native inventory changed or was truncated in transit");
+            inventoryObserved.push(observed);
+          }
+        }
         const plan = freshRead ? [steps.at(-1)] : steps;
         if (outputs === 0) {
           const encoded = JSON.stringify(input);
@@ -136,7 +172,9 @@ export async function startServiceWorkFixtures({ secret, agent, sessions, validS
         assert.equal(body.openclaw_approval_receipt_id, undefined);
         receipts.push({ path: req.url, session: body.provenance.session_key });
         if (req.url.endsWith("/workstation-inventory")) {
-          result = { contract: "administrateme-workstation-inventory-v1", inventory_grants_authority: false, provider_effect_count: 0 };
+          const index = body.view !== "details" ? 0 : body.offset ? 2 : 1;
+          assert.deepEqual(Object.fromEntries(Object.entries(body).filter(([key]) => key !== "provenance")), steps[index][1]);
+          result = inventoryPages[index];
         } else if (req.url.endsWith("/service-context")) {
           result = { source_events: [{ event_id: sourceEvent, title: "GRANTED_SOURCE_FIXTURE", scope: "member-private:fixture", authority_grant_id: "fixture-standing-grant" }] };
         } else if (req.url.endsWith("/service-private-work")) {
@@ -162,7 +200,7 @@ export async function startServiceWorkFixtures({ secret, agent, sessions, validS
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   const baseUrl = `http://127.0.0.1:${server.address().port}`;
   return {
-    baseUrl, receipts, initialInputs, errors, conversationReceipts, conversationReplies,
+    baseUrl, receipts, initialInputs, errors, inventoryObserved, conversationReceipts, conversationReplies,
     get modelCalls() { return modelCalls; },
     close: () => new Promise((resolve) => server.close(resolve)),
   };

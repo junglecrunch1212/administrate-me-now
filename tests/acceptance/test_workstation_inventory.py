@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -18,7 +19,7 @@ from tests.acceptance.test_cos_identity_delegation_kernel import (
     _settings,
 )
 from tests.acceptance.test_cos_service_private_work import _service
-from tests.unit.test_workstation_inventory import OWNER, document
+from tests.unit.test_workstation_inventory import document
 
 PATH = "/api/openclaw/v1/tools/workstation-inventory"
 
@@ -40,34 +41,47 @@ def test_current_inventory_owner_filtering_and_truthful_unknowns(
             value["bindings"].append(row)
         provision(config, value, expected_revision=0)
 
-        def read(provenance: dict) -> dict:
+        def read(provenance: dict, **query: object) -> dict:
             response = client.post(
-                PATH, headers=OPENCLAW_HEADERS, json={"provenance": provenance}
+                PATH, headers=OPENCLAW_HEADERS, json={"provenance": provenance, **query}
             )
             assert response.status_code == 200, response.text
             return response.json()
 
         own = read(_service("own-inventory"))
-        assert {
-            r["resource_owner_principal_id"]
-            for r in own["identity_inventory"]["bindings"]
-        } == {OWNER}
+        assert {r[3] for r in own["items"] if r[0] == "identities"} == {"CoS"}
         _grant_private(client, A, "current-inventory-grant-a")
         current = read(_service("delegated-inventory"))
-        assert {
-            r["resource_owner_principal_id"]
-            for r in current["identity_inventory"]["bindings"]
-        } == {OWNER, A}
+        assert {r[3] for r in current["items"] if r[0] == "identities"} == {"CoS", A}
         member = read(_provenance(A, "member-inventory"))
-        assert {
-            r["resource_owner_principal_id"]
-            for r in member["identity_inventory"]["bindings"]
-        } == {OWNER, A}
+        assert {r[3] for r in member["items"] if r[0] == "identities"} == {"CoS", A}
         assert member["provider_effect_count"] == 0
         assert member["inventory_grants_authority"] is False
         assert all(
-            row["states"]["executable"]["value"] is None
-            for row in member["identity_inventory"]["bindings"]
+            row[6][5] == "?" for row in member["items"] if row[0] == "identities"
+        )
+        assert member["counts"]["identities"] == 2
+        assert own["counts"]["identities"] == 1
+        assert "browser-" + B not in json.dumps(member)
+        denied_detail = client.post(
+            PATH,
+            headers=OPENCLAW_HEADERS,
+            json={
+                "provenance": _provenance(A, "other-binding"),
+                "view": "details",
+                "section": "identities",
+                "binding_id": "browser-" + B,
+            },
+        )
+        assert denied_detail.status_code == 404
+        detail = read(
+            _provenance(A, "own-detail"),
+            view="details",
+            section="identities",
+            binding_id="cos-browser",
+        )
+        assert any(
+            row["path"] == ["expected_identity", "account"] for row in detail["items"]
         )
         invalid = _service("forged-inventory")
         invalid["session_key"] += "bad"
@@ -82,9 +96,17 @@ def test_current_inventory_owner_filtering_and_truthful_unknowns(
         value["revision"] = 2
         value["bindings"][0]["observed_identity"]["account"] = "wrong@fixture.invalid"
         provision(config, value, expected_revision=1)
+        stale = client.post(
+            PATH,
+            headers=OPENCLAW_HEADERS,
+            json={
+                "provenance": _service("stale-page"),
+                "offset": 1,
+                "snapshot": own["snapshot"],
+            },
+        )
+        assert stale.status_code == 409
         assert (
-            read(_service("fresh-inventory"))["identity_inventory"]["bindings"][0][
-                "identity_state"
-            ]
+            read(_service("fresh-inventory"), section="identities")["items"][0][5]
             == "identity_mismatch"
         )
