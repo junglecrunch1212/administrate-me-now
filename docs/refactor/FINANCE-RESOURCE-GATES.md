@@ -149,6 +149,7 @@ evidence, not passing acceptance.
 | `ee43a0df` | 872 Python, 100 native/static/browser passed, including queued-revocation ordering | Before 4.036, after 3.570 → mixed 4.698 ms (1.163851) | Fail; planning also fails at 30.69% |
 | `fce14a57` | 872 Python, 100 native/static/browser and deep-query work checks passed | Before 4.414, after 4.388 → mixed 5.433 ms (1.231012) | Fail; planning also fails at 20.74% |
 | `b32c4252` | 877 Python, 100 native/static/browser, query-work and reader-memory checks passed | Before 4.323, after 4.164 → mixed 5.431 ms (1.256279) | Fail; planning also fails at 21.49% |
+| `9814dbac` | 877 Python, 100 native/static/browser, query-work, reader-memory and diagnostic validity checks passed | Before 4.249, after 3.495 → mixed 5.423 ms (1.276111) | Fail; planning also fails at 10.19% |
 
 The [de8 hosted run](https://github.com/junglecrunch1212/administrate-me-now/actions/runs/40042497072)
 retains 251 admitted finance calls, 18.381/19.970 ms warm status/calculation
@@ -324,7 +325,7 @@ What Now p95 before/mixed/after 0.160/0.164/0.157 ms; planning
 instrumentation differ from the independently driven raw gate. Their favorable
 core timing cannot explain or waive the raw failures.
 
-The next diagnostic-only revision matches the independent finance client and
+The `9814dbac` diagnostic matches the independent finance client and
 uses wall timing without cProfile by default. It runs four controlled client
 start offsets (0, 12.5, 25 and 37.5 ms) across the 50 ms core cadence, each with
 100 core and 50 finance calls, plus before/after phases. Every offset is
@@ -339,3 +340,30 @@ as either real acceptance server. It isolates the final loop-blocking cost;
 it does not justify caching or removing production revocation checks. No runtime
 code, raw workload, threshold, source contract or activation setting changes in
 this diagnostic revision.
+
+
+At `9814dbac`, the raw accepted-planning gate recorded before/after/mixed core
+p95 3.967/3.645/4.372 ms (10.19% regression), 251 admitted calls and
+17.966/17.819 ms summary/detail p95. The light gate recorded 251 calls and
+18.565/18.840 ms status/calculation p95. Both remain failed under the unchanged
+10% raw threshold. Three reader-memory trials measured 7,020,544–7,024,640 bytes
+initial RSS growth, unchanged after 1,000 further reads; rebuild/reopen raised
+that to 7,483,392–7,487,488, with 7,462,912–7,467,008 retained after shutdown.
+The reader thread terminated in all three trials; retained RSS is not freed
+memory or a deployment-hardware qualification.
+
+Independent-client wall profiles and the final-SQL control both showed their
+largest core tails at the 12.5 ms offset. Real/control What Now p95 was
+3.229/2.949 ms for light finance and 3.338/3.282 ms for planning. Thus final
+authority SQL alone does not explain the shared cost. Slow core spans overlapped
+event-log cursor validation, page reads and lag counts, followed by audit
+projection application. These overlaps identify work to investigate, not causal
+proof or an alternate acceptance threshold.
+
+The next bounded candidate combines event-log cursor validation and the first
+page query into one native-worker turn. It preserves existence checks even for
+empty filtered results, exclusive cursors, type/owner filters, watermark and
+paging semantics; it changes neither bus delivery nor authority. The affected
+EventLog suite joins hosted finance checks, including a multi-page filtered read
+that proves one worker turn per page. The same raw gates and independent-client
+profiles determine whether this reduction helps; no latency success is assumed.

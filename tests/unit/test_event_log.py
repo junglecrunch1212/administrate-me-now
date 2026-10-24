@@ -478,10 +478,53 @@ async def test_read_since_filters_by_owner_scope(log: EventLog) -> None:
     assert [e["payload"]["i"] for e in only] == [1, 3]
 
 
-async def test_read_since_unknown_cursor_raises(log: EventLog) -> None:
+@pytest.mark.parametrize(
+    "filters",
+    [{}, {"types": ["foo"]}, {"owner_scope": "private:m1"}, {"through": "ev_0"}],
+)
+async def test_read_since_unknown_cursor_raises(log: EventLog, filters: dict) -> None:
     await log.append(_event(1))
     with pytest.raises(CursorNotFound):
-        await _collect(log, cursor="ev_zzzzzzzzzzzzzz")
+        await _collect(log, cursor="ev_zzzzzzzzzzzzzz", **filters)
+
+
+async def test_read_since_uses_one_worker_turn_per_filtered_page(
+    log: EventLog, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A valid cursor need not belong to the requested type/owner. It must be
+    # checked before filtering, with no extra event-loop/native-worker handoff.
+    cursor = await log.append(_event(-1, type="bar"))
+    wanted = await log.append_batch(
+        [_event(i, type="foo", owner_scope="private:m1") for i in range(1001)]
+    )
+    await log.append(_event(1001, type="foo", owner_scope="private:m1"))
+    await log.append(_event(1002, type="bar", owner_scope="private:m1"))
+    await log.append(_event(1003, type="foo"))
+    run_locked = log._run_locked  # noqa: SLF001 - worker admission contract
+    worker_turns = 0
+
+    async def counted(func, *args):
+        nonlocal worker_turns
+        worker_turns += 1
+        return await run_locked(func, *args)
+
+    monkeypatch.setattr(log, "_run_locked", counted)
+    rows = await _collect(
+        log,
+        cursor=cursor,
+        through=wanted[-1],
+        limit=500,
+        types=["foo"],
+        owner_scope="private:m1",
+    )
+    assert [row["event_id"] for row in rows] == wanted
+    assert [row["payload"]["i"] for row in rows] == list(range(1001))
+    assert worker_turns == 3
+
+    # A known checkpoint at the watermark produces an empty tail in one turn.
+    worker_turns = 0
+    assert await _collect(log, cursor=wanted[-1], through=wanted[-1]) == []
+    assert worker_turns == 1
 
 
 async def test_persistence_across_reopen(tmp_path: Path) -> None:

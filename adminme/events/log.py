@@ -592,22 +592,23 @@ class EventLog:
     ) -> AsyncIterator[dict[str, Any]]:
         if limit <= 0:
             raise ValueError("limit must be positive")
-        if cursor is not None:
-            exists = await self._run_locked(self._event_exists, cursor)
-            if not exists:
-                raise CursorNotFound(cursor)
-
         batch_size = max(limit, 500)
         last = cursor
+        # Bus consumers usually read a short tail after an existing checkpoint.
+        # Validate that checkpoint and fetch the first page in one native-worker
+        # turn instead of waking the event loop between the two database reads.
+        read_page = self._read_checked_page
         while True:
             rows = await self._run_locked(
-                self._read_page,
+                read_page,
                 last,
                 through,
                 batch_size,
                 owner_scope,
                 tuple(types) if types else None,
             )
+            # Later cursors came from this append-only log's previous page.
+            read_page = self._read_page
             if not rows:
                 return
             for row in rows:
@@ -728,6 +729,20 @@ class EventLog:
         cur = self._conn.cursor()
         cur.execute("SELECT 1 FROM events WHERE event_id = ? LIMIT 1", (event_id,))
         return cur.fetchone() is not None
+
+    def _read_checked_page(
+        self,
+        after_id: str | None,
+        through: str | None,
+        limit: int,
+        owner_scope: str | None,
+        types: tuple[str, ...] | None,
+    ) -> list[sqlcipher3.Row]:
+        # Existence is independent of the requested filters/watermark: an
+        # unknown checkpoint must still fail when the filtered page is empty.
+        if after_id is not None and not self._event_exists(after_id):
+            raise CursorNotFound(after_id)
+        return self._read_page(after_id, through, limit, owner_scope, types)
 
     def _read_page(
         self,
