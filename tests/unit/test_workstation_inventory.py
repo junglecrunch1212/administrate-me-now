@@ -12,6 +12,7 @@ import pytest
 from adminme.workstation_inventory import (
     IdentityInventory,
     identity_bindings,
+    provider_bindings,
     workstation_tools,
 )
 from bootstrap.workstation_inventory import provision
@@ -149,7 +150,11 @@ def test_literal_tool_denial_is_not_provider_disconnection_or_native_registratio
     assert tools["browser"]["tool_accessible"]["value"] is False
     assert tools["browser"]["connected"]["value"] is None
     assert tools["memory_get"]["tool_accessible"]["value"] is None
-    assert result["loaded_catalog_verified"] is False
+    assert result["effective_toolset_verified"] is False
+    assert result["declaration_catalog_proves_access"] is False
+    assert tools["memory_get"]["tool_accessible"]["basis"] == (
+        "native_effective_toolset_or_invocation_required"
+    )
 
 
 def test_native_additive_allow_and_scheduler_alias_do_not_report_false_absence(
@@ -186,3 +191,32 @@ def test_native_additive_allow_and_scheduler_alias_do_not_report_false_absence(
     }
     assert values["browser"] is None and values["automations"] is None
     assert values["exec"] is False
+
+
+def test_member_browser_inventory_never_becomes_cos_operating_account(
+    tmp_path: Path,
+) -> None:
+    tmp_path.chmod(0o700)
+    now = datetime.now(timezone.utc)
+    value = document(now, owner="member-a")
+    value["bindings"][0]["operating_principal_id"] = "member-a"
+    provision(tmp_path, value, expected_revision=0)
+    row = identity_bindings(tmp_path, allowed_owners={"member-a"}, now=now)["bindings"][
+        0
+    ]
+    assert row["identity_state"] == "verified_record"
+    assert (
+        row["workstation_identity_requirement"]
+        == "member_account_is_not_a_cos_workstation_route"
+    )
+    assert row["states"]["executable"]["value"] is False
+
+
+def test_service_account_does_not_expose_another_members_binding() -> None:
+    binding = SimpleNamespace(
+        owner_id=OWNER, resource_owner_principal_id="member-b", on_behalf_of="member-b"
+    )
+    runtime = SimpleNamespace(
+        adapters=None, settings=SimpleNamespace(provider_bindings=[binding])
+    )
+    assert provider_bindings(runtime, {OWNER, "member-a"}) == []

@@ -34,7 +34,10 @@ verified record, not proof of the present tab's account. Wrong account, stale
 binding revision or expired evidence cannot establish execution readiness.
 OpenClaw owns actual tool policy and registration: a literal deny or closed
 allowlist can explain a missing tool, while allowed configuration alone never
-claims a loaded or functioning tool. General workstation enablement remains a
+claims a loaded or functioning tool. Native `tools.catalog` is declaration
+metadata and cannot prove the effective agent tool set or an invocation. A
+current effective-tool-set check or bounded actual invocation is required.
+General workstation enablement remains a
 separate supported OpenClaw operation; this slice does not open a shell, browser,
 native app, file tree or scheduler.
 

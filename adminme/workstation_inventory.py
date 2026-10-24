@@ -175,7 +175,10 @@ def identity_bindings(
         return {"state": "invalid_private_inventory", "bindings": []}
     rows = []
     for binding in inventory.bindings:
-        if binding.resource_owner_principal_id not in allowed_owners:
+        if not {
+            binding.resource_owner_principal_id,
+            binding.operating_principal_id,
+        }.issubset(allowed_owners):
             continue
         verification = binding.verification
         matching = binding.observed_identity == binding.expected_identity
@@ -193,9 +196,16 @@ def identity_bindings(
             if fresh
             else "stale_evidence"
         )
+        wrong_worker = (
+            binding.route.kind in {"browser", "native_app", "local_workspace"}
+            and binding.operating_principal_id != COS_SERVICE_PRINCIPAL_ID
+        )
         rows.append(
             {
                 **binding.model_dump(mode="json"),
+                "workstation_identity_requirement": "member_account_is_not_a_cos_workstation_route"
+                if wrong_worker
+                else "verify_actual_destination_identity",
                 "identity_state": identity_state,
                 "states": states(
                     configured=state(True, "owner_private_inventory"),
@@ -207,7 +217,9 @@ def identity_bindings(
                         verification.observed_at.isoformat() if verification else None,
                     ),
                     executable=state(
-                        False if identity_state != "verified_record" else None,
+                        False
+                        if wrong_worker or identity_state != "verified_record"
+                        else None,
                         "current_tool_and_authority_check_required",
                     ),
                 ),
@@ -227,7 +239,13 @@ def provider_bindings(runtime: Any, allowed_owners: set[str]) -> list[dict[str, 
     inventory = runtime.adapters.inventory() if runtime.adapters else {}
     rows = []
     for binding in runtime.settings.provider_bindings:
-        if binding.owner_id not in allowed_owners:
+        binding_owners = {
+            binding.owner_id,
+            binding.resource_owner_principal_id or binding.owner_id,
+        }
+        if binding.on_behalf_of:
+            binding_owners.add(binding.on_behalf_of)
+        if not binding_owners.issubset(allowed_owners):
             continue
         live = inventory.get(binding.adapter_id) or {}
         running = live.get("state") == "running"
@@ -236,7 +254,9 @@ def provider_bindings(runtime: Any, allowed_owners: set[str]) -> list[dict[str, 
             {
                 "binding_id": binding.adapter_id,
                 "provider": binding.provider_family,
-                "resource_owner_principal_id": binding.owner_id,
+                "resource_owner_principal_id": binding.resource_owner_principal_id
+                or binding.owner_id,
+                "on_behalf_of_member_id": binding.on_behalf_of,
                 "operating_principal_id": binding.owner_id,
                 "provider_account": binding.provider_account_id,
                 "workspace": binding.workspace,
@@ -415,7 +435,7 @@ def workstation_tools(runtime: Any, agent_id: str) -> dict[str, Any]:
                             False if absent else None,
                             "explicit_native_tool_policy"
                             if absent
-                            else "native_loaded_catalog_required",
+                            else "native_effective_toolset_or_invocation_required",
                         ),
                         executable=state(
                             False if absent else None,
@@ -429,7 +449,8 @@ def workstation_tools(runtime: Any, agent_id: str) -> dict[str, Any]:
         "state": "policy_read",
         "agent_id": agent_id,
         "capabilities": rows,
-        "loaded_catalog_verified": False,
+        "effective_toolset_verified": False,
+        "declaration_catalog_proves_access": False,
         "policy_engine": "OpenClaw",
     }
 
