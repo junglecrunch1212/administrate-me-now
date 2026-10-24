@@ -491,6 +491,13 @@ async def test_actual_size_closed_import_core_responsiveness_and_revocation(tmp_
                 "/api/member/v1/finance/choices", headers=DEMO_HEADERS
             )
             assert denied.status_code == 403
+            phase = "after"
+            await asyncio.sleep(2)
+            finished.set()
+            await core_task
+            core_task = None
+            # Read the final denial without competing with the foreground
+            # capacity gate; a busy response would not prove revocation.
             provenance = _provenance("sized-import-revoked")
             provenance.update(
                 actor_id=ready["actor"],
@@ -522,11 +529,6 @@ async def test_actual_size_closed_import_core_responsiveness_and_revocation(tmp_
                 "cos_state": cos.json()["state"],
                 "independent_grant_preserved": True,
             }
-            phase = "after"
-            await asyncio.sleep(2)
-            finished.set()
-            await core_task
-            core_task = None
             parent.send("snapshot")
             report["retained"] = (await _receive(parent))["snapshot"]
             assert all(r.get("status") == 200 for r in report["core"]), report["core"]
