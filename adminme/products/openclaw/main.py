@@ -4494,6 +4494,7 @@ async def finance_status(
                 if blocked:
                     result["readiness"] = blocked["state"]
             elif body.capability_id:
+                capability_id = body.capability_id
                 # A publication/report is not evidence of all topic dependencies.
                 # Until typed domain dependencies are accepted, request them honestly.
                 if body.include_bundle:
@@ -4515,7 +4516,7 @@ async def finance_status(
                         await runtime.projections.read(
                             "money",
                             lambda conn: publication_readiness_context(
-                                conn, session, body.capability_id, book_id=body.book_id
+                                conn, session, capability_id, book_id=body.book_id
                             ),
                         )
                         if not blocked
