@@ -633,3 +633,59 @@ def test_terminal_readback_keeps_original_authority_and_rejects_mismatched_histo
             assert len(service.calls) == 1
         finally:
             client.portal.call(model.aclose)
+
+
+def test_crash_after_durable_attempt_reconciles_unknown_without_provider_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from adminme.products.openclaw import cos_responses
+
+    service = FakeGmailService()
+    with TestClient(
+        create_application(configured(tmp_path)),
+        base_url="https://central-fixture.ts.net",
+        raise_server_exceptions=False,
+    ) as client:
+        runtime = client.app.state.runtime
+        prepare(client, service)
+        model, _ = model_boundary(client)
+        try:
+            source = source_for(client, "portal", "requested-email-crash")
+            approved = confirm(client, source)
+            execution = policy_receipt(client, source, approved)
+            original = cos_responses._receipt
+
+            async def crash_after_attempt(*args: Any, **kwargs: Any) -> str:
+                identifier = await original(*args, **kwargs)
+                if kwargs["event_type"] == "cos.response.attempted":
+                    raise RuntimeError("isolated crash after durable attempt")
+                return identifier
+
+            monkeypatch.setattr(cos_responses, "_receipt", crash_after_attempt)
+            assert client.post(EXECUTE, headers=AUTH, json=execution).status_code == 500
+            monkeypatch.setattr(cos_responses, "_receipt", original)
+            assert (
+                len(client.portal.call(_events, runtime, "cos.response.attempted")) == 1
+            )
+            assert client.portal.call(_events, runtime, "cos.response.result") == []
+            read = client.post(
+                STATUS,
+                headers=AUTH,
+                json={**source, "approval_event_id": approved["approval_event_id"]},
+            )
+            assert read.json()["status"] == "unknown"
+            assert client.portal.call(_events, runtime, "cos.response.result") == [], (
+                "Status must remain read-only"
+            )
+            recovered = client.post(EXECUTE, headers=AUTH, json=execution)
+            assert recovered.status_code == 200, recovered.text
+            assert recovered.json()["status"] == "unknown"
+            assert recovered.json()["automatic_retry_allowed"] is False
+            assert len(client.portal.call(_events, runtime, "cos.response.result")) == 1
+            assert (
+                client.post(EXECUTE, headers=AUTH, json=execution).json()["status"]
+                == "unknown"
+            )
+            assert service.calls == []
+        finally:
+            client.portal.call(model.aclose)

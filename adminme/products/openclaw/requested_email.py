@@ -398,6 +398,13 @@ async def execute_requested_email(
     runtime = seam._runtime(request)
     approved = _owned_approval(session, approved)
     result = await retained_result(runtime, session, approved)
+    if result.get("reason") == "prior_attempt_unresolved":
+        # Reuse the existing ledger's crash recovery: retain one unknown terminal
+        # without consuming a new approval or making another provider call.
+        await responses._execute_locked(
+            runtime, session, approved, body, request, approved["payload"]
+        )
+        return await retained_result(runtime, session, approved)
     if result["status"] != "awaiting_request_policy":
         return result
     authorization = await validate_email_authority(
@@ -426,7 +433,7 @@ async def execute_requested_email(
 
     # The existing executor keeps final guard -> independent receipt consumption
     # -> durable attempt -> exact permit -> provider -> terminal ordering.
-    return await responses._execute_locked(
+    await responses._execute_locked(
         runtime,
         session,
         approved,
@@ -436,6 +443,7 @@ async def execute_requested_email(
         standing_check=current_authority,
         request_authorization=authorization,
     )
+    return await retained_result(runtime, session, approved)
 
 
 @router.post("/confirm-requested-email")
