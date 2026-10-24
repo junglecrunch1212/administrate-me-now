@@ -4041,7 +4041,6 @@ def create_application(settings: RuntimeSettings) -> FastAPI:
     app.include_router(member_router)
     app.include_router(member_bridge_setup_router)
     app.include_router(member_cos_router)
-    app.include_router(finance_metadata_router)
     from adminme.products.member.google_connections import (
         router as google_connections_router,
     )
@@ -4050,6 +4049,7 @@ def create_application(settings: RuntimeSettings) -> FastAPI:
     app.include_router(apple_service_settings_router)
     app.include_router(apple_notes_commands_router)
     app.include_router(system_router)
+    app.include_router(finance_metadata_router)
     return app
 
 

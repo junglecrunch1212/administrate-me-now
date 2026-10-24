@@ -5591,7 +5591,7 @@ function financeMetadataSettingsCard(data) {
       const result = await api("/api/member/v1/finance/bindings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ book_id: book.value.trim() || null, household_party_id: household.value.trim() || null }) });
       output.dataset.state = result.state;
       output.append(text("h3", titleCase(result.state)), text("p", result.qualification || "Unavailable or incomplete access is not evidence of empty history."));
-      const details = document.createElement("details"); details.append(text("summary", "Exact binding receipt"), text("pre", JSON.stringify(result, null, 2))); output.append(details);
+      const details = document.createElement("details"); const receipt = text("pre", JSON.stringify(result, null, 2)); receipt.style.whiteSpace = "pre-wrap"; receipt.style.overflowWrap = "anywhere"; details.append(text("summary", "Exact binding receipt"), receipt); output.append(details);
     } catch (error) { status.textContent = `Metadata could not be read. ${error.message}`; }
     finally { busy = false; controls(); }
   });

@@ -223,6 +223,16 @@ never imply daily-current data or reliable affordability/payment safety.
    Development-draft guards and the full-finance 10% latency gates stay unchanged.
    A genuinely separate metadata release would first require a bounded component
    contract and positive/negative selector tests; no relabeling substitutes for it.
+   Recommendation: retain this PR's system-wide artifact path and, if qualified
+   and approved, initially enable only the direct-owner metadata control. Keep
+   publication processing, model membership and CoS metadata off. This is a
+   qualified system release with narrowly selected behavior, not a metadata-only
+   release or clearance of failed full-finance resource gates. A separate
+   component would cut the owner router/control/audit schemas, bounded history
+   reader, Settings UI and their tests away from the CoS tools, financial query
+   facade, import/provenance and model pipeline; freeze remaining dependencies
+   and prove unrelated/ownership/storage changes still select system-wide. That
+   alternative needs implementation and qualification, not a new permission form.
 2. After protected release and explicit deployment approval, the owner can enable
    **only their own metadata access** in the card, inspect the fixed-watermark
    receipt and disable it again. No CoS grant is needed for this prerequisite.

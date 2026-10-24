@@ -4325,8 +4325,17 @@ async def finance_bindings(
     runtime = _runtime(request)
     session = _session(request, body.provenance)
     permitted = _metadata_permitted(runtime, session, body.provenance)
+
+    async def policy_if_permitted() -> dict[str, Any] | None:
+        if not permitted:
+            return None
+        try:
+            return await control_state(runtime, session)
+        except RuntimeError:
+            raise HTTPException(503, "finance_metadata_control_unavailable") from None
+
     async with control_lock(runtime, session):
-        policy = await control_state(runtime, session) if permitted else None
+        policy = await policy_if_permitted()
         result: dict[str, Any] = {
             "state": "access_unavailable",
             "bindings": [],
@@ -4344,7 +4353,7 @@ async def finance_bindings(
             operation="finance.bindings.inspect",
             result_event_ids=[watermark] if watermark else [],
         )
-        current_policy = await control_state(runtime, session) if permitted else None
+        current_policy = await policy_if_permitted()
         # Final policy read and synchronous identity/grant check, with the control
         # lock held: supported disable transitions cannot interleave disclosure.
         latest = _session(request, body.provenance)

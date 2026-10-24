@@ -128,7 +128,7 @@ def test_metadata_alone_empty_audited_without_financial_query_or_model(tmp_path)
         )
         assert query.json()["state"] == "permission_required"
         runtime = client.app.state.runtime
-        assert not runtime._finance_disclosure_sessions
+        assert not getattr(runtime, "_finance_disclosure_sessions", {})
 
         async def audits():
             return [
@@ -506,6 +506,7 @@ def test_control_rejects_implicit_boolean_enablement(tmp_path, value):
 
 def test_control_unavailable_is_never_verified_empty(tmp_path, monkeypatch):
     with TestClient(create_application(settings(tmp_path))) as client:
+        grant_read_only(client)
 
         async def fail(*args):
             raise RuntimeError("private control diagnostic must not escape")
@@ -513,7 +514,7 @@ def test_control_unavailable_is_never_verified_empty(tmp_path, monkeypatch):
         monkeypatch.setattr(
             client.app.state.runtime.event_log, "read_finance_metadata_control", fail
         )
-        response = owner_read(client)
-        assert response.status_code == 503
-        assert "private control diagnostic" not in response.text
-        assert "verified_empty" not in response.text
+        for response in (owner_read(client), read(client)):
+            assert response.status_code == 503
+            assert "private control diagnostic" not in response.text
+            assert "verified_empty" not in response.text

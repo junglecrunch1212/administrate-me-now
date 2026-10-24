@@ -3862,8 +3862,8 @@
     "missing_source_candidate_cells": [],
     "object_lifecycles": 28,
     "source_candidate_cells": 143,
-    "technical_event_schemas": 384,
-    "technical_event_types": 305,
+    "technical_event_schemas": 386,
+    "technical_event_types": 307,
     "uncataloged_event_types": [],
     "unproved_exact_lifecycle_transitions": [],
     "unproved_supported_source_candidate_cells": []
@@ -16901,6 +16901,79 @@
         "goal_id",
         "name",
         "target_minor"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "finance.metadata_inspected",
+      "family": "finance",
+      "properties": {
+        "access_path": {
+          "const": "authenticated_member",
+          "title": "Access Path",
+          "type": "string"
+        },
+        "complete": {
+          "title": "Complete",
+          "type": "boolean"
+        },
+        "history_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "History Sha256"
+        },
+        "owner_id": {
+          "maxLength": 160,
+          "minLength": 1,
+          "title": "Owner Id",
+          "type": "string"
+        },
+        "policy_revision": {
+          "minimum": 0,
+          "title": "Policy Revision",
+          "type": "integer"
+        },
+        "provider_effects": {
+          "const": false,
+          "default": false,
+          "title": "Provider Effects",
+          "type": "boolean"
+        },
+        "state": {
+          "maxLength": 80,
+          "minLength": 1,
+          "title": "State",
+          "type": "string"
+        },
+        "through_event_id": {
+          "anyOf": [
+            {
+              "maxLength": 160,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Through Event Id"
+        }
+      },
+      "required": [
+        "owner_id",
+        "access_path",
+        "policy_revision",
+        "state",
+        "complete"
       ],
       "schema_version": 1
     },
@@ -35081,6 +35154,65 @@
         "entries",
         "changed_by_member_id",
         "changed_at"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "settings.finance_metadata_changed",
+      "family": "settings",
+      "properties": {
+        "changed_by_member_id": {
+          "maxLength": 160,
+          "minLength": 1,
+          "title": "Changed By Member Id",
+          "type": "string"
+        },
+        "cos_read_enabled": {
+          "title": "Cos Read Enabled",
+          "type": "boolean"
+        },
+        "owner_id": {
+          "maxLength": 160,
+          "minLength": 1,
+          "title": "Owner Id",
+          "type": "string"
+        },
+        "owner_read_enabled": {
+          "title": "Owner Read Enabled",
+          "type": "boolean"
+        },
+        "prior_event_id": {
+          "anyOf": [
+            {
+              "maxLength": 160,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Prior Event Id"
+        },
+        "provider_effects": {
+          "const": false,
+          "default": false,
+          "title": "Provider Effects",
+          "type": "boolean"
+        },
+        "revision": {
+          "minimum": 1,
+          "title": "Revision",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "owner_id",
+        "changed_by_member_id",
+        "revision",
+        "owner_read_enabled",
+        "cos_read_enabled"
       ],
       "schema_version": 1
     },

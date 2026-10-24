@@ -536,3 +536,62 @@ current relative-isolation guarantee; it has not been adopted. Metadata-only
 reads and dated snapshot delivery must not be represented as resource-qualified
 full finance activation. The separate daily Sheets refresh engine is not a
 dependency of an accurately labeled accepted dated snapshot.
+
+## Proposed acceptance revision — not adopted
+
+The current 10% requirement remains failed. These are proposed product budgets
+for explicit review, not thresholds fitted to make a failed run pass. Raw gates
+retain p95 summaries, not raw samples/p99; p99 cannot be reconstructed from those
+reports. Whole-process CPU and deployment-hardware headroom are unmeasured.
+Instrumented diagnostic p99/CPU spans cannot replace those missing measurements.
+
+| Measure | Candidate budget for review | Rationale and evidence gap |
+|---|---|---|
+| Core HTTP p95 | <=25 ms total and <=5 ms added over the larger bracketing baseline | Small explicit interaction-delay budget, independent of the ~4 ms denominator |
+| Core HTTP p99 | <=75 ms total and <=15 ms added | Bounds tail harm; no current raw result establishes this |
+| Finance latency | Preserve status p95 <100 ms and calculation/planning p95 <500 ms; add p99 <500 ms / <1 s respectively | Existing p95 obligations remain; p99 needs raw collection |
+| Added process-tree CPU | <=0.25 logical-core equivalent averaged over normal load; <=1 core under stress | Sum process CPU seconds / elapsed seconds against an equally sampled baseline, not overlapping spans |
+| Added RSS | <=64 MiB metadata/light, <=128 MiB planning; <=8 MiB retained growth after warm-up over 15 minutes | Sample parent and workers together; the measured ~6 MiB reader alone proves neither budget |
+| Whole lab process tree | <=512 MiB RSS; existing lane/queue/timeout limits | Proposed safety stop, not measured production headroom |
+
+Normal-load assumptions for review: 2 core requests/second plus one finance
+retrieval every 5 seconds, sustained 15 minutes, preceded and followed by the
+same core-only baseline. Include one fixed 30-second 20-core/10-finance burst.
+These are conservative household-envelope assumptions, not measured household
+usage. Keep the existing 20-core/10-finance sustained stress test separate.
+Predeclare one complete run per workload; retain every phase, error, timeout,
+cold/queued result and raw sample, with counts and quantile uncertainty. Do not
+select favorable phases or retry to pass. The 180 normal-phase finance samples
+cannot establish a confident rare-tail guarantee; review a longer fixed run or
+a separate pre-agreed stress sample if that guarantee is required. Correct
+values, audits, revocation, privacy and zero provider effects remain mandatory.
+
+This trades strict relative isolation for explicit absolute interaction and
+capacity budgets. It does not qualify LLM response time, background reminders,
+heavy analysis, daily Sheets recalculation or live source freshness. Hosted
+Linux and intended deployment hardware require separate evidence.
+
+No local lab is already authorized here. A disposable VM is one proposed
+isolation choice, not a repository requirement. A reviewable setup is a local VM with 2 vCPUs, 2 GiB memory,
+loopback-only networking, no shared home/Keychain/service directories, a clean
+immutable candidate checkout and the prepared pinned Python 3.14.7/Node 24.19.0
+toolchain. Approve that VM, private scratch directory, resource ceiling and
+cleanup window before execution. The existing probe below can run once inside
+it with a 10-minute VM watchdog and no automatic retry:
+
+    ADMINME_TEST_MODE=1 ADMINME_FINANCE_BENCHMARK=1 \
+    ADMINME_FINANCE_PLANNING_BENCHMARK=1 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=bridge \
+    /absolute/approved/lab-venv/bin/python -m pytest -q -s \
+      tests/acceptance/test_finance_mixed_load.py::test_light_finance_mixed_load_p95_gate \
+      tests/acceptance/test_finance_mixed_load.py::test_accepted_planning_mixed_load_p95_gate \
+      --basetemp=/absolute/approved/lab-scratch/finance-probe
+
+That is an executable existing p95 probe, not complete proposed qualification.
+Sustained-load parameterization, raw p99 preservation and process-tree CPU/RSS
+enforcement must first be implemented and qualified in hosted CI. A VM watchdog
+stops only the lab; retain synthetic reports, stop its processes, then remove
+only the approved VM/scratch path. No installed release, private state, Keychain,
+TCC or provider connection is needed by the synthetic fixtures. Direct candidate
+execution alongside the household service remains prohibited; shared resource
+contention is an operational effect even without a file mutation. No local VM,
+probe, new qualification or policy change has been run or approved here.

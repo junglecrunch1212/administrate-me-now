@@ -30,6 +30,7 @@ CATALOG_CONTRACT = "administrateme-capability-catalog-v1"
 VERBS = ("read", "observe", "draft", "prepare", "hold", "execute")
 
 _TOOL_PERMISSION_OPTIONS: dict[str, frozenset[str]] = {
+    "administrateme_finance_bindings": frozenset({"read_context"}),
     "administrateme_finance_status": frozenset({"read_context"}),
     "administrateme_finance_query": frozenset({"read_context"}),
     "administrateme_finance_calculate": frozenset({"read_context"}),
