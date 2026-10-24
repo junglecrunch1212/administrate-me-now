@@ -13,6 +13,8 @@ from typing import Any
 
 from fastapi import HTTPException
 
+from adminme.adapters.cos_channel_acquisition import policy_from_config
+from adminme.cos_channel_operation import aware_time, runtime_live_authorization
 from adminme.request_actions_control import request_actions_allowed
 from adminme.conversation_instructions import (
     capture_instruction,
@@ -34,7 +36,9 @@ class GmailConversationIntake:
         self.runtime = runtime
         self.activated_at: datetime | None = None
         # Envelope occurred_at has second precision; compare at that same precision.
-        self.started_at = datetime.now(timezone.utc).replace(microsecond=0)
+        started = datetime.now(timezone.utc)
+        self.started_at = started.replace(microsecond=0)
+        self.started_at_ms = int(started.timestamp() * 1000)
 
     async def initialize(self, activation_at: str | None = None) -> None:
         runtime = self.runtime
@@ -43,6 +47,7 @@ class GmailConversationIntake:
         if not any(
             channel.provider == "gmail"
             and channel.enrolled
+            and channel.state in {"healthy", "observation", "degraded"}
             and channel.service_principal_id == COS_SERVICE_PRINCIPAL_ID
             for channel in runtime.settings.service_channel_accounts
         ):
@@ -51,14 +56,36 @@ class GmailConversationIntake:
             runtime.settings.instance.tenant_id, self.ACTIVATION_KEY
         )
         if existing is None:
-            # Updater candidate startup precedes ObservationManager construction.
-            # Never write a new schema until supported normal-operation restore.
+            # Supported restoration records activation while services are stopped.
+            # The process may start before its operation journal is archived, so
+            # a fresh provider observation also retries this missing-marker step.
+            # Never write feature history in candidate/maintenance operation.
+            if (
+                runtime.observation is None
+                or await runtime.observation.is_active()
+                or not request_actions_allowed(runtime)
+            ):
+                return
+            if activation_at is None:
+                try:
+                    acquisition = policy_from_config(runtime.settings.adapter_config)
+                except (TypeError, ValueError):
+                    return
+                if acquisition is None:
+                    return
+                authority = await runtime_live_authorization(
+                    runtime,
+                    channel="email",
+                    provider_account_id=acquisition.gmail_provider_account_id,
+                )
+                enabled_at = aware_time(authority.get("enabled_at"))
+                if not authority.get("authorized") or enabled_at is None:
+                    return
+                # Do not turn a historical activation into inbox backfill.
+                activation_at = max(self.started_at, enabled_at).isoformat()
             if (
                 activation_at is None
                 or datetime.fromisoformat(activation_at) < self.started_at
-                or runtime.observation is None
-                or await runtime.observation.is_active()
-                or not request_actions_allowed(runtime)
             ):
                 return
             now = EventEnvelope.now_utc_iso()
@@ -130,7 +157,13 @@ class GmailConversationIntake:
             return
         if event["type"] in {"cos.channels.activated", "observation.disabled"}:
             if self.activated_at is None:
-                await self.initialize(event["occurred_at"])
+                # A replayed toggle is startup recovery, not a fresh operator
+                # transition in this process; it must prove current authority.
+                await self.initialize(
+                    event["occurred_at"]
+                    if event["event_at_ms"] >= self.started_at_ms
+                    else None
+                )
             if self.activated_at is None:
                 return
             # Resume only new feature-owned inputs held by maintenance. Never
@@ -148,8 +181,6 @@ class GmailConversationIntake:
                     if instruction is not None:
                         await self._dispatch(instruction)
             return
-        if self.activated_at is None:
-            return
         member = gmail_source_member(runtime, event)
         if member is None:
             return
@@ -162,9 +193,15 @@ class GmailConversationIntake:
             )
         except ValueError:
             return
-        if received.tzinfo is None or received < self.activated_at:
+        if received.tzinfo is None:
             return
         if not 0 <= (datetime.now(timezone.utc) - received).total_seconds() <= 3600:
+            return
+        if self.activated_at is None:
+            if received < self.started_at:
+                return
+            await self.initialize()
+        if self.activated_at is None or received < self.activated_at:
             return
         account, thread = payload["provider_account_id"], payload.get("thread_id")
         native_id = payload.get("native_message_id")
