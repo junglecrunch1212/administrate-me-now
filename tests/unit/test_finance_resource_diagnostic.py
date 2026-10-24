@@ -3,6 +3,9 @@
 import asyncio
 import json
 import time
+from pathlib import Path
+
+import yaml
 
 import pytest
 
@@ -197,3 +200,27 @@ async def test_raw_retention_failure_cannot_produce_success(tmp_path, monkeypatc
             operation=lambda index: "fixture",
             output=tmp_path / "absent.jsonl",
         )
+
+
+def test_diagnostic_runner_paths_are_only_resolved_inside_steps():
+    workflow = yaml.load(
+        (
+            Path(__file__).resolve().parents[2]
+            / ".github/workflows/finance-development.yml"
+        ).read_text(),
+        Loader=yaml.BaseLoader,
+    )
+    job = workflow["jobs"]["resource-diagnostic"]
+    assert "runner." not in json.dumps(job.get("env", {}))
+    execution_steps = [
+        step
+        for step in job["steps"]
+        if "ADMINME_FINANCE_RESOURCE_SMOKE" in step.get("env", {})
+        or "ADMINME_FINANCE_RESOURCE_DIAGNOSTIC" in step.get("env", {})
+    ]
+    assert len(execution_steps) == 2
+    assert all(
+        step["env"]["FINANCE_RESOURCE_ARTIFACT_DIR"]
+        == "${{ runner.temp }}/finance-resources"
+        for step in execution_steps
+    )

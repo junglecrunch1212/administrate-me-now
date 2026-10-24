@@ -195,7 +195,6 @@ jobs:
       ADMINME_TEST_MODE: '1'
       PYTHONPATH: bridge
       PYTHONDONTWRITEBYTECODE: '1'
-      FINANCE_RESOURCE_ARTIFACT_DIR: ${{ runner.temp }}/finance-resources
       FINANCE_CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
@@ -209,6 +208,7 @@ jobs:
       - name: Validate diagnostic evidence and owned runtime cleanup
         env:
           ADMINME_FINANCE_RESOURCE_SMOKE: '1'
+          FINANCE_RESOURCE_ARTIFACT_DIR: ${{ runner.temp }}/finance-resources
         run: >-
           poetry run pytest -q
           tests/unit/test_finance_resource_diagnostic.py
@@ -216,6 +216,7 @@ jobs:
       - name: One fixed sustained and burst diagnostic (not acceptance)
         env:
           ADMINME_FINANCE_RESOURCE_DIAGNOSTIC: '1'
+          FINANCE_RESOURCE_ARTIFACT_DIR: ${{ runner.temp }}/finance-resources
         run: >-
           poetry run pytest -q -s
           'tests/acceptance/test_finance_sustained_resources.py::test_sustained_resource_diagnostic[${{ matrix.workload }}]'
