@@ -66,6 +66,7 @@ function fakeApi(
     ) {
       gateways.set(method, { handler, scope: opts?.scope });
     },
+    registerAgentToolResultMiddleware: vi.fn(),
     registerService(service: OpenClawPluginService) {
       services.push(service);
     },

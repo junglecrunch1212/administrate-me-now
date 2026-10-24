@@ -12,6 +12,7 @@ from adminme.workstation_browser import (
     BROWSER_POLICY_FILE,
     BrowserPolicy,
     browser_resource,
+    url_in_scope,
 )
 from adminme.workstation_inventory import (
     INVENTORY_FILE,
@@ -43,6 +44,26 @@ def current_resource(
     )
 
 
+def available_resources(runtime: Any, member_id: str) -> list[str]:
+    try:
+        policy = BrowserPolicy.model_validate(
+            read_private_document(
+                runtime.settings.instance.config_dir / BROWSER_POLICY_FILE
+            )
+        )
+    except (OSError, ValueError):
+        return []
+    result = []
+    for row in policy.resources:
+        try:
+            resource = authorized_resource(runtime, row.resource_id, for_read=True)
+        except (OSError, ValueError, KeyError):
+            continue
+        if member_id in resource["audience_member_ids"]:
+            result.append(row.resource_id)
+    return sorted(result)
+
+
 def coordinate(runtime: Any, resource: dict[str, Any]) -> SourceCoordinate:
     identity = resource["expected_identity"]
     return SourceCoordinate(
@@ -60,7 +81,7 @@ def coordinate(runtime: Any, resource: dict[str, Any]) -> SourceCoordinate:
         trusted_route="service_private:" + COS_SERVICE_PRINCIPAL_ID,
         protected_source_id=resource["resource_id"],
         native_container_kind="source",
-        native_container_id=digest(resource["url"]),
+        native_container_id=digest(resource["authorized_url_prefix"]),
     )
 
 
@@ -91,7 +112,7 @@ def authorized_resource(
             "device",
             "os_user",
             "browser_profile",
-            "url",
+            "authorized_url_prefix",
             "expected_identity",
             "audience_member_ids",
             "restrictions",
@@ -143,6 +164,7 @@ def observation_authority(
         return None
     if (
         current["authority_sha256"] != payload["authority_sha256"]
+        or not url_in_scope(current["authorized_url_prefix"], payload["url"])
         or event["source_account_id"] != current["expected_identity"]["account"]
         or not identity_matches(current, payload["actual_identity"])
         or payload["operating_principal_id"] != session.principal.principal_id

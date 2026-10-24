@@ -56,6 +56,7 @@ def test_browser_resource_reuses_canonical_identity_and_requires_all_site_checks
                 "native_target_id": "real-native-tab",
                 "target_evidence_reference": "operator-observation:verified-profile-tab",
                 "url": "https://work.example.invalid/planning",
+                "authorized_url_prefix": "https://work.example.invalid/",
                 "identity_probes": {
                     key: {"selector": f"#{key}"}
                     for key in ("account", "workspace", "role")

@@ -38,6 +38,7 @@ from bootstrap.contracts import (
 from bootstrap.openclaw_cron import OpenClawCronReconciler
 from bootstrap.openclaw_install import resolve_reviewed_openclaw
 from bootstrap.secrets import secret_store
+from bootstrap.workstation_browser import native_service_tools
 
 
 def activation_path(paths: DeploymentPaths) -> Path:
@@ -452,7 +453,10 @@ def _service_release_workspace(release: Path) -> dict[str, bytes] | None:
 
 
 def _prepare_service_topology(
-    gateway: dict[str, Any], paths: DeploymentPaths, files: dict[str, bytes] | None
+    gateway: dict[str, Any],
+    paths: DeploymentPaths,
+    files: dict[str, bytes] | None,
+    native_tools: list[str] | None = None,
 ) -> dict[str, Any]:
     config = copy.deepcopy(gateway)
     agents = config.get("agents", {}).get("list", [])
@@ -517,7 +521,7 @@ def _prepare_service_topology(
             {
                 "id": expected_agent,
                 "workspace": str(workspace),
-                "tools": {"allow": list(SERVICE_PRIVATE_TOOLS)},
+                "tools": {"allow": [*SERVICE_PRIVATE_TOOLS, *(native_tools or [])]},
             }
         )
     config.setdefault("agents", {})["list"] = retained
@@ -535,7 +539,10 @@ def prepare_service_topology(
     is omitted from the later compatibility comparison.
     """
     return _prepare_service_topology(
-        gateway, paths, _service_release_workspace(release)
+        gateway,
+        paths,
+        _service_release_workspace(release),
+        native_service_tools(gateway, paths, release),
     )
 
 
@@ -545,9 +552,9 @@ def reconcile_service_topology(paths: DeploymentPaths, release: Path) -> dict[st
     config_path = paths.instance_dir / "openclaw" / "runtime" / "openclaw.json"
     if config_path.is_symlink() or not config_path.is_file():
         raise RuntimeError("service topology requires the runtime configuration")
-    config = _prepare_service_topology(
-        json.loads(config_path.read_text("utf-8")), paths, files
-    )
+    previous = json.loads(config_path.read_text("utf-8"))
+    native_tools = native_service_tools(previous, paths, release)
+    config = _prepare_service_topology(previous, paths, files, native_tools)
     if files is not None:
         workspace = service_workspace_path(
             paths.instance_dir / "openclaw",
@@ -576,7 +583,9 @@ def reconcile_service_topology(paths: DeploymentPaths, release: Path) -> dict[st
     )
     return {
         "service_agent_count": int(files is not None),
-        "service_tool_count": len(SERVICE_PRIVATE_TOOLS) if files is not None else 0,
+        "service_tool_count": len(SERVICE_PRIVATE_TOOLS) + len(native_tools)
+        if files is not None
+        else 0,
         "member_authority": False,
         "provider_authority": False,
         "content_exposed": False,

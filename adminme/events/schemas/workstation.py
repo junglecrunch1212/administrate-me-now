@@ -41,6 +41,7 @@ class WorkstationSourceObservedV1(BaseModel):
     route_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     native_target_id: str = Field(min_length=1, max_length=300)
     url: str = Field(min_length=1, max_length=2000)
+    authorized_url_prefix: str = Field(min_length=1, max_length=2000)
     device: str = Field(min_length=1, max_length=300)
     os_user: str = Field(min_length=1, max_length=300)
     browser_profile: str = Field(min_length=1, max_length=300)

@@ -29,6 +29,7 @@
     { "name": "adminme-forward", "kind": "runtime-slash" }
   ],
   "contracts": {
+    "agentToolResultMiddleware": ["openclaw", "codex"],
     "serviceWorkspaceFiles": ["AGENTS.md", "IDENTITY.md"],
     "tools": [
       "administrateme_state",

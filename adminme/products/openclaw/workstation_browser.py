@@ -9,7 +9,8 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import time
-from typing import Any, cast
+from datetime import datetime, timezone
+from typing import Any, Literal, cast
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import Field
@@ -23,6 +24,7 @@ from adminme.service_identities import COS_SERVICE_PRINCIPAL_ID
 from adminme.workstation_inventory import AccountIdentity
 from adminme.workstation_sources import (
     authorized_resource,
+    available_resources,
     identity_matches,
     observation_authority,
 )
@@ -35,7 +37,21 @@ OBSERVED = "cos.workstation.source_observed"
 
 
 class BrowserReadRequest(handoff.MemberWorkRequest):
-    resource_id: str = Field(min_length=1, max_length=300)
+    resource_id: str | None = Field(default=None, min_length=1, max_length=300)
+    choice_offset: int = Field(default=0, ge=0, le=50)
+
+
+FAILURE = "tools.workstation-browser.failed"
+CAPTURE = "tools.workstation-browser.capture"
+
+
+class RetainedBrowserRequest(work.ServiceOnlyRequest):
+    source_message_event_id: str = Field(min_length=1, max_length=240)
+    browser_request_event_id: str = Field(min_length=1, max_length=240)
+
+
+class BrowserFailureRequest(work.ServiceOnlyRequest):
+    reason: Literal["native_browser_read_not_verified"]
 
 
 class BrowserCaptureRequest(work.ServiceOnlyRequest):
@@ -96,6 +112,17 @@ async def _bound(
         or (for_read and resource["route_sha256"] != payload["route_sha256"])
     ):
         raise HTTPException(403, "browser source authority changed")
+    if (
+        for_read
+        and (
+            datetime.now(timezone.utc)
+            - datetime.fromisoformat(payload["requested_at"].replace("Z", "+00:00"))
+        ).total_seconds()
+        > 600
+    ):
+        raise HTTPException(
+            409, "native browser request expired; retry the current instruction"
+        )
     if for_read and await runtime.observation.is_active():
         raise HTTPException(409, "native browser work is paused in observation mode")
     return admitted, resource, sources
@@ -111,14 +138,32 @@ async def admit(body: BrowserReadRequest, request: Request) -> dict[str, Any]:
         request, body.provenance, body.source_message_event_id
     )
     runtime = seam._runtime(request)
-    resource = _resource(runtime, body.resource_id)
+    if body.resource_id is None:
+        choices = available_resources(runtime, member.auth_member_id)
+        if len(choices) == 1 and body.choice_offset == 0:
+            resource = _resource(runtime, choices[0])
+        else:
+            page = choices[body.choice_offset : body.choice_offset + 10]
+            end = body.choice_offset + len(page)
+            return {
+                "status": "resource_choice_required" if choices else "unavailable",
+                "resource_ids": page,
+                "total": len(choices),
+                "next_offset": end if end < len(choices) else None,
+                "reason": "select_an_authorized_browser_resource"
+                if choices
+                else "no_current_browser_resource",
+                "provider_effect_count": 0,
+            }
+    else:
+        resource = _resource(runtime, body.resource_id)
     if member.auth_member_id not in resource["audience_member_ids"]:
         raise HTTPException(403, "browser source is not authorized for this requester")
     if await runtime.observation.is_active():
         raise HTTPException(409, "native browser work is paused in observation mode")
     receipt = await work.member_follow_up(
         work.MemberFollowUpRequest.model_validate(
-            body.model_dump(exclude={"run_nonce", "resource_id"})
+            body.model_dump(exclude={"run_nonce", "resource_id", "choice_offset"})
         ),
         request,
     )
@@ -235,6 +280,7 @@ async def capture(body: BrowserCaptureRequest, request: Request) -> dict[str, An
         "route_sha256": resource["route_sha256"],
         "native_target_id": body.native_target_id,
         "url": body.url,
+        "authorized_url_prefix": resource["authorized_url_prefix"],
         "device": resource["device"],
         "os_user": resource["os_user"],
         "browser_profile": resource["browser_profile"],
@@ -297,7 +343,7 @@ async def capture(body: BrowserCaptureRequest, request: Request) -> dict[str, An
         runtime,
         session,
         audit,
-        "tools.workstation-browser.capture",
+        CAPTURE,
         [observed["event_id"]],
         [*sources, authority],
     )
@@ -309,6 +355,20 @@ async def capture(body: BrowserCaptureRequest, request: Request) -> dict[str, An
         "restriction": "internal_processing_only",
         "provider_effect_count": 0,
     }
+
+
+@router.post("/failure")
+async def failure(body: BrowserFailureRequest, request: Request) -> dict[str, Any]:
+    session = work._session(request, body.provenance)
+    runtime = seam._runtime(request)
+    admitted = await _event(runtime, session, body.provenance, REQUESTED)
+    if admitted is None:
+        raise HTTPException(403, "native browser run has no authenticated request")
+    audit = body.provenance.model_copy(
+        update={"correlation_id": work._read_session_digest(body.provenance)}
+    )
+    await work._audit(runtime, session, audit, FAILURE, [admitted["event_id"]])
+    return {"status": "blocked", "reason": body.reason, "provider_effect_count": 0}
 
 
 @router.post("/result")
@@ -333,16 +393,23 @@ async def result(body: handoff.MemberResultRequest, request: Request) -> dict[st
     ):
         raise HTTPException(403, "browser run does not match the original request")
     observed = await _event(runtime, session, p, OBSERVED)
-    if observed is None:
+    proof = await handoff._receipt(runtime, session, p, CAPTURE)
+    if observed is None or proof is None:
+        failed = await handoff._receipt(runtime, session, p, FAILURE)
         return {
-            "status": "pending_or_unknown",
+            "status": "blocked" if failed else "pending_or_unknown",
+            "reason": "native_browser_read_not_verified"
+            if failed
+            else "no_terminal_read_receipt",
             "follow_up_source_id": body.follow_up_source_id,
+            "browser_request_event_id": bound[0]["event_id"],
             "provider_effect_count": 0,
         }
     authority = observation_authority(runtime, session, observed)
     member = seam._session(request, body.provenance, required_permission="read_context")
     if (
         authority is None
+        or proof["payload"]["result_event_ids"] != [observed["event_id"]]
         or member.auth_member_id not in bound[1]["audience_member_ids"]
         or observed["payload"]["audience_member_ids"] != [member.auth_member_id]
         or receipt["audience"] != [member.auth_member_id]
@@ -359,6 +426,7 @@ async def result(body: handoff.MemberResultRequest, request: Request) -> dict[st
         "status": "verified",
         "follow_up_source_id": body.follow_up_source_id,
         "work_id": receipt["task_id"],
+        "browser_request_event_id": bound[0]["event_id"],
         "observation_event_id": observed["event_id"],
         "excerpt": observed["payload"]["excerpt"],
         "truncated": observed["payload"]["truncated"],
@@ -369,3 +437,29 @@ async def result(body: handoff.MemberResultRequest, request: Request) -> dict[st
         "worker_principal_id": COS_SERVICE_PRINCIPAL_ID,
         "provider_effect_count": 0,
     }
+
+
+@router.post("/retained")
+async def retained(body: RetainedBrowserRequest, request: Request) -> dict[str, Any]:
+    member, _ = await work.current_private_instruction(
+        request, body.provenance, body.source_message_event_id
+    )
+    runtime = seam._runtime(request)
+    admitted = await runtime.event_log.get(body.browser_request_event_id)
+    if (
+        not admitted
+        or admitted["type"] != REQUESTED
+        or admitted["schema_version"] != 1
+        or admitted["tenant_id"] != member.tenant_id
+        or admitted["payload"]["requester_member_id"] != member.auth_member_id
+    ):
+        raise HTTPException(404, "requested browser work is unavailable")
+    return await result(
+        handoff.MemberResultRequest(
+            provenance=body.provenance,
+            source_message_event_id=body.source_message_event_id,
+            follow_up_source_id=admitted["payload"]["instruction_source_event_id"],
+            run_nonce=admitted["payload"]["request_id"],
+        ),
+        request,
+    )

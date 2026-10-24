@@ -6,6 +6,7 @@ import { registerDashboard } from "./dashboard.js";
 import { registerHooks } from "./hooks.js";
 import { registerService } from "./service.js";
 import { registerTools } from "./tools.js";
+import { registerWorkstationBrowserHooks } from "./workstation-browser-hooks.js";
 import { registerWorkstationInventory } from "./workstation.js";
 import { registerWorkstationWorkTool, registerWorkstationWorkHooks } from "./workstation-work.js";
 import { registerMemberWorkTool } from "./member-work.js";
@@ -53,6 +54,7 @@ export default definePluginEntry({
     registerHooks(api, runtime);
     registerConversationInput(api, runtime);
     registerWorkstationWorkHooks(api, runtime);
+    registerWorkstationBrowserHooks(api, runtime);
     registerService(api, runtime);
     runtime.cosApprovals = registerCosApprovalRelay(api, runtime);
     registerCosPermissionPreflight(api, runtime);

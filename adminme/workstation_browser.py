@@ -27,6 +27,23 @@ class IdentityProbe(StrictRecord):
     extraction: Literal["exact", "email"] = "exact"
 
 
+def url_in_scope(prefix: str, url: str) -> bool:
+    scope, actual = urlsplit(prefix), urlsplit(url)
+    if (
+        scope.scheme != "https"
+        or not scope.hostname
+        or scope.username
+        or scope.password
+        or scope.query
+        or scope.fragment
+        or scope.port not in {None, 443}
+        or (scope.scheme, scope.netloc) != (actual.scheme, actual.netloc)
+    ):
+        return False
+    root = scope.path.rstrip("/")
+    return not root or actual.path == root or actual.path.startswith(root + "/")
+
+
 class BrowserResource(StrictRecord):
     resource_id: Text
     inventory_binding_id: Text
@@ -37,6 +54,7 @@ class BrowserResource(StrictRecord):
     target_evidence_reference: Text
     # Exact URLs keep this first read slice bounded; no query/token wildcards.
     url: Annotated[str, Field(min_length=1, max_length=2000)]
+    authorized_url_prefix: Annotated[str, Field(min_length=1, max_length=2000)]
     identity_probes: dict[Literal["account", "workspace", "role"], IdentityProbe]
     audience_member_ids: list[Text] = Field(min_length=1, max_length=20)
     restrictions: list[Text] = Field(default_factory=list, max_length=20)
@@ -55,6 +73,10 @@ class BrowserResource(StrictRecord):
         ):
             raise ValueError(
                 "browser resource needs an exact HTTPS URL without credentials or query"
+            )
+        if not url_in_scope(self.authorized_url_prefix, self.url):
+            raise ValueError(
+                "the exact tab URL must remain in its authorized resource prefix"
             )
         if "account" not in self.identity_probes:
             raise ValueError("the destination account needs its own probe")
@@ -137,6 +159,7 @@ def browser_resource(
         "os_user": binding.route.os_user,
         "browser_profile": binding.route.browser_profile,
         "url": resource.url,
+        "authorized_url_prefix": resource.authorized_url_prefix,
         "expected_identity": expected,
         "identity_probes": {
             key: value.model_dump() for key, value in resource.identity_probes.items()

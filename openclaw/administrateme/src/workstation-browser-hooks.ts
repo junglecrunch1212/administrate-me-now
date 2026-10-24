@@ -16,6 +16,11 @@ export function registerWorkstationBrowserHooks(api: OpenClawPluginApi, runtime:
   const provenance = (context: Record<string, unknown>) => provenanceFromServiceTool(context as OpenClawPluginToolContext,
     runtime.transport.config.sharedSecretEnv, runtime.transport.config.serviceWorkEnabled);
   const policy = (context: Record<string, unknown>) => runtime.transport.request<WorkerPolicy>(`${BASE}/policy`, { provenance: provenance(context) });
+  const failed = async (context: Record<string, unknown>) => {
+    if (!service(context)) return;
+    try { await runtime.transport.request(`${BASE}/failure`, { provenance: provenance(context), reason: "native_browser_read_not_verified" }); }
+    catch { /* Lost failure receipts remain unknown, never a false success. */ }
+  };
   const native = { currentConfig: () => api.runtime.config.current() };
   const key = (context: Record<string, unknown>, call: unknown) => {
     if (typeof context.sessionKey !== "string" || typeof call !== "string" || !call) throw new Error("Native tool call binding is unavailable.");
@@ -44,6 +49,7 @@ export function registerWorkstationBrowserHooks(api: OpenClawPluginApi, runtime:
       pending.set(id, { prepared, route: current.resource.route_sha256, started: Date.now() });
       return { params: prepared.params };
     } catch {
+      if (event.toolName === "browser") await failed(context);
       return { block: true, blockReason: "A current authenticated browser request, verified CoS tab and source policy are required." };
     }
   }, { priority: 100 });
@@ -68,6 +74,7 @@ export function registerWorkstationBrowserHooks(api: OpenClawPluginApi, runtime:
     } catch {
       // The original result is never returned after capture, policy or identity
       // failure. The host's middleware runner also withholds on thrown failures.
+      await failed(context);
       api.logger.warn("Native browser read was withheld because its source evidence could not be verified.");
       return { result: toolResult({ status: "blocked", reason: "browser_source_not_verified", provider_effect_count: 0 }) };
     }

@@ -58,6 +58,7 @@ def test_verified_tab_refresh_uses_current_revision_and_can_revoke_without_evide
                 "native_target_id": "actual-native-target",
                 "target_evidence_reference": "operator-observation:profile-and-tab",
                 "url": "https://work.example.invalid/planning",
+                "authorized_url_prefix": "https://work.example.invalid/",
                 "identity_probes": {
                     key: {"selector": f"#{key}"}
                     for key in ("account", "workspace", "role")
@@ -85,3 +86,71 @@ def test_verified_tab_refresh_uses_current_revision_and_can_revoke_without_evide
     config.chmod(0o755)
     with pytest.raises(ValueError, match="private"):
         provision(config, {**policy, "revision": 4}, expected_revision=3)
+
+
+def test_native_patch_uses_hash_guard_and_only_browser_and_existing_cos_agent(tmp_path):
+    from adminme.openclaw_topology import SERVICE_PRIVATE_TOOLS, service_agent_id
+    from adminme.service_identities import COS_SERVICE_PRINCIPAL_ID
+    from bootstrap.contracts import DeploymentPaths
+    from bootstrap.workstation_browser import native_service_tools, prepare_native_patch
+    from adminme.workstation_browser import prepare_browser_gateway
+
+    paths = DeploymentPaths.from_root(tmp_path)
+    directory = paths.instance_dir / "config"
+    directory.mkdir(parents=True, mode=0o700)
+    private_file(directory / INVENTORY_FILE, document(datetime.now(timezone.utc)))
+    resource = {
+        "resource_id": "planning",
+        "inventory_binding_id": "cos-browser",
+        "inventory_binding_revision": 1,
+        "native_target_id": "observed-tab",
+        "target_evidence_reference": "fixture:profile-tab",
+        "url": "https://work.example.invalid/planning",
+        "authorized_url_prefix": "https://work.example.invalid/",
+        "identity_probes": {
+            key: {"selector": f"#{key}"} for key in ("account", "workspace", "role")
+        },
+        "audience_member_ids": ["member-a"],
+    }
+    private_file(
+        directory / BROWSER_POLICY_FILE,
+        {"revision": 1, "enabled": True, "resources": [resource]},
+    )
+    release = tmp_path / "release"
+    manifest = release / "openclaw" / "administrateme" / "openclaw.plugin.json"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(
+        json.dumps({"contracts": {"agentToolResultMiddleware": ["openclaw", "codex"]}})
+    )
+    agent = service_agent_id(COS_SERVICE_PRINCIPAL_ID)
+    original = {
+        "plugins": {"entries": {"administrateme": {"enabled": True}}},
+        "agents": {
+            "list": [
+                {"id": agent, "tools": {"allow": list(SERVICE_PRIVATE_TOOLS)}},
+                {"id": "member-agent", "tools": {"allow": ["administrateme_state"]}},
+            ]
+        },
+        "gateway": {"auth": {"token": "synthetic-secret-never-in-patch"}},
+    }
+    snapshot = {"valid": True, "hash": "a" * 64, "config": original}
+    params = prepare_native_patch(snapshot, paths, release)
+    patch = json.loads(params["raw"])
+    assert params["baseHash"] == snapshot["hash"]
+    assert patch["agents"]["list"] == [
+        {"id": agent, "tools": {"allow": [*SERVICE_PRIVATE_TOOLS, "browser"]}}
+    ]
+    assert "synthetic-secret" not in json.dumps(params)
+    assert patch["browser"]["allowSystemProfileImport"] is False
+    assert "browser" not in original
+    assert json.loads(
+        prepare_native_patch(snapshot, paths, release, disable=True)["raw"]
+    ) == {"browser": {"enabled": False}}
+    with pytest.raises(ValueError, match="snapshot"):
+        prepare_native_patch({**snapshot, "hash": ""}, paths, release)
+    prepared = prepare_browser_gateway(original)
+    prepared["plugins"]["entries"]["administrateme"]["enabled"] = False
+    assert native_service_tools(prepared, paths, release) == []
+    manifest.write_text(json.dumps({"contracts": {}}))
+    with pytest.raises(ValueError, match="deployed release"):
+        prepare_native_patch(snapshot, paths, release)
