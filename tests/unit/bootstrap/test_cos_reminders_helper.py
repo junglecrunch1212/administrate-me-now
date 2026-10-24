@@ -315,7 +315,7 @@ async def test_actual_helper_client_adapter_persists_facts_then_denial_preserves
     adapter._device_identity = lambda: ("a" * 64, os.getuid())
     adapter._reader_factory = client.HelperRemindersReader
     try:
-        await adapter.start(ctx=ctx)
+        await acquisition._start(adapter, ctx, log)
         facts = await acquisition._facts(log)
         assert [row["type"] for row in facts] == ["list.created", "list_item.added"]
         assert facts[-1]["payload"]["member_id"] is None
