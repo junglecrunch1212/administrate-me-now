@@ -9,7 +9,7 @@ const agent = "adminme-0123456789abcdef";
 const account = "fixture-member-work";
 const actor = "+12025550101"; // fixture:tenant_data:ok
 const session = `agent:${agent}:imessage:${account}:direct:${actor}`;
-const text = "Please prepare a private briefing for our weekend discussion.";
+const text = "Keep a private follow-up to prepare a private briefing for our weekend discussion.";
 const toolName = "administrateme_service_follow_up";
 function fixture(enabled = true) {
   const hooks = new Map<string, (...args: any[]) => any>();

@@ -37,8 +37,8 @@ export default definePluginEntry({
     registerDashboard(api, runtime);
     if (registrationMode === "discovery") return;
     registerTools(api, runtime);
-    registerSelfReminderTools(api, runtime);
     registerMemberWorkTool(api, runtime);
+    registerSelfReminderTools(api, runtime);
     registerServicePrivateTools(api, runtime);
     if (registrationMode === "tool-discovery") return;
     registerServiceWorkGateway(api, runtime);

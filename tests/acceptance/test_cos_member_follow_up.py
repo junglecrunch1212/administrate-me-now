@@ -31,7 +31,9 @@ from tests.acceptance.test_cos_response_execution import (
 
 ENDPOINT = "/api/openclaw/v1/tools/service-follow-up"
 PRIVATE = "/api/openclaw/v1/tools/service-private-state"
-INSTRUCTION = "Please prepare a private briefing for our weekend discussion."
+INSTRUCTION = (
+    "Keep a private follow-up to prepare a private briefing for our weekend discussion."
+)
 
 
 def _grant(client: TestClient, *, other: bool = False, create: bool = False) -> str:
@@ -118,7 +120,7 @@ def test_member_instruction_private_work_receipt_replay_and_service_continuation
         )
         assert private.status_code == 200, private.text
         work = private.json()["work"][0]
-        assert work["description"] == INSTRUCTION
+        assert work["notes"] == INSTRUCTION
         assert (
             work["source_authorities"][0]["source_event_id"]
             == source["source_message_event_id"]
