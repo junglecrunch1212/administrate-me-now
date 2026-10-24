@@ -19,16 +19,9 @@ import pytest
 import uvicorn
 from websockets.asyncio.client import connect
 
-from adminme.finance.importer import import_publication
-from adminme.finance.publication import content_hash
-from adminme.lib.session import build_internal_session
 from adminme.runtime.application import create_application
-from tests.acceptance.test_finance_disclosure import enabled_settings
-from tests.acceptance.test_finance_publications import publication
 from tests.acceptance.test_openclaw_native_seam import PRINCIPAL
-from adminme.finance.planning_store import import_projection
 from tests.fixtures.finance_planning import (
-    projection,
     with_boundary_windows,
     with_unavailable_openings,
     with_conservative_minima,
@@ -37,35 +30,31 @@ from tests.fixtures.finance_planning import (
 
 
 def _serve_choices(root, listener, ready):
-    app = create_application(enabled_settings(root))
+    from tests.acceptance.test_finance_activation import configured, fixture
+    from tests.fixtures.finance_activation import activate
+
+    app = create_application(configured(root))
     original = app.router.lifespan_context
 
     @asynccontextmanager
     async def lifespan(application):
         async with original(application):
             runtime = application.state.runtime
-            value = publication(runtime.settings.instance.tenant_id)
-            value["owner_id"] = PRINCIPAL
-            for report in value["reports"]:
-                for metric in report["metrics"]:
-                    metric["owner_id"] = PRINCIPAL
-            value["content_sha256"] = content_hash(value)
-            await import_publication(
-                runtime,
-                build_internal_session(PRINCIPAL, "principal", value["tenant_id"]),
+            value, planned, package = fixture(runtime.settings.instance.tenant_id)
+            planned = with_grouped_issues(
+                with_conservative_minima(
+                    with_unavailable_openings(with_boundary_windows(planned))
+                )
+            )
+            manifest, packet = await activate(
+                application,
+                {"Tailscale-User-Login": "fixture-principal.ts.net"},
                 value,
+                planned,
+                package,
             )
-            await import_projection(
-                runtime,
-                build_internal_session(PRINCIPAL, "principal", value["tenant_id"]),
-                with_grouped_issues(
-                    with_conservative_minima(
-                        with_unavailable_openings(
-                            with_boundary_windows(projection(value, 24))
-                        )
-                    )
-                ),
-            )
+            (root / "reviewed-manifest.json").write_text(json.dumps(manifest))
+            (root / "closed-package.json").write_text(json.dumps(packet))
             ready.send(True)
             ready.close()
             yield
@@ -490,6 +479,80 @@ async def test_owner_saves_goal_and_preference_then_reloads(tmp_path):
             )
             assert await evaluate(
                 "!document.querySelector('.finance-metadata-settings [name=owner_metadata]').checked && document.querySelector('.finance-metadata-result').textContent === ''"
+            )
+            await wait_for(
+                "document.querySelector('.finance-access-settings')?.textContent.includes('Books dashboard enabled.')"
+            )
+            await evaluate("""(() => {
+              const card = document.querySelector('.finance-access-settings');
+              card.querySelector('[name=books_enabled]').checked = false;
+              card.querySelector('[name=cos_analysis_enabled]').checked = false;
+              card.querySelector('form').requestSubmit();
+            })()""")
+            await wait_for(
+                "document.querySelector('.finance-access-settings')?.textContent.includes('Books access saved.')"
+            )
+            await call("Page.reload")
+            await wait_for(
+                "document.querySelector('.finance-access-settings')?.textContent.includes('Books dashboard and Finance analysis are disabled.')"
+            )
+            await evaluate("""(() => {
+              const card = document.querySelector('.finance-access-settings');
+              card.querySelector('[name=books_enabled]').checked = true;
+              card.querySelector('[name=books_enabled]').dispatchEvent(new Event('change'));
+              card.querySelector('[name=cos_analysis_enabled]').checked = true;
+              card.querySelector('form').requestSubmit();
+            })()""")
+            await wait_for(
+                "document.querySelector('.finance-access-settings')?.textContent.includes('Books access saved.')"
+            )
+            await evaluate(
+                "Array.from(document.querySelectorAll('.finance-access-settings details')).at(-1).open=true"
+            )
+
+            async def file_input(index, path):
+                document = await call("DOM.getDocument")
+                selected = await call(
+                    "DOM.querySelectorAll",
+                    {
+                        "nodeId": document["root"]["nodeId"],
+                        "selector": ".finance-access-settings input[type=file]",
+                    },
+                )
+                await call(
+                    "DOM.setFileInputFiles",
+                    {"nodeId": selected["nodeIds"][index], "files": [str(path)]},
+                )
+
+            await file_input(0, tmp_path / "instance" / "reviewed-manifest.json")
+            await wait_for(
+                "document.querySelector('.finance-access-settings pre').textContent.includes('independently_reviewed_evidence')"
+            )
+            await evaluate("""(() => {
+              const card = document.querySelector('.finance-access-settings');
+              const review = Array.from(card.querySelectorAll('input[type=checkbox]')).at(-1);
+              review.checked = true; review.dispatchEvent(new Event('change'));
+              Array.from(card.querySelectorAll('button')).find(b=>b.textContent==='Approve this manifest for 30 minutes').click();
+            })()""")
+            await wait_for(
+                "document.querySelector('.finance-access-settings').textContent.includes('This exact manifest is approved until')"
+            )
+            await file_input(1, tmp_path / "instance" / "closed-package.json")
+            await evaluate(
+                "Array.from(document.querySelectorAll('.finance-access-settings button')).find(b=>b.textContent==='Import exact approved snapshot').click()"
+            )
+            await wait_for(
+                "document.querySelector('.finance-access-settings').textContent.includes('Approved snapshot accepted.')"
+            )
+            assert await evaluate(
+                "document.querySelector('.finance-access-settings').textContent.includes('\"idempotent\": true')"
+            )
+            await evaluate(
+                "document.querySelector('.finance-access-settings').scrollIntoView({block:'start'})"
+            )
+            activation_shot = await call("Page.captureScreenshot", {"format": "png"})
+            (output / "finance-activation-synthetic.png").write_bytes(
+                base64.b64decode(activation_shot["data"])
             )
     finally:
         receive.close()

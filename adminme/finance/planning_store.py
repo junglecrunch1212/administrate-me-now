@@ -7,6 +7,7 @@ credentials, public ingestion endpoint or authority to accept accounting rows.
 from __future__ import annotations
 
 import asyncio
+from adminme.finance.import_work import run_cpu
 import hashlib
 import json
 from datetime import date, datetime, timedelta, timezone
@@ -248,7 +249,7 @@ async def import_projection(
     if lock.locked():
         raise PublicationError("projection_ingress_busy")
     async with lock:
-        p = await asyncio.to_thread(validate_projection, value)
+        p = await run_cpu(validate_projection, value)
         if (
             p["tenant_id"] != session.tenant_id
             or p["owner_id"] != session.auth_member_id

@@ -647,7 +647,7 @@ def _accepted_books_snapshot(
 ) -> dict[str, Any]:
     """Bounded exact published metrics; never map arbitrary IDs onto legacy totals."""
     try:
-        status = publication_status(conn, session, book_id=book_id)
+        status = publication_status(conn, session, book_id)
         if "publication_id" not in status:
             return status
         reports = [

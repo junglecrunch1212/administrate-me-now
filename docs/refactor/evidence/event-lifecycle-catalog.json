@@ -3862,8 +3862,8 @@
     "missing_source_candidate_cells": [],
     "object_lifecycles": 28,
     "source_candidate_cells": 143,
-    "technical_event_schemas": 394,
-    "technical_event_types": 312,
+    "technical_event_schemas": 397,
+    "technical_event_types": 315,
     "uncataloged_event_types": [],
     "unproved_exact_lifecycle_transitions": [],
     "unproved_supported_source_candidate_cells": []
@@ -17042,6 +17042,19 @@
           "title": "Authority Sha256",
           "type": "string"
         },
+        "book_binding_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Book Binding Sha256"
+        },
         "book_id": {
           "anyOf": [
             {
@@ -17546,6 +17559,85 @@
         "goal_id",
         "name",
         "target_minor"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "finance.import_result",
+      "family": "finance",
+      "properties": {
+        "approval_event_id": {
+          "maxLength": 160,
+          "minLength": 1,
+          "title": "Approval Event Id",
+          "type": "string"
+        },
+        "outcome": {
+          "enum": [
+            "accepted",
+            "rejected",
+            "incomplete"
+          ],
+          "title": "Outcome",
+          "type": "string"
+        },
+        "owner_id": {
+          "maxLength": 160,
+          "minLength": 1,
+          "title": "Owner Id",
+          "type": "string"
+        },
+        "policy_revision": {
+          "minimum": 1,
+          "title": "Policy Revision",
+          "type": "integer"
+        },
+        "projection_event_id": {
+          "anyOf": [
+            {
+              "maxLength": 160,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Projection Event Id"
+        },
+        "provider_effects": {
+          "const": false,
+          "default": false,
+          "title": "Provider Effects",
+          "type": "boolean"
+        },
+        "publication_event_id": {
+          "anyOf": [
+            {
+              "maxLength": 160,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Publication Event Id"
+        },
+        "reason": {
+          "maxLength": 100,
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        }
+      },
+      "required": [
+        "owner_id",
+        "approval_event_id",
+        "policy_revision",
+        "outcome",
+        "reason"
       ],
       "schema_version": 1
     },
@@ -35966,6 +36058,126 @@
         "entries",
         "changed_by_member_id",
         "changed_at"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "settings.finance_access_changed",
+      "family": "settings",
+      "properties": {
+        "binding": {
+          "$ref": "#/$defs/FinanceBookBinding"
+        },
+        "books_enabled": {
+          "title": "Books Enabled",
+          "type": "boolean"
+        },
+        "changed_by_member_id": {
+          "maxLength": 160,
+          "minLength": 1,
+          "title": "Changed By Member Id",
+          "type": "string"
+        },
+        "cos_analysis_enabled": {
+          "title": "Cos Analysis Enabled",
+          "type": "boolean"
+        },
+        "owner_id": {
+          "maxLength": 160,
+          "minLength": 1,
+          "title": "Owner Id",
+          "type": "string"
+        },
+        "prior_event_id": {
+          "anyOf": [
+            {
+              "maxLength": 160,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Prior Event Id"
+        },
+        "provider_effects": {
+          "const": false,
+          "default": false,
+          "title": "Provider Effects",
+          "type": "boolean"
+        },
+        "revision": {
+          "minimum": 1,
+          "title": "Revision",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "owner_id",
+        "changed_by_member_id",
+        "revision",
+        "binding",
+        "books_enabled",
+        "cos_analysis_enabled"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "settings.finance_import_approved",
+      "family": "settings",
+      "properties": {
+        "approved_at": {
+          "title": "Approved At",
+          "type": "string"
+        },
+        "changed_by_member_id": {
+          "maxLength": 160,
+          "minLength": 1,
+          "title": "Changed By Member Id",
+          "type": "string"
+        },
+        "expires_at": {
+          "title": "Expires At",
+          "type": "string"
+        },
+        "manifest": {
+          "$ref": "#/$defs/FinanceImportManifest"
+        },
+        "owner_id": {
+          "maxLength": 160,
+          "minLength": 1,
+          "title": "Owner Id",
+          "type": "string"
+        },
+        "policy_event_id": {
+          "maxLength": 160,
+          "minLength": 1,
+          "title": "Policy Event Id",
+          "type": "string"
+        },
+        "policy_revision": {
+          "minimum": 1,
+          "title": "Policy Revision",
+          "type": "integer"
+        },
+        "provider_effects": {
+          "const": false,
+          "default": false,
+          "title": "Provider Effects",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "owner_id",
+        "changed_by_member_id",
+        "policy_revision",
+        "policy_event_id",
+        "manifest",
+        "approved_at",
+        "expires_at"
       ],
       "schema_version": 1
     },

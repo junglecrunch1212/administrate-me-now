@@ -1407,7 +1407,7 @@ async function run() {
         await principal.page.reload({ waitUntil: "networkidle" });
         record("Finance view survives URL reload", await principal.page.getByRole("button", { name: "Spending", exact: true }).getAttribute("aria-pressed") === "true", principal.page.url());
         await principal.page.getByRole("button", { name: "Data health", exact: true }).click();
-        record("Finance data health exposes source and workbook truth", (await principal.page.locator(".finance-health").textContent()).includes("Latest source") && (await principal.page.locator(".finance-health").textContent()).includes("Plaid owns provider facts"), await principal.page.locator(".finance-health").textContent());
+        record("Finance data health exposes source and workbook truth", (await principal.page.locator(".finance-health").textContent()).includes("Latest source") && (await principal.page.locator(".finance-health").textContent()).includes("Provider observations alone do not release reports"), await principal.page.locator(".finance-health").textContent());
         await screenshot(principal.page, "surface-finance-health-desktop.png");
       } else if (surface === "scoreboard") {
         const scoreboardText = await principal.page.locator("#surface").textContent();

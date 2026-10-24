@@ -7,6 +7,7 @@ idempotency enforces compare-and-swap even across an ambiguous timeout/restart.
 
 from __future__ import annotations
 import asyncio
+from adminme.finance.import_work import run_cpu
 import hashlib
 import json
 from datetime import datetime, timedelta, timezone
@@ -45,8 +46,6 @@ async def _settled(runtime: Any) -> None:
 def require_import_owner(runtime: Any, session: Session) -> None:
     from adminme.finance.access_control import books_enabled
 
-    if not books_enabled(runtime, session):
-        raise PublicationError("publication_ingress_disabled")
     if (
         session.auth_role != "principal"
         or session.is_view_as
@@ -55,6 +54,8 @@ def require_import_owner(runtime: Any, session: Session) -> None:
         or runtime.settings.member_roles.get(session.auth_member_id) != "principal"
     ):
         raise PublicationError("publication_owner_authority_required")
+    if not books_enabled(runtime, session):
+        raise PublicationError("publication_ingress_disabled")
 
 
 async def import_publication(
@@ -76,7 +77,7 @@ async def import_publication(
         raise PublicationError("publication_ingress_busy")
     async with lock:
         # Only one bounded validation may enter the shared executor at a time.
-        p = await asyncio.to_thread(validate_publication, value)
+        p = await run_cpu(validate_publication, value)
         if (
             p["tenant_id"] != session.tenant_id
             or p["owner_id"] != session.auth_member_id
@@ -86,9 +87,16 @@ async def import_publication(
             timezone.utc
         ) + timedelta(minutes=5):
             raise PublicationError("publication_future_clock")
-        from adminme.finance.access_control import require_publication_binding
+        from adminme.finance.access_control import (
+            require_publication_binding,
+            policy_for_session,
+        )
 
         require_publication_binding(runtime, session, p)
+        if policy_for_session(
+            runtime, session
+        ).binding is not None and not namespace_root(p):
+            raise PublicationError("provenance_closed_package_required")
         event_key = _key(p)
         existing = await runtime.event_log.get_by_idempotency(
             session.tenant_id, event_key
@@ -140,7 +148,7 @@ async def import_publication(
                 if prior_publication
                 else None
             )
-            await asyncio.to_thread(verify_package, p, provenance_package, prior_proof)
+            await run_cpu(verify_package, p, provenance_package, prior_proof)
             require_import_owner(runtime, session)
             await archive_package(runtime, session, p, provenance_package)
             await _settled(runtime)

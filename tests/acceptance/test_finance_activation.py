@@ -179,6 +179,7 @@ def test_persisted_activation_import_disclosure_restart_and_disable(tmp_path):
             book_id=p["book_id"],
             publication_id=p["publication_id"],
             report_id="scenarios",
+            limit=1,
         )
         assert query.status_code == 200, query.text
         assert "12500" in query.text
@@ -236,6 +237,7 @@ def test_persisted_activation_import_disclosure_restart_and_disable(tmp_path):
                 book_id=p["book_id"],
                 publication_id=p["publication_id"],
                 report_id="scenarios",
+                limit=1,
             ).json()["state"]
             == "permission_required"
         )
@@ -273,10 +275,8 @@ def test_exact_binding_owner_and_independent_approval_required(tmp_path):
             ]
             == []
         )
-        assert (
-            _post(client, "status", "domain-without-grant").json()["state"]
-            == "permission_required"
-        )
+        no_grant = _post(client, "status", "domain-without-grant")
+        assert no_grant.status_code == 403, no_grant.text
         approval = approve(client, manifest)
         assert upload(client, approval, packet, headers=OTHER_HEADERS).status_code in {
             403,
@@ -291,6 +291,7 @@ def test_exact_binding_owner_and_independent_approval_required(tmp_path):
             book_id="unapproved-book",
             publication_id=p["publication_id"],
             report_id="scenarios",
+            limit=1,
         )
         assert "12500" not in denied.text
         assert client.get(
@@ -317,11 +318,15 @@ def test_exact_binding_owner_and_independent_approval_required(tmp_path):
 
 
 @pytest.mark.parametrize(
-    "mutation", ["hash", "extra_blob", "oversize", "duplicate_key", "unreviewed"]
+    "mutation",
+    ["hash", "extra_blob", "oversize", "duplicate_key", "unreviewed", "wrong_owner"],
 )
 def test_closed_upload_rejection_advances_no_head(tmp_path, mutation):
     settings = configured(tmp_path)
-    p, d, package = fixture(settings.instance.tenant_id)
+    p, d, package = fixture(
+        settings.instance.tenant_id,
+        owner=OTHER if mutation == "wrong_owner" else PRINCIPAL,
+    )
     manifest, packet = packet_for(p, d, package)
     with TestClient(create_application(settings)) as client:
         control(client, manifest["binding"])
@@ -406,6 +411,8 @@ def test_revocation_after_retrieval_before_disclosure_blocks_result(
         control(client, manifest["binding"], cos=True)
         assert upload(client, approve(client, manifest), packet).status_code == 200
         _grant_cos(client, "final-disclosure-grant")
+        seeded = _post(client, "status", "before-final-revocation")
+        assert seeded.status_code == 200 and "answer_ref" in seeded.json(), seeded.text
         original = main._record_tool_call
 
         async def revoke_during_audit(request, session, provenance, **kwargs):
@@ -444,6 +451,7 @@ def test_revocation_after_retrieval_before_disclosure_blocks_result(
             book_id=p["book_id"],
             publication_id=p["publication_id"],
             report_id="scenarios",
+            limit=1,
         )
         assert result.status_code == 403, result.text
         assert "12500" not in result.text
@@ -488,7 +496,7 @@ def test_one_owner_control_failure_does_not_abort_runtime(
         assert client.get(CONTROL, headers=OTHER_HEADERS).status_code == 200
         assert (
             client.get(
-                "/api/member/v1/surfaces/tasks", headers=DEMO_HEADERS
+                "/api/member/v1/surfaces/reminders", headers=DEMO_HEADERS
             ).status_code
             == 200
         )
@@ -498,8 +506,9 @@ def test_one_owner_control_failure_does_not_abort_runtime(
             )
 
 
+@pytest.mark.parametrize("interruption", ["cancel", "timeout"])
 def test_cancelled_decoder_keeps_admission_until_settled_and_never_imports(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, interruption
 ):
     from adminme.products.member import finance_import
 
@@ -512,6 +521,8 @@ def test_cancelled_decoder_keeps_admission_until_settled_and_never_imports(
         release = threading.Event()
         held_buffers = []
         original = finance_import.decode_package
+        if interruption == "timeout":
+            monkeypatch.setattr(finance_import, "DECODE_SECONDS", 0.01)
 
         async def scenario():
             started = asyncio.Event()
@@ -533,10 +544,13 @@ def test_cancelled_decoder_keeps_admission_until_settled_and_never_imports(
                 )
                 try:
                     await asyncio.wait_for(started.wait(), 5)
-                    first.cancel()
-                    await asyncio.sleep(0)
-                    first.cancel()
-                    await asyncio.sleep(0)
+                    if interruption == "cancel":
+                        first.cancel()
+                        await asyncio.sleep(0)
+                        first.cancel()
+                        await asyncio.sleep(0)
+                    else:
+                        await asyncio.sleep(0.05)
                     assert not first.done()
                     second = await http.post(
                         IMPORTS + approval, headers=DEMO_HEADERS, json=packet
@@ -552,8 +566,12 @@ def test_cancelled_decoder_keeps_admission_until_settled_and_never_imports(
                     ).status_code == 200
                 finally:
                     release.set()
-                    with pytest.raises(asyncio.CancelledError):
-                        await first
+                    if interruption == "cancel":
+                        with pytest.raises(asyncio.CancelledError):
+                            await first
+                    else:
+                        response = await first
+                        assert response.status_code == 422, response.text
                 assert len(held_buffers[0]) == 0
                 assert not client.app.state.runtime.settings_command_locks[
                     "finance-closed-package-import"
@@ -564,4 +582,80 @@ def test_cancelled_decoder_keeps_admission_until_settled_and_never_imports(
             events,
             client.app.state.runtime,
             ["finance.publication_accepted", "finance.projection_verified"],
+        )
+
+
+def test_controls_preserve_chosen_baseline_and_shared_legacy_processing(tmp_path):
+    from adminme.projections.xlsx_workbooks import FINANCE_WORKBOOK_NAME
+    from tests.acceptance.test_finance_choices import goal
+
+    settings = configured(tmp_path)
+    p, d, package = fixture(settings.instance.tenant_id)
+    manifest, packet = packet_for(p, d, package)
+    with TestClient(create_application(settings)) as client:
+        runtime = client.app.state.runtime
+        daemon = runtime.xlsx_reverse
+        client.portal.call(daemon.stop)
+        other_before = client.get(SURFACE, headers=OTHER_HEADERS).json()["cockpit"]
+        control(client, manifest["binding"])
+        assert upload(client, approve(client, manifest), packet).status_code == 200
+        saved = client.post(
+            "/api/member/v1/finance/choices/goals/chosen-reserve",
+            headers=DEMO_HEADERS,
+            json=goal(p),
+        )
+        assert saved.status_code == 200, saved.text
+        chosen = client.get(
+            "/api/member/v1/finance/choices", headers=DEMO_HEADERS
+        ).json()["items"]
+        control(client, manifest["binding"], cos=True)
+        control(client, manifest["binding"], books=False)
+        control(client, manifest["binding"])
+        assert upload(client, approve(client, manifest), packet).status_code == 200
+        assert (
+            client.get("/api/member/v1/finance/choices", headers=DEMO_HEADERS).json()[
+                "items"
+            ]
+            == chosen
+        )
+        # The actual shared workbook cycle remains active after private consent.
+        client.portal.call(daemon.run_cycle_now, FINANCE_WORKBOOK_NAME)
+        reverse = client.portal.call(events, runtime, ["xlsx.reverse_projected"])
+        assert any(
+            e["payload"]["workbook_name"] == FINANCE_WORKBOOK_NAME for e in reverse
+        )
+        other_after = client.get(SURFACE, headers=OTHER_HEADERS).json()["cockpit"]
+        assert other_after["scenarios"] == other_before["scenarios"]
+        assert other_after["summary"] == other_before["summary"]
+        assert p["publication_id"] not in json.dumps(other_after)
+
+
+@pytest.mark.parametrize("change", ["expiry", "control_revision"])
+def test_import_approval_expiry_and_revision_are_not_reusable(
+    tmp_path, monkeypatch, change
+):
+    from datetime import datetime, timedelta, timezone
+    from adminme.products.member import finance_import
+
+    settings = configured(tmp_path)
+    p, d, package = fixture(settings.instance.tenant_id)
+    manifest, packet = packet_for(p, d, package)
+    with TestClient(create_application(settings)) as client:
+        control(client, manifest["binding"])
+        approval = approve(client, manifest)
+        if change == "expiry":
+            later = datetime.now(timezone.utc) + timedelta(minutes=31)
+
+            class Later(datetime):
+                @classmethod
+                def now(cls, tz=None):
+                    return later
+
+            monkeypatch.setattr(finance_import, "datetime", Later)
+        else:
+            control(client, manifest["binding"], books=False)
+            control(client, manifest["binding"])
+        assert upload(client, approval, packet).status_code in {403, 409}
+        assert not client.portal.call(
+            events, client.app.state.runtime, ["finance.publication_accepted"]
         )

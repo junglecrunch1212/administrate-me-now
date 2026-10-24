@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import datetime, timedelta, timezone
 from typing import Annotated, Any
-from contextlib import suppress
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -18,6 +18,7 @@ from adminme.events.schemas.finance_import import (
 from adminme.finance.access_control import control_lock, policy_for_session
 from adminme.finance.closed_import import decode_package
 from adminme.finance.importer import import_publication
+from adminme.finance.import_work import await_settled, run_cpu
 from adminme.finance.planning_store import import_projection
 from adminme.finance.publication import PublicationError
 from adminme.lib.session import Session
@@ -33,6 +34,7 @@ from adminme.products.member.main import (
 router = APIRouter(tags=["member-finance-import"])
 SessionDep = Annotated[Session, Depends(session_from_request)]
 APPROVAL_EVENT = "settings.finance_import_approved"
+DECODE_SECONDS = 30
 
 
 class ImportApprovalRequest(BaseModel):
@@ -52,10 +54,22 @@ def _check_policy(policy: Any, manifest: FinanceImportManifest, revision: int) -
 
 
 @router.post("/api/member/v1/finance/import-approvals")
-async def approve_import(
-    body: ImportApprovalRequest, request: Request, session: SessionDep
-) -> dict[str, Any]:
+async def approve_import(request: Request, session: SessionDep) -> dict[str, Any]:
     require_owner(request, session)
+    # Bound the manifest before parsing; a giant approval body must not reach
+    # FastAPI's eager JSON decoder or compete with ordinary household requests.
+    raw = bytearray()
+    try:
+        async with asyncio.timeout(5):
+            async for chunk in request.stream():
+                if len(raw) + len(chunk) > 32768:
+                    raise ValueError("approval body limit")
+                raw.extend(chunk)
+        body = ImportApprovalRequest.model_validate(json.loads(raw))
+    except (ValueError, TypeError, RecursionError, TimeoutError):
+        raise HTTPException(422, "finance_import_approval_invalid") from None
+    finally:
+        raw.clear()
     runtime = request.app.state.runtime
     fingerprint = _settings_request_fingerprint(
         APPROVAL_EVENT, body.model_dump(exclude={"request_id"})
@@ -186,23 +200,11 @@ async def _decode_settled(data: bytearray, manifest: FinanceImportManifest):
     task and drain it, even under repeated cancellation, before releasing the
     request's import lock. A cancelled/timed-out decode can never enter ingress.
     """
-    worker = asyncio.create_task(asyncio.to_thread(decode_package, data, manifest))
     try:
-        async with asyncio.timeout(30):
-            return await asyncio.shield(worker)
-    except BaseException:
-        while not worker.done():
-            try:
-                await asyncio.shield(worker)
-            except asyncio.CancelledError:
-                continue
-            except Exception:
-                break
-        with suppress(BaseException):
-            worker.result()
-        raise
+        async with asyncio.timeout(DECODE_SECONDS):
+            return await run_cpu(decode_package, data, manifest)
     finally:
-        # The decoder has settled on every exit, including cancellation.
+        # run_cpu has settled on every exit, including cancellation/timeout.
         data.clear()
 
 
@@ -225,8 +227,8 @@ async def import_approved_package(
             raise HTTPException(415, "finance_import_json_required")
         accounting = dated = None
         entered_ingress = False
+        data = bytearray()
         try:
-            data = bytearray()
             async with asyncio.timeout(30):
                 async for chunk in request.stream():
                     if len(data) + len(chunk) > limit:
@@ -235,7 +237,6 @@ async def import_approved_package(
             publication, projection, package = await _decode_settled(
                 data, approval.manifest
             )
-            del data
             require_owner(request, session)
             if (
                 publication["tenant_id"] != session.tenant_id
@@ -304,3 +305,21 @@ async def import_approved_package(
                     "provider_effect_count": 0,
                 },
             ) from None
+        except asyncio.CancelledError:
+            # Native work has drained before this handler. Retain a terminal
+            # receipt even if the caller repeats cancellation during the audit.
+            await await_settled(
+                _audit(
+                    runtime,
+                    session,
+                    approval_id,
+                    approval.policy_revision,
+                    "incomplete" if entered_ingress else "rejected",
+                    "finance_import_request_cancelled",
+                    accounting,
+                    dated,
+                )
+            )
+            raise
+        finally:
+            data.clear()

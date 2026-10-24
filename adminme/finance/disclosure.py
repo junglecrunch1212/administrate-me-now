@@ -61,6 +61,13 @@ def _check_current_owner(runtime: Any, session: Session) -> None:
         raise FinanceDisclosureError("finance_disclosure_authority_changed")
 
 
+def _disclosure_access(runtime: Any, session: Session):
+    try:
+        return policy_for_session(runtime, session)
+    except FinanceAccessError:
+        raise FinanceDisclosureError("finance_disclosure_authority_changed") from None
+
+
 def _authority_digest(runtime: Any, session: Session, context: Any) -> str:
     if (
         "read_context" not in context.permissions
@@ -75,7 +82,7 @@ def _authority_digest(runtime: Any, session: Session, context: Any) -> str:
             "audience": f"private:{session.auth_member_id}",
             "grant": context.audit_payload(),
             "permissions": sorted(context.permissions),
-            "finance_access": policy_for_session(
+            "finance_access": _disclosure_access(
                 runtime, session
             ).authority_coordinates(),
         }
@@ -209,7 +216,7 @@ async def record_disclosure(
         }
         marker = existing.get(_marker_key(session_hash))
         now = datetime.now(timezone.utc)
-        access = policy_for_session(runtime, session)
+        access = _disclosure_access(runtime, session)
         common = {
             "book_binding_sha256": _digest(access.binding.model_dump())
             if access.binding
@@ -338,7 +345,7 @@ async def check_disclosure(
         raise FinanceDisclosureError("finance_disclosure_receipt_expired")
     try:
         await refresh_control(runtime, session.auth_member_id)
-        access = policy_for_session(runtime, session)
+        access = _disclosure_access(runtime, session)
     except FinanceAccessError:
         raise FinanceDisclosureError("finance_disclosure_authority_changed") from None
     binding_hash = _digest(access.binding.model_dump()) if access.binding else None

@@ -550,7 +550,9 @@ def _serve(
             if expected_digest is None or session.service_context is None:
                 return original_authority(runtime, session, expected_digest)
             disclosure._check_current_owner(runtime, session)
-            digest = disclosure._authority_digest(session, session.service_context)
+            digest = disclosure._authority_digest(
+                runtime, session, session.service_context
+            )
             if digest != expected_digest:
                 raise disclosure.FinanceDisclosureError(
                     "synthetic_control_digest_mismatch"
@@ -558,7 +560,15 @@ def _serve(
             return digest
 
         disclosure.validate_current_authority = synthetic_final_authority_control
-    app = create_application(_settings(root))
+    # Final resource workloads exercise persisted production controls. Legacy
+    # fixture flags remain available only to historical diagnostic unit setups.
+    app = create_application(
+        replace(
+            _settings(root),
+            finance_publications_enabled=False,
+            finance_model_members=frozenset(),
+        )
+    )
     app.add_middleware(_SyntheticServerTiming)
     if profile:
         app.add_middleware(
@@ -584,31 +594,26 @@ def _serve(
             if planning_workload:
                 # Synthetic inventory only. Seed through the same governed
                 # import/projection composition used by production.
-                from adminme.finance.importer import import_publication
-                from adminme.finance.planning_store import import_projection
-                from adminme.finance.publication import content_hash
-                from adminme.lib.session import build_internal_session
-                from tests.acceptance.test_finance_publications import publication
+                from tests.fixtures.finance_provenance import package_fixture
+                from tests.fixtures.finance_activation import (
+                    activate,
+                    witness_projection,
+                )
                 from tests.fixtures.finance_planning import (
                     shared_projection,
                     with_conservative_minima,
                     with_grouped_issues,
                 )
 
-                accounting = publication(runtime.settings.instance.tenant_id)
-                accounting["owner_id"] = FIXTURE_MEMBER_ID
-                for report in accounting["reports"]:
-                    for metric in report["metrics"]:
-                        metric["owner_id"] = FIXTURE_MEMBER_ID
-                accounting["content_sha256"] = content_hash(accounting)
-                owner = build_internal_session(
-                    FIXTURE_MEMBER_ID, "principal", accounting["tenant_id"]
+                accounting, package = package_fixture(
+                    runtime.settings.instance.tenant_id, FIXTURE_MEMBER_ID
                 )
-                await import_publication(runtime, owner, accounting)
-                projection = with_grouped_issues(
-                    with_conservative_minima(shared_projection(accounting))
+                projection = witness_projection(
+                    with_grouped_issues(
+                        with_conservative_minima(shared_projection(accounting))
+                    )
                 )
-                await import_projection(runtime, owner, projection)
+                await activate(application, HEADERS, accounting, projection, package)
                 largest = max(
                     projection["detail_manifest"], key=lambda m: m["row_count"]
                 )
@@ -643,6 +648,15 @@ def _serve(
                     )
                 )
             else:
+                from tests.fixtures.finance_provenance import package_fixture
+                from tests.fixtures.finance_activation import activate
+
+                accounting, package = package_fixture(
+                    runtime.settings.instance.tenant_id, FIXTURE_MEMBER_ID
+                )
+                await activate(
+                    application, HEADERS, accounting, None, package, import_data=False
+                )
                 ready.send(binding)
             ready.close()
 
