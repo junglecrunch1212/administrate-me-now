@@ -22,7 +22,7 @@ required privacy invariant or product function.
   the four-tool private facade, 18 deterministic hypothetical calculators,
   accepted accounting import/replay, receipt-bound deterministic answers,
   owner goals/preferences and the declared planning summary subset. At
-  `34d2bfe8`, 847 Python checks, 100 native checks and synthetic desktop acceptance
+  `ee43a0df`, 872 Python checks, 100 native checks and synthetic desktop acceptance
   passed, including revocation during a finance-delivery yield and route-specific
   member/delegated CoS authority. Routing/preparation for F01–F31 is not implementation of every model.
 - **Unsupported functions still required by the original ambition:** durable
@@ -45,7 +45,9 @@ required privacy invariant or product function.
   The later frozen local candidate reports 6,020,614 bytes and 470,138 independent
   source-parity assertions; six identity/accounting bindings and their audience
   references remain deliberately unbound. The overlap validator correction is
-  at `1323abd5`, pending its hosted result. These reported producer checks do not
+  at `1323abd5`, with its runtime tests passing at `e5483133` and `ee43a0df`.
+  Books independently checked its original crossing-window occurrences against
+  the corrected validator without changing candidate content. These reported producer checks do not
   establish conforming adoption or private runtime parity.
   No private payload is being sent to this checkout or hosted CI.
   The producer distinguishes 18 oracle groups, 12 observed-opening native-tested
@@ -55,7 +57,10 @@ required privacy invariant or product function.
   raw core p95 regression limit of at most 10%. One earlier bounded latency pass
   did not establish stability; later runs failed. The authority-reader fix at
   `34d2bfe8` passed this bounded gate at 8.69%, with material bracketing-baseline
-  drift; `1323abd5` failed again at 18.12%. Broader resource isolation remains
+  drift; `1323abd5` failed again at 18.12%. At `ee43a0df`, the light gate failed
+  at 16.39% and the accepted-planning gate at 30.69%. The next candidate targets
+  deep planning-page database work and corrects collapsed diagnostic labels.
+  Broader resource isolation remains
   unproved. Large-ledger, reminder-delivery,
   heavy-worker termination/memory and deployment-hardware evidence remain absent.
 - **Activation remains separate:** source approval/merge, private processing and

@@ -76,6 +76,11 @@ jobs:
           tests/acceptance/test_cos_self_replies.py
           tests/acceptance/test_cos_identity_delegation_kernel.py
           tests/acceptance/test_gate7_household_experience.py
+      - name: Diagnose shared planning query plans and deep-page work
+        if: always()
+        env:
+          ADMINME_FINANCE_QUERY_COST: '1'
+        run: poetry run pytest -q -s tests/acceptance/test_finance_planning_query_cost.py
       - name: Static checks
         if: always()
         run: |
@@ -116,9 +121,19 @@ jobs:
         if: always()
         env:
           ADMINME_FINANCE_PROFILE: '1'
+          FINANCE_PROFILE_ARTIFACT_DIR: ${{ runner.temp }}/finance-profiles
         run: poetry run pytest -q -s tests/acceptance/test_finance_mixed_load.py::test_profile_light_finance_request_cost
       - name: Profile accepted-planning queries in a separate synthetic server
         if: always()
         env:
           ADMINME_FINANCE_PLANNING_PROFILE: '1'
+          FINANCE_PROFILE_ARTIFACT_DIR: ${{ runner.temp }}/finance-profiles
         run: poetry run pytest -q -s tests/acceptance/test_finance_mixed_load.py::test_profile_accepted_planning_request_cost
+      - name: Retain synthetic operation queue and execution spans
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: finance-profiles-synthetic
+          path: ${{ runner.temp }}/finance-profiles
+          if-no-files-found: warn
+          retention-days: 7

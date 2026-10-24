@@ -146,6 +146,7 @@ evidence, not passing acceptance.
 | `34d2bfe8` | 847 Python, 100 native/static and synthetic desktop checks passed | Before 1.885, after 2.767 → mixed 3.007 ms (1.086922) | Bounded pass; baseline drift limits generalization |
 | `1323abd5` | 867 Python passed; two new raw-render fixtures lacked `answer_ref`. 100 native/static/browser passed | Before 4.395, after 4.270 → mixed 5.191 ms (1.181163) | Fail; earlier pass does not establish stable isolation |
 | `e5483133` | 871 Python, 100 native/static/browser passed | Before 3.426, after 3.491 → mixed 4.356 ms (1.247873) | Fail; dedicated-reader performance remains insufficient |
+| `ee43a0df` | 872 Python, 100 native/static/browser passed, including queued-revocation ordering | Before 4.036, after 3.570 → mixed 4.698 ms (1.163851) | Fail; planning also fails at 30.69% |
 
 The [de8 hosted run](https://github.com/junglecrunch1212/administrate-me-now/actions/runs/40042497072)
 retains 251 admitted finance calls, 18.381/19.970 ms warm status/calculation
@@ -236,4 +237,28 @@ worker. Lower final-authority timing is insufficient. The next diagnostic record
 per-operation executor wait separately from execution, including core snapshot
 queries, authority reads and event-log work. Instrumentation remains confined
 to separate profile servers; no profile value substitutes for either raw gate.
-The queued-revocation fence and its regression are pending their own hosted run.
+The queued-revocation fence and its regression passed at `ee43a0df`; neither
+latency gate passed. The light run had 251 finance calls, 17.171/16.909 ms
+status/calculation p95. Planning had 251 calls, before/after core p95
+3.999/3.988 ms and mixed 5.226 ms (30.69%); summary/detail p95 was
+19.903/26.704 ms. Server p95 also rose, from 1.668 to 1.923 ms for light and
+1.657 to 2.087 ms for planning. These are application-side regressions too.
+
+An independent source review identified a diagnostic defect: wrapped methods
+were all named `timed`, combining core snapshots and event application in queue
+statistics. The next candidate preserves original method identities and retains
+raw per-operation queue/start/end and per-route start/end spans in a synthetic
+artifact. Instrumented timings remain separate from both raw gates.
+
+The same review identified deep event-page scans on the general projection
+worker; measured planning query p95 was 11.185 ms. The candidate full-horizon
+query seeks by the existing contiguous ordinal index before joining bodies.
+Ingress and replay already require every event to be undated or overlap its
+context's 365-day horizon, so this removes redundant filtering and prior-body
+reads without changing row membership/order, source dates or public offsets.
+Shorter horizons still filter before pagination. A hosted diagnostic compares
+identical returned rows against the prior SQL at offsets 0, 1409, 2816, 2817
+and 2818, records both query plans and operation counts, and requires deep-page
+VM work to fall. Full-context pagination/replay and boundary-window checks
+remain the semantic proof; both unchanged mixed-load gates still must pass.
+No additional worker, cache, schema, grant or workload change is introduced.

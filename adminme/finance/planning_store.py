@@ -641,18 +641,44 @@ def query_projection(
         start = start_date.isoformat()
         end = (start_date + timedelta(days=horizon_days)).isoformat()
         if "shared_inventory_sha256" in p:
-            rows = conn.execute(
-                "SELECT e.event_json FROM finance_dated_event_bindings b JOIN finance_dated_shared_events e USING(tenant_id,owner_id,book_id,projection_id,record_id) WHERE b.tenant_id=? AND b.owner_id=? AND b.book_id=? AND b.projection_id=? AND b.context_id=? AND (json_extract(e.event_json,'$.earliest_date') IS NULL OR (json_extract(e.event_json,'$.earliest_date') < ? AND json_extract(e.event_json,'$.latest_date') >= ?)) ORDER BY b.ordinal LIMIT ? OFFSET ?",
-                (*key, requested, context_id, end, start, limit + 1, offset),
-            ).fetchall()
+            if horizon_days == 365:
+                # Ingress/replay validates every bound row as undated or
+                # overlapping its context's full 365-day horizon. Ordinals
+                # are contiguous from zero, so seek to the page before joining
+                # bodies. Deep pages need no earlier body reads/JSON parsing.
+                rows = conn.execute(
+                    "SELECT e.event_json FROM (SELECT record_id,ordinal FROM finance_dated_event_bindings WHERE tenant_id=? AND owner_id=? AND book_id=? AND projection_id=? AND context_id=? AND ordinal>=? ORDER BY ordinal LIMIT ?) b JOIN finance_dated_shared_events e ON e.tenant_id=? AND e.owner_id=? AND e.book_id=? AND e.projection_id=? AND e.record_id=b.record_id ORDER BY b.ordinal",
+                    (
+                        *key,
+                        requested,
+                        context_id,
+                        offset,
+                        limit + 1,
+                        *key,
+                        requested,
+                    ),
+                ).fetchall()
+            else:
+                # Shorter horizons filter before applying the public offset;
+                # source ordinals cannot substitute for filtered row offsets.
+                rows = conn.execute(
+                    "SELECT e.event_json FROM finance_dated_event_bindings b JOIN finance_dated_shared_events e USING(tenant_id,owner_id,book_id,projection_id,record_id) WHERE b.tenant_id=? AND b.owner_id=? AND b.book_id=? AND b.projection_id=? AND b.context_id=? AND (json_extract(e.event_json,'$.earliest_date') IS NULL OR (json_extract(e.event_json,'$.earliest_date') < ? AND json_extract(e.event_json,'$.latest_date') >= ?)) ORDER BY b.ordinal LIMIT ? OFFSET ?",
+                    (*key, requested, context_id, end, start, limit + 1, offset),
+                ).fetchall()
             result["events"] = [
                 {**json.loads(r[0]), "context_id": context_id} for r in rows[:limit]
             ]
         else:
-            rows = conn.execute(
-                "SELECT event_json FROM finance_dated_projection_events WHERE tenant_id=? AND owner_id=? AND book_id=? AND projection_id=? AND context_id=? AND (json_extract(event_json,'$.earliest_date') IS NULL OR (json_extract(event_json,'$.earliest_date') < ? AND json_extract(event_json,'$.latest_date') >= ?)) ORDER BY ordinal LIMIT ? OFFSET ?",
-                (*key, requested, context_id, end, start, limit + 1, offset),
-            ).fetchall()
+            if horizon_days == 365:
+                rows = conn.execute(
+                    "SELECT event_json FROM finance_dated_projection_events WHERE tenant_id=? AND owner_id=? AND book_id=? AND projection_id=? AND context_id=? AND ordinal>=? ORDER BY ordinal LIMIT ?",
+                    (*key, requested, context_id, offset, limit + 1),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT event_json FROM finance_dated_projection_events WHERE tenant_id=? AND owner_id=? AND book_id=? AND projection_id=? AND context_id=? AND (json_extract(event_json,'$.earliest_date') IS NULL OR (json_extract(event_json,'$.earliest_date') < ? AND json_extract(event_json,'$.latest_date') >= ?)) ORDER BY ordinal LIMIT ? OFFSET ?",
+                    (*key, requested, context_id, end, start, limit + 1, offset),
+                ).fetchall()
             result["events"] = [json.loads(r[0]) for r in rows[:limit]]
         result["next_offset"] = offset + limit if len(rows) > limit else None
         result["horizon_days"] = horizon_days

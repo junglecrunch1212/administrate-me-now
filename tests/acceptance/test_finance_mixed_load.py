@@ -18,6 +18,7 @@ import socket
 import time
 from contextlib import asynccontextmanager
 from dataclasses import replace
+from functools import wraps
 from pathlib import Path
 from typing import Any, cast
 
@@ -99,6 +100,9 @@ class _SyntheticCpuProfile:
         self.completed = False
         self.loop_thread_id = None
         self.wall_calls = {}
+        self.executor_spans = []
+        self.http_spans = []
+        self.profile_started_at = 0.0
         # Diagnostic-only instrumentation distinguishes main-loop blocking
         # from work already dispatched to the native projection worker. It is
         # installed only in this separate profile server, never the p95 gate.
@@ -147,12 +151,30 @@ class _SyntheticCpuProfile:
                 operation += ":" + args[0]
 
             def begin():
+                began_at = time.perf_counter()
                 if active:
-                    record(
-                        f"executor_wait:{lane}:{operation}",
-                        time.perf_counter() - queued_at,
-                    )
-                return func(*args, **kwargs)
+                    record(f"executor_wait:{lane}:{operation}", began_at - queued_at)
+                try:
+                    return func(*args, **kwargs)
+                finally:
+                    if active:
+                        finished_at = time.perf_counter()
+                        with self.wall_lock:
+                            self.executor_spans.append(
+                                {
+                                    "operation": f"{lane}:{operation}",
+                                    "queued_ms": round(
+                                        (queued_at - self.profile_started_at) * 1000, 3
+                                    ),
+                                    "started_ms": round(
+                                        (began_at - self.profile_started_at) * 1000, 3
+                                    ),
+                                    "finished_ms": round(
+                                        (finished_at - self.profile_started_at) * 1000,
+                                        3,
+                                    ),
+                                }
+                            )
 
             return original_submit(executor, begin)
 
@@ -161,6 +183,7 @@ class _SyntheticCpuProfile:
         def instrument(owner, name, label):
             original = getattr(owner, name)
 
+            @wraps(original)
             def timed(*args, **kwargs):
                 active = self.started and not self.completed
                 started = time.perf_counter()
@@ -197,9 +220,26 @@ class _SyntheticCpuProfile:
             import threading
 
             self.loop_thread_id = threading.get_ident()
+            self.profile_started_at = time.perf_counter()
             self.started = True
             self.profile.enable()
-        await self.app(scope, receive, send)
+        began_at = time.perf_counter()
+        tracked = self.started and not self.completed and scope["type"] == "http"
+        try:
+            await self.app(scope, receive, send)
+        finally:
+            if tracked:
+                self.http_spans.append(
+                    {
+                        "route": scope["path"],
+                        "started_ms": round(
+                            (began_at - self.profile_started_at) * 1000, 3
+                        ),
+                        "finished_ms": round(
+                            (time.perf_counter() - self.profile_started_at) * 1000, 3
+                        ),
+                    }
+                )
         if finance:
             self.count += 1
             if self.count == 50:
@@ -228,11 +268,14 @@ class _SyntheticCpuProfile:
                     wall_calls = {
                         key: list(values) for key, values in self.wall_calls.items()
                     }
+                    executor_spans = list(self.executor_spans)
                 self.output_path.write_text(
                     json.dumps(
                         {
                             "diagnostic_only": True,
                             "profiled_finance_calls": self.count,
+                            "executor_spans": executor_spans,
+                            "http_spans": list(self.http_spans),
                             "wall_calls_instrumented_ms": {
                                 key: {
                                     "calls": len(values),
@@ -815,7 +858,34 @@ async def _profile_workload(tmp_path, *, planning_workload):
                 if planning_workload
                 else "SYNTHETIC_FINANCE_CPU_PROFILE"
             )
-            print(label + " " + json.dumps(report), flush=True)
+            print(
+                label
+                + " "
+                + json.dumps(
+                    {
+                        k: v
+                        for k, v in report.items()
+                        if k not in {"executor_spans", "http_spans"}
+                    }
+                ),
+                flush=True,
+            )
+            artifact_dir = os.getenv("FINANCE_PROFILE_ARTIFACT_DIR")
+            if artifact_dir:
+                target = Path(artifact_dir)
+                target.mkdir(parents=True, exist_ok=True)
+                (
+                    target
+                    / (
+                        "planning-profile.json"
+                        if planning_workload
+                        else "light-profile.json"
+                    )
+                ).write_text(json.dumps(report, indent=2))
+            waits = report["wall_calls_instrumented_ms"]
+            assert "executor_wait:adminme-projections:_call_many_query" in waits
+            assert "executor_wait:adminme-projections:_apply_one_for:tasks" in waits
+            assert not any(":timed" in key for key in waits)
     finally:
         receive.close()
         listener.close()
