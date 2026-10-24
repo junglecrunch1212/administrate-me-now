@@ -25,6 +25,7 @@ class CurrentReminderInstruction(BaseModel):
 
 
 class ConfirmAppleReminderRequest(CurrentReminderInstruction):
+    request_authorization: bool = False
     title: str = Field(min_length=1, max_length=1000)
     due_at: AwareDatetime
     notes: str | None = Field(default=None, max_length=10000)
@@ -130,11 +131,47 @@ async def apple_reminder_status(
         "title": requested["title"],
         "provider_effect_count": 0,
         "automatic_retry": False,
+        "due_status": "past_due"
+        if datetime.fromisoformat(due_at) < datetime.now(timezone.utc)
+        else "future",
+        "authorization_age_seconds": max(
+            0,
+            int(
+                (
+                    datetime.now(timezone.utc)
+                    - datetime.fromisoformat(approval["confirmed_at"])
+                ).total_seconds()
+            ),
+        ),
+        "authorization_expires_at": None,  # Legacy confirmations never recorded an expiry.
     }
     command = await runtime.event_log.get_by_idempotency(
         session.tenant_id, f"external-sync-approved:{domain_event_id}"
     )
     if command is None:
+        from adminme.products.openclaw.request_authorization import grounding_for_domain
+
+        grounding = await grounding_for_domain(runtime, session, domain)
+        if grounding is not None:
+            expires = grounding["payload"]["expires_at"]
+            receipt["authorization_expires_at"] = expires
+            from adminme.request_actions_control import request_actions_allowed
+
+            receipt["request_authorization_state"] = (
+                "revoked"
+                if not request_actions_allowed(
+                    runtime, issued_at=grounding["payload"]["issued_at"]
+                )
+                else "expired"
+                if datetime.fromisoformat(expires) <= datetime.now(timezone.utc)
+                else "current"
+            )
+            if receipt["request_authorization_state"] == "current":
+                receipt["state"] = "awaiting_request_policy"
+        elif receipt["due_status"] == "past_due":
+            receipt["request_authorization_state"] = (
+                "legacy_overdue_requires_explicit_resume"
+            )
         return receipt
     from adminme.apple_service_history import apple_command_owner_matches
 
@@ -244,7 +281,10 @@ async def confirm_apple_reminder(
     )
     runtime = seam._runtime(request)
     fingerprint = seam._fingerprint(
-        body.model_dump(mode="json", exclude={"provenance", "source_message_event_id"})
+        body.model_dump(
+            mode="json",
+            exclude={"provenance", "source_message_event_id", "request_authorization"},
+        )
     )
     command_id = reminder_command_id(
         session.tenant_id, session.auth_member_id, body.request_id
@@ -261,6 +301,20 @@ async def confirm_apple_reminder(
                     409, "request id conflicts with a prior Apple reminder"
                 )
             receipt = await apple_reminder_status(runtime, session, prior["event_id"])
+            if body.request_authorization:
+                from adminme.products.openclaw.request_authorization import (
+                    grounding_for_domain,
+                    ticket,
+                )
+
+                grounding = await grounding_for_domain(runtime, session, prior)
+                if (
+                    grounding is not None
+                    and receipt.get("request_authorization_state") == "current"
+                ):
+                    receipt["request_authorization"] = ticket(
+                        runtime, session, prior, grounding
+                    )
             return {**receipt, "duplicate": True, "event_id": prior["event_id"]}
         if await runtime.observation.is_active():
             raise HTTPException(
@@ -294,6 +348,27 @@ async def confirm_apple_reminder(
             raise HTTPException(
                 403, "Apple Reminders list is outside current member permission"
             )
+        grounding = None
+        if body.request_authorization:
+            from adminme.products.openclaw.request_authorization import ground_action
+
+            grounding = await ground_action(
+                runtime,
+                session,
+                source,
+                action_id=command_id,
+                request_fingerprint=fingerprint,
+                action={
+                    "provider": "apple_reminders",
+                    "operation": "create_reminder",
+                    "resource_owner": "requester",
+                    "title": body.title,
+                    "due_at": body.due_at.isoformat(),
+                    "notes": body.notes,
+                    "list_id": selected,
+                    "selected_by_policy": body.list_id is None,
+                },
+            )
         from adminme.products.member.main import (
             ReminderCommandRequest,
             confirm_reminder_command,
@@ -320,6 +395,16 @@ async def confirm_apple_reminder(
             request_fingerprint=fingerprint,
         )
         receipt = await apple_reminder_status(runtime, session, confirmed["event_id"])
+        if grounding is not None:
+            from adminme.products.openclaw.request_authorization import ticket
+
+            domain = await runtime.event_log.get(confirmed["event_id"])
+            assert domain is not None
+            receipt["request_authorization"] = ticket(
+                runtime, session, domain, grounding
+            )
+            receipt["state"] = "awaiting_request_policy"
+
     await seam._record_tool_call(
         request,
         session,

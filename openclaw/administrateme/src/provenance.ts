@@ -1,4 +1,6 @@
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
+import { conversationToolProvenance } from "./conversation-input.js";
+import type { PluginRuntime } from "./runtime.js";
 import type {
   GatewayClient,
   OpenClawPluginToolContext,
@@ -36,7 +38,10 @@ export function provenanceFromTool(
   context: OpenClawPluginToolContext,
   callKind: "tool" | "standing_order" = "tool",
   sharedSecretEnv = "ADMINME_OPENCLAW_SHARED_SECRET",
+  runtime?: PluginRuntime,
 ): Provenance {
+  const conversation = runtime && callKind === "tool" ? conversationToolProvenance(runtime, context) : undefined;
+  if (conversation) return conversation;
   const sessionKey = context.sessionKey ?? "";
   if (context.agentId?.startsWith("am-service-") || sessionKey.includes(":administrateme-service-")) {
     throw new Error("Service-private sessions cannot invoke member tools");

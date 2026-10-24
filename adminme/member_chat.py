@@ -66,6 +66,7 @@ class MemberChatTransport(Protocol):
         session_key: str,
         message: str,
         idempotency_key: str,
+        instruction_ticket: dict[str, Any] | None = None,
     ) -> AsyncIterator[MemberChatChunk]: ...
 
     async def history(
@@ -284,6 +285,7 @@ class OpenClawGatewayChatTransport:
         session_key: str,
         message: str,
         idempotency_key: str,
+        instruction_ticket: dict[str, Any] | None = None,
     ) -> AsyncIterator[MemberChatChunk]:
         socket = await self._connect()
         terminal = False
@@ -304,6 +306,15 @@ class OpenClawGatewayChatTransport:
                 raise MemberChatError(
                     "protocol_error", "Chat subscription was not confirmed"
                 )
+            if instruction_ticket is not None:
+                admitted = await self._request(
+                    socket, "administrateme.conversation.prepare", instruction_ticket
+                )
+                if admitted.get("accepted") is not True:
+                    raise MemberChatError(
+                        "instruction_unavailable",
+                        "Authenticated chat input was not acknowledged",
+                    )
             request_id = str(uuid.uuid4())
             send_started = True
             await socket.send(
@@ -512,6 +523,7 @@ class DeterministicOpenClawChatTransport:
         session_key: str,
         message: str,
         idempotency_key: str,
+        instruction_ticket: dict[str, Any] | None = None,
     ) -> AsyncIterator[MemberChatChunk]:
         del idempotency_key
         self._cancelled.discard(session_key)
@@ -549,6 +561,7 @@ class UnavailableMemberChatTransport:
         session_key: str,
         message: str,
         idempotency_key: str,
+        instruction_ticket: dict[str, Any] | None = None,
     ) -> AsyncIterator[MemberChatChunk]:
         del session_key, message, idempotency_key
         raise MemberChatError("not_configured", "Chat provider is not configured")

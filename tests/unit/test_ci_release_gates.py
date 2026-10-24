@@ -2056,7 +2056,7 @@ def test_service_work_runtime_normalization_is_limited_to_direct_router_statemen
         "bootstrap/versions.json",
         "poetry.lock",
         "openclaw/administrateme/package-lock.json",
-        "openclaw/administrateme/src/transport.ts",
+        "openclaw/administrateme/src/runtime.ts",
         "tests/unreviewed.py",
     ],
 )
@@ -3125,6 +3125,225 @@ def test_native_terminal_ingest_scope_preserves_unrelated_authorization() -> Non
     assert _service_work_ingest(new + new) is None
 
 
+_GMAIL_IMPORT = "from adminme.conversation_intake import GmailConversationIntake\n"
+_GMAIL_SLOT = (
+    "        self.gmail_conversations: GmailConversationIntake | None = None\n"
+)
+_GMAIL_INITIALIZE = (
+    "            self.gmail_conversations = GmailConversationIntake(self)\n"
+    "            await self.gmail_conversations.initialize()\n"
+)
+_GMAIL_SUBSCRIBE = (
+    '            self.bus.subscribe("cos-gmail:conversation", '
+    '["messaging.received", "cos.channels.activated", "observation.disabled"], '
+    "self.gmail_conversations.handle, "
+    "consumer_version=self.gmail_conversations.CONSUMER_VERSION)\n"
+)
+_GMAIL_BASE_RUNTIME = (
+    "class AdministrateMeRuntime:\n"
+    "    def __init__(self):\n"
+    "        self.settings = settings\n"
+    "    async def start(self):\n"
+    "        try:\n"
+    "            await require_storage()\n"
+    "            await start_other_subscribers()\n"
+    "        except Exception:\n"
+    "            await stop_components()\n" + _SERVICE_WIRED_RUNTIME
+)
+_GMAIL_WIRED_RUNTIME = _GMAIL_IMPORT + _GMAIL_BASE_RUNTIME.replace(
+    "        self.settings = settings\n",
+    "        self.settings = settings\n" + _GMAIL_SLOT,
+).replace(
+    "            await start_other_subscribers()\n",
+    _GMAIL_INITIALIZE
+    + _GMAIL_SUBSCRIBE
+    + "            await start_other_subscribers()\n",
+)
+_BRIDGE_REQUEST_IMPORT = "        from adminme.products.openclaw.request_authorization import require_current_bridge_request\n"
+_BRIDGE_REQUEST_CHECK = "        await require_current_bridge_request(runtime, event)\n"
+_BRIDGE_REQUEST_BASE = (
+    "async def authorize_apple_command(request, body):\n"
+    "    require_member()\n"
+    "    async with lock:\n"
+    "        await require_live_mode()\n"
+    "        proof = command_proof(runtime, member_id, command)\n"
+    "        return proof\n"
+)
+_BRIDGE_REQUEST_WIRED = _BRIDGE_REQUEST_BASE.replace(
+    "        proof = command_proof(runtime, member_id, command)\n",
+    _BRIDGE_REQUEST_IMPORT
+    + _BRIDGE_REQUEST_CHECK
+    + "        proof = command_proof(runtime, member_id, command)\n",
+)
+
+
+def test_conversation_runtime_mapping_only_removes_complete_exact_wiring() -> None:
+    assert _service_work_application(_GMAIL_BASE_RUNTIME) == _service_work_application(
+        _GMAIL_WIRED_RUNTIME
+    )
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        _GMAIL_WIRED_RUNTIME.replace(_GMAIL_IMPORT, ""),
+        _GMAIL_WIRED_RUNTIME.replace(_GMAIL_SLOT, ""),
+        _GMAIL_WIRED_RUNTIME.replace(_GMAIL_INITIALIZE, ""),
+        _GMAIL_WIRED_RUNTIME.replace(_GMAIL_SUBSCRIBE, ""),
+        _GMAIL_WIRED_RUNTIME.replace(_GMAIL_INITIALIZE, _GMAIL_INITIALIZE * 2),
+        _GMAIL_WIRED_RUNTIME.replace(_GMAIL_SUBSCRIBE, _GMAIL_SUBSCRIBE * 2),
+        _GMAIL_WIRED_RUNTIME.replace(
+            _GMAIL_INITIALIZE + _GMAIL_SUBSCRIBE, _GMAIL_SUBSCRIBE + _GMAIL_INITIALIZE
+        ),
+        _GMAIL_WIRED_RUNTIME.replace(
+            _GMAIL_INITIALIZE,
+            "            if enabled:\n"
+            + "    "
+            + _GMAIL_INITIALIZE.replace(
+                "\n            await", "\n                await"
+            ),
+        ),
+        _GMAIL_WIRED_RUNTIME.replace(
+            '"cos.channels.activated"', '"untrusted.activation"'
+        ),
+        _GMAIL_WIRED_RUNTIME.replace(
+            "consumer_version=self.gmail_conversations.CONSUMER_VERSION",
+            "consumer_version=self.gmail_conversations.CONSUMER_VERSION, replay_on_version_change=True",
+        ),
+        _GMAIL_WIRED_RUNTIME.replace(
+            "await require_storage()", "await ignore_storage()"
+        ),
+        _GMAIL_WIRED_RUNTIME.replace(
+            "self.settings = settings", "self.settings = wrong_settings"
+        ),
+        _GMAIL_WIRED_RUNTIME.replace(
+            "await stop_components()", "await leave_running()"
+        ),
+    ],
+)
+def test_conversation_runtime_mapping_binds_neighbors_and_partial_wiring(
+    source: str,
+) -> None:
+    assert _service_work_application(source) != _service_work_application(
+        _GMAIL_BASE_RUNTIME
+    )
+
+
+def test_conversation_member_mapping_keeps_authentication_and_other_routes_bound() -> (
+    None
+):
+    before = (
+        "async def chat_stream(body, request, session):\n    return old_chat()\n"
+        "async def chat_history(request, session):\n    return authorized_history()\n"
+        "def _require_member_chat(request, session):\n    return require_member()\n"
+    )
+    after = "from adminme.openclaw_topology import member_agent_id\n" + before.replace(
+        "return old_chat()", "return await captured_chat(body)"
+    )
+    assert _service_work_member(before) == _service_work_member(after)
+    for old, new in (
+        ("return authorized_history()", "return unscoped_history()"),
+        ("return require_member()", "return anonymous()"),
+        ("import member_agent_id", "import member_agent_id, member_session_key"),
+    ):
+        assert _service_work_member(after.replace(old, new)) != _service_work_member(
+            before
+        )
+    assert (
+        _service_work_member(after + "\nasync def chat_stream():\n    pass\n") is None
+    )
+    assert (
+        _service_work_member("from adminme.openclaw_topology import member_agent_id\n")
+        is None
+    )
+
+
+def test_bridge_request_mapping_keeps_every_other_admission_check_bound() -> None:
+    assert _service_work_ingest(_BRIDGE_REQUEST_BASE) == _service_work_ingest(
+        _BRIDGE_REQUEST_WIRED
+    )
+    for old, new in (
+        (_BRIDGE_REQUEST_IMPORT, ""),
+        (_BRIDGE_REQUEST_CHECK, ""),
+        (_BRIDGE_REQUEST_CHECK, _BRIDGE_REQUEST_CHECK * 2),
+        (
+            "require_current_bridge_request(runtime, event)",
+            "require_current_bridge_request(runtime, other_event)",
+        ),
+        ("require_member()", "trust_claimed_member()"),
+        ("await require_live_mode()", "await ignore_observation()"),
+        ("command_proof(runtime, member_id, command)", "unreviewed_proof(command)"),
+        ("async with lock:", "async with unrelated_lock:"),
+    ):
+        assert _service_work_ingest(
+            _BRIDGE_REQUEST_WIRED.replace(old, new)
+        ) != _service_work_ingest(_BRIDGE_REQUEST_BASE)
+    assert _service_work_ingest(_BRIDGE_REQUEST_WIRED * 2) is None
+
+
+def test_bridge_request_mapping_binds_pending_denial_to_exact_policy_check() -> None:
+    base = (
+        "async def pending_commands(request):\n"
+        "    require_member()\n"
+        "    try:\n"
+        "        apple_grant = command_permission(runtime, member_id, payload)\n"
+        "    except (ValueError, KeyError):\n"
+        "        require_retained_grant()\n"
+        "        apple_authorization_denied = True\n"
+        "    return commands\n"
+    )
+    paired = (
+        "        from adminme.products.openclaw.request_authorization import require_current_bridge_request\n"
+        "        await require_current_bridge_request(runtime, event)\n"
+    )
+    wired = base.replace(
+        "    except (ValueError, KeyError):\n",
+        paired + "    except (ValueError, KeyError, HTTPException):\n",
+    )
+    assert _service_work_ingest(base) == _service_work_ingest(wired)
+    for old, new in (
+        (paired, ""),
+        (paired, paired * 2),
+        ("ValueError, KeyError, HTTPException", "ValueError, KeyError"),
+        ("ValueError, KeyError, HTTPException", "Exception"),
+        (
+            "require_current_bridge_request(runtime, event)",
+            "require_current_bridge_request(runtime, other_event)",
+        ),
+        ("require_retained_grant()", "ignore_retained_grant()"),
+        ("require_member()", "trust_claimed_member()"),
+    ):
+        assert _service_work_ingest(wired.replace(old, new)) != _service_work_ingest(
+            base
+        )
+    assert _service_work_ingest(wired * 2) is None
+
+
+@pytest.mark.parametrize(
+    ("relative", "before", "after"),
+    [
+        (COS_SERVICE_WORK_APPLICATION, _GMAIL_BASE_RUNTIME, _GMAIL_WIRED_RUNTIME),
+        (ENROLLMENT_INGEST_PATH, _BRIDGE_REQUEST_BASE, _BRIDGE_REQUEST_WIRED),
+    ],
+)
+def test_conversation_integration_uses_immutable_focused_scope(
+    repository, relative, before, after
+) -> None:
+    path, _ = repository
+    _service_work_candidate(path)
+    base = _commit(path, relative, before)
+    head = _commit(path, relative, after)
+    assert (
+        select_scope(path, _event(base, head), checkout_sha=head)["scope"]
+        == "cos-service-work"
+    )
+    (path / relative).write_text("MUTABLE = True\n")
+    assert (
+        select_scope(path, _event(base, head), checkout_sha=head)["scope"]
+        == "cos-service-work"
+    )
+
+
 @pytest.mark.parametrize(
     "module, name",
     [
@@ -3148,6 +3367,34 @@ def test_workstation_scope_requires_exact_complete_router_pair(
     assert _service_work_application(
         after.replace("    return app\n", "    unsafe()\n    return app\n")
     ) != _service_work_application(before)
+
+
+@pytest.mark.parametrize(
+    "relative",
+    [
+        "adminme/conversation_instructions.py",
+        "adminme/conversation_intake.py",
+        "adminme/products/openclaw/conversation_reply.py",
+        "adminme/products/openclaw/request_authorization.py",
+        "adminme/request_actions_control.py",
+        "bootstrap/request_actions.py",
+        "openclaw/administrateme/src/conversation-input.ts",
+        "openclaw/administrateme/src/request-policy.ts",
+        "packs/skills/ground_requested_action/schemas/input.schema.json",
+        "tests/acceptance/test_authenticated_conversation_channels.py",
+        "tests/acceptance/test_authenticated_conversation_reply.py",
+        "tests/acceptance/test_authenticated_request_actions.py",
+    ],
+)
+def test_authenticated_action_paths_use_the_affected_lane(repository, relative) -> None:
+    path, _ = repository
+    _, base = _service_work_candidate(path)
+    _commit(path, "adminme/conversation_intake.py", "# Reviewed conversation binding\n")
+    head = _commit(path, relative, "# Reviewed authenticated action contract\n")
+    assert (
+        select_scope(path, _event(base, head), checkout_sha=head)["scope"]
+        == "cos-service-work"
+    )
 
 
 @pytest.mark.parametrize(
