@@ -189,6 +189,10 @@ async def capture_instruction(
     source: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Called only by authenticated portal intake or verified provider intake."""
+    if runtime.observation is None or await runtime.observation.is_active():
+        raise HTTPException(
+            409, "Observation mode does not capture new action instructions"
+        )
     channel = provenance["channel_id"]
     if channel == "gmail":
         if source is None or gmail_source_member(runtime, source) != member_id:

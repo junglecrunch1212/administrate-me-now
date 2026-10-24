@@ -1187,7 +1187,11 @@ class AdministrateMeRuntime:
             )
             self.bus.subscribe(
                 "cos-gmail:conversation",
-                ["messaging.received", "cos.channels.activated"],
+                [
+                    "messaging.received",
+                    "cos.channels.activated",
+                    "observation.disabled",
+                ],
                 self.gmail_conversations.handle,
                 consumer_version=self.gmail_conversations.CONSUMER_VERSION,
             )

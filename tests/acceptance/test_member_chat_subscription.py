@@ -63,6 +63,11 @@ def test_authenticated_member_stream_subscribes_and_finishes_without_refresh(
 
         monkeypatch.setattr(transport, "_connect", connect)
         runtime.member_chat = transport
+        client.portal.call(
+            runtime.observation.disable,
+            "operator:fixture",
+            "Enable authenticated conversation fixture",
+        )
         before = client.portal.call(_events, runtime)
         response = client.post(
             "/api/member/v1/chat/stream",

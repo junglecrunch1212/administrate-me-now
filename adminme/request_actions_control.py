@@ -12,7 +12,7 @@ FILENAME = "request-actions-control.json"
 
 def read_control(config_dir: Path) -> dict[str, Any]:
     path = config_dir / FILENAME
-    if not path.exists():
+    if not path.exists() and not path.is_symlink():
         return {
             "contract": "request-actions-control-v1",
             "disabled": False,

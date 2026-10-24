@@ -33,8 +33,9 @@ class GmailConversationIntake:
     def __init__(self, runtime: Any) -> None:
         self.runtime = runtime
         self.activated_at: datetime | None = None
+        self.started_at = datetime.now(timezone.utc)
 
-    async def initialize(self) -> None:
+    async def initialize(self, activation_at: str | None = None) -> None:
         runtime = self.runtime
         # No new channel account is provisioned. This only binds already enrolled
         # CoS Gmail sources; historical inbox/queued work is not released.
@@ -49,6 +50,16 @@ class GmailConversationIntake:
             runtime.settings.instance.tenant_id, self.ACTIVATION_KEY
         )
         if existing is None:
+            # Updater candidate startup precedes ObservationManager construction.
+            # Never write a new schema until supported normal-operation restore.
+            if (
+                activation_at is None
+                or datetime.fromisoformat(activation_at) < self.started_at
+                or runtime.observation is None
+                or await runtime.observation.is_active()
+                or not request_actions_allowed(runtime)
+            ):
+                return
             now = EventEnvelope.now_utc_iso()
             await runtime.events.write(
                 EventEnvelope(
@@ -64,7 +75,7 @@ class GmailConversationIntake:
                     actor_identity=COS_SERVICE_PRINCIPAL_ID,
                     idempotency_key=self.ACTIVATION_KEY,
                     payload={
-                        "activated_at": now,
+                        "activated_at": activation_at,
                         "channel": "gmail",
                         "rule": "new_authenticated_instructions_only",
                     },
@@ -114,9 +125,13 @@ class GmailConversationIntake:
 
     async def handle(self, event: dict[str, Any]) -> None:
         runtime = self.runtime
-        if self.activated_at is None or not request_actions_allowed(runtime):
+        if not request_actions_allowed(runtime):
             return
-        if event["type"] == "cos.channels.activated":
+        if event["type"] in {"cos.channels.activated", "observation.disabled"}:
+            if self.activated_at is None:
+                await self.initialize(event["occurred_at"])
+            if self.activated_at is None:
+                return
             # Resume only new feature-owned inputs held by maintenance. Never
             # release historical provider commands or an ambiguous started run.
             async for row in runtime.event_log.read_since(
@@ -131,6 +146,8 @@ class GmailConversationIntake:
                     )
                     if instruction is not None:
                         await self._dispatch(instruction)
+            return
+        if self.activated_at is None:
             return
         member = gmail_source_member(runtime, event)
         if member is None:

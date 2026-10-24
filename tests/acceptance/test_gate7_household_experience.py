@@ -523,6 +523,11 @@ def test_member_chat_is_openclaw_owned_isolated_and_server_authorized(
 
     with TestClient(app) as client:
         runtime = app.state.runtime
+        client.portal.call(
+            runtime.observation.disable,
+            "operator:fixture",
+            "Enable authenticated conversation fixture",
+        )
         before = client.portal.call(_events, runtime)
         adult_stream = _chat(
             client, ADULT, "Help me choose a small step.", "adult-chat-0001"

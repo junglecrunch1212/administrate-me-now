@@ -8249,22 +8249,24 @@ async def chat_stream(
     from adminme.conversation_instructions import capture_instruction, input_ticket
 
     actor_id, _ = runtime.member_chat_binding(session.auth_member_id)
-    instruction = await capture_instruction(
-        runtime,
-        member_id=session.auth_member_id,
-        text=body.message,
-        request_id=body.request_id,
-        provenance={
-            "channel_id": "administrateme-portal",
-            "account_id": "member-portal",
-            "actor_id": actor_id,
-            "agent_id": member_agent_id(session.auth_member_id),
-            "session_key": session_key,
-            "message_id": body.request_id,
-            "thread_id": None,
-            "correlation_id": correlation_id,
-        },
-    )
+    instruction = None
+    if runtime.observation is not None and not await runtime.observation.is_active():
+        instruction = await capture_instruction(
+            runtime,
+            member_id=session.auth_member_id,
+            text=body.message,
+            request_id=body.request_id,
+            provenance={
+                "channel_id": "administrateme-portal",
+                "account_id": "member-portal",
+                "actor_id": actor_id,
+                "agent_id": member_agent_id(session.auth_member_id),
+                "session_key": session_key,
+                "message_id": body.request_id,
+                "thread_id": None,
+                "correlation_id": correlation_id,
+            },
+        )
 
     async def generate() -> AsyncIterator[bytes]:
         lock = runtime.member_chat_locks.setdefault(
@@ -8276,7 +8278,9 @@ async def chat_stream(
                     session_key=session_key,
                     message=body.message,
                     idempotency_key=f"member:{session.auth_member_id}:{body.request_id}",
-                    instruction_ticket=input_ticket(runtime, instruction),
+                    instruction_ticket=input_ticket(runtime, instruction)
+                    if instruction is not None
+                    else None,
                 ):
                     runtime.member_chat_last_failure = None
                     public = chunk.public()

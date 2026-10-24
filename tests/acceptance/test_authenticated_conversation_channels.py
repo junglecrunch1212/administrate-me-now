@@ -35,7 +35,12 @@ from tests.acceptance.test_forwarded_channel_intake import (
     _events,
     _settings as base_settings,
 )
-from tests.acceptance.test_native_apple_reminder import SECRET, _grant, _instruction
+from tests.acceptance.test_native_apple_reminder import (
+    SECRET,
+    _grant,
+    _instruction,
+    _normal_operation,
+)
 
 TEXT = "Add a reminder to my Apple Reminders to call my mom at 9:30 AM today"
 
@@ -201,6 +206,7 @@ def test_three_actual_intakes_resolve_the_same_member_without_substituting_chann
 ) -> None:
     with TestClient(create_application(settings(tmp_path / channel))) as client:
         _grant(client)
+        _normal_operation(client)
         if channel == "imessage":
             source = _instruction(client, "three-channel-native")
         elif channel == "gmail":
@@ -227,6 +233,7 @@ def test_portal_request_identity_is_stable_and_not_rebound_to_other_member_or_te
 ) -> None:
     with TestClient(create_application(settings(tmp_path / "portal"))) as client:
         _grant(client)
+        _normal_operation(client)
         _grant(client, other=True)
         first = portal_instruction(client, "portal-stable-request")
         assert portal_instruction(client, "portal-stable-request") == first
@@ -267,6 +274,7 @@ def test_gmail_retains_only_authored_instruction_and_does_not_release_old_or_unt
 ) -> None:
     with TestClient(create_application(settings(tmp_path / "gmail"))) as client:
         _grant(client)
+        _normal_operation(client)
         gmail_observation(client, "old-pending", old=True)
         gmail_observation(client, "forged-from", untrusted=True)
         assert (
@@ -313,3 +321,40 @@ def test_gmail_retains_only_authored_instruction_and_does_not_release_old_or_unt
 def test_quoted_or_forwarded_text_alone_is_not_an_instruction(body: str) -> None:
     with pytest.raises(HTTPException):
         authored_email_text(body)
+
+
+def test_observation_startup_and_portal_chat_write_no_new_feature_history(
+    tmp_path: Path,
+) -> None:
+    """The guarded updater may still restore the predecessor before normal activation."""
+    value = settings(tmp_path / "observation-startup")
+    with TestClient(create_application(value)) as client:
+        runtime = client.app.state.runtime
+        assert client.portal.call(runtime.observation.is_active()) is True
+        _grant(client)
+        response = client.post(
+            "/api/member/v1/chat/stream",
+            headers=MEMBER_HEADERS,
+            json={
+                "message": "Show current status.",
+                "request_id": "observation-chat-fixture",
+            },
+        )
+        assert response.status_code == 200, response.text
+        assert (
+            client.portal.call(_events, runtime, "cos.conversation.instruction") == []
+        )
+        assert client.portal.call(_events, runtime, "cos.conversation.activation") == []
+        assert client.portal.call(_events, runtime, "cos.action.request_grounded") == []
+        assert runtime.gmail_conversations.activated_at is None
+        _normal_operation(client)
+        original = gmail_observation(client, "first-after-normal-activation")
+        instructions = client.portal.call(
+            _events, runtime, "cos.conversation.instruction"
+        )
+        assert len(instructions) == 1
+        assert instructions[0]["payload"]["source_message_event_id"] == original
+        assert (
+            len(client.portal.call(_events, runtime, "cos.conversation.activation"))
+            == 1
+        )

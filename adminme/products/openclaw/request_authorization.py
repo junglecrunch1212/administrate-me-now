@@ -65,6 +65,8 @@ async def ground_action(
     request_fingerprint: str,
     action: dict[str, Any],
 ) -> dict[str, Any]:
+    if runtime.observation is None or await runtime.observation.is_active():
+        raise HTTPException(409, "Observation mode suppresses requested actions")
     if not request_actions_allowed(
         runtime, issued_at=source["payload"]["submitted_at"]
     ):
