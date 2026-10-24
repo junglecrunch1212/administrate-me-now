@@ -139,6 +139,7 @@ from adminme.products.core.main import router as core_router
 from adminme.products.member.main import router as member_router
 from adminme.products.member.bridge_setup import router as member_bridge_setup_router
 from adminme.products.member.cos import router as member_cos_router
+from adminme.products.member.finance_metadata import router as finance_metadata_router
 from adminme.products.member.apple_service_settings import (
     router as apple_service_settings_router,
 )
@@ -4040,6 +4041,7 @@ def create_application(settings: RuntimeSettings) -> FastAPI:
     app.include_router(member_router)
     app.include_router(member_bridge_setup_router)
     app.include_router(member_cos_router)
+    app.include_router(finance_metadata_router)
     from adminme.products.member.google_connections import (
         router as google_connections_router,
     )

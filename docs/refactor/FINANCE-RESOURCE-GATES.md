@@ -492,3 +492,47 @@ The decision boundary is now structural, not another timing adjustment:
 Heavy analysis and activation remain disabled. The full capability/workflow
 backlog remains in the acceptance ledger; removal of this unsuccessful
 optimization does not complete the original W0–W7 scope.
+
+## Exact a26cada2 terminal evidence
+
+[Finance run 40108819429](https://github.com/junglecrunch1212/administrate-me-now/actions/runs/40108819429)
+completed with 975 functional checks passing and both raw resource gates
+failing. No diagnostic result substitutes for these gates. Both workloads used
+20 core requests/second plus 10 finance requests/second, 500 core samples per
+phase and 251 actual finance calls, on hosted Linux with Python 3.14.7.
+
+| Raw workload | Baseline before / after p95 | Mixed core p95 | Increase over larger baseline | Server before → mixed p95 |
+|---|---|---|---|---|
+| Light | 4.630 / 4.320 ms | 5.378 ms | 0.748 ms; 16.148% | 1.898 → 2.165 ms |
+| Accepted planning | 4.393 / 4.259 ms | 5.209 ms | 0.816 ms; 18.564% | 1.841 → 2.151 ms |
+
+The unchanged acceptance bound is 10%. Baseline drift is 0.310/0.134 ms;
+the server-side increases are 0.267/0.310 ms. The effect is therefore not solely
+client timing. The absolute added HTTP delay is small in these synthetic
+workloads, but the run does not measure end-to-end CoS answer latency, household
+Mini behavior, reminder delivery or a large ledger. It supplies no whole-process
+CPU utilization percentage. Summing overlapping instrumented spans would not
+produce one. Neither a saturated host nor harmless measurement noise is proven.
+
+The authority-reader diagnostic measured first-read RSS deltas of
+6,004,736–6,021,120 bytes, flat through another 1,000 reads; rebuild/reopen deltas
+were 6,467,584–6,483,968 bytes. The reader thread exited, while allocator RSS was
+retained. These are Linux synthetic reader costs, not a 256-KiB process bound or
+production memory-capacity evidence.
+
+The single matched Tasks no-op diagnostic removed 50 dispatches per mixed
+phase without uniformly improving latency. Planning client p95 at offsets
+0/12.5/25/37.5 ms was 5.581/8.114/5.467/4.350 ms in baseline and
+5.593/7.381/4.344/4.405 ms in control. This establishes cadence sensitivity, not
+a causal cure or a passing alternative phase. Its RSS includes trace buffers;
+all diagnostic reports remain `acceptance_eligible=false`. No production
+no-op optimization or delay tuning follows from this mixed result.
+
+The decision remains explicit: either retain the 10% relative gate and develop
+a causally supported structural reduction, or have the owner separately approve
+a representative absolute-latency/rate contract with its tradeoff stated. The
+latter could accept the observed sub-millisecond increase while weakening the
+current relative-isolation guarantee; it has not been adopted. Metadata-only
+reads and dated snapshot delivery must not be represented as resource-qualified
+full finance activation. The separate daily Sheets refresh engine is not a
+dependency of an accurately labeled accepted dated snapshot.

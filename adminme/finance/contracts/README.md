@@ -158,3 +158,117 @@ is not an initializer and cannot prove absence outside the selected history.
 
 This enabling change does not supply the narrower finance-only CoS permission,
 live bindings, private transport/import operation or deployment authorization.
+
+### Owner metadata discovery and separate CoS access
+
+**MODERNIZE:** the direct authenticated-owner operation is
+`POST /api/member/v1/finance/bindings`. It needs the existing trusted member
+ingress and current principal identity in the owner's own view. It needs no CoS
+delegation, provider enrollment, financial model or publication-processing flag.
+The **Books connection metadata** card at
+`/member/settings?section=cos-work` exposes the controls and receipt. Both owner
+and CoS metadata access default off.
+
+`GET/PUT /api/member/v1/settings/finance-metadata` reads or changes only that
+owner's two flags. PUT requires an exact current revision, strict boolean flags
+and idempotency key. It appends `settings.finance_metadata_changed@v1` before
+reporting success; no deployment configuration, plaintext journal or credentials
+are edited. Latest valid encrypted control survives restart, stale revisions
+fail, failed persistence does not enable access, and retrying an old enable after
+a newer disable returns current disabled state. Direct owner reads append
+`finance.metadata_inspected@v1`, with truthful member attribution and no raw
+financial values. The receipt records inspection, not proof of network delivery.
+
+The native `administrateme_finance_bindings` tool calls
+`POST /api/openclaw/v1/tools/finance-bindings`. Its separate CoS flag does not
+grant authority: the existing loopback credential, exact member/private host turn
+and current `read_context` delegation are still required. It retains the existing
+service-aware tool audit. Financial queries, imports, advice and model enablement
+remain separate. Metadata does not create a financial-answer session; ordinary
+private CoS transcript retention still applies.
+
+Both paths share the owner-filtered fixed-watermark reader described above,
+permit one in-flight metadata read, and cap results at 8 KiB before the constant
+provider-effect field. Disabled, busy, unavailable and incomplete states never
+assert empty history. Reads and control transitions share a per-owner lock;
+after the durable audit, a fresh control read and synchronous identity/role
+check precede return with no intervening await. CoS additionally re-resolves its
+current delegation and exact audience. Revocation cannot be passed by cached
+permission. No new identity or database connection is introduced.
+
+Tenant/owner come from current authentication. One explicitly supplied existing
+household Party ID can be checked through the scoped Parties query; only kind
+eligibility, ID and source event are returned, never names or contact data.
+`not_visible_or_missing` is not proof of global absence. No ID is enumerated,
+generated or selected as the Books binding. There is no local Books-registration
+or publisher-policy registry: reviewed publisher records remain authority for
+book ID and policy ID/version. Retained accepted history can report previous
+bindings. Verified-empty history proves only scoped app history at its watermark,
+not absence of publisher registration or authority to initialize a publication.
+
+### Delivery dependencies and recovery
+
+The dated PARTIAL snapshot is independent of daily Sheets refresh, formal
+statements and direct-provider freshness. Keep daily automation off. Preserve
+as-of/source clocks, unknowns, holds, partial coverage and non-additive views;
+never imply daily-current data or reliable affordability/payment safety.
+
+1. Engineering qualifies owner controls, native metadata, restart/audit,
+   isolation and final denial through hosted production composition and synthetic
+   browser checks. Current PR scope is `system-wide`, not a separately qualified
+   metadata component. The existing protected release selector requires exact
+   release-scope evidence plus Linux `system-consistency`, macOS
+   `system-rehearsal` and `bridge-installed-runtime`; the protected
+   `deterministic-consistency` result and current updater evidence remain binding.
+   Development-draft guards and the full-finance 10% latency gates stay unchanged.
+   A genuinely separate metadata release would first require a bounded component
+   contract and positive/negative selector tests; no relabeling substitutes for it.
+2. After protected release and explicit deployment approval, the owner can enable
+   **only their own metadata access** in the card, inspect the fixed-watermark
+   receipt and disable it again. No CoS grant is needed for this prerequisite.
+   Bound acceptance: correct owner identity/history receipt, hidden/absent entity
+   distinction, disabled and wrong-audience denials, retained audit and restart.
+   Live member rendering must use the authorized member-device procedure.
+3. Existing authorities then supply the household entity, publisher book/policy
+   ID/version and history disposition. The producer builds the canonical
+   accounting envelope, closed package and exact dated-projection anchor. An
+   independent reviewer/owner must inspect and pin the exact evidence set.
+   `ClosedPackage.approved_evidence` enforces exact-set equality in candidate
+   code; it is not a live approval UI. The package's index or summary-report hash
+   cannot self-approve its evidence.
+4. A private handoff requires exact package, destination ownership/audience,
+   retention and transfer approval. OpenAI Library exact-version upload and
+   materialization is a candidate reported by the coordinating task, not a
+   verified transfer here. The source cloud path is not local to this host.
+   The receiver must check every manifest byte count and SHA256 against the
+   independently approved source manifest; no signed URL, public link or Git
+   upload belongs in the handoff. No private file has been acquired by this work.
+5. Financial advisory use still needs the narrow finance-only permission and
+   supported publication/model activation operation. Current `read_context` is
+   broader private-context reading, not a finance-only permission. Import and
+   activation require action-time approval of exact bindings, digest set,
+   destination and owner scope; no provider writes or other member data follow.
+6. Before claiming usable projection/CoS, prove exact accepted and dated read-back,
+   expected stale/partial qualifications, owner isolation and revocation on the
+   activated immutable artifact. The daily engine is not a prerequisite.
+
+The concrete metadata recovery operation is PUT to the same Settings endpoint
+with both flags false, the current revision and a fresh request ID (or uncheck
+both boxes and save in the card). Read back disabled state and a denied metadata
+read; the append-only control, inspection and publication events remain intact.
+This supported transition needs no new CoS grant or adapter-config migration.
+Do not revoke unrelated standing permissions. After the new event types exist,
+prefer feature disable on a schema-aware runtime. Binary rollback requires a
+predecessor proven compatible with retained state; the existing guarded command
+is, with actual reviewed paths substituted at activation:
+
+```sh
+python -m bootstrap.cli --instance-root /absolute/reviewed/instance rollback \
+  --recovery-repository /absolute/clean/protected-main-checkout
+```
+
+Do not run it to test a candidate. Preserve the healthiest compatible runtime
+and retained history. A failed history read, privacy denial failure or new
+workflow regression triggers recovery and isolated diagnosis; rollback cannot
+erase disclosure. No live setting, grant, transfer, import or deployment is
+performed by this code/test work.

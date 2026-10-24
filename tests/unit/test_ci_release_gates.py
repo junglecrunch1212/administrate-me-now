@@ -908,6 +908,17 @@ def test_enrollment_worker_requires_complete_affected_contract_and_final_binding
             if step.get("name") == "Validate enrollment browser behavior"
         )
         assert "if" not in browser
+        assert browser["id"] == "enrollment_browser"
+        artifact = next(
+            step
+            for step in job["steps"]
+            if step.get("name") == "Retain targeted browser evidence"
+        )
+        assert (
+            artifact["if"]
+            == "${{ !cancelled() && steps.enrollment_browser.outcome != 'skipped' }}"
+        )
+        assert artifact["with"]["if-no-files-found"] == "error"
         assert browser["env"]["ADMINME_GATE7_BRIDGE_ENROLLMENT_ONLY"] == "1"
         assert "test:gate7" in browser["run"]
 

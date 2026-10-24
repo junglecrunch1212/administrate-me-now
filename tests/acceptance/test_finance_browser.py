@@ -442,6 +442,55 @@ async def test_owner_saves_goal_and_preference_then_reloads(tmp_path):
             (output / "finance-choices-synthetic.png").write_bytes(
                 base64.b64decode(screenshot["data"])
             )
+            await call(
+                "Page.navigate",
+                {"url": f"http://127.0.0.1:{port}/member/settings?section=cos-work"},
+            )
+            await wait_for(
+                "document.querySelector('.finance-metadata-settings')?.textContent.includes('Your metadata access is disabled.')"
+            )
+            await evaluate("""(() => {
+              const card = document.querySelector('.finance-metadata-settings');
+              card.querySelector('[name=owner_metadata]').checked = true;
+              card.querySelector('form').requestSubmit();
+            })()""")
+            await wait_for(
+                "document.querySelector('.finance-metadata-settings').textContent.includes('Your metadata access is enabled.')"
+            )
+            await evaluate(
+                "Array.from(document.querySelectorAll('.finance-metadata-settings button')).find(b=>b.textContent==='Inspect retained bindings').click()"
+            )
+            await wait_for(
+                "document.querySelector('.finance-metadata-result')?.dataset.state === 'populated'"
+            )
+            assert await evaluate(
+                "!document.querySelector('.finance-metadata-settings [name=cos_metadata]').checked"
+            )
+            assert await evaluate(
+                "!document.querySelector('.finance-metadata-result').textContent.includes('value_minor')"
+            )
+            await evaluate(
+                "document.querySelector('.finance-metadata-settings').scrollIntoView({block:'start'})"
+            )
+            metadata_shot = await call("Page.captureScreenshot", {"format": "png"})
+            (output / "finance-metadata-synthetic.png").write_bytes(
+                base64.b64decode(metadata_shot["data"])
+            )
+            await evaluate("""(() => {
+              const card = document.querySelector('.finance-metadata-settings');
+              card.querySelector('[name=owner_metadata]').checked = false;
+              card.querySelector('form').requestSubmit();
+            })()""")
+            await wait_for(
+                "document.querySelector('.finance-metadata-settings').textContent.includes('History is preserved.')"
+            )
+            await call("Page.reload")
+            await wait_for(
+                "document.querySelector('.finance-metadata-settings')?.textContent.includes('Your metadata access is disabled.')"
+            )
+            assert await evaluate(
+                "!document.querySelector('.finance-metadata-settings [name=owner_metadata]').checked && document.querySelector('.finance-metadata-result').textContent === ''"
+            )
     finally:
         receive.close()
         listener.close()

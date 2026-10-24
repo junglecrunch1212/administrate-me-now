@@ -7,6 +7,8 @@ export const FINANCE_TOOLS = new Set([
   "administrateme_finance_calculate", "administrateme_finance_job",
 ]);
 
+export const METADATA_TOOLS = new Set(["administrateme_finance_bindings"]);
+
 type HostContext = { runId?: string | undefined; sessionKey?: string | undefined; agentId?: string | undefined };
 type Audience = { sessionKey: string; agentId: string; actorId: string; accountId: string; channelId: string };
 type Binding = Audience & { runId: string; expiresAt: number };
@@ -121,7 +123,7 @@ export function registerFinanceTurns(api: OpenClawPluginApi, runtime: PluginRunt
   });
 }
 
-export function bindFinanceTurn(runtime: PluginRuntime, context: HostContext, callId: string | undefined): boolean {
+export function bindFinanceTurn(runtime: PluginRuntime, context: HostContext, callId: string | undefined, financialContent = true): boolean {
   if (!callId || callId.length > 300 || !context.runId) return false;
   const admitted = runs.get(runtime)?.get(context.runId);
   const audience = privateAudience(runtime, context);
@@ -131,10 +133,13 @@ export function bindFinanceTurn(runtime: PluginRuntime, context: HostContext, ca
   prune(bindings);
   if (bindings.size >= 256) return false;
   bindings.set(callId, admitted);
-  let active = activeFinance.get(runtime);
-  if (!active) { active = new Map(); activeFinance.set(runtime, active); }
-  // At most the already bounded 256 active run bindings can be represented.
-  active.set(admitted.sessionKey, admitted.runId);
+  if (financialContent) {
+    let active = activeFinance.get(runtime);
+    if (!active) { active = new Map(); activeFinance.set(runtime, active); }
+    // Operational binding metadata does not enable financial answers or models.
+    // At most the already bounded 256 active run bindings can be represented.
+    active.set(admitted.sessionKey, admitted.runId);
+  }
   return true;
 }
 

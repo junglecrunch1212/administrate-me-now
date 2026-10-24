@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
+import json
 import re
 from typing import Any
 
@@ -143,3 +145,74 @@ async def binding_metadata(
         "state": "populated" if selected else "verified_empty",
         "bindings": selected,
     }
+
+
+async def household_entity_metadata(
+    runtime: Any, session: Session, party_id: str | None
+) -> dict[str, Any]:
+    """Verify one supplied existing Party, never enumerate or mint identities."""
+    if party_id is None:
+        return {"state": "exact_existing_id_required", "authority": "parties"}
+    if runtime.projections is None:
+        return {"state": "schema_unavailable", "authority": "parties"}
+    from adminme.projections.parties.queries import get_party
+
+    def read(conn: Any) -> dict[str, Any]:
+        party = get_party(conn, session, party_id=party_id)
+        if party is None:
+            # A scoped query cannot prove global absence. No guessed ID is echoed.
+            return {"state": "not_visible_or_missing", "authority": "parties"}
+        if party["kind"] != "household" or party.get("qualification") != "qualified":
+            return {"state": "not_eligible_household", "authority": "parties"}
+        return {
+            "state": "visible_household_record",
+            "authority": "parties",
+            "party_id": party["party_id"],
+            "last_event_id": party["last_event_id"],
+            "binding_selected": False,
+        }
+
+    return await runtime.projections.read("parties", read)
+
+
+async def inspect_metadata(
+    runtime: Any, session: Session, book_id: str | None, household_party_id: str | None
+) -> dict[str, Any]:
+    """Already-authorized bounded read shared by direct owner and delegated CoS."""
+    lock = runtime.settings_command_locks.setdefault(
+        "finance-metadata:read", asyncio.Lock()
+    )
+    if lock.locked():
+        return {
+            "state": "temporarily_unavailable",
+            "reason": "metadata_read_busy",
+            "bindings": [],
+            "completeness": {"complete": False},
+        }
+    async with lock:
+        result = await binding_metadata(runtime, session, book_id)
+        result["identity"] = {
+            "tenant_id": session.tenant_id,
+            "owner_id": session.auth_member_id,
+        }
+        result["household_entity"] = await household_entity_metadata(
+            runtime, session, household_party_id
+        )
+        result["publisher_policy"] = {
+            "state": "external_authority_required",
+            "authority": "publisher_reviewed_policy",
+            "local_registry_supported": False,
+        }
+        result["book_registration"] = {
+            "state": "external_authority_required",
+            "authority": "publisher_registry_or_retained_accepted_history",
+            "local_registry_supported": False,
+        }
+        if len(json.dumps(result, ensure_ascii=True, allow_nan=False).encode()) > 8192:
+            return {
+                "state": "history_incomplete",
+                "reason": "metadata_output_limit",
+                "bindings": [],
+                "completeness": {"complete": False},
+            }
+        return result

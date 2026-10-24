@@ -614,6 +614,7 @@ jobs:
           poetry -C bridge check --lock
 
       - name: Validate enrollment browser behavior
+        id: enrollment_browser
         env:
           ADMINME_GATE7_BRIDGE_ENROLLMENT_ONLY: "1"
           ADMINME_GATE7_EVIDENCE_DIR: ${{ runner.temp }}/adminme-bridge-development-browser
@@ -623,7 +624,7 @@ jobs:
           npm run test:gate7 --prefix tools/console-reference-harness
 
       - name: Retain targeted browser evidence
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.enrollment_browser.outcome != 'skipped' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: targeted-bridge-browser

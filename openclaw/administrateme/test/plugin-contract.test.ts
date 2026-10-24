@@ -193,7 +193,7 @@ describe("native OpenClaw contract fixture", () => {
       await handler.handler({ cleanedBody: "Review my finance question." }, { ...context, runId: "host-run" });
     }
     expect(runtime.hooks.get("before_agent_reply")![0]!.options).toMatchObject({ eligibleTriggers: ["user"] });
-    const names = ["status", "query", "calculate", "job"];
+    const names = ["status", "query", "calculate", "job", "bindings"];
     for (const suffix of names) {
       const name = `administrateme_finance_${suffix}`;
       const tool = runtime.tools.get(name)!(context) as AnyAgentTool;
@@ -229,6 +229,24 @@ describe("native OpenClaw contract fixture", () => {
     expect(fetchMock.mock.calls.length).toBe(count);
   });
 
+  it("binds metadata to a private host turn without enabling financial answer state", async () => {
+    const agent = "adminme-0123456789abcdef";
+    const peer = "0123456789abcdefabcd";
+    const signature = createHmac("sha256", process.env.ADMINME_OPENCLAW_SHARED_SECRET!).update(`portal-session|${peer}`).digest("hex").slice(0, 32);
+    const runtime = fakeApi({ memberAgentIds: [agent] });
+    const context = { agentId: agent, sessionKey: `agent:${agent}:administrateme-portal-${peer}-${signature}`, messageChannel: "gateway", runId: "metadata-run", toolCallId: "metadata-call" };
+    for (const handler of runtime.hooks.get("before_agent_reply")!) await handler.handler({ cleanedBody: "Inspect my bindings." }, context);
+    expect(await runtime.hooks.get("before_tool_call")![0]!.handler({ toolName: "administrateme_finance_bindings", params: {}, toolCallId: "metadata-call" }, context)).toBeUndefined();
+    const tool = runtime.tools.get("administrateme_finance_bindings")!(context) as AnyAgentTool;
+    await tool.execute("metadata-call", { book_id: "known-book" });
+    expect(String(fetchMock.mock.calls[0]![0])).toContain("/api/openclaw/v1/tools/finance-bindings");
+    expect(requestBody(fetchMock)).toMatchObject({ book_id: "known-book", provenance: { message_id: "finance-run:metadata-run" } });
+    const write = runtime.hooks.get("before_message_write")![0]!.handler;
+    expect(await write({ sessionKey: context.sessionKey, message: { role: "assistant", content: [{ type: "text", text: "The retained history is empty." }] } }, context)).toBeUndefined();
+    const persist = runtime.hooks.get("tool_result_persist")![0]!.handler;
+    expect(await persist({ toolName: "administrateme_finance_bindings", message: { role: "toolResult", content: [{ type: "text", text: "verified_empty" }] } }, context)).toBeUndefined();
+  });
+
   it("admits only the exactly configured private iMessage finance audience", async () => {
     const agent = "adminme-0123456789abcdef";
     const account = "fixture-finance";
@@ -251,7 +269,7 @@ describe("native OpenClaw contract fixture", () => {
     const runtime = fakeApi();
     expect(pkg.peerDependencies.openclaw).toBe(OPENCLAW_VERSION);
     expect(pkg.openclaw.build.openclawCommit).toBe(OPENCLAW_COMMIT);
-    expect([...runtime.tools]).toHaveLength(36);
+    expect([...runtime.tools]).toHaveLength(37);
     expect([...runtime.commands]).toHaveLength(9);
     expect([...runtime.gateways]).toHaveLength(18);
     expect(runtime.gateways.has("administrateme.cosPermissions.preflight")).toBe(true);
@@ -525,7 +543,7 @@ describe("native OpenClaw contract fixture", () => {
   it("exposes tools without starting services during tool discovery", () => {
     const runtime = fakeApi({}, "tool-discovery");
     expect([...runtime.gateways]).toHaveLength(14);
-    expect([...runtime.tools]).toHaveLength(36);
+    expect([...runtime.tools]).toHaveLength(37);
     for (const name of ["status", "query", "calculate", "job"]) {
       expect(runtime.tools.has(`administrateme_finance_${name}`)).toBe(true);
     }

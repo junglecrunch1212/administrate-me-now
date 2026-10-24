@@ -5542,6 +5542,62 @@ function cosPrivatePermissionsCard(data, updateDelegations) {
   lock(); void reconcile(); return card;
 }
 
+function financeMetadataSettingsCard(data) {
+  const card = document.createElement("section"); card.className = "card finance-metadata-settings";
+  const identity = data.control.identity;
+  card.append(text("h2", "Books connection metadata"), text("p", "Inspect your retained Books bindings and publication history. This shows identifiers and completeness, without financial values. Daily refresh remains separate."));
+  if (!identity.can_mutate || identity.authenticated_role !== "principal" || identity.viewing_as || identity.authenticated_member_id !== identity.view_member_id) {
+    card.append(text("p", "Available only in your own authenticated principal view.", "state-note")); return card;
+  }
+  let policy = null; let busy = false;
+  const status = text("p", "Checking metadata access…", "state-note"); status.setAttribute("role", "status");
+  const form = document.createElement("form");
+  const owner = document.createElement("input"); owner.type = "checkbox"; owner.name = "owner_metadata";
+  const cos = document.createElement("input"); cos.type = "checkbox"; cos.name = "cos_metadata";
+  for (const [input, label] of [[owner, "Allow me to inspect my Books metadata"], [cos, "Allow CoS to inspect my Books metadata"]]) {
+    const wrap = document.createElement("label"); wrap.className = "bridge-capability-choice"; wrap.append(input, text("span", label)); form.append(wrap);
+  }
+  form.append(text("p", "Your own access needs no CoS grant. CoS also needs your existing private-context read permission; this control does not grant it or enable financial advice.", "state-note"));
+  const save = text("button", "Save metadata access", "button button-primary"); save.type = "submit";
+  const refresh = text("button", "Check metadata access", "button button-secondary"); refresh.type = "button";
+  form.append(save, refresh);
+  const book = document.createElement("input"); book.type = "text"; book.maxLength = 120;
+  const household = document.createElement("input"); household.type = "text"; household.maxLength = 120;
+  const selection = document.createElement("details"); selection.append(text("summary", "Select known bindings (optional)"), field("Existing book ID", book), field("Existing household Party ID", household));
+  const inspect = text("button", "Inspect retained bindings", "button button-secondary"); inspect.type = "button";
+  const output = document.createElement("div"); output.className = "finance-metadata-result";
+  function controls() { for (const el of [owner, cos, save, refresh, book, household, inspect]) el.disabled = busy || !policy; refresh.disabled = busy; inspect.disabled = busy || !policy?.owner_read_enabled; }
+  function apply(value) { policy = value; owner.checked = value.owner_read_enabled; cos.checked = value.cos_read_enabled; controls(); }
+  async function reload() {
+    busy = true; controls(); output.replaceChildren();
+    try { apply(await api("/api/member/v1/settings/finance-metadata")); status.textContent = policy.owner_read_enabled ? "Your metadata access is enabled." : "Your metadata access is disabled."; }
+    catch (error) { policy = null; status.textContent = `Access could not be verified. ${error.message}`; }
+    finally { busy = false; controls(); }
+  }
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault(); if (busy || !policy) return;
+    busy = true; controls(); output.replaceChildren();
+    try {
+      apply(await api("/api/member/v1/settings/finance-metadata", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ request_id: crypto.randomUUID(), expected_revision: policy.revision, owner_read_enabled: owner.checked, cos_read_enabled: cos.checked }) }));
+      status.textContent = policy.owner_read_enabled ? "Your metadata access is enabled." : "Your metadata access is disabled. History is preserved.";
+    } catch (error) { policy = null; status.textContent = `Save could not be verified. Check metadata access before trying again. ${error.message}`; }
+    finally { busy = false; controls(); }
+  });
+  refresh.addEventListener("click", () => { void reload(); });
+  inspect.addEventListener("click", async () => {
+    if (busy || !policy?.owner_read_enabled) return;
+    busy = true; controls(); output.replaceChildren();
+    try {
+      const result = await api("/api/member/v1/finance/bindings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ book_id: book.value.trim() || null, household_party_id: household.value.trim() || null }) });
+      output.dataset.state = result.state;
+      output.append(text("h3", titleCase(result.state)), text("p", result.qualification || "Unavailable or incomplete access is not evidence of empty history."));
+      const details = document.createElement("details"); details.append(text("summary", "Exact binding receipt"), text("pre", JSON.stringify(result, null, 2))); output.append(details);
+    } catch (error) { status.textContent = `Metadata could not be read. ${error.message}`; }
+    finally { busy = false; controls(); }
+  });
+  card.append(status, form, selection, inspect, output); controls(); void reload(); return card;
+}
+
 function howCosWorksSettings(data) {
   const fragment = document.createDocumentFragment(); const model = data.control.how_my_cos_works || {}; const identity = data.control.cos_identity || {};
   const identityCard = document.createElement("section"); identityCard.className = "card settings-safety"; identityCard.append(text("p", "SAME COS · ISOLATED MEMBER CONTEXT", "eyebrow"), text("h2", "One household service principal, one private adult context")); const facts = document.createElement("dl"); facts.className = "settings-facts"; for (const [label, value] of [["Service principal", identity.service_principal_id], ["Household Party", identity.party_id], ["Active member", identity.active_member_context], ["OpenClaw agent", identity.openclaw_agent_id], ["Shared generic memory", identity.generic_member_memory_shared ? "Yes" : "No"], ["Raw cross-member context", identity.raw_cross_member_context ? "Yes" : "No"]]) facts.append(text("dt", label), text("dd", value)); identityCard.append(facts); fragment.append(identityCard);
@@ -5558,7 +5614,7 @@ function howCosWorksSettings(data) {
     if (!items.length) delegationList.append(text("li", "No delegation is visible in this context.", "empty"));
   }
   updateDelegations(model.delegations || []);
-  fragment.append(cosPrivatePermissionsCard(data, updateDelegations), delegations);
+  fragment.append(cosPrivatePermissionsCard(data, updateDelegations), financeMetadataSettingsCard(data), delegations);
   const compiled = model.compiled_context; if (compiled) { const contextCard = document.createElement("details"); contextCard.className = "card settings-advanced"; contextCard.append(text("summary", "Compiled effective CoS context"), text("p", `Digest ${compiled.digest} · built only from typed state.`, "state-note")); contextCard.append(permissionList("Explicitly excluded", compiled.excluded || [])); fragment.append(contextCard); }
   return fragment;
 }

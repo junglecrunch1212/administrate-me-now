@@ -845,6 +845,46 @@ class EventLog:
         )
         return list(self._conn.execute(sql, params))
 
+    async def read_finance_metadata_control(
+        self, tenant_id: str, owner_id: str
+    ) -> dict[str, Any] | None:
+        """One bounded latest operational control on the already-open worker."""
+        if not tenant_id or not owner_id:
+            raise ValueError("exact tenant and owner are required")
+        return await self._run_locked(
+            self._read_finance_metadata_control, tenant_id, owner_id
+        )
+
+    def _read_finance_metadata_control(
+        self, tenant_id: str, owner_id: str
+    ) -> dict[str, Any] | None:
+        deadline = time.monotonic() + 0.1
+        steps = 0
+
+        def bounded() -> int:
+            nonlocal steps
+            steps += 1000
+            return int(steps > 100_000 or time.monotonic() > deadline)
+
+        self._conn.set_progress_handler(bounded, 1000)
+        try:
+            row = self._conn.execute(
+                "SELECT event_id,schema_version,actor_identity,visibility_scope,"
+                "CASE WHEN length(CAST(payload AS BLOB))<=4096 THEN payload END AS payload "
+                "FROM events WHERE tenant_id=? AND owner_scope=? "
+                "AND type='settings.finance_metadata_changed' ORDER BY event_id DESC LIMIT 1",
+                (tenant_id, f"private:{owner_id}"),
+            ).fetchone()
+            if row is None:
+                return None
+            value = dict(row)
+            value["payload"] = json.loads(value["payload"])
+            return value
+        except (sqlcipher3.DatabaseError, TypeError, ValueError):
+            raise RuntimeError("finance_metadata_control_unavailable") from None
+        finally:
+            self._conn.set_progress_handler(None, 0)
+
     async def read_finance_binding_metadata(
         self, tenant_id: str, owner_id: str
     ) -> dict[str, Any]:

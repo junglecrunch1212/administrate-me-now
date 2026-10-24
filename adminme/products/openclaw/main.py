@@ -4181,6 +4181,11 @@ class FinanceQueryRequest(ContextRequest):
     limit: int = Field(default=50, ge=1, le=100)
 
 
+class FinanceBindingsRequest(ContextRequest):
+    book_id: str | None = Field(default=None, min_length=1, max_length=120)
+    household_party_id: str | None = Field(default=None, min_length=1, max_length=120)
+
+
 class FinanceCalculateRequest(ContextRequest):
     calculator_id: str = Field(
         min_length=1, max_length=80, pattern=r"^[a-z][a-z0-9_]*$"
@@ -4255,14 +4260,13 @@ async def _finance_session(request: Request, provenance: Provenance) -> Session:
     return Session(**values)
 
 
-def _finance_private_context(
+def _private_member_tool_context(
     runtime: Any, session: Session, provenance: Provenance
 ) -> bool:
-    """Bind disclosure to the exact private audience, not just the sender."""
+    """Bind a service read to its exact private member audience."""
     if (
         provenance.call_kind != "tool"
         or provenance.thread_id is not None
-        or not (provenance.message_id or "").startswith("finance-run:")
         or provenance.agent_id != member_agent_id(session.auth_member_id)
     ):
         return False
@@ -4289,6 +4293,68 @@ def _finance_private_context(
             == session.auth_member_id
         )
     return False
+
+
+def _finance_private_context(
+    runtime: Any, session: Session, provenance: Provenance
+) -> bool:
+    return (provenance.message_id or "").startswith("finance-run:") and (
+        _private_member_tool_context(runtime, session, provenance)
+    )
+
+
+def _metadata_permitted(runtime: Any, session: Session, provenance: Provenance) -> bool:
+    return bool(
+        session.auth_role == "principal"
+        and not session.is_view_as
+        and runtime.settings.member_roles.get(session.auth_member_id) == "principal"
+        and session.tenant_id == runtime.settings.instance.tenant_id
+        and f"private:{session.auth_member_id}" in session.allowed_scopes
+        and _finance_private_context(runtime, session, provenance)
+    )
+
+
+@router.post("/tools/finance-bindings")
+async def finance_bindings(
+    body: FinanceBindingsRequest, request: Request
+) -> dict[str, Any]:
+    """Independently gated operational metadata, with no financial model/ingress."""
+    from adminme.finance.metadata import inspect_metadata
+    from adminme.finance.metadata_control import control_lock, control_state
+
+    runtime = _runtime(request)
+    session = _session(request, body.provenance)
+    permitted = _metadata_permitted(runtime, session, body.provenance)
+    async with control_lock(runtime, session):
+        policy = await control_state(runtime, session) if permitted else None
+        result: dict[str, Any] = {
+            "state": "access_unavailable",
+            "bindings": [],
+            "completeness": {"complete": False},
+        }
+        if permitted and policy and policy["cos_read_enabled"]:
+            result = await inspect_metadata(
+                runtime, session, body.book_id, body.household_party_id
+            )
+        watermark = result.get("completeness", {}).get("through_event_id")
+        await _record_tool_call(
+            request,
+            session,
+            body.provenance,
+            operation="finance.bindings.inspect",
+            result_event_ids=[watermark] if watermark else [],
+        )
+        current_policy = await control_state(runtime, session) if permitted else None
+        # Final policy read and synchronous identity/grant check, with the control
+        # lock held: supported disable transitions cannot interleave disclosure.
+        latest = _session(request, body.provenance)
+        if permitted and (
+            latest != session
+            or current_policy != policy
+            or not _metadata_permitted(runtime, latest, body.provenance)
+        ):
+            raise HTTPException(403, "finance_metadata_authority_changed")
+        return {**result, "provider_effect_count": 0}
 
 
 def _finance_permitted(runtime: Any, session: Session, provenance: Provenance) -> bool:

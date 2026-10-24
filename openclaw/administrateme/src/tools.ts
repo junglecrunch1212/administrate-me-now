@@ -8,7 +8,7 @@ import { provenanceFromTool } from "./provenance.js";
 import { toolResult } from "./result.js";
 import { trackSession, type PluginRuntime } from "./runtime.js";
 import { waitForApprovalPublication } from "./approval.js";
-import { FINANCE_TOOLS, takeFinanceTurn } from "./finance-turns.js";
+import { FINANCE_TOOLS, METADATA_TOOLS, takeFinanceTurn } from "./finance-turns.js";
 
 const ItemKind = Type.Union([Type.Literal("task"), Type.Literal("commitment")]);
 const LifecycleAction = Type.Union([
@@ -120,7 +120,7 @@ function makeTool(
         definition.standingOrder ? "standing_order" : "tool",
         runtime.transport.config.sharedSecretEnv,
       );
-      if (FINANCE_TOOLS.has(definition.name)) {
+      if (FINANCE_TOOLS.has(definition.name) || METADATA_TOOLS.has(definition.name)) {
         provenance.message_id = takeFinanceTurn(runtime, id, context);
       }
       trackSession(runtime, provenance);
@@ -182,6 +182,15 @@ function makeTool(
 
 export function registerTools(api: OpenClawPluginApi, runtime: PluginRuntime): void {
   const definitions = [
+    {
+      name: "administrateme_finance_bindings",
+      description: "Inspect only owner-private Books binding/history metadata and one supplied existing household Party ID. Separately enabled; requires current private read authority. No financial values, import, identity creation or advice. Empty accepted history does not prove absent publisher registrations.",
+      parameters: Type.Object({
+        book_id: Type.Optional(Type.String({ minLength: 1, maxLength: 120 })),
+        household_party_id: Type.Optional(Type.String({ minLength: 1, maxLength: 120 })),
+      }, { additionalProperties: false }),
+      path: "/api/openclaw/v1/tools/finance-bindings",
+    },
     {
       name: "administrateme_finance_status",
       description: "Check one private finance capability or accepted-publication status; include_bindings requests only bounded app bindings and a fixed-watermark completeness receipt. Missing evidence is not zero; this grants no action authority.",
