@@ -32,7 +32,9 @@ FULL_PHASES = (
 SMOKE_PHASES = tuple(
     (name, 1, 4, 2 if finance else 0) for name, _, _, finance in FULL_PHASES
 )
-TRACE = contextvars.ContextVar("synthetic_http_trace", default=None)
+TRACE: contextvars.ContextVar[dict | None] = contextvars.ContextVar(
+    "synthetic_http_trace", default=None
+)
 
 
 def append_record(path: Path, value: dict) -> None:
@@ -314,7 +316,7 @@ class OwnedProcessTree:
     def sample(self, phase: str) -> dict:
         rows: dict[int, dict] = {}
         errors = []
-        queue = [(self.pid, None)]
+        queue: list[tuple[int, int | None]] = [(self.pid, None)]
         while queue:
             pid, parent = queue.pop()
             if pid in rows:

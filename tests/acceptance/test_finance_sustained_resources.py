@@ -10,6 +10,7 @@ import platform
 import socket
 import time
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -48,7 +49,7 @@ async def _diagnostic(tmp_path: Path, workload: str, *, smoke: bool) -> dict:
         os.environ.get("FINANCE_RESOURCE_ARTIFACT_DIR", str(tmp_path / "evidence"))
     ) / (workload + ("-smoke" if smoke else "-sustained"))
     output.mkdir(parents=True, exist_ok=False)
-    report = {
+    report: dict[str, Any] = {
         "contract": "synthetic-finance-sustained-resources-v1",
         "diagnostic_only": True,
         "acceptance_eligible": False,
@@ -106,6 +107,7 @@ async def _diagnostic(tmp_path: Path, workload: str, *, smoke: bool) -> dict:
     )
     server.start()
     send.close()
+    assert server.pid is not None
     report["runtime_pid"] = server.pid
     tree = OwnedProcessTree(server.pid)
     current_phase = "startup"
@@ -168,7 +170,7 @@ async def _diagnostic(tmp_path: Path, workload: str, *, smoke: bool) -> dict:
         for name, duration, core_rate, finance_rate in phases:
             current_phase = name
             start = time.monotonic() + 0.5
-            phase_result = {
+            phase_result: dict[str, Any] = {
                 "name": name,
                 "start_at": start,
                 "end_at": start + duration,
