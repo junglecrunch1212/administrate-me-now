@@ -50,6 +50,7 @@ def settings(path: Path) -> Any:
         base_settings(path),
         member_chat_enabled_members=frozenset({MEMBER_A, MEMBER_B}),
         deterministic_member_chat_fixture=True,
+        openclaw_model_configured=True,
         openclaw_shared_secret=SECRET,
     )
 

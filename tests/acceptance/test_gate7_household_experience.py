@@ -662,17 +662,47 @@ def test_member_chat_is_openclaw_owned_isolated_and_server_authorized(
             + css_asset.text
             + client.get("/member-assets/index.html").text
         )
-        persisted_events = json.dumps(
-            client.portal.call(_events, runtime), sort_keys=True
-        )
+        retained = client.portal.call(_events, runtime)
+        persisted_events = json.dumps(retained, sort_keys=True)
         response_metadata = repr(dict(member_page.headers)) + repr(
             dict(adult_history.headers)
         )
         signed_session = runtime.member_chat_binding(ADULT)[1]
+        # A current human instruction retains its exact authenticated binding in
+        # encrypted, member-private history. It must not leak into another audit,
+        # a public surface, response metadata or a plaintext file.
+        bound_instructions = [
+            event
+            for event in retained
+            if signed_session in json.dumps(event, sort_keys=True)
+        ]
+        assert len(bound_instructions) == 1
+        instruction = bound_instructions[0]
+        assert instruction["type"] == "cos.conversation.instruction"
+        assert instruction["schema_version"] == 1
+        assert (
+            instruction["owner_scope"]
+            == instruction["visibility_scope"]
+            == f"private:{ADULT}"
+        )
+        assert (
+            instruction["actor_identity"]
+            == instruction["payload"]["member_id"]
+            == ADULT
+        )
+        assert instruction["payload"]["session_key"] == signed_session
+        other_events = json.dumps(
+            [
+                event
+                for event in retained
+                if event["event_id"] != instruction["event_id"]
+            ],
+            sort_keys=True,
+        )
         for sensitive_value in (SECRET, signed_session):
-            assert (
-                sensitive_value
-                not in diagnostics + assets + persisted_events + response_metadata
+            assert sensitive_value not in diagnostics + assets + response_metadata
+            assert sensitive_value not in (
+                persisted_events if sensitive_value == SECRET else other_events
             )
             for stored_file in instance.rglob("*"):
                 if stored_file.is_file():
