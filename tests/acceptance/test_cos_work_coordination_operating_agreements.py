@@ -1058,3 +1058,133 @@ def test_g06_encrypted_backup_restore_preserves_structured_state(
         assert agreement is not None and agreement["state"] == "active"
         assert runtime.fixture_adapter.delivered == []
         assert client.portal.call(_provider_effect_count, runtime) == 0
+
+
+def test_startup_retains_newer_constitution_without_appending_an_older_floor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import hashlib
+    import adminme.runtime.application as application
+
+    config = _settings(tmp_path / "instance")
+
+    async def retained(runtime):
+        return [
+            event
+            async for event in runtime.event_log.read_since()
+            if event["type"] != "runtime.started"
+        ]
+
+    with TestClient(create_application(config)) as client:
+        before = client.portal.call(retained, client.app.state.runtime)
+    original_payload = application.constitutional_agreement_payload
+
+    def older_release_payload(**kwargs):
+        payload = original_payload(**kwargs)
+        payload["revision"] = 1
+        payload["rule"]["rule_id"] = "household-cos-safety-v1"
+        payload["definition_digest"] = hashlib.sha256(
+            json.dumps(payload["rule"], sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        return payload
+
+    monkeypatch.setattr(
+        application, "constitutional_agreement_payload", older_release_payload
+    )
+    with TestClient(create_application(config)) as client:
+        runtime = client.app.state.runtime
+        assert client.portal.call(retained, runtime) == before
+        rows = (
+            runtime.projections.connection("parties")
+            .execute(
+                "SELECT revision, state FROM operating_agreements "
+                "WHERE tenant_id=? AND agreement_id=? ORDER BY revision",
+                (config.instance.tenant_id, "constitutional:household-cos-safety"),
+            )
+            .fetchall()
+        )
+        assert [dict(row) for row in rows] == [{"revision": 2, "state": "active"}]
+        assert client.portal.call(_provider_effect_count, runtime) == 0
+        assert runtime.fixture_adapter.delivered == []
+
+
+def test_parties_version_replays_late_old_constitution_without_rewriting_history(
+    tmp_path: Path,
+) -> None:
+    import hashlib
+    from adminme.operating_agreements import constitutional_agreement_payload
+
+    config = _settings(tmp_path / "instance")
+
+    async def retained(runtime):
+        return [
+            event
+            async for event in runtime.event_log.read_since()
+            if event["type"] != "runtime.started"
+        ]
+
+    with TestClient(create_application(config)) as client:
+        runtime = client.app.state.runtime
+        now = EventEnvelope.now_utc_iso()
+        old = constitutional_agreement_payload(
+            adult_principal_ids=[A, B], registered_at=now, repository_root=REPO_ROOT
+        )
+        old["revision"] = 1
+        old["rule"]["rule_id"] = "household-cos-safety-v1"
+        old["rule"]["prohibitions"] = ["cross_member_private_evidence_disclosure"]
+        old["definition_digest"] = hashlib.sha256(
+            json.dumps(old["rule"], sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        event = EventEnvelope(
+            event_at_ms=1,
+            tenant_id=config.instance.tenant_id,
+            type="operating_agreement.constitution_registered",
+            schema_version=1,
+            occurred_at=now,
+            source_adapter="constitutional-operating-agreement",
+            source_account_id="release-baseline",
+            actor_identity="system:constitutional-safety",
+            owner_scope="shared:household",
+            visibility_scope="shared:household",
+            sensitivity="normal",
+            payload=old,
+        )
+        event_id = client.portal.call(runtime.events.write, event)
+        client.portal.call(runtime.wait_for_projection, "parties", event_id)
+        conn = runtime.projections.connection("parties")
+        # Reproduce the historical v4 derived cache, retaining actual late-v1
+        # source history. Startup must repair it by replay, not by rewriting facts.
+        conn.execute(
+            "UPDATE operating_agreements SET state='active' WHERE layer='constitutional'"
+        )
+        conn.execute("UPDATE _projection_meta SET value='4' WHERE key='version'")
+        conn.commit()
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM operating_agreements WHERE layer='constitutional' AND state='active'"
+            ).fetchone()[0]
+            == 2
+        )
+        before = client.portal.call(retained, runtime)
+
+    for _ in range(2):
+        with TestClient(create_application(config)) as client:
+            runtime = client.app.state.runtime
+            conn = runtime.projections.connection("parties")
+            rows = conn.execute(
+                "SELECT revision, state FROM operating_agreements "
+                "WHERE tenant_id=? AND layer='constitutional' ORDER BY revision",
+                (config.instance.tenant_id,),
+            ).fetchall()
+            assert [dict(row) for row in rows] == [
+                {"revision": 1, "state": "superseded"},
+                {"revision": 2, "state": "active"},
+            ]
+            assert (
+                conn.execute(
+                    "SELECT value FROM _projection_meta WHERE key='version'"
+                ).fetchone()[0]
+                == "5"
+            )
+            assert client.portal.call(retained, runtime) == before
+            assert client.portal.call(_provider_effect_count, runtime) == 0

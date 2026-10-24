@@ -58,6 +58,20 @@ jobs:
           path: ${{ runner.temp }}/finance-event-lifecycle-catalog.json
           if-no-files-found: error
           retention-days: 7
+      - name: Diagnose synthetic idle connection handoff without retries
+        timeout-minutes: 2
+        env:
+          ADMINME_FINANCE_IDLE_DIAGNOSTIC: '1'
+          FINANCE_IDLE_ARTIFACT_DIR: ${{ runner.temp }}/finance-idle
+        run: poetry run pytest -q -s tests/acceptance/test_finance_idle_connection.py
+      - name: Retain idle connection diagnostic
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: finance-idle-linux
+          path: ${{ runner.temp }}/finance-idle
+          if-no-files-found: error
+          retention-days: 7
       - name: Finance synthetic process and numerical checks
         run: >-
           poetry run pytest -q --runxfail
@@ -85,6 +99,9 @@ jobs:
           tests/unit/daemons/test_adapter_supervisor.py
           tests/unit/test_projection_money.py
           tests/unit/test_projection_parties.py
+          tests/unit/test_operating_agreements.py
+          tests/acceptance/test_cos_work_coordination_operating_agreements.py::test_startup_retains_newer_constitution_without_appending_an_older_floor
+          tests/acceptance/test_cos_work_coordination_operating_agreements.py::test_parties_version_replays_late_old_constitution_without_rewriting_history
           tests/integration/test_projection_rebuild.py
           tests/unit/test_xlsx_finance_workbook.py
           tests/unit/test_xlsx_reverse_finance.py
@@ -260,6 +277,20 @@ jobs:
           python-version: '3.14.7'
       - run: pipx install poetry==2.4.1
       - run: poetry sync --with dev
+      - name: Diagnose synthetic idle connection handoff without retries
+        timeout-minutes: 2
+        env:
+          ADMINME_FINANCE_IDLE_DIAGNOSTIC: '1'
+          FINANCE_IDLE_ARTIFACT_DIR: ${{ runner.temp }}/finance-idle
+        run: poetry run pytest -q -s tests/acceptance/test_finance_idle_connection.py
+      - name: Retain idle connection diagnostic
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: finance-idle-macos
+          path: ${{ runner.temp }}/finance-idle
+          if-no-files-found: error
+          retention-days: 7
       - name: Verify self counters, registered lifecycle and short production composition
         timeout-minutes: 5
         env:

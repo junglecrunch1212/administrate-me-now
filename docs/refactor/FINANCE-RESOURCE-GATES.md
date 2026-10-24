@@ -43,7 +43,7 @@ sustained stress with 120-second 20/0 baselines. Cold (one second) and warm-up
 (30 seconds) precede these phases. Stress uses the approved stress CPU ceiling;
 the short burst conservatively uses that same ceiling. Total scheduled phase
 time is 1,591 seconds per workload, excluding startup and cleanup. The full
-sequence is opt-in and has not run. The normal phase still has only 180 finance
+sequence is opt-in; the first approved attempt below stopped before completion. The normal phase still has only 180 finance
 samples, so its empirical p99 is not a confident rare-tail guarantee.
 
 Added latency and CPU compare with the larger matched bracketing baseline.
@@ -57,6 +57,33 @@ Collector correctness on the same head and reviewed artifact provenance are
 separate prerequisites; the offline evaluator cannot attest its own provenance.
 A passed workload verdict grants no runtime authority. Both workloads and full
 system release validation remain required before Finance activation.
+
+## Native attempt on 2026-10-24 — failed, not qualified
+
+The approved native cohort bound candidate
+`d3b8b3f2a285eae6b18cd07f4cf354f48c9a9a2b` to evaluated checkout
+`932600dc0ac7903450218ddd34c263af444750ac`. Preparation began at 20:32:53 UTC;
+qualification began at 20:35:37 UTC. The light workload stopped after its normal
+phase with one status `ReadError` (index 127, 13.2489 ms request latency,
+24.0265 ms scheduled-to-terminal). All 1,981 core requests and 210 of 211 Finance
+requests across the completed phases succeeded. The failed request remains in
+raw evidence. Planning did not start; later phases and all v2 verdicts remain
+incomplete. Neither successful requests nor clean collection qualify the cohort.
+
+All three registered children returned with exit code zero and complete terminal
+receipts; the coordinator exited 1. Copied evidence hashes matched the fixture
+originals. The temporary checkout and both environments were removed by
+20:53:08 UTC, within the 70-minute envelope. Whole-OS-process-tree coverage was
+not proven. The private evidence manifest digest is
+`a86a37015dcf1368cc6078d179210c865aae2c9f44aecd86e489e9ed6f04b795`.
+
+The failed request started 4.9950 seconds after the prior response completed.
+Idle expiry is a hypothesis; the original trace cannot prove it. A separately
+versioned hosted diagnostic deliberately yields between connection selection and
+header transmission across server idle expiry, retaining the failed attempt and
+comparing a shorter client idle lifetime. This is a mechanism test, not resource
+qualification or retrospective proof. No failed request is retried or omitted;
+new native qualification requires its corrected exact-head scope to be reviewed.
 
 ## Implemented boundaries
 

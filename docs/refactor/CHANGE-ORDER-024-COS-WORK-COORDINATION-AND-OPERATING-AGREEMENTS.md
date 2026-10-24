@@ -116,6 +116,16 @@ object, or provider state is rewritten.
   deployment, permission/credential changes, write enablement, and every
   provider effect require a later explicit owner-authorized change.
 
+A constitutional revision arriving after a newer retained revision remains
+historical and superseded, independent of arrival order. **MODERNIZE** Parties
+projection version 5 to replay retained history on version change and repair
+older derived caches; **PRESERVE** immutable facts and the newest registered
+constitutional authority. Startup must not append an older competing floor.
+Historical binaries do not acquire this guard retroactively: the production
+updater's current intake-policy compatibility check refuses the pre-cutover
+binary. Explicit legacy recovery tests begin with the actual retained predecessor
+and continue to require exact event retention and one active constitutional floor.
+
 ## Evidence
 
 `tests/acceptance/test_cos_work_coordination_operating_agreements.py` drives

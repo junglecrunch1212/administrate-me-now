@@ -100,7 +100,7 @@ try {
   // Real pinned llm-task composition, synthetic completion only. Its schema is
   // post-validation, not a model instruction: the pack must teach the root shape.
   const { createLlmTaskTool } = await jiti.import(path.join(sourceRoot, "extensions/llm-task/src/llm-task-tool.ts"));
-  const groundingRequest = JSON.parse(execFileSync("python3", ["-c", `
+  const groundingRequest = JSON.parse(execFileSync("poetry", ["run", "python", "-c", `
 import json
 from pathlib import Path
 from adminme.lib.skill_runner.pack_loader import load_pack
@@ -149,7 +149,7 @@ print(json.dumps(_build_request_body(pack=pack, session_key="agent:main:adminme:
   console.log("Pinned llm-task grounding boundary passed: explicit root contract, routed isolated runtime, valid and malformed completions");
   const { createPluginRegistryState } = await jiti.import(path.join(sourceRoot, "src/plugins/registry-state.ts"));
   const { createToolHookRegistrars } = await jiti.import(path.join(sourceRoot, "src/plugins/registry-registrars-tools-hooks.ts"));
-  const preparedPolicies = JSON.parse(execFileSync("python3", ["-c", `
+  const preparedPolicies = JSON.parse(execFileSync("poetry", ["run", "python", "-c", `
 import json
 from bootstrap.cos_reply_hooks import configure_reply_hook
 entry = {"hooks": {"allowPromptInjection": False}}

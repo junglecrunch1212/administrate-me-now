@@ -1607,20 +1607,21 @@ class AdministrateMeRuntime:
         existing = (
             self.projections.connection("parties")
             .execute(
-                "SELECT definition_digest FROM operating_agreements "
-                "WHERE tenant_id=? AND agreement_id=? AND revision=?",
-                (
-                    self.settings.instance.tenant_id,
-                    payload["agreement_id"],
-                    payload["revision"],
-                ),
+                "SELECT revision, definition_digest FROM operating_agreements "
+                "WHERE tenant_id=? AND agreement_id=? AND layer='constitutional' "
+                "ORDER BY revision DESC LIMIT 1",
+                (self.settings.instance.tenant_id, payload["agreement_id"]),
             )
             .fetchone()
         )
-        if existing is not None and str(existing["definition_digest"]) == str(
-            payload["definition_digest"]
-        ):
-            return
+        if existing is not None:
+            # An older release must not register a competing constitutional floor.
+            if int(existing["revision"]) > int(payload["revision"]):
+                return
+            if int(existing["revision"]) == int(payload["revision"]) and str(
+                existing["definition_digest"]
+            ) == str(payload["definition_digest"]):
+                return
         event_id = await self._require_events().write(
             EventEnvelope(
                 event_at_ms=int(time.time() * 1000),
