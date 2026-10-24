@@ -118,6 +118,7 @@ class _SyntheticCpuProfile:
         from adminme.finance import disclosure, planning_store
         from starlette.responses import JSONResponse
         from fastapi import routing as response_routing
+        from fastapi._compat import ModelField
         from adminme.products.openclaw import main as native
         from adminme.projections.runner import ProjectionRunner
 
@@ -337,6 +338,7 @@ class _SyntheticCpuProfile:
         instrument(json, "dumps", "json_encode")
         instrument(event_log, "_row_to_event", "event_envelope_decode")
         instrument(JSONResponse, "render", "response_json_render")
+        instrument(ModelField, "serialize_json", "response_pydantic_json")
         instrument(disclosure, "validate_current_authority", "final_authority")
         instrument(planning_store, "query_projection", "planning_query")
         instrument(native, "_session", "resolve_session")
@@ -1149,17 +1151,31 @@ async def _profile_workload(tmp_path, *, planning_workload, authority_control=Fa
                     break
                 await asyncio.sleep(0.01)
             report = json.loads(report_path.read_text())
-            assert (
-                report["profiled_finance_calls"] == 200
-                and report["independent_load_processes"]
-                and (not report["cpu_profile_enabled"] or report["top_self"])
-            )
             if planning is not None:
                 report["planning_inventory"] = {
                     "bodies": planning["inventory_bodies"],
                     "references": planning["context_references"],
                     "queried_context_rows": len(planning["expected_events"]),
                 }
+            # Retain the raw diagnostic even when a validity check below fails.
+            artifact_dir = os.getenv("FINANCE_PROFILE_ARTIFACT_DIR")
+            if artifact_dir:
+                target = Path(artifact_dir)
+                target.mkdir(parents=True, exist_ok=True)
+                (
+                    target
+                    / (
+                        ("planning" if planning_workload else "light")
+                        + ("-authority-control" if authority_control else "")
+                        + "-profile.json"
+                    )
+                ).write_text(json.dumps(report, indent=2))
+            assert (
+                report["profiled_finance_calls"] == 200
+                and report["independent_load_processes"]
+                and (not report["cpu_profile_enabled"] or report["top_self"])
+            )
+            if planning is not None:
                 assert report["planning_inventory"] == {
                     "bodies": 3307,
                     "references": 38382,
@@ -1176,10 +1192,9 @@ async def _profile_workload(tmp_path, *, planning_workload, authority_control=Fa
                 "event_envelope_decode:http_loop" == label
                 for label in report["wall_calls_instrumented_ms"]
             )
-            assert any(
-                "response_json_render:http_loop" == label
-                for label in report["wall_calls_instrumented_ms"]
-            )
+            # Pinned FastAPI uses direct Pydantic JSON bytes for typed
+            # endpoints. JSONResponse.render is optional on that fast path.
+            assert "response_serialize" in report["wall_calls_instrumented_ms"]
             label = (
                 "SYNTHETIC_PLANNING_REQUEST_PROFILE"
                 if planning_workload
@@ -1200,18 +1215,6 @@ async def _profile_workload(tmp_path, *, planning_workload, authority_control=Fa
                 ),
                 flush=True,
             )
-            artifact_dir = os.getenv("FINANCE_PROFILE_ARTIFACT_DIR")
-            if artifact_dir:
-                target = Path(artifact_dir)
-                target.mkdir(parents=True, exist_ok=True)
-                (
-                    target
-                    / (
-                        ("planning" if planning_workload else "light")
-                        + ("-authority-control" if authority_control else "")
-                        + "-profile.json"
-                    )
-                ).write_text(json.dumps(report, indent=2))
             for phase in ("before", *(name for name, _ in phases), "after"):
                 assert (
                     sum(

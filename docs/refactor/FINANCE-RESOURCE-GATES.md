@@ -151,6 +151,7 @@ evidence, not passing acceptance.
 | `b32c4252` | 877 Python, 100 native/static/browser, query-work and reader-memory checks passed | Before 4.323, after 4.164 → mixed 5.431 ms (1.256279) | Fail; planning also fails at 21.49% |
 | `9814dbac` | 877 Python, 100 native/static/browser, query-work, reader-memory and diagnostic validity checks passed | Before 4.249, after 3.495 → mixed 5.423 ms (1.276111) | Fail; planning also fails at 10.19% |
 | `d2115dd9` | 922 Python, 100 native/static/browser, query-work, reader-memory and diagnostic validity checks passed | Before 4.267, after 4.250 → mixed 5.349 ms (1.253548) | Fail; planning also fails at 29.23% |
+| `d616844e` | 922 Python, 100 native/static/browser, query-work and reader-memory checks passed; all four diagnostics failed on an incorrect response-render assertion | Before 3.630, after 3.539 → mixed 4.407 ms (1.214193) | Fail; planning also fails at 22.69% |
 
 The [de8 hosted run](https://github.com/junglecrunch1212/administrate-me-now/actions/runs/40042497072)
 retains 251 admitted finance calls, 18.381/19.970 ms warm status/calculation
@@ -396,3 +397,22 @@ additive. Thread CPU excludes waits; wall minus CPU includes SQL I/O,
 descheduling and possible GIL contention and must not be described as GIL time
 alone. The extra instrumentation is confined to separate synthetic profile
 servers, never either raw gate, and does not qualify release or private access.
+
+
+The first occupancy-diagnostic revision (`d616844e`) incorrectly required
+`JSONResponse.render` to execute. Pinned FastAPI 0.136.0 sends typed endpoints
+through `serialize_response(..., dump_json=True)` and constructs `Response`
+from Pydantic JSON bytes, so that rendering hook is optional. The correction
+requires the already-instrumented serializer, also times the synchronous
+Pydantic JSON-byte serializer, and retains raw trace artifacts before validity
+assertions. This repairs diagnostic coverage only; it changes
+neither production response serialization nor the raw performance gate.
+
+At `d616844e`, planning raw before/after/mixed core p95 was
+3.491/3.494/4.288 ms, with 251 finance calls and 16.680/16.881 ms
+summary/detail p95. Light had 250 calls and 14.952/14.974 ms
+status/calculation p95. The three reader trials were again flat after
+1,000 reads (initial RSS delta 7,020,544–7,024,640 bytes), grew to
+7,483,392–7,487,488 after rebuild and retained 7,462,912–7,467,008 after
+shutdown with zero reader threads. None of these observations clears either
+raw gate, and the failed occupancy profiles supply no qualified timing result.
