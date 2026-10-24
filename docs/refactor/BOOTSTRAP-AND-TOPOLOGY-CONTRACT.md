@@ -346,8 +346,13 @@ Runtime preparation occurs only at that stable, non-selected final path, only
 while the record remains pending, and only after deleting all allowlisted
 generated roots without following links. Retry revalidates the unchanged
 source, marker, pointer chain, and release coordinate, then rebuilds those
-roots from scratch and verifies exact Python, Node, and Poetry pins. Every
-active or recursively retained predecessor is read-only. A cooperative
+roots from scratch and verifies exact Python, Node, and Poetry pins. The
+isolated preparation environment disables Poetry installer parallelism: wheel
+script permission queries temporarily change the process-wide umask, which must
+not overlap another wheel write. Generated permissions remain subject to the
+strict runtime fingerprint; preparation never repairs an installed file to
+make that check pass. CI checks may still run in parallel. Every active or
+recursively retained predecessor is read-only. A cooperative
 instance operation lock covers the supported fixed-commit activate launcher
 through controller cleanup, while direct rollback acquires the same canonical
 manager lock. The preparation record is consumed immediately before the first
