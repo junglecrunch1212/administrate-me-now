@@ -862,3 +862,14 @@ canonical book/entity/publisher/history choices, approved private handoff,
 import/read-back, narrow finance authority and supported activation. A dated,
 truthfully PARTIAL snapshot is separate from the disabled daily Sheets engine
 and from unavailable complete formal statements. None is claimed activated here.
+
+
+The first native correctness attempt at `2ef44c88` is unqualified: the guard
+rejected OpenPyXL's import-time ambient MIME-file lookup, and the forced-worker
+cleanup case could hang on a multiprocessing event after killing its waiter.
+The hosted job reached its 20-minute timeout; retained startup/terminal counters
+and failure/cleanup receipts are evidence of failure, not a smoke pass. The
+repair initializes only Python's built-in MIME table (no wider host-file access)
+and replaces shared-event cancellation with one authenticated stop frame. Native
+correctness now has a five-minute step timeout and own-process traceback output;
+the two observed failures require fresh hosted proof before any native lab.

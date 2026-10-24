@@ -361,3 +361,21 @@ def test_three_registered_children_bound_including_coordinator_and_spawn_tracker
     with pytest.raises(native.EvidenceError, match="process cap"):
         registry.spawn("worker")
     registry.context.Process.assert_not_called()
+
+
+def test_synthetic_mime_setup_does_not_read_host_configuration(monkeypatch):
+    import mimetypes
+
+    monkeypatch.setattr(mimetypes, "knownfiles", ["/private/production/mime.types"])
+    monkeypatch.setattr(mimetypes, "inited", False)
+    monkeypatch.setattr(mimetypes, "_db", None)
+    # Save all globals mutated by init so this test cannot change other fixtures.
+    for name in ("suffix_map", "types_map", "encodings_map", "common_types"):
+        monkeypatch.setattr(mimetypes, name, getattr(mimetypes, name))
+    reader = Mock(side_effect=AssertionError("host MIME access forbidden"))
+    monkeypatch.setattr(mimetypes.MimeTypes, "read", reader)
+    monkeypatch.setattr(mimetypes.MimeTypes, "read_windows_registry", Mock())
+    native.prepare_synthetic_mime_database()
+    assert mimetypes.guess_type("synthetic.txt") == ("text/plain", None)
+    reader.assert_not_called()
+    assert mimetypes.knownfiles == []

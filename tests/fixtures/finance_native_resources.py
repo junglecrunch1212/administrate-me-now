@@ -218,6 +218,16 @@ def metric_record(user_seconds, system_seconds, rss_bytes, peak_bytes, mach_peak
     }
 
 
+def prepare_synthetic_mime_database():
+    """Use only stdlib MIME constants; never read ambient host configuration."""
+    import mimetypes
+
+    mimetypes.knownfiles = []
+    # Reset the pinned stdlib cache so an earlier import cannot retain host mappings.
+    setattr(mimetypes, "_db", None)
+    mimetypes.init(files=[])
+
+
 class FixtureGuard:
     """Deny Python subprocess and nonfixture network/file accesses; not a sandbox.
 
@@ -328,6 +338,7 @@ def _entry(
         )
         guard = FixtureGuard(root, port, faults)
         sys.addaudithook(guard)
+        prepare_synthetic_mime_database()
 
         def monitor():
             try:
