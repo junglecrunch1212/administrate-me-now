@@ -89,12 +89,14 @@ class _SyntheticServerTiming:
 class _SyntheticCpuProfile:
     """Diagnostic only: never used by the latency acceptance measurement."""
 
-    def __init__(self, app, output_path):
+    def __init__(self, app, output_path, authority_control=False):
         import cProfile
 
         self.app = app
         self.output_path = output_path
         self.profile = cProfile.Profile()
+        self.cpu_detail = os.getenv("ADMINME_FINANCE_CPU_DETAIL") == "1"
+        self.authority_control = authority_control
         self.count = 0
         self.started = False
         self.completed = False
@@ -237,8 +239,15 @@ class _SyntheticCpuProfile:
                 self.profile_started_at = time.perf_counter()
                 self.phase = "before"
                 self.started = True
-                self.profile.enable()
-            elif operation in {"mixed", "after"}:
+                if self.cpu_detail:
+                    self.profile.enable()
+            elif operation in {
+                "mixed-0",
+                "mixed-12.5",
+                "mixed-25",
+                "mixed-37.5",
+                "after",
+            }:
                 self.phase = operation
             elif operation == "stop":
                 self._finish()
@@ -278,7 +287,9 @@ class _SyntheticCpuProfile:
         self.profile.disable()
         self.completed = True
         # pstats exposes this public mapping at runtime; its stub omits it.
-        statistics = cast(Any, pstats.Stats(self.profile)).stats
+        statistics = (
+            cast(Any, pstats.Stats(self.profile)).stats if self.cpu_detail else {}
+        )
 
         def row(item):
             (
@@ -305,6 +316,10 @@ class _SyntheticCpuProfile:
                 {
                     "diagnostic_only": True,
                     "profiled_finance_calls": self.count,
+                    "cpu_profile_enabled": self.cpu_detail,
+                    "independent_load_processes": True,
+                    "final_authority_sql_stubbed": self.authority_control,
+                    "acceptance_eligible": False,
                     "executor_spans": executor_spans,
                     "http_spans": list(self.http_spans),
                     "phase_wall_calls_instrumented_ms": {
@@ -353,12 +368,38 @@ def _serve(
     ready,
     profile: bool = False,
     planning_workload: bool = False,
+    authority_control: bool = False,
 ) -> None:
+    if authority_control:
+        assert profile, "authority control cannot run in an acceptance server"
+        from adminme.finance import disclosure
+
+        original_authority = disclosure.validate_current_authority
+
+        def synthetic_final_authority_control(runtime, session, expected_digest=None):
+            # Deliberately unqualified TEST CONTROL: omit only the final SQL
+            # read/handoff after receipt persistence. Initial/current session
+            # queries, owner checks, hashes and all audit work still execute.
+            # Never use this control as evidence of real authorization safety
+            # or latency acceptance. The fixture has no authority mutations.
+            if expected_digest is None or session.service_context is None:
+                return original_authority(runtime, session, expected_digest)
+            disclosure._check_current_owner(runtime, session)
+            digest = disclosure._authority_digest(session, session.service_context)
+            if digest != expected_digest:
+                raise disclosure.FinanceDisclosureError(
+                    "synthetic_control_digest_mismatch"
+                )
+            return digest
+
+        disclosure.validate_current_authority = synthetic_final_authority_control
     app = create_application(_settings(root))
     app.add_middleware(_SyntheticServerTiming)
     if profile:
         app.add_middleware(
-            _SyntheticCpuProfile, output_path=root / "finance-cpu-profile.json"
+            _SyntheticCpuProfile,
+            output_path=root / "finance-cpu-profile.json",
+            authority_control=authority_control,
         )
     original = app.router.lifespan_context
 
@@ -554,7 +595,14 @@ def _client(url: str) -> httpx.AsyncClient:
 
 
 def _finance_load(
-    url: str, actor: str, session: str, ready, stop, planning=None
+    url: str,
+    actor: str,
+    session: str,
+    ready,
+    stop,
+    planning=None,
+    max_calls: int = 800,
+    first_call: int = 100,
 ) -> None:
     """Independent process/event loop: finance client work cannot delay core timing."""
 
@@ -564,11 +612,11 @@ def _finance_load(
         async with _client(url) as client:
             ready.send({"ready": True})
             start = time.perf_counter()
-            for index in range(800):
+            for index in range(max_calls):
                 if stop.is_set():
                     break
                 calculation, elapsed = await _finance_call(
-                    client, actor, session, index + 100, planning
+                    client, actor, session, index + first_call, planning
                 )
                 (calculations if calculation else statuses).append(elapsed)
                 # Ten tool calls/second is a bounded synthetic stress workload.
@@ -825,7 +873,18 @@ async def test_profile_accepted_planning_request_cost(tmp_path):
     await _profile_workload(tmp_path, planning_workload=True)
 
 
-async def _profile_workload(tmp_path, *, planning_workload):
+@pytest.mark.skipif(
+    os.getenv("ADMINME_FINANCE_AUTHORITY_CONTROL") != "1",
+    reason="Isolated synthetic counterfactual only; not authorization or latency acceptance",
+)
+@pytest.mark.parametrize("planning_workload", [False, True])
+async def test_profile_final_authority_sql_control(tmp_path, planning_workload):
+    await _profile_workload(
+        tmp_path, planning_workload=planning_workload, authority_control=True
+    )
+
+
+async def _profile_workload(tmp_path, *, planning_workload, authority_control=False):
     context = multiprocessing.get_context("spawn")
     receive, send = context.Pipe(duplex=False)
     listener = socket.socket()
@@ -835,7 +894,14 @@ async def _profile_workload(tmp_path, *, planning_workload):
     port = listener.getsockname()[1]
     server = context.Process(
         target=_serve,
-        args=(tmp_path / "profile-instance", listener, send, True, planning_workload),
+        args=(
+            tmp_path / "profile-instance",
+            listener,
+            send,
+            True,
+            planning_workload,
+            authority_control,
+        ),
     )
     server.start()
     send.close()
@@ -869,14 +935,6 @@ async def _profile_workload(tmp_path, *, planning_workload):
                 assert response.status_code == 200
                 await _finance_call(finance, actor, session, index + 1000, planning)
 
-            async def finance_calls():
-                started = time.perf_counter()
-                for index in range(50):
-                    await _finance_call(finance, actor, session, index + 500, planning)
-                    await asyncio.sleep(
-                        max(0, started + (index + 1) * 0.1 - time.perf_counter())
-                    )
-
             async def core_calls():
                 started = time.perf_counter()
                 for index in range(100):
@@ -894,8 +952,56 @@ async def _profile_workload(tmp_path, *, planning_workload):
             await asyncio.sleep(0.25)  # Settle warmup audit work before diagnosis.
             assert (await core.get("/__synthetic/profile/start")).status_code == 200
             await core_calls()
-            assert (await core.get("/__synthetic/profile/mixed")).status_code == 200
-            await asyncio.gather(finance_calls(), core_calls())
+            phases = (
+                ("mixed-0", 0.0),
+                ("mixed-12.5", 0.0125),
+                ("mixed-25", 0.025),
+                ("mixed-37.5", 0.0375),
+            )
+            for phase_index, (phase, delay) in enumerate(phases):
+                assert (
+                    await core.get("/__synthetic/profile/" + phase)
+                ).status_code == 200
+                load_receive, load_send = context.Pipe(duplex=False)
+                stop_load = context.Event()
+                load = context.Process(
+                    target=_finance_load,
+                    args=(
+                        f"http://127.0.0.1:{port}",
+                        actor,
+                        session,
+                        load_send,
+                        stop_load,
+                        planning,
+                        50,
+                        100 + phase_index * 100,
+                    ),
+                )
+                load.start()
+                load_send.close()
+                try:
+                    assert await asyncio.to_thread(load_receive.poll, 15)
+                    assert load_receive.recv() == {"ready": True}
+                    await asyncio.sleep(delay)
+                    await core_calls()
+                    stop_load.set()
+                    assert await asyncio.to_thread(load_receive.poll, 15)
+                    measured = load_receive.recv()
+                    assert "error" not in measured, measured
+                    assert (
+                        len(measured["statuses"]) + len(measured["calculations"]) == 50
+                    )
+                finally:
+                    stop_load.set()
+                    await asyncio.to_thread(load.join, 5)
+                    if load.is_alive():
+                        load.terminate()
+                        await asyncio.to_thread(load.join, 5)
+                    if load.is_alive():
+                        load.kill()
+                        await asyncio.to_thread(load.join, 5)
+                    load_receive.close()
+                assert load.exitcode == 0
             assert (await core.get("/__synthetic/profile/after")).status_code == 200
             await core_calls()
             assert (await core.get("/__synthetic/profile/stop")).status_code == 200
@@ -906,15 +1012,19 @@ async def _profile_workload(tmp_path, *, planning_workload):
                 await asyncio.sleep(0.01)
             report = json.loads(report_path.read_text())
             assert (
-                report["profiled_finance_calls"] == 50
-                and report["top_self"]
-                and report["domain_cumulative"]
+                report["profiled_finance_calls"] == 200
+                and report["independent_load_processes"]
+                and (not report["cpu_profile_enabled"] or report["top_self"])
             )
+            assert report["final_authority_sql_stubbed"] == authority_control
+            assert report["acceptance_eligible"] is False
             label = (
-                "SYNTHETIC_PLANNING_CPU_PROFILE"
+                "SYNTHETIC_PLANNING_REQUEST_PROFILE"
                 if planning_workload
-                else "SYNTHETIC_FINANCE_CPU_PROFILE"
+                else "SYNTHETIC_FINANCE_REQUEST_PROFILE"
             )
+            if authority_control:
+                label += "_UNQUALIFIED_AUTHORITY_CONTROL"
             print(
                 label
                 + " "
@@ -934,12 +1044,12 @@ async def _profile_workload(tmp_path, *, planning_workload):
                 (
                     target
                     / (
-                        "planning-profile.json"
-                        if planning_workload
-                        else "light-profile.json"
+                        ("planning" if planning_workload else "light")
+                        + ("-authority-control" if authority_control else "")
+                        + "-profile.json"
                     )
                 ).write_text(json.dumps(report, indent=2))
-            for phase in ("before", "mixed", "after"):
+            for phase in ("before", *(name for name, _ in phases), "after"):
                 assert (
                     sum(
                         item["phase"] == phase

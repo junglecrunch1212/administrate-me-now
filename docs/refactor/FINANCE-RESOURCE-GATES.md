@@ -148,6 +148,7 @@ evidence, not passing acceptance.
 | `e5483133` | 871 Python, 100 native/static/browser passed | Before 3.426, after 3.491 → mixed 4.356 ms (1.247873) | Fail; dedicated-reader performance remains insufficient |
 | `ee43a0df` | 872 Python, 100 native/static/browser passed, including queued-revocation ordering | Before 4.036, after 3.570 → mixed 4.698 ms (1.163851) | Fail; planning also fails at 30.69% |
 | `fce14a57` | 872 Python, 100 native/static/browser and deep-query work checks passed | Before 4.414, after 4.388 → mixed 5.433 ms (1.231012) | Fail; planning also fails at 20.74% |
+| `b32c4252` | 877 Python, 100 native/static/browser, query-work and reader-memory checks passed | Before 4.323, after 4.164 → mixed 5.431 ms (1.256279) | Fail; planning also fails at 21.49% |
 
 The [de8 hosted run](https://github.com/junglecrunch1212/administrate-me-now/actions/runs/40042497072)
 retains 251 admitted finance calls, 18.381/19.970 ms warm status/calculation
@@ -298,3 +299,43 @@ and virtual memory before the reader, after its first read, after 1,000 repeated
 reads, after rebuild and after shutdown. This measures the existing reader's
 synthetic lifecycle; it does not establish deployment-hardware or heavy-worker
 memory, and the page-cache target remains distinct from an RSS limit.
+
+At `b32c4252`, the reader callback, repeated cancellation/failure, publication,
+queued revocation and close checks passed (877 Python cases in the selected
+functional suite). Both raw gates still failed: light had 251 finance calls,
+17.750/19.454 ms status/calculation p95 and 25.63% core regression. Planning had
+250 calls, before/after/mixed core p95 4.100/4.078/4.981 ms (21.49%), with
+19.334/20.045 ms summary/detail p95. All native/static/browser checks passed.
+
+Three isolated Linux processes measured an initial reader RSS increase of
+7,004,160–7,024,640 bytes (about 6.7 MiB), unchanged after 1,000 additional reads.
+Rebuild/reopen increased the delta to 7,467,008–7,487,488 bytes. The reader thread
+count returned to zero at shutdown, but RSS remained 7,446,528–7,467,008 bytes
+above the initial baseline. Allocator-retained memory is not reported as freed,
+and this single lifecycle is not a long-run leak test. Virtual address space
+reservation is recorded separately. These observations neither impose a 256 KiB
+RSS bound nor qualify the household Mac Mini or a heavy worker.
+
+Matched instrumented profiles showed little change in core queue time: light
+What Now p95 before/mixed/after 0.160/0.164/0.157 ms; planning
+0.169/0.172/0.177 ms. Whole-session resolution now runs on the authority reader
+(p95 0.697/0.765 ms); final authority still blocks the HTTP loop synchronously
+(p95 0.745/0.759 ms). The profiles' shared client event loop and heavy cProfile
+instrumentation differ from the independently driven raw gate. Their favorable
+core timing cannot explain or waive the raw failures.
+
+The next diagnostic-only revision matches the independent finance client and
+uses wall timing without cProfile by default. It runs four controlled client
+start offsets (0, 12.5, 25 and 37.5 ms) across the 50 ms core cadence, each with
+100 core and 50 finance calls, plus before/after phases. Every offset is
+reported; none is selected to replace acceptance. An optional explicit
+`ADMINME_FINANCE_CPU_DETAIL=1` preserves the heavier CPU trace when needed.
+Separate disposable control servers omit only final authority SQL after receipt
+persistence, retaining the initial session reads, owner/digest checks and audits.
+This deliberately unsafe-for-authorization counterfactual is confined to the
+synthetic test module, requires profile mode, is labeled
+`final_authority_sql_stubbed=true` and `acceptance_eligible=false`, and cannot run
+as either real acceptance server. It isolates the final loop-blocking cost;
+it does not justify caching or removing production revocation checks. No runtime
+code, raw workload, threshold, source contract or activation setting changes in
+this diagnostic revision.

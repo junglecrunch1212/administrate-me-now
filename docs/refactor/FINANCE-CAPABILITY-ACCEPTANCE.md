@@ -22,7 +22,7 @@ required privacy invariant or product function.
   the four-tool private facade, 18 deterministic hypothetical calculators,
   accepted accounting import/replay, receipt-bound deterministic answers,
   owner goals/preferences and the declared planning summary subset. At
-  `fce14a57`, 872 Python checks, 100 native checks and synthetic desktop acceptance
+  `b32c4252`, 877 Python checks, 100 native checks and synthetic desktop acceptance
   passed, including revocation during a finance-delivery yield and route-specific
   member/delegated CoS authority. Routing/preparation for F01–F31 is not implementation of every model.
 - **Unsupported functions still required by the original ambition:** durable
@@ -63,7 +63,11 @@ required privacy invariant or product function.
   That repair passed semantic/query-work checks at `fce14a57`, but light/planning
   raw p95 still failed at 23.10%/20.74%. The current follow-up removes the extra
   finance-session worker handoff, adds matched diagnostic phases and measures
-  dedicated-reader memory; current-head hosted checks remain pending.
+  dedicated-reader memory. At `b32c4252`, those functional/resource checks
+  passed, but raw light/planning p95 still failed at 25.63%/21.49%. The next
+  diagnostic matches independent clients, varies cadence offsets and isolates
+  final authority SQL cost in explicitly unqualified synthetic control servers.
+  Production authority checks and both raw gates remain unchanged.
   Broader resource isolation remains
   unproved. Large-ledger, reminder-delivery,
   heavy-worker termination/memory and deployment-hardware evidence remain absent.

@@ -134,6 +134,12 @@ jobs:
           ADMINME_FINANCE_PLANNING_PROFILE: '1'
           FINANCE_PROFILE_ARTIFACT_DIR: ${{ runner.temp }}/finance-profiles
         run: poetry run pytest -q -s tests/acceptance/test_finance_mixed_load.py::test_profile_accepted_planning_request_cost
+      - name: Isolate final authority SQL cost with an unqualified synthetic control
+        if: always()
+        env:
+          ADMINME_FINANCE_AUTHORITY_CONTROL: '1'
+          FINANCE_PROFILE_ARTIFACT_DIR: ${{ runner.temp }}/finance-profiles
+        run: poetry run pytest -q -s tests/acceptance/test_finance_mixed_load.py::test_profile_final_authority_sql_control
       - name: Retain synthetic operation queue and execution spans
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
