@@ -76,6 +76,11 @@ jobs:
           tests/acceptance/test_cos_self_replies.py
           tests/acceptance/test_cos_identity_delegation_kernel.py
           tests/acceptance/test_gate7_household_experience.py
+      - name: Measure dedicated authority reader memory and shutdown
+        if: always()
+        env:
+          ADMINME_FINANCE_READER_MEMORY: '1'
+        run: poetry run pytest -q -s tests/acceptance/test_finance_authority_memory.py
       - name: Diagnose shared planning query plans and deep-page work
         if: always()
         env:

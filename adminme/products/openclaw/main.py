@@ -4214,8 +4214,8 @@ def _finance_admission_identity(
 async def _finance_session(request: Request, provenance: Provenance) -> Session:
     """Resolve the existing exact identity contract without blocking HTTP I/O.
 
-    Only detached dataclass fields cross the projection worker boundary. This
-    does not cache a grant; final delivery independently rechecks current scope.
+    Only detached dataclass fields cross the existing authority-reader boundary.
+    This does not cache a grant; final delivery independently rechecks current scope.
     """
     from dataclasses import fields
     from adminme.service_identities import ServiceRequestContext
@@ -4239,7 +4239,7 @@ async def _finance_session(request: Request, provenance: Provenance) -> Session:
             }
         return values
 
-    values = await runtime.projections.read("parties", detached_session)
+    values = await runtime.projections.read_authority(detached_session)
     context = values.get("service_context")
     if context is not None:
         values["service_context"] = ServiceRequestContext(**context)

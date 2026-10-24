@@ -100,6 +100,8 @@ class _SyntheticCpuProfile:
         self.completed = False
         self.loop_thread_id = None
         self.wall_calls = {}
+        self.phase_wall_calls = {}
+        self.phase = "warmup"
         self.executor_spans = []
         self.http_spans = []
         self.profile_started_at = 0.0
@@ -114,15 +116,17 @@ class _SyntheticCpuProfile:
 
         self.wall_lock = threading.Lock()
 
-        def record(label, elapsed):
+        def record(label, elapsed, phase):
             with self.wall_lock:
                 self.wall_calls.setdefault(label, []).append(elapsed)
+                self.phase_wall_calls.setdefault(f"{phase}:{label}", []).append(elapsed)
 
         original_submit = concurrent.futures.ThreadPoolExecutor.submit
 
         def observed_submit(executor, func, /, *args, **kwargs):
             queued_at = time.perf_counter()
             active = self.started and not self.completed
+            phase = self.phase
             prefix = getattr(executor, "_thread_name_prefix", "other")
             lane = (
                 prefix
@@ -153,7 +157,9 @@ class _SyntheticCpuProfile:
             def begin():
                 began_at = time.perf_counter()
                 if active:
-                    record(f"executor_wait:{lane}:{operation}", began_at - queued_at)
+                    record(
+                        f"executor_wait:{lane}:{operation}", began_at - queued_at, phase
+                    )
                 try:
                     return func(*args, **kwargs)
                 finally:
@@ -163,6 +169,7 @@ class _SyntheticCpuProfile:
                             self.executor_spans.append(
                                 {
                                     "operation": f"{lane}:{operation}",
+                                    "phase": phase,
                                     "queued_ms": round(
                                         (queued_at - self.profile_started_at) * 1000, 3
                                     ),
@@ -186,6 +193,7 @@ class _SyntheticCpuProfile:
             @wraps(original)
             def timed(*args, **kwargs):
                 active = self.started and not self.completed
+                phase = self.phase
                 started = time.perf_counter()
                 try:
                     return original(*args, **kwargs)
@@ -200,7 +208,9 @@ class _SyntheticCpuProfile:
                             )
                             else "worker"
                         )
-                        record(f"{label}:{thread}", time.perf_counter() - started)
+                        record(
+                            f"{label}:{thread}", time.perf_counter() - started, phase
+                        )
 
             setattr(owner, name, timed)
 
@@ -213,17 +223,35 @@ class _SyntheticCpuProfile:
         instrument(ProjectionRunner, "_call_many_query", "core_snapshot")
 
     async def __call__(self, scope, receive, send):
-        finance = scope["type"] == "http" and scope.get("path", "").startswith(
+        path = scope.get("path", "")
+        # Test-only controls exist solely in the isolated profile middleware.
+        # Start after warmup and stop after the last baseline response, so cold
+        # imports and synchronous profile serialization cannot distort a core
+        # tail inside the diagnostic window.
+        if scope["type"] == "http" and path.startswith("/__synthetic/profile/"):
+            operation = path.rsplit("/", 1)[-1]
+            if operation == "start":
+                import threading
+
+                self.loop_thread_id = threading.get_ident()
+                self.profile_started_at = time.perf_counter()
+                self.phase = "before"
+                self.started = True
+                self.profile.enable()
+            elif operation in {"mixed", "after"}:
+                self.phase = operation
+            elif operation == "stop":
+                self._finish()
+            else:
+                raise AssertionError("unknown synthetic profile control")
+            await send({"type": "http.response.start", "status": 200, "headers": []})
+            await send({"type": "http.response.body", "body": b"ok"})
+            return
+        finance = scope["type"] == "http" and path.startswith(
             "/api/openclaw/v1/tools/finance-"
         )
-        if finance and not self.started:
-            import threading
-
-            self.loop_thread_id = threading.get_ident()
-            self.profile_started_at = time.perf_counter()
-            self.started = True
-            self.profile.enable()
         began_at = time.perf_counter()
+        phase = self.phase
         tracked = self.started and not self.completed and scope["type"] == "http"
         try:
             await self.app(scope, receive, send)
@@ -231,7 +259,8 @@ class _SyntheticCpuProfile:
             if tracked:
                 self.http_spans.append(
                     {
-                        "route": scope["path"],
+                        "route": path,
+                        "phase": phase,
                         "started_ms": round(
                             (began_at - self.profile_started_at) * 1000, 3
                         ),
@@ -240,71 +269,82 @@ class _SyntheticCpuProfile:
                         ),
                     }
                 )
-        if finance:
+        if finance and tracked:
             self.count += 1
-            if self.count == 50:
-                import pstats
 
-                self.profile.disable()
-                self.completed = True
-                # pstats exposes this public mapping at runtime; its stub omits it.
-                statistics = cast(Any, pstats.Stats(self.profile)).stats
+    def _finish(self):
+        import pstats
 
-                def row(item):
-                    (
-                        (filename, line, function),
-                        (primitive, calls, own, cumulative, _),
-                    ) = item
-                    return {
-                        "function": function,
-                        "file": filename.rsplit("/", 1)[-1],
-                        "line": line,
-                        "calls": calls,
-                        "self_ms": round(own * 1000, 3),
-                        "cumulative_ms": round(cumulative * 1000, 3),
-                    }
+        self.profile.disable()
+        self.completed = True
+        # pstats exposes this public mapping at runtime; its stub omits it.
+        statistics = cast(Any, pstats.Stats(self.profile)).stats
 
-                with self.wall_lock:
-                    wall_calls = {
-                        key: list(values) for key, values in self.wall_calls.items()
-                    }
-                    executor_spans = list(self.executor_spans)
-                self.output_path.write_text(
-                    json.dumps(
-                        {
-                            "diagnostic_only": True,
-                            "profiled_finance_calls": self.count,
-                            "executor_spans": executor_spans,
-                            "http_spans": list(self.http_spans),
-                            "wall_calls_instrumented_ms": {
-                                key: {
-                                    "calls": len(values),
-                                    "total": round(sum(values) * 1000, 3),
-                                    "p95": round(_p95(values) * 1000, 3),
-                                    "max": round(max(values) * 1000, 3),
-                                }
-                                for key, values in wall_calls.items()
-                            },
-                            "top_self": [
-                                row(item)
-                                for item in sorted(
-                                    statistics.items(),
-                                    key=lambda item: item[1][2],
-                                    reverse=True,
-                                )[:20]
-                            ],
-                            "domain_cumulative": [
-                                row(item)
-                                for item in sorted(
-                                    statistics.items(),
-                                    key=lambda item: item[1][3],
-                                    reverse=True,
-                                )
-                                if "/adminme/" in item[0][0]
-                            ][:30],
+        def row(item):
+            (
+                (filename, line, function),
+                (primitive, calls, own, cumulative, _),
+            ) = item
+            return {
+                "function": function,
+                "file": filename.rsplit("/", 1)[-1],
+                "line": line,
+                "calls": calls,
+                "self_ms": round(own * 1000, 3),
+                "cumulative_ms": round(cumulative * 1000, 3),
+            }
+
+        with self.wall_lock:
+            wall_calls = {key: list(values) for key, values in self.wall_calls.items()}
+            executor_spans = list(self.executor_spans)
+            phase_wall_calls = {
+                key: list(values) for key, values in self.phase_wall_calls.items()
+            }
+        self.output_path.write_text(
+            json.dumps(
+                {
+                    "diagnostic_only": True,
+                    "profiled_finance_calls": self.count,
+                    "executor_spans": executor_spans,
+                    "http_spans": list(self.http_spans),
+                    "phase_wall_calls_instrumented_ms": {
+                        key: {
+                            "calls": len(values),
+                            "total": round(sum(values) * 1000, 3),
+                            "p95": round(_p95(values) * 1000, 3),
+                            "max": round(max(values) * 1000, 3),
                         }
-                    )
-                )
+                        for key, values in phase_wall_calls.items()
+                    },
+                    "wall_calls_instrumented_ms": {
+                        key: {
+                            "calls": len(values),
+                            "total": round(sum(values) * 1000, 3),
+                            "p95": round(_p95(values) * 1000, 3),
+                            "max": round(max(values) * 1000, 3),
+                        }
+                        for key, values in wall_calls.items()
+                    },
+                    "top_self": [
+                        row(item)
+                        for item in sorted(
+                            statistics.items(),
+                            key=lambda item: item[1][2],
+                            reverse=True,
+                        )[:20]
+                    ],
+                    "domain_cumulative": [
+                        row(item)
+                        for item in sorted(
+                            statistics.items(),
+                            key=lambda item: item[1][3],
+                            reverse=True,
+                        )
+                        if "/adminme/" in item[0][0]
+                    ][:30],
+                }
+            )
+        )
 
 
 def _serve(
@@ -819,6 +859,16 @@ async def _profile_workload(tmp_path, *, planning_workload):
             )
             assert grant.status_code in {200, 201}, grant.text
 
+            for index in range(20):
+                response = await core.get(
+                    "/api/core/v1/what-now"
+                    if index % 2 == 0
+                    else "/api/core/v1/commitments/active",
+                    headers=HEADERS,
+                )
+                assert response.status_code == 200
+                await _finance_call(finance, actor, session, index + 1000, planning)
+
             async def finance_calls():
                 started = time.perf_counter()
                 for index in range(50):
@@ -841,7 +891,14 @@ async def _profile_workload(tmp_path, *, planning_workload):
                         max(0, started + (index + 1) * 0.05 - time.perf_counter())
                     )
 
+            await asyncio.sleep(0.25)  # Settle warmup audit work before diagnosis.
+            assert (await core.get("/__synthetic/profile/start")).status_code == 200
+            await core_calls()
+            assert (await core.get("/__synthetic/profile/mixed")).status_code == 200
             await asyncio.gather(finance_calls(), core_calls())
+            assert (await core.get("/__synthetic/profile/after")).status_code == 200
+            await core_calls()
+            assert (await core.get("/__synthetic/profile/stop")).status_code == 200
             report_path = tmp_path / "profile-instance" / "finance-cpu-profile.json"
             for _ in range(50):
                 if report_path.exists():
@@ -882,6 +939,15 @@ async def _profile_workload(tmp_path, *, planning_workload):
                         else "light-profile.json"
                     )
                 ).write_text(json.dumps(report, indent=2))
+            for phase in ("before", "mixed", "after"):
+                assert (
+                    sum(
+                        item["phase"] == phase
+                        and item["route"].startswith("/api/core/")
+                        for item in report["http_spans"]
+                    )
+                    == 100
+                )
             waits = report["wall_calls_instrumented_ms"]
             assert "executor_wait:adminme-projections:_call_many_query" in waits
             assert "executor_wait:adminme-projections:_apply_one_for:tasks" in waits

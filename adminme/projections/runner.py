@@ -424,6 +424,40 @@ class ProjectionRunner:
         self._require_detached_result(result)
         return cast(_T, result)
 
+    async def read_authority(
+        self,
+        query: Callable[[sqlcipher3.Connection], _T],
+    ) -> _T:
+        """Run a Parties-only read on its existing query-only owner worker.
+
+        This avoids occupying the general projection worker while it waits for
+        the authority reader. Already-submitted Parties mutations still precede
+        this callback; publication/close retain the same admission boundary.
+        """
+        if "parties" not in self._projections:
+            raise KeyError("parties")
+        call = self._submit_authority(self._call_query, "parties", query)
+        pending = asyncio.wrap_future(call)
+        try:
+            result = await asyncio.shield(pending)
+        except asyncio.CancelledError:
+            # An accepted callback must settle before its caller relinquishes
+            # ownership, including during rebuild/close. Do not cancel SQL.
+            while not pending.done():
+                try:
+                    await asyncio.shield(pending)
+                except asyncio.CancelledError:
+                    continue
+                except Exception:
+                    break
+            try:
+                pending.result()
+            except Exception:
+                _log.exception("authority query failed after cancellation")
+            raise
+        self._require_detached_result(result)
+        return cast(_T, result)
+
     async def read_many(
         self,
         names: Iterable[str],
@@ -1047,6 +1081,11 @@ class ProjectionRunner:
     def _submit(
         self, func: Callable[..., _T], *args: Any
     ) -> concurrent.futures.Future[_T]:
+        if threading.get_ident() == self._parties_reader_thread_id:
+            # An authority callback must not wait on the writer: publication or
+            # shutdown may be waiting for this reader to finish. Its only DB
+            # surface is the permanent query-only Parties handle.
+            raise RuntimeError("authority callback cannot submit projection work")
         with self._submission_lock:
             if self._closing or self._closed:
                 raise RuntimeError("projection runner is closing")
@@ -1100,38 +1139,9 @@ class ProjectionRunner:
         if read_only and name == "parties":
             if threading.get_ident() == self._parties_reader_thread_id:
                 return self._execute_statement(name, sql, parameters, many, read_only)
-            # Serialize submissions with database publication: a request either
-            # finishes against the prior inode before close, or opens the newly
-            # published database afterwards. No grant values are cached.
-            with self._submission_lock:
-                on_writer = threading.get_ident() == self._worker_thread_id
-                # A callback already accepted on the writer may finish its
-                # nested reads before the queued close. Reject new callers.
-                if self._closed or (self._closing and not on_writer):
-                    raise RuntimeError("projection runner is closing")
-                if self._parties_pending_mutations and not on_writer:
-                    # Do not overtake a queued revocation, role change or
-                    # publication. Once this reaches its original FIFO place,
-                    # the writer delegates the actual SQL to the reader owner.
-                    call = self._executor.submit(
-                        self._execute_sync,
-                        name,
-                        sql,
-                        parameters,
-                        many=many,
-                        read_only=read_only,
-                    )
-                else:
-                    with self._parties_submission_lock:
-                        call = self._parties_executor.submit(
-                            self._execute_statement,
-                            name,
-                            sql,
-                            parameters,
-                            many,
-                            read_only,
-                        )
-            return call.result()
+            return self._submit_authority(
+                self._execute_statement, name, sql, parameters, many, read_only
+            ).result()
         if threading.get_ident() == self._worker_thread_id:
             return self._execute_statement(name, sql, parameters, many, read_only)
         return self._submit(
@@ -1142,6 +1152,31 @@ class ProjectionRunner:
             many,
             read_only,
         ).result()
+
+    def _submit_authority(
+        self, func: Callable[..., _T], *args: Any
+    ) -> concurrent.futures.Future[_T]:
+        if threading.get_ident() == self._parties_reader_thread_id:
+            raise RuntimeError("authority callback cannot submit nested work")
+        # Serialize admission with publication. Reads either finish on the old
+        # inode before its close or open the replacement after publication.
+        with self._submission_lock:
+            on_writer = threading.get_ident() == self._worker_thread_id
+            if self._closed or (self._closing and not on_writer):
+                raise RuntimeError("projection runner is closing")
+            if self._parties_pending_mutations and not on_writer:
+                # Preserve the original writer FIFO for accepted revocations,
+                # role changes and publication; bypass only unrelated work.
+                return self._executor.submit(
+                    self._run_authority_after_mutations, func, args
+                )
+            with self._parties_submission_lock:
+                return self._parties_executor.submit(func, *args)
+
+    def _run_authority_after_mutations(
+        self, func: Callable[..., _T], args: tuple[Any, ...]
+    ) -> _T:
+        return self._submit_authority(func, *args).result()
 
     def _execute_statement(
         self,

@@ -22,7 +22,7 @@ required privacy invariant or product function.
   the four-tool private facade, 18 deterministic hypothetical calculators,
   accepted accounting import/replay, receipt-bound deterministic answers,
   owner goals/preferences and the declared planning summary subset. At
-  `ee43a0df`, 872 Python checks, 100 native checks and synthetic desktop acceptance
+  `fce14a57`, 872 Python checks, 100 native checks and synthetic desktop acceptance
   passed, including revocation during a finance-delivery yield and route-specific
   member/delegated CoS authority. Routing/preparation for F01–F31 is not implementation of every model.
 - **Unsupported functions still required by the original ambition:** durable
@@ -60,6 +60,10 @@ required privacy invariant or product function.
   drift; `1323abd5` failed again at 18.12%. At `ee43a0df`, the light gate failed
   at 16.39% and the accepted-planning gate at 30.69%. The next candidate targets
   deep planning-page database work and corrects collapsed diagnostic labels.
+  That repair passed semantic/query-work checks at `fce14a57`, but light/planning
+  raw p95 still failed at 23.10%/20.74%. The current follow-up removes the extra
+  finance-session worker handoff, adds matched diagnostic phases and measures
+  dedicated-reader memory; current-head hosted checks remain pending.
   Broader resource isolation remains
   unproved. Large-ledger, reminder-delivery,
   heavy-worker termination/memory and deployment-hardware evidence remain absent.

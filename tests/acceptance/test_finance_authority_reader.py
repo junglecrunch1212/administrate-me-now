@@ -195,8 +195,9 @@ async def test_fresh_authority_does_not_queue_behind_unrelated_writer_work(tmp_p
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("whole_callback", [False, True])
 async def test_authority_read_during_publish_waits_for_new_database(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, whole_callback
 ):
     import adminme.projections.runner as runner_module
 
@@ -220,7 +221,11 @@ async def test_authority_read_during_publish_waits_for_new_database(
         monkeypatch.setattr(runner_module.os, "replace", held_replace)
         rebuilding = asyncio.create_task(runner.rebuild("parties"))
         assert await asyncio.to_thread(entered.wait, 5)
-        reading = asyncio.create_task(asyncio.to_thread(resolve, reader))
+        reading = asyncio.create_task(
+            runner.read_authority(lambda conn: resolve(conn).audit_payload())
+            if whole_callback
+            else asyncio.to_thread(resolve, reader)
+        )
         await asyncio.sleep(0.02)
         assert not reading.done()
         release.set()
@@ -240,7 +245,10 @@ async def test_authority_read_during_publish_waits_for_new_database(
 
 
 @pytest.mark.asyncio
-async def test_dedicated_reader_cannot_overtake_queued_revocation(tmp_path):
+@pytest.mark.parametrize("whole_callback", [False, True])
+async def test_dedicated_reader_cannot_overtake_queued_revocation(
+    tmp_path, whole_callback
+):
     runner, log = await start_runner(tmp_path)
     entered, release = threading.Event(), threading.Event()
     held = mutation = reading = None
@@ -268,7 +276,11 @@ async def test_dedicated_reader_cannot_overtake_queued_revocation(tmp_path):
                 break
             await asyncio.sleep(0.001)
         assert runner._parties_pending_mutations
-        reading = asyncio.create_task(asyncio.to_thread(resolve, reader))
+        reading = asyncio.create_task(
+            runner.read_authority(lambda conn: resolve(conn).audit_payload())
+            if whole_callback
+            else asyncio.to_thread(resolve, reader)
+        )
         await asyncio.sleep(0.02)
         assert not reading.done(), "fresh read overtook an accepted revocation"
         release.set()
@@ -287,3 +299,106 @@ async def test_dedicated_reader_cannot_overtake_queued_revocation(tmp_path):
             await asyncio.gather(reading, return_exceptions=True)
         await runner.stop()
         await log.close()
+
+
+@pytest.mark.asyncio
+async def test_whole_authority_callback_bypasses_unrelated_writer_without_write_access(
+    tmp_path,
+):
+    runner, log = await start_runner(tmp_path)
+    entered, release = threading.Event(), threading.Event()
+    held = None
+    try:
+        writer = runner._unsafe_maintenance_connection("parties")
+        grant(writer)
+        approve(writer)
+
+        def occupy_writer():
+            entered.set()
+            assert release.wait(10), "synthetic writer hold was not released"
+
+        held = asyncio.create_task(runner._run_on_worker(occupy_writer))
+        assert await asyncio.to_thread(entered.wait, 5)
+
+        def authority(conn):
+            assert threading.get_ident() == runner._parties_reader_thread_id
+            return resolve(conn).audit_payload()
+
+        result = await asyncio.wait_for(runner.read_authority(authority), 2)
+        assert result["authority_grant_id"] == "grant-synthetic"
+        assert not held.done()
+        with pytest.raises(RuntimeError, match="cannot submit projection work"):
+            await runner.read_authority(
+                lambda _: writer.execute("DELETE FROM service_delegation_grants")
+            )
+        with pytest.raises(getattr(sqlcipher3, "DatabaseError")):
+            await runner.read_authority(
+                lambda conn: conn.execute("PRAGMA query_only=OFF")
+            )
+        with pytest.raises(RuntimeError, match="native SQLCipher handle"):
+            await runner.read_authority(lambda _: runner._parties_read_conn)
+        assert await runner.read_authority(authority) == result
+    finally:
+        release.set()
+        if held is not None:
+            await held
+        await runner.stop()
+        await log.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fail_after_cancel", [False, True])
+async def test_cancelled_authority_callback_settles_without_blocking_loop_or_close(
+    tmp_path,
+    fail_after_cancel,
+    caplog,
+):
+    runner, log = await start_runner(tmp_path)
+    entered, release = threading.Event(), threading.Event()
+    reading = closing = None
+    try:
+
+        def held_query(conn):
+            entered.set()
+            assert release.wait(10), "synthetic authority hold was not released"
+            if fail_after_cancel:
+                raise RuntimeError("synthetic authority failure after cancellation")
+            return conn.execute(
+                "SELECT COUNT(*) FROM service_delegation_grants"
+            ).fetchone()[0]
+
+        reading = asyncio.create_task(runner.read_authority(held_query))
+        assert await asyncio.to_thread(entered.wait, 5)
+        reading.cancel()
+        await asyncio.sleep(0.01)
+        reading.cancel()
+        await asyncio.sleep(0.01)
+        assert not reading.done(), (
+            "cancelled callback escaped before native work settled"
+        )
+        closing = asyncio.create_task(runner.stop())
+        for _ in range(100):
+            if runner._closing:
+                break
+            await asyncio.sleep(0.001)
+        assert runner._closing
+        assert not closing.done()
+        with pytest.raises(RuntimeError, match="closing"):
+            await runner.read_authority(lambda conn: None)
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await reading
+        await closing
+        if fail_after_cancel:
+            assert "authority query failed after cancellation" in caplog.text
+    finally:
+        release.set()
+        if reading is not None:
+            await asyncio.gather(reading, return_exceptions=True)
+        if closing is not None:
+            await asyncio.gather(closing, return_exceptions=True)
+        await runner.stop()
+        await log.close()
+    assert runner._parties_reader_thread_id not in {
+        t.ident for t in threading.enumerate()
+    }

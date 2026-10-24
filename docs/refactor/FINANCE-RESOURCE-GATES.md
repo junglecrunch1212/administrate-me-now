@@ -147,6 +147,7 @@ evidence, not passing acceptance.
 | `1323abd5` | 867 Python passed; two new raw-render fixtures lacked `answer_ref`. 100 native/static/browser passed | Before 4.395, after 4.270 → mixed 5.191 ms (1.181163) | Fail; earlier pass does not establish stable isolation |
 | `e5483133` | 871 Python, 100 native/static/browser passed | Before 3.426, after 3.491 → mixed 4.356 ms (1.247873) | Fail; dedicated-reader performance remains insufficient |
 | `ee43a0df` | 872 Python, 100 native/static/browser passed, including queued-revocation ordering | Before 4.036, after 3.570 → mixed 4.698 ms (1.163851) | Fail; planning also fails at 30.69% |
+| `fce14a57` | 872 Python, 100 native/static/browser and deep-query work checks passed | Before 4.414, after 4.388 → mixed 5.433 ms (1.231012) | Fail; planning also fails at 20.74% |
 
 The [de8 hosted run](https://github.com/junglecrunch1212/administrate-me-now/actions/runs/40042497072)
 retains 251 admitted finance calls, 18.381/19.970 ms warm status/calculation
@@ -262,3 +263,38 @@ and 2818, records both query plans and operation counts, and requires deep-page
 VM work to fall. Full-context pagination/replay and boundary-window checks
 remain the semantic proof; both unchanged mixed-load gates still must pass.
 No additional worker, cache, schema, grant or workload change is introduced.
+
+At `fce14a57`, identical deep-page rows were returned using the existing ordinal
+index. At offset 2816, the diagnostic counted at most 300 VM steps for the full
+candidate query versus at least 67,800 for the prior page SQL. Mean diagnostic
+times were 1.691 ms (full candidate) and 7.597 ms (prior page only); these are
+not the raw acceptance measurement. The matched query plans confirm an indexed
+ordinal seek followed by lookups for the selected bodies. Planning query p95
+in the separate profile fell from 11.185 to 3.159 ms, yet both raw gates failed.
+Light status/calculation p95 was 18.346/19.106 ms with 250 calls. Planning core
+before/after/mixed p95 was 4.488/4.434/5.419 ms (20.74%), with 251 calls and
+21.052/21.388 ms summary/detail p95. No isolated favorable number clears either
+gate.
+
+Corrected operation labels showed small instrumented core queue waits: What Now
+p95 0.195 ms (light) and 0.174 ms (planning), versus finance session-resolution
+p95 1.251/1.401 ms occupying the general worker while waiting on the authority
+reader. The next candidate dispatches each complete finance session read onto
+that existing reader. It adds no thread or grant cache and retains the queued
+Parties-mutation fence. Reader callbacks cannot submit writer work, avoiding
+publication/close deadlocks; cancelled callbacks settle without blocking the
+HTTP loop, including repeated cancellation, before cancellation propagates.
+Final authority SQL and transport/disclosure checks remain fresh and unchanged.
+Dedicated tests cover nonblocking unrelated-writer contention, write rejection,
+no native-handle escape, queued revocation/publication and cancellation/close.
+
+The next separate profiles warm both paths before recording before/mixed/after
+phases (100 core calls each, 50 finance calls in the mixed phase). Profile
+serialization occurs only after all measured responses, removing a diagnostic
+end-of-run perturbation found in the raw spans. They retain per-route and
+per-operation spans and phase-specific statistics; neither acceptance workload
+is changed. Three isolated Linux processes also measure resident/high-water
+and virtual memory before the reader, after its first read, after 1,000 repeated
+reads, after rebuild and after shutdown. This measures the existing reader's
+synthetic lifecycle; it does not establish deployment-hardware or heavy-worker
+memory, and the page-cache target remains distinct from an RSS limit.
