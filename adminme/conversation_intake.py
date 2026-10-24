@@ -36,7 +36,9 @@ class GmailConversationIntake:
         self.runtime = runtime
         self.activated_at: datetime | None = None
         # Envelope occurred_at has second precision; compare at that same precision.
-        self.started_at = datetime.now(timezone.utc).replace(microsecond=0)
+        started = datetime.now(timezone.utc)
+        self.started_at = started.replace(microsecond=0)
+        self.started_at_ms = int(started.timestamp() * 1000)
 
     async def initialize(self, activation_at: str | None = None) -> None:
         runtime = self.runtime
@@ -64,11 +66,13 @@ class GmailConversationIntake:
                 or not request_actions_allowed(runtime)
             ):
                 return
-            try:
-                acquisition = policy_from_config(runtime.settings.adapter_config)
-            except (TypeError, ValueError):
-                return
-            if acquisition is not None:
+            if activation_at is None:
+                try:
+                    acquisition = policy_from_config(runtime.settings.adapter_config)
+                except (TypeError, ValueError):
+                    return
+                if acquisition is None:
+                    return
                 authority = await runtime_live_authorization(
                     runtime,
                     channel="email",
@@ -77,9 +81,8 @@ class GmailConversationIntake:
                 enabled_at = aware_time(authority.get("enabled_at"))
                 if not authority.get("authorized") or enabled_at is None:
                     return
-                if activation_at is None:
-                    # Do not turn a historical activation into inbox backfill.
-                    activation_at = max(self.started_at, enabled_at).isoformat()
+                # Do not turn a historical activation into inbox backfill.
+                activation_at = max(self.started_at, enabled_at).isoformat()
             if (
                 activation_at is None
                 or datetime.fromisoformat(activation_at) < self.started_at
@@ -154,7 +157,13 @@ class GmailConversationIntake:
             return
         if event["type"] in {"cos.channels.activated", "observation.disabled"}:
             if self.activated_at is None:
-                await self.initialize(event["occurred_at"])
+                # A replayed toggle is startup recovery, not a fresh operator
+                # transition in this process; it must prove current authority.
+                await self.initialize(
+                    event["occurred_at"]
+                    if event["event_at_ms"] >= self.started_at_ms
+                    else None
+                )
             if self.activated_at is None:
                 return
             # Resume only new feature-owned inputs held by maintenance. Never
