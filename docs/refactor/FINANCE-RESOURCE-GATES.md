@@ -587,11 +587,74 @@ it with a 10-minute VM watchdog and no automatic retry:
       --basetemp=/absolute/approved/lab-scratch/finance-probe
 
 That is an executable existing p95 probe, not complete proposed qualification.
-Sustained-load parameterization, raw p99 preservation and process-tree CPU/RSS
-enforcement must first be implemented and qualified in hosted CI. A VM watchdog
+The diagnostic harness below adds sustained-load, raw p99 and process-tree
+CPU/RSS collection; its exact-head hosted evidence must be reviewed before any
+hardware run. Proposed budget enforcement has not been adopted. A VM watchdog
 stops only the lab; retain synthetic reports, stop its processes, then remove
 only the approved VM/scratch path. No installed release, private state, Keychain,
 TCC or provider connection is needed by the synthetic fixtures. Direct candidate
 execution alongside the household service remains prohibited; shared resource
 contention is an operational effect even without a file mutation. No local VM,
 probe, new qualification or policy change has been run or approved here.
+
+## Diagnostic sustained/resource harness (not acceptance)
+
+The next-head diagnostic implements the proposed measurement method without
+adopting any proposed budget. `test_finance_sustained_resources.py` spawns the
+existing credential-free production HTTP composition, plus separate core and
+finance load generators. Its fixed full sequence is cold (1 second), warm-up
+(30 seconds at 2 core/1 finance requests per second), core-only baseline
+(60 seconds at 2/s), normal mixed load (900 seconds at 2 core/0.2 finance/s),
+matching core-only baseline (60 seconds), burst baseline (25 seconds at 20
+core/s), mixed burst (30 seconds at 20 core/10 finance/s), and matching burst
+baseline (25 seconds). Light and accepted-planning fixtures run once each on
+separate hosted jobs. The existing two 10% mixed-load gates retain their exact
+workloads, assertions and execution; this diagnostic cannot clear them.
+
+Every scheduled request receives a terminal JSONL record. Fixed arrival times
+continue during slow responses; bounded client queues retain overflow as a
+rejection. Raw records retain operation, scheduled/start/terminal times, queue
+wait, HTTP status, server timing, latency, errors, drain cancellation and
+undispatched requests. No retry, successful-only phase selection or removal of
+cold requests is permitted. Reports give nearest-rank p95/p99, sample counts,
+all-attempt and successful-only distributions separately, and flag fewer than
+1,000 observations as weak tail evidence. Fifteen minutes supplies only 180
+normal finance observations. Neither its p99 nor a 120-sample baseline is a
+confident rare-tail guarantee.
+
+The resource observer reads Linux procfs only beneath the explicitly spawned
+runtime PID and its OS-reported descendants, including children of every
+thread. It excludes pytest and the independent load generators. CPU sums
+process user/system time, OS-accounted waited-child time and live descendant
+time, including all runtime threads. CPU seconds divided by sampled elapsed
+seconds gives logical-core equivalents, not an overlapping-span percentage.
+RSS is the sum of resident pages at 250-ms intervals. Raw PID/start-time,
+per-process counters, collection errors and every resource sample are retained.
+PID reuse, changed parentage, missing proc entries and decreasing aggregate
+CPU are measurement gaps, not zero usage. Tree snapshots are not atomic;
+short-lived unwaited/orphaned children and sub-sample RSS peaks remain limits.
+Shared pages may be counted more than once, so this is neither PSS nor cgroup
+peak accounting. Hosted results do not establish Mini capacity.
+
+The summary records absolute measurements and differences from the larger
+bracketing baseline for normal and burst phases, plus retained normal-phase
+RSS growth. It never evaluates the proposed budgets as acceptance. Harness
+correctness and production-composition smoke tests must pass before the full
+diagnostic runs. Each job has a 35-minute outer timeout; request timeout is
+10 seconds, phase drain is 15 seconds, and only its owned synthetic processes
+are terminated during cleanup. Partial raw files and a prewritten manifest
+remain available on failure. The hosted artifact retention is seven days.
+No private import, live process inspection, provider operation or local lab is
+involved. Hardware measurements remain separately authorized work.
+
+Completed request-profile, final-authority-control and paired Tasks-no-op
+experiments are preserved as explicit `workflow_dispatch` opt-ins, disabled by
+default. Their fixed-corpus correctness check still runs. This avoids repeating
+unchanged exploratory experiments automatically; all existing correctness,
+browser and real-load gates remain in the normal workflow.
+
+The terminal `b1ac7a25` light baseline was 4.498/4.486 ms and mixed p95 was
+5.719 ms (+1.221 ms, +27.156%). Planning was 3.812/3.708 ms versus 4.811 ms
+(+0.999 ms, +26.199%). Both unchanged 10% gates failed. These older summary-only
+runs still provide neither raw p99 nor whole-process CPU evidence. The new
+collector does not retroactively fill those gaps.

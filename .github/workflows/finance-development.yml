@@ -6,7 +6,14 @@ on:
       - 'adminme/events/schemas/finance*'
       - 'adminme/projections/money/**'
       - 'tests/**/test_finance*'
+      - 'tests/fixtures/finance_resource_diagnostic.py'
       - '.github/workflows/finance-development.yml'
+  workflow_dispatch:
+    inputs:
+      exploratory_profiles:
+        description: 'Explicitly repeat the preserved exploratory profiles (not acceptance)'
+        type: boolean
+        default: false
 permissions:
   contents: read
 concurrency:
@@ -54,6 +61,7 @@ jobs:
           tests/unit/test_historical_attribution.py
           tests/unit/test_finance_capabilities.py
           tests/unit/test_finance_resources.py
+          tests/unit/test_finance_resource_diagnostic.py
           tests/unit/test_finance_readiness.py
           tests/unit/test_finance_delegation_snapshot.py
           tests/unit/test_finance_admission.py
@@ -138,19 +146,19 @@ jobs:
           ADMINME_FINANCE_PLANNING_BENCHMARK: '1'
         run: poetry run pytest -q -s tests/acceptance/test_finance_mixed_load.py::test_accepted_planning_mixed_load_p95_gate
       - name: Profile shared request cost in a separate synthetic server
-        if: '!cancelled()'
+        if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && inputs.exploratory_profiles }}
         env:
           ADMINME_FINANCE_PROFILE: '1'
           FINANCE_PROFILE_ARTIFACT_DIR: ${{ runner.temp }}/finance-profiles
         run: poetry run pytest -q -s tests/acceptance/test_finance_mixed_load.py::test_profile_light_finance_request_cost
       - name: Profile accepted-planning queries in a separate synthetic server
-        if: '!cancelled()'
+        if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && inputs.exploratory_profiles }}
         env:
           ADMINME_FINANCE_PLANNING_PROFILE: '1'
           FINANCE_PROFILE_ARTIFACT_DIR: ${{ runner.temp }}/finance-profiles
         run: poetry run pytest -q -s tests/acceptance/test_finance_mixed_load.py::test_profile_accepted_planning_request_cost
       - name: Isolate final authority SQL cost with an unqualified synthetic control
-        if: '!cancelled()'
+        if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && inputs.exploratory_profiles }}
         env:
           ADMINME_FINANCE_AUTHORITY_CONTROL: '1'
           FINANCE_PROFILE_ARTIFACT_DIR: ${{ runner.temp }}/finance-profiles
@@ -161,7 +169,7 @@ jobs:
           ADMINME_FINANCE_TASKS_NOOP_DIAGNOSTIC: '1'
         run: poetry run pytest -q -s tests/acceptance/test_finance_tasks_noop.py::test_fixed_corpus_order_projection_checkpoint_replay_restart_and_cancellation
       - name: Single matched Tasks no-op diagnostic across both workloads
-        if: '!cancelled()'
+        if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && inputs.exploratory_profiles }}
         env:
           ADMINME_FINANCE_TASKS_NOOP_DIAGNOSTIC: '1'
           FINANCE_PROFILE_ARTIFACT_DIR: ${{ runner.temp }}/finance-profiles
@@ -173,4 +181,49 @@ jobs:
           name: finance-profiles-synthetic
           path: ${{ runner.temp }}/finance-profiles
           if-no-files-found: warn
+          retention-days: 7
+
+  resource-diagnostic:
+    name: Diagnostic resource envelope (${{ matrix.workload }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        workload: [light, planning]
+    env:
+      ADMINME_TEST_MODE: '1'
+      PYTHONPATH: bridge
+      PYTHONDONTWRITEBYTECODE: '1'
+      FINANCE_RESOURCE_ARTIFACT_DIR: ${{ runner.temp }}/finance-resources
+      FINANCE_CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.14.7'
+      - run: pipx install poetry==2.4.1
+      - run: poetry sync --with dev
+      - name: Validate diagnostic evidence and owned runtime cleanup
+        env:
+          ADMINME_FINANCE_RESOURCE_SMOKE: '1'
+        run: >-
+          poetry run pytest -q
+          tests/unit/test_finance_resource_diagnostic.py
+          tests/acceptance/test_finance_sustained_resources.py::test_resource_diagnostic_smoke
+      - name: One fixed sustained and burst diagnostic (not acceptance)
+        env:
+          ADMINME_FINANCE_RESOURCE_DIAGNOSTIC: '1'
+        run: >-
+          poetry run pytest -q -s
+          'tests/acceptance/test_finance_sustained_resources.py::test_sustained_resource_diagnostic[${{ matrix.workload }}]'
+      - name: Retain all diagnostic samples, failures and cleanup evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: finance-resource-diagnostic-${{ matrix.workload }}
+          path: ${{ runner.temp }}/finance-resources
+          if-no-files-found: error
           retention-days: 7
