@@ -4249,10 +4249,29 @@ function financeHealth(cockpit) {
   section.append(text("p", "Accepted Books publications own accounting and planning. Provider observations alone do not release reports; the event log preserves accepted provenance and replay.", "review-state")); return section;
 }
 
+function financeBooksOverview(books) {
+  const hero = document.createElement("section"); hero.className = "hero-card finance-hero";
+  const copy = document.createElement("div");
+  copy.append(text("p", "YOUR HOUSEHOLD BOOKS", "eyebrow"), text("h2", "Your financial picture", "action-title"), text("p", "Review the published plan, explore dated cash and funding estimates, and keep your choices alongside their evidence.", "brief-summary"));
+  copy.append(text("p", "Books owns these outputs. A planning estimate is not a verified bank balance or permission to spend.", "state-note"));
+  const facts = document.createElement("dl"); facts.className = "finance-hero-stats";
+  for (const [label, value] of [["Publication accepted", books.as_of || "Unknown"], ["Source observed", books.source_clock_summary?.oldest_observed_at || "Unknown"], ["Current freshness", "Not established"], ["Cash safety", "Not established"]]) {
+    const fact = document.createElement("div"); fact.append(text("dt", label), text("dd", value)); facts.append(fact);
+  }
+  hero.append(copy, facts); return hero;
+}
+
 function renderFinance(data) {
   const root = $("#surface"); root.replaceChildren(); $("#mode-label").textContent = "Private · deterministic planning · no bank writes";
   const cockpit = data.cockpit || { summary: {}, budgets: [], scenarios: [], accounts: [], data_health: {} };
   const requested = new URLSearchParams(location.search).get("view"); if (FINANCE_VIEWS.some(([value]) => value === requested)) state.financeView = requested;
+  if (cockpit.accepted_books?.publication_id) {
+    // Accepted Books is the finance authority for this owner. Legacy workbook
+    // scenarios and provider observations must not appear as a second plan.
+    $("#mode-label").textContent = "Private · Books outputs · source assumptions preserved";
+    root.append(freshnessStrip(data), financeBooksOverview(cockpit.accepted_books), financePlanningCard(cockpit.accepted_books), financeChoicesCard(cockpit.accepted_books), financeAcceptedBooks(cockpit));
+    return;
+  }
   root.append(freshnessStrip(data), financeAcceptedBooks(cockpit), financePlanningCard(cockpit.accepted_books), financeHero(cockpit), financeControls());
   if (state.financeView === "overview") root.append(financeKpis(cockpit), financeCashFlow(cockpit), financeBudgets(cockpit), financeScenarios(cockpit), financeGoals(cockpit), financeChoicesCard(cockpit.accepted_books));
   else if (state.financeView === "cashflow") root.append(financeCashFlow(cockpit), financeScenarios(cockpit));

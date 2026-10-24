@@ -221,6 +221,27 @@ async def test_owner_saves_goal_and_preference_then_reloads(tmp_path):
                 )
 
             await wait_for("Boolean(document.querySelector('.finance-choices'))")
+            # An accepted Books owner sees one source of planning truth. A
+            # stale legacy view URL must not restore the old workbook plan.
+            assert await evaluate(
+                "document.querySelector('.finance-hero').textContent.includes('YOUR HOUSEHOLD BOOKS')"
+            )
+            assert (
+                await evaluate(
+                    "document.querySelectorAll('.finance-kpi, .finance-cashflow, .finance-budget, .finance-scenarios, .finance-controls').length"
+                )
+                == 0
+            )
+            await evaluate(
+                "history.replaceState({}, '', '?view=scenarios'); renderFinance(state.surface)"
+            )
+            await wait_for("Boolean(document.querySelector('.finance-choices'))")
+            assert (
+                await evaluate(
+                    "document.querySelectorAll('.finance-scenarios, .finance-controls').length"
+                )
+                == 0
+            )
             identity = await evaluate(
                 "fetch('/api/member/v1/bootstrap').then(r => r.json()).then(x => ({member:x.member,trust:x.trust}))"
             )

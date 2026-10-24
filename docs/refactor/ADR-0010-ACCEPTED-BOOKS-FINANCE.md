@@ -15,6 +15,12 @@ and encrypted append-only history. No provider token reuse or provider feed is
 introduced. Private publication ingress and finance model access default off;
 production configuration does not enable these settings automatically.
 
+**SUPERSEDE** the mixed dashboard for an owner with an accepted Books publication.
+The Finance page leads with that publication, its dated projections and owner
+choices. Legacy workbook forecasts and provider-derived plan cards are not
+rendered alongside it, including when reopening an older Finance view URL.
+This presentation change does not itself enable import or model processing.
+
 **MODERNIZE** Finance's empty state: unknown is null, partial account observations
 are qualified, forecasts require authored inputs, and unreleased statements are
 unavailable. A catalog route is not evidence of a supported calculation model.
