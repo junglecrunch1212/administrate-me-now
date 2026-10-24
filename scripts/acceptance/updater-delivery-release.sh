@@ -24,7 +24,7 @@ tests=(
 )
 # A module introduced by a later small PR must bring its corresponding proof.
 # An absent optional module is not a skipped test or evidence for that feature.
-for module in prepared_runtime workspace_instructions; do
+for module in prepared_runtime workspace_instructions storage_headroom; do
   if [[ -f "bootstrap/$module.py" ]]; then
     test -f "tests/unit/bootstrap/test_$module.py"
     tests+=("tests/unit/bootstrap/test_$module.py")

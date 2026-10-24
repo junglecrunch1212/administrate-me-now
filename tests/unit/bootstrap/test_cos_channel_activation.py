@@ -1717,3 +1717,45 @@ def test_real_plugin_replacement_preserves_maintenance_restoration(
         "administrateme"
     ]
     assert after == before
+
+
+@pytest.mark.parametrize("operation", ["pause", "restore"])
+def test_disk_refusal_preserves_normal_state_and_history_before_service_stop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, operation: str
+) -> None:
+    controller, request, pause = _live_controller(tmp_path, monkeypatch)
+    if operation == "restore":
+        controller.enter_observation(pause)
+    before = {
+        path.relative_to(controller.paths.instance_dir): path.read_bytes()
+        for path in controller.paths.instance_dir.rglob("*")
+        if path.is_file() and not path.name.endswith(("-wal", "-shm"))
+    }
+    audit_before = asyncio.run(_audit(controller))
+    stops = controller.services.stops
+    starts = controller.services.starts
+    backups = list(controller.paths.backup_dir.iterdir())
+    monkeypatch.setattr(
+        "bootstrap.storage_headroom._volume", lambda _path: (1, 5 * 1024**3)
+    )
+    with pytest.raises(CoSActivationError, match="disk headroom insufficient"):
+        if operation == "pause":
+            controller.enter_observation(pause)
+        else:
+            controller.activate(
+                request.model_copy(update={"recipient_entries": None}), enable_live=True
+            )
+    assert controller.services.stops == stops
+    assert controller.services.starts == starts
+    assert not controller.journal_path.exists()
+    assert asyncio.run(_audit(controller)) == audit_before
+    assert list(controller.paths.backup_dir.iterdir()) == backups
+    after = {
+        path.relative_to(controller.paths.instance_dir): path.read_bytes()
+        for path in controller.paths.instance_dir.rglob("*")
+        if path.is_file() and not path.name.endswith(("-wal", "-shm"))
+    }
+    assert after == before
+    assert controller.services.runtime_diagnostics()["observation_active"] is (
+        operation == "restore"
+    )
