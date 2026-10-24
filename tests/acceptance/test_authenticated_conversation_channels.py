@@ -122,6 +122,8 @@ def gmail_observation(
     group: bool = False,
     old: bool = False,
     received_at: datetime | None = None,
+    from_header: str = "member-a@example.invalid",
+    reply_to: str | None = None,
 ) -> str:
     spec = importlib.util.spec_from_file_location(
         "gmail_conversation_fixture", ROOT / "packs/adapters/messaging/gmail/adapter.py"
@@ -154,10 +156,12 @@ def gmail_observation(
             "name": "Authentication-Results",
             "value": "mx.google.com; dkim=pass header.i=@example.invalid; dmarc=pass header.from=example.invalid",
         },
-        {"name": "From", "value": "member-a@example.invalid"},
+        {"name": "From", "value": from_header},
         {"name": "To", "value": EMAIL_ACCOUNT},
         {"name": "Message-Id", "value": "<fixture-current@example.invalid>"},
     ]
+    if reply_to is not None:
+        headers.append({"name": "Reply-To", "value": reply_to})
     if group:
         headers.append({"name": "Cc", "value": "third-party@example.invalid"})
     if untrusted:
