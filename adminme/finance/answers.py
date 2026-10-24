@@ -76,6 +76,14 @@ def render_result(result: dict[str, Any]) -> str:
         )
     elif str(result.get("result_kind", "")).startswith("planning_"):
         lines.append("Books planning projection: qualified historical output.")
+        if isinstance(result.get("summary", {}).get("minimum"), dict):
+            lines.append(
+                "The conservative minimum is a source scalar, not a lower/upper range."
+            )
+        if any(row.get("earliest_date") is None for row in result.get("events", [])):
+            lines.append(
+                "Undated items remain unplaced; no date or horizon inclusion is inferred."
+            )
         lines.append(
             "Bank cash and cash-equivalent funding are non-additive views. Modeled net funding is not payroll or guaranteed bank income."
         )

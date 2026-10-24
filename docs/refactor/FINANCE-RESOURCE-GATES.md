@@ -116,6 +116,7 @@ evidence, not passing acceptance.
 | `e8c57926` | Two planning defects failed; corrected later | 4.735 → 5.615 ms (1.185864) | Fail |
 | `b9466312` | 779 Python, 96 native and synthetic desktop checks passed | 3.524 → 4.305 ms (1.221600) | Fail |
 | `de8a6fe1` | 782 Python, 96 native and synthetic desktop checks passed | 4.389 → 5.440 ms (1.239571) | Fail |
+| `7d120a86` | 793 Python, 96 native and synthetic desktop checks passed | 2.725 → 3.059 ms (1.122426); after baseline 1.932 ms | Fail |
 
 The [de8 hosted run](https://github.com/junglecrunch1212/administrate-me-now/actions/runs/40042497072)
 retains 251 admitted finance calls, 18.381/19.970 ms warm status/calculation
@@ -138,3 +139,11 @@ distinct. The separate dated-projection transport is a declared summary subset;
 its exact Books producer mapping and private parity remain integration gates.
 Accounting accepted-publication v1 is unchanged. Heavy-work memory, termination,
 reminder delivery, large-ledger and deployment-hardware gates remain unproved.
+
+The [7d120a86 run](https://github.com/junglecrunch1212/administrate-me-now/actions/runs/40044025770)
+retains the failure despite the lower absolute latency. Its separate diagnostic
+measured 50 final authorization calls on the HTTP loop: 18.079 ms total,
+0.453 ms p95, 0.498 ms maximum. Main-loop projection dispatch p95 was 0.347 ms;
+100 worker session resolutions had 0.853 ms p95. These instrumented values are
+not acceptance timings and do not authorize removing fresh revocation checks.
+No identical rerun is substituted for a fix or used to erase earlier failures.

@@ -9678,12 +9678,14 @@ async def finance_planning(
         "planning_projection",
         "planning_events",
         "planning_gaps",
+        "planning_issues",
         "planning_evidence",
         "planning_sources",
         "planning_engines",
     ] = "planning_contexts",
     reference_id: str | None = Query(default=None, min_length=1, max_length=80),
     horizon_days: int = Query(default=30, ge=7, le=365),
+    gap_group_id: str | None = Query(default=None, min_length=1, max_length=80),
     offset: int = Query(default=0, ge=0, le=10000),
 ) -> dict[str, Any]:
     from adminme.finance.planning_store import query_projection
@@ -9704,6 +9706,7 @@ async def finance_planning(
                 offset=offset,
                 limit=50,
                 reference_id=reference_id,
+                gap_group_id=gap_group_id,
             ),
         )
     except ValueError:

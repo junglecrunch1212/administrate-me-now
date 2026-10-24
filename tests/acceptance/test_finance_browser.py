@@ -27,7 +27,12 @@ from tests.acceptance.test_finance_disclosure import enabled_settings
 from tests.acceptance.test_finance_publications import publication
 from tests.acceptance.test_openclaw_native_seam import PRINCIPAL
 from adminme.finance.planning_store import import_projection
-from tests.fixtures.finance_planning import projection, with_unavailable_openings
+from tests.fixtures.finance_planning import (
+    projection,
+    with_unavailable_openings,
+    with_conservative_minima,
+    with_grouped_issues,
+)
 
 
 def _serve_choices(root, listener, ready):
@@ -52,7 +57,11 @@ def _serve_choices(root, listener, ready):
             await import_projection(
                 runtime,
                 build_internal_session(PRINCIPAL, "principal", value["tenant_id"]),
-                with_unavailable_openings(projection(value, 24)),
+                with_grouped_issues(
+                    with_conservative_minima(
+                        with_unavailable_openings(projection(value, 24))
+                    )
+                ),
             )
             ready.send(True)
             ready.close()
@@ -257,6 +266,24 @@ async def test_owner_saves_goal_and_preference_then_reloads(tmp_path):
             )
             await evaluate(
                 "document.querySelector('.finance-gap-details details').open=false"
+            )
+            await evaluate(
+                "Array.from(document.querySelectorAll('.finance-gap-details details')).find(d=>d.querySelector('summary').textContent.includes('Source Issues 0')).open=true"
+            )
+            await wait_for(
+                "document.querySelector('.finance-gap-details').textContent.includes('16 required of 16 original issues')"
+            )
+            await evaluate(
+                "Array.from(document.querySelectorAll('.finance-gap-details button')).find(b=>b.textContent==='Original source issues').click()"
+            )
+            await wait_for(
+                "document.querySelector('.finance-gap-details').textContent.includes('Required source issue: source-issue-000')"
+            )
+            assert await evaluate(
+                "document.querySelector('.finance-planning').textContent.includes('Conservative minimum')"
+            )
+            await evaluate(
+                "Array.from(document.querySelectorAll('.finance-gap-details details')).forEach(d=>d.open=false)"
             )
             await evaluate(
                 "document.querySelector('.finance-planning').scrollIntoView({block:'start'})"

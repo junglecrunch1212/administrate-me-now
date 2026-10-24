@@ -414,8 +414,10 @@ def test_projection_import_refuses_unauthorized_or_conflicting_boundary(
         )
 
 
+@pytest.mark.parametrize("source_case", ["ranges", "grouped_scalars"])
 def test_each_opening_selection_is_reachable_with_status_selection_and_summary_budget(
     tmp_path,
+    source_case,
 ):
     from tests.fixtures.finance_planning import with_unavailable_openings
 
@@ -424,6 +426,13 @@ def test_each_opening_selection_is_reachable_with_status_selection_and_summary_b
         accounting, owner = import_fixture(client)
         runtime = client.app.state.runtime
         value = with_unavailable_openings(projection(accounting))
+        if source_case == "grouped_scalars":
+            from tests.fixtures.finance_planning import (
+                with_grouped_issues,
+                with_conservative_minima,
+            )
+
+            value = with_grouped_issues(with_conservative_minima(value))
         assert validate_projection(value) == value and len(value["contexts"]) == 24
         client.portal.call(import_projection, runtime, owner, value)
         for index, context in enumerate(value["contexts"]):
@@ -712,3 +721,394 @@ def test_provider_sync_clock_is_preserved_without_relabeling_other_clocks(tmp_pa
         assert source["balance_as_of"]["date"] is None
         assert source["observed_at"]["value"] is None
         assert source["retrieved_at"]["value"] == "2026-03-07T17:00:00Z"
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "duplicate_inventory",
+        "duplicate_reference",
+        "missing_reference",
+        "inventory_digest",
+        "context_digest",
+        "unused_inventory",
+        "mixed_layout",
+        "bank_alias_changed",
+        "undated_reason",
+        "partial_date",
+    ],
+)
+def test_shared_inventory_rejects_ambiguous_or_incomplete_context_coverage(fault):
+    from tests.fixtures.finance_planning import shared_projection
+
+    value = shared_projection(publication())
+    if fault == "duplicate_inventory":
+        value["shared_event_inventory"].append(
+            deepcopy(value["shared_event_inventory"][0])
+        )
+    elif fault == "duplicate_reference":
+        value["detail_manifest"][0]["record_ids"].append(
+            value["detail_manifest"][0]["record_ids"][0]
+        )
+    elif fault == "missing_reference":
+        value["detail_manifest"][0]["record_ids"][0] = "absent-source-event"
+    elif fault == "inventory_digest":
+        value["shared_inventory_sha256"] = "f" * 64
+    elif fault == "context_digest":
+        value["detail_manifest"][0]["rows_sha256"] = "f" * 64
+    elif fault == "unused_inventory":
+        extra = deepcopy(value["shared_event_inventory"][0])
+        extra["record_id"] = "unreferenced-record"
+        extra["event_id"] = "unreferenced-source-event"
+        value["shared_event_inventory"].append(extra)
+        seal(value)
+    elif fault == "mixed_layout":
+        value["detail_events"] = [
+            {
+                **value["shared_event_inventory"][0],
+                "context_id": value["contexts"][0]["context_id"],
+            }
+        ]
+    elif fault == "bank_alias_changed":
+        value["detail_manifest"][1]["record_ids"].reverse()
+        seal(value)
+    elif fault == "undated_reason":
+        value["shared_event_inventory"][0]["date_unknown_reason"] = None
+        seal(value)
+    elif fault == "partial_date":
+        value["shared_event_inventory"][0]["latest_date"] = "2026-03-08"
+        seal(value)
+    value["content_sha256"] = content_hash(value)
+    with pytest.raises(PublicationError):
+        validate_projection(value)
+
+
+def test_shared_inventory_full_pagination_replay_and_owner_isolation(tmp_path):
+    import hashlib
+    from adminme.finance.publication import canonical_bytes
+    from tests.fixtures.finance_planning import (
+        shared_projection,
+        with_grouped_issues,
+        with_conservative_minima,
+    )
+
+    configured = enabled_settings(tmp_path)
+    with TestClient(create_application(configured)) as client:
+        _grant_cos(client, "shared-inventory")
+        accounting, owner = import_fixture(client)
+        value = with_grouped_issues(
+            with_conservative_minima(shared_projection(accounting))
+        )
+        assert len(value["shared_event_inventory"]) == 3215
+        assert sum(m["row_count"] for m in value["detail_manifest"]) == 38382
+        assert len(canonical_bytes(value)) < 8 * 1024 * 1024
+        runtime = client.app.state.runtime
+        client.portal.call(import_projection, runtime, owner, value)
+
+        async def all_contexts(session):
+            total = 0
+            for manifest in value["detail_manifest"]:
+                offset = 0
+                restored = []
+                while offset is not None:
+                    answer = await runtime.projections.read(
+                        "money",
+                        lambda conn: query_projection(
+                            conn,
+                            session,
+                            book_id=value["book_id"],
+                            projection_id=value["projection_id"],
+                            context_id=manifest["context_id"],
+                            report_id="planning_events",
+                            horizon_days=365,
+                            offset=offset,
+                            limit=100,
+                        ),
+                    )
+                    assert "record_ids" not in answer["manifest"]
+                    restored.extend(answer["events"])
+                    offset = answer["next_offset"]
+                inventory = {
+                    row["record_id"]: row for row in value["shared_event_inventory"]
+                }
+                assert [row["event_id"] for row in restored] == [
+                    inventory[record_id]["event_id"]
+                    for record_id in manifest["record_ids"]
+                ]
+                assert all(
+                    row["context_id"] == manifest["context_id"] for row in restored
+                )
+                assert (
+                    hashlib.sha256(canonical_bytes(restored)).hexdigest()
+                    == manifest["rows_sha256"]
+                )
+                total += len(restored)
+            return total
+
+        assert client.portal.call(all_contexts, owner) == 38382
+        conn = runtime.projections.connection("money")
+        assert (
+            conn.execute("SELECT COUNT(*) FROM finance_dated_shared_events").fetchone()[
+                0
+            ]
+            == 3215
+        )
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM finance_dated_event_bindings"
+            ).fetchone()[0]
+            == 38382
+        )
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM finance_dated_projection_events"
+            ).fetchone()[0]
+            == 0
+        )
+        metadata = json.loads(
+            conn.execute(
+                "SELECT metadata_json FROM finance_dated_projections"
+            ).fetchone()[0]
+        )
+        assert "shared_event_inventory" not in metadata
+        assert all("record_ids" not in m for m in metadata["detail_manifest"])
+        for index in (0, 6, 12):
+            response = _post(
+                client,
+                "query",
+                f"shared-page-{index}",
+                book_id=value["book_id"],
+                publication_id=accounting["publication_id"],
+                projection_id=value["projection_id"],
+                context_id=value["contexts"][index]["context_id"],
+                report_id="planning_events",
+                horizon_days=365,
+            )
+            assert (
+                response.status_code == 200
+                and len(response.json().get("events", [])) == 1
+            ), response.text
+        other = build_internal_session(
+            "member-other", "principal", accounting["tenant_id"]
+        )
+        assert (
+            query_projection(
+                conn,
+                other,
+                book_id=value["book_id"],
+                context_id=value["contexts"][0]["context_id"],
+                report_id="planning_events",
+            )["state"]
+            == "missing_evidence"
+        )
+        client.portal.call(runtime.projections.rebuild, "money")
+        assert client.portal.call(all_contexts, owner) == 38382
+    with TestClient(create_application(configured)) as client:
+        assert client.portal.call(
+            import_projection, client.app.state.runtime, owner, value
+        )["idempotent"]
+        conn = client.app.state.runtime.projections.connection("money")
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM finance_dated_event_bindings"
+            ).fetchone()[0]
+            == 38382
+        )
+
+
+def test_conservative_minimum_and_absent_zero_crossing_remain_source_typed(tmp_path):
+    from tests.fixtures.finance_planning import with_conservative_minima
+
+    with TestClient(create_application(enabled_settings(tmp_path))) as client:
+        _grant_cos(client, "scalar-minimum")
+        accounting, owner = import_fixture(client)
+        value = with_conservative_minima(projection(accounting))
+        client.portal.call(import_projection, client.app.state.runtime, owner, value)
+        common = {
+            "book_id": value["book_id"],
+            "publication_id": accounting["publication_id"],
+            "projection_id": value["projection_id"],
+            "context_id": value["contexts"][0]["context_id"],
+            "report_id": "planning_projection",
+            "horizon_days": 30,
+        }
+        answer = _post(client, "query", "scalar-minimum", **common)
+        assert answer.status_code == 200 and "summary" in answer.json(), answer.text
+        assert answer.json()["summary"]["minimum"] == {
+            "kind": "CONSERVATIVE_SOURCE_SCALAR",
+            "value_minor": 100,
+            "unknown_reason": None,
+        }
+        assert "source scalar, not a lower/upper range" in render_result(answer.json())
+        signals = _post(
+            client, "query", "scalar-signals", projection_view="signals", **common
+        )
+        assert signals.status_code == 200 and "summary" in signals.json(), signals.text
+        assert signals.json()["summary"]["first_zero_crossing_date"] == {
+            "date": None,
+            "unknown_reason": "source_does_not_provide_zero_crossing",
+        }
+
+
+def test_shared_record_keys_preserve_original_event_ids_across_source_variants():
+    from tests.fixtures.finance_planning import shared_projection
+
+    value = shared_projection(publication())
+    manifest = value["detail_manifest"][
+        6
+    ]  # A funding view, independent of bank aliases.
+    original_id = manifest["record_ids"][0]
+    original = next(
+        row
+        for row in value["shared_event_inventory"]
+        if row["record_id"] == original_id
+    )
+    variant = deepcopy(original)
+    variant["record_id"] = "distinct-source-variant"
+    variant["amount"] = bounds(2)
+    variant["bank_effect"] = bounds(2)
+    value["shared_event_inventory"].append(variant)
+    manifest["record_ids"][0] = variant["record_id"]
+    assert variant["event_id"] == original["event_id"]
+    assert validate_projection(seal(value)) == value
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "required_group_omitted",
+        "required_flag_changed",
+        "issue_omitted",
+        "issue_identity",
+        "issue_audience",
+        "issue_membership",
+        "group_scope",
+    ],
+)
+def test_original_issue_flags_and_memberships_cannot_disappear_in_groups(fault):
+    from tests.fixtures.finance_planning import with_grouped_issues
+
+    value = with_grouped_issues(projection(publication()))
+    if fault == "required_group_omitted":
+        value["contexts"][0]["horizons"][0]["conditions"].remove("source-issues-0")
+    elif fault == "required_flag_changed":
+        value["gap_issues"][0]["required"] = False
+    elif fault == "issue_omitted":
+        value["gap_issues"].pop()
+    elif fault == "issue_identity":
+        value["gap_issues"][1]["issue_id"] = value["gap_issues"][0]["issue_id"]
+    elif fault == "issue_audience":
+        value["gap_issues"][0]["audience_member_ids"] = ["member-other"]
+    elif fault == "issue_membership":
+        value["gap_issues"][0]["memberships"][0]["context_id"] = "context-other"
+    elif fault == "group_scope":
+        value["gaps"][-1]["horizon_days"] = [30]
+    if fault not in {"required_flag_changed", "issue_omitted"}:
+        seal(value)
+    value["content_sha256"] = content_hash(value)
+    with pytest.raises(PublicationError):
+        validate_projection(value)
+
+
+def test_original_issues_are_fully_recoverable_with_required_flags_and_exact_horizons(
+    tmp_path,
+):
+    from tests.fixtures.finance_planning import with_grouped_issues
+
+    with TestClient(create_application(enabled_settings(tmp_path))) as client:
+        _grant_cos(client, "original-issue-groups")
+        accounting, owner = import_fixture(client)
+        value = with_grouped_issues(projection(accounting))
+        assert value["issue_manifest"]["row_count"] == 141
+        assert value["issue_manifest"]["required_count"] == 49
+        assert len(value["gaps"]) <= 128
+        assert all(
+            len(h["conditions"]) <= 16 for c in value["contexts"] for h in c["horizons"]
+        )
+        runtime = client.app.state.runtime
+        client.portal.call(import_projection, runtime, owner, value)
+        context_id = value["contexts"][0]["context_id"]
+
+        async def recover():
+            recovered = {}
+            for days in (7, 90):
+                selected = []
+                offset = 0
+                while offset is not None:
+                    response = await runtime.projections.read(
+                        "money",
+                        lambda conn: query_projection(
+                            conn,
+                            owner,
+                            book_id=value["book_id"],
+                            context_id=context_id,
+                            report_id="planning_issues",
+                            horizon_days=days,
+                            limit=100,
+                            offset=offset,
+                        ),
+                    )
+                    selected.extend(response["records"])
+                    offset = response["next_offset"]
+                assert sum(issue["required"] for issue in selected) == 46
+                assert len(selected) == 138
+                assert all(days in issue["horizon_days"] for issue in selected)
+                recovered.update(
+                    {issue["issue_id"]: issue["required"] for issue in selected}
+                )
+                groups = await runtime.projections.read(
+                    "money",
+                    lambda conn: query_projection(
+                        conn,
+                        owner,
+                        book_id=value["book_id"],
+                        context_id=context_id,
+                        report_id="planning_gaps",
+                        horizon_days=days,
+                        limit=100,
+                    ),
+                )
+                assert (
+                    sum(
+                        g.get("issue_counts", {}).get("required", 0)
+                        for g in groups["records"]
+                    )
+                    == 46
+                )
+            return recovered
+
+        recovered = client.portal.call(recover)
+        assert recovered == {
+            issue["issue_id"]: issue["required"] for issue in value["gap_issues"]
+        }
+        common = {
+            "book_id": value["book_id"],
+            "publication_id": accounting["publication_id"],
+            "projection_id": value["projection_id"],
+            "context_id": context_id,
+        }
+        group = _post(
+            client,
+            "query",
+            "group-native",
+            report_id="planning_gaps",
+            reference_id="source-issues-0",
+            **common,
+        )
+        assert group.status_code == 200 and group.json().get("records"), group.text
+        assert group.json()["records"][0]["issue_counts"] == {
+            "total": 16,
+            "required": 16,
+        }
+        issue = _post(
+            client,
+            "query",
+            "group-native",
+            report_id="planning_issues",
+            gap_group_id="source-issues-0",
+            reference_id="source-issue-000",
+            **common,
+        )
+        assert issue.status_code == 200 and issue.json().get("records"), issue.text
+        assert issue.json()["records"][0]["required"] is True
+        assert issue.json()["records"][0]["issue_id"] == "source-issue-000"

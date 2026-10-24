@@ -22,8 +22,9 @@ required privacy invariant or product function.
   the four-tool private facade, 18 deterministic hypothetical calculators,
   accepted accounting import/replay, receipt-bound deterministic answers,
   owner goals/preferences and the declared planning summary subset. At
-  `de8a6fe1`, 782 Python checks, 96 native checks and synthetic desktop acceptance
-  passed, including revocation during a finance-delivery yield. Routing/preparation for F01–F31 is not implementation of every model.
+  `7d120a86`, 793 Python checks, 96 native checks and synthetic desktop acceptance
+  passed, including revocation during a finance-delivery yield and route-specific
+  member/delegated CoS authority. Routing/preparation for F01–F31 is not implementation of every model.
 - **Unsupported functions still required by the original ambition:** durable
   heavy analysis and resource reservation; remaining strategic/tax/retirement
   variants with independent oracles; production joint decisions, outcomes and
@@ -35,7 +36,12 @@ required privacy invariant or product function.
 - **Producer and private parity remain unproved:** map the exact native context
   tuples and every supported field/clock, review the pinned schema/hash, then
   compare an authorized private export. Synthetic 12/24-context fixtures and
-  3,215-row transport coverage do not prove native parity or source correctness.
+  3,215-body transport coverage do not prove native parity or source correctness.
+  Current producer-fit source work adds shared detail manifests, undated rows,
+  reversible issue groups and typed conservative minima. It needs hosted tests
+  and review of the revised schema/hash before a producer export is built.
+  The producer distinguishes 18 oracle groups, 12 observed-opening native-tested
+  tuples and 24 query aliases; verified-opening oracle nulls are not native-tested.
 - **Final-head validation and performance remain gates:** the current candidate
   needs its hosted required checks, native/browser results and the unchanged
   raw core p95 regression limit of at most 10%. One earlier bounded latency pass

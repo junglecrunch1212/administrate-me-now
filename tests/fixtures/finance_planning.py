@@ -248,17 +248,44 @@ def projection(accounting, total_events=0):
 
 
 def seal(value):
-    value["detail_manifest"] = [
-        {
-            "context_id": c["context_id"],
-            "row_count": len(rows),
-            "rows_sha256": rows_hash(rows),
+    if "gap_issues" in value:
+        value["issue_manifest"] = {
+            "row_count": len(value["gap_issues"]),
+            "required_count": sum(issue["required"] for issue in value["gap_issues"]),
+            "rows_sha256": rows_hash(value["gap_issues"]),
         }
-        for c in value["contexts"]
-        for rows in [
-            [r for r in value["detail_events"] if r["context_id"] == c["context_id"]]
+    if "shared_event_inventory" in value:
+        inventory = {row["record_id"]: row for row in value["shared_event_inventory"]}
+        value["shared_inventory_sha256"] = rows_hash(value["shared_event_inventory"])
+        for manifest in value["detail_manifest"]:
+            manifest["row_count"] = len(manifest["record_ids"])
+            manifest["rows_sha256"] = rows_hash(
+                {
+                    **{
+                        k: v
+                        for k, v in inventory[record_id].items()
+                        if k != "record_id"
+                    },
+                    "context_id": manifest["context_id"],
+                }
+                for record_id in manifest["record_ids"]
+            )
+    else:
+        value["detail_manifest"] = [
+            {
+                "context_id": c["context_id"],
+                "row_count": len(rows),
+                "rows_sha256": rows_hash(rows),
+            }
+            for c in value["contexts"]
+            for rows in [
+                [
+                    r
+                    for r in value["detail_events"]
+                    if r["context_id"] == c["context_id"]
+                ]
+            ]
         ]
-    ]
     value["content_sha256"] = content_hash(value)
     return value
 
@@ -310,4 +337,136 @@ def with_unavailable_openings(value):
             "evidence_ids": ["evidence-synthetic"],
         }
     )
+    return seal(value)
+
+
+def shared_projection(accounting):
+    """Synthetic 3,215-body/38,382-reference fit case, not native parity."""
+    value = with_unavailable_openings(projection(accounting))
+    value["shared_event_inventory"] = [
+        {
+            "record_id": f"record-{index:04d}",
+            "event_id": f"shared-{index:04d}",
+            "earliest_date": None if index % 97 == 0 else "2026-03-08",
+            "latest_date": None if index % 97 == 0 else "2026-03-08",
+            "date_unknown_reason": "source_undated" if index % 97 == 0 else None,
+            "kind": "income",
+            "account_route_id": "route-synthetic",
+            "recognition_id": f"recognition-{index:04d}",
+            "included": True,
+            "direction": "inflow",
+            "amount": bounds(1),
+            "bank_effect": bounds(1),
+            "debt_effect": bounds(0),
+            "evidence_ids": ["evidence-synthetic"],
+            "conditions": [],
+        }
+        for index in range(3215)
+    ]
+    groups = {}
+    value["detail_manifest"] = []
+    for context in value["contexts"]:
+        key = (
+            context["measure"],
+            context["scenario_id"],
+            context["opening_basis"],
+            None if context["measure"] == BANK else context["income_basis"],
+        )
+        group = groups.setdefault(key, len(groups))
+        count = (
+            1600
+            if context["measure"] == BANK
+            and context["opening_basis"] == "observed_cash_hypothetical"
+            else 1599
+        )
+        value["detail_manifest"].append(
+            {
+                "context_id": context["context_id"],
+                "record_ids": [
+                    f"record-{(group * 200 + index) % 3215:04d}"
+                    for index in range(count)
+                ],
+            }
+        )
+    assert len(groups) == 18
+    return seal(value)
+
+
+def with_conservative_minima(value):
+    """Source scalar minima and explicitly absent zero-crossing evidence."""
+    for context in value["contexts"]:
+        for horizon in context["horizons"]:
+            unavailable = horizon["estimate_state"] == "UNAVAILABLE"
+            horizon["minimum"] = {
+                "kind": "CONSERVATIVE_SOURCE_SCALAR",
+                "value_minor": None if unavailable else 100,
+                "unknown_reason": "verified_opening_unavailable"
+                if unavailable
+                else None,
+            }
+            horizon["first_zero_crossing_date"] = {
+                "date": None,
+                "unknown_reason": "source_does_not_provide_zero_crossing",
+            }
+    return seal(value)
+
+
+def with_grouped_issues(value):
+    """141 original issues, 49 required overall, exactly 46 per horizon."""
+    context_ids = [context["context_id"] for context in value["contexts"]]
+    groups = {}
+    value["gap_issues"] = []
+    for index in range(141):
+        days = (
+            [7, 30]
+            if 43 <= index <= 45
+            else [90, 180, 365]
+            if 46 <= index <= 48
+            else [7, 30, 90, 180, 365]
+        )
+        group_id = f"source-issues-{index // 16}"
+        groups.setdefault(group_id, []).append(index)
+        value["gap_issues"].append(
+            {
+                "issue_id": f"source-issue-{index:03d}",
+                "gap_id": group_id,
+                "required": index < 49,
+                "audience_member_ids": [value["owner_id"]],
+                "memberships": [
+                    {"context_id": context_id, "horizon_days": days[:]}
+                    for context_id in context_ids
+                ],
+                "explanation": f"Synthetic original issue {index} remains unresolved.",
+                "required_input": "Provide the source evidence for this original issue.",
+                "timing": "before_safety_conclusion",
+                "evidence_ids": ["evidence-synthetic"],
+            }
+        )
+    for group_id in groups:
+        value["gaps"].append(
+            {
+                "gap_id": group_id,
+                "issue_group": True,
+                "context_ids": context_ids[:],
+                "horizon_days": [7, 30, 90, 180, 365],
+                "audience_member_ids": [value["owner_id"]],
+                "explanation": "Grouped original issues retain their IDs, required flags and memberships.",
+                "required_input": "Review the original issues in this group.",
+                "timing": "before_safety_conclusion",
+                "evidence_ids": ["evidence-synthetic"],
+            }
+        )
+    for context in value["contexts"]:
+        for horizon in context["horizons"]:
+            needed = {
+                issue["gap_id"]
+                for issue in value["gap_issues"]
+                if issue["required"]
+                and any(
+                    m["context_id"] == context["context_id"]
+                    and horizon["days"] in m["horizon_days"]
+                    for m in issue["memberships"]
+                )
+            }
+            horizon["conditions"].extend(sorted(needed))
     return seal(value)

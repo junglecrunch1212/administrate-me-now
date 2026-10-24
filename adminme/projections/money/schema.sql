@@ -291,3 +291,27 @@ CREATE TABLE IF NOT EXISTS finance_dated_projection_refs (
 );
 CREATE INDEX IF NOT EXISTS idx_finance_dated_projection_refs_page
 ON finance_dated_projection_refs(tenant_id,owner_id,book_id,projection_id,kind,context_id,ordinal);
+
+-- Shared detail bodies stay owner/projection scoped; selectors only add order.
+CREATE TABLE IF NOT EXISTS finance_dated_shared_events (
+    tenant_id TEXT NOT NULL,
+    owner_id TEXT NOT NULL,
+    book_id TEXT NOT NULL,
+    projection_id TEXT NOT NULL,
+    record_id TEXT NOT NULL,
+    event_json TEXT NOT NULL,
+    PRIMARY KEY (tenant_id, owner_id, book_id, projection_id, record_id)
+);
+CREATE TABLE IF NOT EXISTS finance_dated_event_bindings (
+    tenant_id TEXT NOT NULL,
+    owner_id TEXT NOT NULL,
+    book_id TEXT NOT NULL,
+    projection_id TEXT NOT NULL,
+    context_id TEXT NOT NULL,
+    ordinal INTEGER NOT NULL,
+    record_id TEXT NOT NULL,
+    PRIMARY KEY (tenant_id, owner_id, book_id, projection_id, context_id, ordinal),
+    UNIQUE (tenant_id, owner_id, book_id, projection_id, context_id, record_id),
+    FOREIGN KEY (tenant_id, owner_id, book_id, projection_id, record_id)
+      REFERENCES finance_dated_shared_events(tenant_id, owner_id, book_id, projection_id, record_id)
+);

@@ -4141,6 +4141,7 @@ class FinanceQueryRequest(ContextRequest):
         "planning_projection",
         "planning_events",
         "planning_gaps",
+        "planning_issues",
         "planning_evidence",
         "planning_sources",
         "planning_engines",
@@ -4163,6 +4164,7 @@ class FinanceQueryRequest(ContextRequest):
     timezone: str | None = Field(default=None, min_length=1, max_length=64)
     as_of_date: str | None = Field(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$")
     reference_id: str | None = Field(default=None, min_length=1, max_length=80)
+    gap_group_id: str | None = Field(default=None, min_length=1, max_length=80)
     projection_view: Literal["balances", "signals", "provenance"] = "balances"
     offset: int = Field(default=0, ge=0, le=10000)
     limit: int = Field(default=50, ge=1, le=100)
@@ -4662,6 +4664,7 @@ async def finance_query(body: FinanceQueryRequest, request: Request) -> dict[str
                             selector=selector,
                             view=body.projection_view,
                             reference_id=body.reference_id,
+                            gap_group_id=body.gap_group_id,
                         ),
                     )
                     if (
@@ -4673,6 +4676,7 @@ async def finance_query(body: FinanceQueryRequest, request: Request) -> dict[str
                     body.projection_id is not None
                     or body.context_id is not None
                     or body.reference_id is not None
+                    or body.gap_group_id is not None
                     or body.projection_view != "balances"
                     or any(
                         getattr(body, key) is not None

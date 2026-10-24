@@ -75,8 +75,21 @@ def apply_projection(envelope: dict[str, Any], conn: Any) -> None:
     metadata = {
         k: v
         for k, v in p.items()
-        if k not in {"detail_events", "evidence_ids", "gaps", "evidence", "sources"}
+        if k
+        not in {
+            "detail_events",
+            "shared_event_inventory",
+            "evidence_ids",
+            "gaps",
+            "gap_issues",
+            "evidence",
+            "sources",
+        }
     }
+    metadata["detail_manifest"] = [
+        {k: v for k, v in manifest.items() if k != "record_ids"}
+        for manifest in p["detail_manifest"]
+    ]
     conn.execute(
         "INSERT INTO finance_dated_projections VALUES (?,?,?,?,?,?,?)",
         (
@@ -87,6 +100,29 @@ def apply_projection(envelope: dict[str, Any], conn: Any) -> None:
             envelope["event_id"],
         ),
     )
+    issue_counts: dict[tuple[str, str], dict[int, dict[str, int]]] = {}
+    for issue_ordinal, issue in enumerate(p.get("gap_issues", [])):
+        for membership in issue["memberships"]:
+            context_id = membership["context_id"]
+            counts = issue_counts.setdefault((issue["gap_id"], context_id), {})
+            for days in membership["horizon_days"]:
+                count = counts.setdefault(days, {"total": 0, "required": 0})
+                count["total"] += 1
+                count["required"] += int(issue["required"])
+            record = {k: v for k, v in issue.items() if k != "memberships"}
+            record["horizon_days"] = membership["horizon_days"]
+            conn.execute(
+                "INSERT INTO finance_dated_projection_refs VALUES (?,?,?,?,?,?,?,?,?)",
+                (
+                    *key,
+                    p["projection_id"],
+                    "issues",
+                    issue["issue_id"],
+                    context_id,
+                    issue_ordinal,
+                    canonical_bytes(record).decode(),
+                ),
+            )
     for kind in ("gaps", "evidence", "sources"):
         for ordinal, record in enumerate(p[kind]):
             ref_id = record[
@@ -105,6 +141,14 @@ def apply_projection(envelope: dict[str, Any], conn: Any) -> None:
                     }
                 )
             for context_id in context_ids:
+                scoped_record = record
+                if kind == "gaps" and record.get("issue_group"):
+                    counts = issue_counts[(ref_id, context_id)]
+                    scoped_record = {
+                        **record,
+                        "horizon_days": sorted(counts),
+                        "issue_counts_by_horizon": counts,
+                    }
                 conn.execute(
                     "INSERT INTO finance_dated_projection_refs VALUES (?,?,?,?,?,?,?,?,?)",
                     (
@@ -114,13 +158,38 @@ def apply_projection(envelope: dict[str, Any], conn: Any) -> None:
                         ref_id,
                         context_id,
                         ordinal,
-                        canonical_bytes(record).decode(),
+                        canonical_bytes(scoped_record).decode(),
                     ),
                 )
-    counts: dict[str, int] = {}
+    for row in p.get("shared_event_inventory", []):
+        conn.execute(
+            "INSERT INTO finance_dated_shared_events VALUES (?,?,?,?,?,?)",
+            (
+                *key,
+                p["projection_id"],
+                row["record_id"],
+                canonical_bytes(
+                    {k: v for k, v in row.items() if k != "record_id"}
+                ).decode(),
+            ),
+        )
+    if "shared_event_inventory" in p:
+        for manifest in p["detail_manifest"]:
+            for ordinal, record_id in enumerate(manifest["record_ids"]):
+                conn.execute(
+                    "INSERT INTO finance_dated_event_bindings VALUES (?,?,?,?,?,?,?)",
+                    (
+                        *key,
+                        p["projection_id"],
+                        manifest["context_id"],
+                        ordinal,
+                        record_id,
+                    ),
+                )
+    event_ordinals: dict[str, int] = {}
     for row in p["detail_events"]:
         context_id = row["context_id"]
-        ordinal = counts.get(context_id, 0)
+        ordinal = event_ordinals.get(context_id, 0)
         conn.execute(
             "INSERT INTO finance_dated_projection_events VALUES (?,?,?,?,?,?,?,?)",
             (
@@ -132,7 +201,7 @@ def apply_projection(envelope: dict[str, Any], conn: Any) -> None:
                 canonical_bytes(row).decode(),
             ),
         )
-        counts[context_id] = ordinal + 1
+        event_ordinals[context_id] = ordinal + 1
     conn.execute(
         "INSERT INTO finance_dated_projection_heads VALUES (?,?,?,?) ON CONFLICT(tenant_id,owner_id,book_id) DO UPDATE SET projection_id=excluded.projection_id",
         (*key, p["projection_id"]),
@@ -267,6 +336,8 @@ def _summary(context: dict[str, Any], horizon: dict[str, Any]) -> dict[str, Any]
         ("cash_in", horizon["cash_in"]),
         ("cash_out", horizon["cash_out"]),
     ):
+        if value.get("kind") == "CONSERVATIVE_SOURCE_SCALAR":
+            continue
         for endpoint in ("lower", "upper"):
             reason = value[f"{endpoint}_unknown_reason"]
             if reason is not None:
@@ -290,7 +361,9 @@ def _summary(context: dict[str, Any], horizon: dict[str, Any]) -> dict[str, Any]
         "opening": _compact_range(context["opening"]),
         "encumbered": _compact_range(context["encumbered"]),
         "closing": _compact_range(horizon["closing"]),
-        "minimum": _compact_range(horizon["minimum"]),
+        "minimum": dict(horizon["minimum"])
+        if horizon["minimum"].get("kind") == "CONSERVATIVE_SOURCE_SCALAR"
+        else _compact_range(horizon["minimum"]),
         "cash_in": _compact_range(horizon["cash_in"]),
         "cash_out": _compact_range(horizon["cash_out"]),
         "reserve_threshold": horizon["reserve_threshold"]["value_minor"],
@@ -322,6 +395,7 @@ def query_projection(
     selector: dict[str, str] | None = None,
     view: str = "all",
     reference_id: str | None = None,
+    gap_group_id: str | None = None,
 ) -> dict[str, Any]:
     if (
         type(offset) is not int
@@ -336,10 +410,13 @@ def query_projection(
         raise PublicationError("projection_view_invalid")
     if reference_id is not None and report_id not in {
         "planning_gaps",
+        "planning_issues",
         "planning_evidence",
         "planning_sources",
     }:
         raise PublicationError("projection_reference_filter_invalid")
+    if gap_group_id is not None and report_id != "planning_issues":
+        raise PublicationError("projection_issue_group_filter_invalid")
     selector = selector or {}
     required_axes = {"measure", "scenario_id", "income_basis", "opening_basis"}
     allowed_axes = required_axes | {
@@ -509,10 +586,15 @@ def query_projection(
                     "published_at": p["published_at"],
                     "verified_at": p["verified_at"],
                 }
-    elif report_id in {"planning_gaps", "planning_evidence", "planning_sources"}:
+    elif report_id in {
+        "planning_gaps",
+        "planning_issues",
+        "planning_evidence",
+        "planning_sources",
+    }:
         kind = report_id.removeprefix("planning_")
         rows = conn.execute(
-            "SELECT record_json FROM finance_dated_projection_refs WHERE tenant_id=? AND owner_id=? AND book_id=? AND projection_id=? AND kind=? AND context_id=? AND (? IS NULL OR reference_id=?) AND (? != 'gaps' OR EXISTS(SELECT 1 FROM json_each(record_json,'$.horizon_days') WHERE value=?)) ORDER BY ordinal LIMIT ? OFFSET ?",
+            "SELECT record_json FROM finance_dated_projection_refs WHERE tenant_id=? AND owner_id=? AND book_id=? AND projection_id=? AND kind=? AND context_id=? AND (? IS NULL OR reference_id=?) AND (? NOT IN ('gaps','issues') OR EXISTS(SELECT 1 FROM json_each(record_json,'$.horizon_days') WHERE value=?)) AND (? IS NULL OR json_extract(record_json,'$.gap_id')=?) ORDER BY ordinal LIMIT ? OFFSET ?",
             (
                 *key,
                 requested,
@@ -522,18 +604,23 @@ def query_projection(
                 reference_id,
                 kind,
                 horizon_days,
+                gap_group_id,
+                gap_group_id,
                 limit + 1,
                 offset,
             ),
         ).fetchall()
-        result["records"] = [
-            {
+        result["records"] = []
+        for row in rows[:limit]:
+            record = {
                 k: v
                 for k, v in json.loads(row[0]).items()
                 if k not in {"context_ids", "audience_member_ids"}
             }
-            for row in rows[:limit]
-        ]
+            counts_by_horizon = record.pop("issue_counts_by_horizon", None)
+            if counts_by_horizon is not None:
+                record["issue_counts"] = counts_by_horizon[str(horizon_days)]
+            result["records"].append(record)
         result["next_offset"] = offset + limit if len(rows) > limit else None
         result["horizon_days"] = horizon_days
     elif report_id == "planning_engines":
@@ -548,11 +635,20 @@ def query_projection(
         end = (
             date.fromisoformat(context["as_of_date"]) + timedelta(days=horizon_days + 1)
         ).isoformat()
-        rows = conn.execute(
-            "SELECT event_json FROM finance_dated_projection_events WHERE tenant_id=? AND owner_id=? AND book_id=? AND projection_id=? AND context_id=? AND json_extract(event_json,'$.earliest_date') < ? ORDER BY ordinal LIMIT ? OFFSET ?",
-            (*key, requested, context_id, end, limit + 1, offset),
-        ).fetchall()
-        result["events"] = [json.loads(r[0]) for r in rows[:limit]]
+        if "shared_inventory_sha256" in p:
+            rows = conn.execute(
+                "SELECT e.event_json FROM finance_dated_event_bindings b JOIN finance_dated_shared_events e USING(tenant_id,owner_id,book_id,projection_id,record_id) WHERE b.tenant_id=? AND b.owner_id=? AND b.book_id=? AND b.projection_id=? AND b.context_id=? AND (json_extract(e.event_json,'$.earliest_date') IS NULL OR json_extract(e.event_json,'$.earliest_date') < ?) ORDER BY b.ordinal LIMIT ? OFFSET ?",
+                (*key, requested, context_id, end, limit + 1, offset),
+            ).fetchall()
+            result["events"] = [
+                {**json.loads(r[0]), "context_id": context_id} for r in rows[:limit]
+            ]
+        else:
+            rows = conn.execute(
+                "SELECT event_json FROM finance_dated_projection_events WHERE tenant_id=? AND owner_id=? AND book_id=? AND projection_id=? AND context_id=? AND (json_extract(event_json,'$.earliest_date') IS NULL OR json_extract(event_json,'$.earliest_date') < ?) ORDER BY ordinal LIMIT ? OFFSET ?",
+                (*key, requested, context_id, end, limit + 1, offset),
+            ).fetchall()
+            result["events"] = [json.loads(r[0]) for r in rows[:limit]]
         result["next_offset"] = offset + limit if len(rows) > limit else None
         result["horizon_days"] = horizon_days
         result["manifest"] = next(

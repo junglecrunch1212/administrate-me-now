@@ -15,7 +15,7 @@ from adminme.projections.money import handlers
 
 class MoneyProjection(Projection):
     name = "money"
-    version = 6
+    version = 7
     subscribes_to = [
         "money_flow.recorded",
         "money_flow.manually_added",

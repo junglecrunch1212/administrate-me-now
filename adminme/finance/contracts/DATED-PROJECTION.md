@@ -8,7 +8,15 @@ adoption and private parity remain separate review dependencies. This supports
 a declared subset of Books v1.2 outputs; it is not lossless v1.2 support. Daily
 balances, card-debt paths and per-account shortfalls are explicitly unsupported
 in the contract and visible on every consumer result. Synthetic
-fixtures are not a representation of the actual twelve native context tuples.
+fixtures are not native parity evidence. The producer handoff distinguishes 18
+frozen oracle groups (two openings × three scenarios × bank/funding-observed/
+funding-modeled families), 12 actually verified native tuples (three scenarios ×
+two measures × two income controls, observed opening only), and 24 proposed
+query aliases. Bank-income aliases reuse one source output. Verified-opening
+null/unavailable oracle outputs are not labeled native-tested. The mapper's
+reported 1,611 local checks, including 780 field comparisons across 60 observed
+native horizons, do not establish a conforming payload, private runtime parity
+or adoption.
 
 The owner-only file-adapter seam requires finance publication processing to be
 enabled and the exact current accepted accounting publication ID/content hash.
@@ -36,7 +44,12 @@ All five horizons begin the next local calendar day. `start_inclusive` and
 are signed integer minor units already rounded by the producer. Transport does
 not round a range into a scalar, multiply a partial month, add a bonus to annual
 gross, or convert a noncash expectation into a receipt. A range can have one or
-both endpoints missing, each with its reason. Known zero and unknown are distinct.
+both endpoints missing, each with its reason. Known zero and unknown are distinct. A source conservative minimum uses
+`{kind: CONSERVATIVE_SOURCE_SCALAR, value_minor, unknown_reason}` instead of a
+lower/upper range. Consumers label that scalar explicitly. No range endpoints
+are manufactured from it. An absent source zero-crossing date stays null with
+its own reason; the adapter never substitutes a first-negative date or computes
+another crossing.
 
 `estimate_state`, `completeness_state` and `safety_state` are independent.
 `INCOMPLETE` may carry useful conditional estimates with explicit conditions.
@@ -82,13 +95,38 @@ and context parity still needs producer evidence before adoption.
 
 ## Complete details with bounded consumption
 
-An export may contain up to 48 explicitly declared contexts and 10,000 detail
-rows within 8 MiB. Each context has an exact row count and digest of its ordered
-rows. Validation rejects omissions, duplicate event identities, undeclared
-contexts and inconsistent manifests. The synthetic acceptance fixture contains
-12 contexts and 3,215 total rows; it tests transport coverage only. A separate
-synthetic 24-context fixture adds unavailable verified-opening choices. Neither
-fixture establishes the actual native export mapping.
+An export remains capped at 48 declared contexts, 10,000 unique detail bodies
+and 8 MiB. Inline `detail_events` remain supported up to 10,000 total rows.
+Alternatively, `shared_event_inventory` holds each body once, and every
+`detail_manifest` lists ordered `record_ids`. Inline and shared layouts cannot
+be mixed. Shared record IDs are storage references distinct from original
+`event_id` values: source variants may retain the same event ID in different
+contexts with distinct record IDs, while byte-identical bodies may be shared.
+A context cannot include the same source event identity twice.
+
+`shared_inventory_sha256` hashes the canonical ordered inventory array. Each
+context's `row_count` and `rows_sha256` bind its entire ordered materialized
+row array, adding its `context_id` and excluding the inventory-only `record_id`.
+Canonical arrays use sorted object keys, compact JSON separators, UTF-8 and no
+NaN/Infinity. The projection content digest binds the inventory and references.
+Unknown/duplicate references, unreferenced inventory entries, conflicting IDs,
+wrong counts/digests and undeclared contexts reject before head advancement.
+No value, inclusion policy or date is inferred while materializing a reference.
+
+The producer-fit handoff reports 3,215 unique native detail items, 35,988
+occurrences across the 18 oracle groups, and 38,382 when bank aliases expand.
+Those are different populations. The reported dated-only count of 35,646 still
+exceeds the former inline capacity. The synthetic shared fixture tests 3,215
+bodies and 38,382 ordered references; it is an export-fit test, not proof that
+those synthetic bodies or memberships equal the native export. Exact field,
+variant, alias and ordering parity remains the producer's separate review gate.
+
+Validation expands one bounded context at a time. Storage keeps bodies and
+owner/context-scoped references separately. Query metadata excludes both the
+inventory and full reference lists, and each detail query joins only its scoped
+page. Sharing does not put repeated event payloads into CoS context or raise
+the existing per-call, per-turn, row-page or 8 MiB limits. Large-export runtime
+and recovery performance still need their own evidence before activation.
 
 Each row retains its date range, account/payment route, measure via context,
 direction, amount range, bank/debt effects, evidence and conditions. A card
@@ -98,6 +136,11 @@ effect. `recognition_id` identifies one economic recognition within a context:
 only one row with that ID can be included. An annual provision and its eventual
 bill cannot both be included for the same recognition. The exporter must map
 its actual inclusion policy to these keys; the adapter cannot infer it.
+Undated items have both date endpoints null and a nonempty
+`date_unknown_reason`. They are not moved to today, an as-of date or a horizon
+boundary. Detail pages retain them as explicitly unplaced items alongside the
+selected dated rows; the UI and native renderer make that distinction. Source
+horizon totals remain untouched. Partial invented date intervals are rejected.
 
 The member surface selects one context and horizon and pages detail 50 rows at
 a time. Native `finance-query` uses `planning_contexts`, `planning_projection`
@@ -109,14 +152,33 @@ sections that each retain the applicable conditions and exact publication pins.
 Status, selection and one summary fit the existing three sequential-call limit;
 separate follow-up turns retrieve other sections. The limits are unchanged.
 
-`planning_gaps`, `planning_evidence` and `planning_sources` resolve one scoped
-reference per native page; `planning_engines` returns the three-role manifest.
-Gap metadata provides an explanation, required input, timing and evidence IDs
-within its owner, context and horizon. Evidence drilldown returns a protected
-artifact reference and declared hash, with `source_content_state=not_included`.
-It does not return source bytes or independently verify the referenced file.
-Private URLs are not accepted in the explanation fields. References are indexed
-by context so bounded reads do not parse the complete detail/evidence arrays.
+`planning_gaps`, `planning_issues`, `planning_evidence` and `planning_sources`
+resolve one scoped record per native page; `planning_engines` returns the
+three-role manifest. `gap_group_id` selects original issues within one group.
+Member reference pages contain at most 50 records with continuation controls.
+
+The 128 gap-group and 16 horizon-condition-reference limits remain unchanged.
+Optional `gap_issues` supports up to 256 original source issues in the same
+8 MiB payload, enough for the reported 141 issue IDs without presenting them
+all in one model response. Every issue retains its original ID, required flag,
+owner audience, explanation/input/timing/evidence and exact per-context horizon
+memberships. `issue_manifest` pins the ordered issue digest, total count and
+required count. A grouping is explicit (`issue_group: true`) and reversible;
+all children are individually retrievable. Groups cannot broaden or omit child
+membership, hide required issues from a horizon's conditions, or declare
+complete/safe evidence while a required issue remains. The synthetic case
+preserves 141 IDs, 49 required globally and exactly 46 required per horizon.
+The producer must confirm original flags/memberships against its source before
+export; transport cannot independently determine whether supplied source facts
+are true.
+
+Group reads show the total/required issue counts for only the selected context
+and horizon. A group pointer is not a cleared condition. Evidence drilldown
+returns a protected artifact reference and declared hash, with
+`source_content_state=not_included`; it neither returns source bytes nor
+independently verifies the referenced file. Private URLs are not accepted in
+explanation fields. References and issue memberships are indexed by context so
+bounded reads do not parse all detail or issue arrays.
 The generic existing reports retain their previous pagination limits. No
 projection cache is enabled. If one fully qualified result exceeds the existing
 native result budget, it fails closed rather than dropping conditions. The

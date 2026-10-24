@@ -197,7 +197,7 @@ export function registerTools(api: OpenClawPluginApi, runtime: PluginRuntime): v
     },
     {
       name: "administrateme_finance_query",
-      description: "Read a private accepted report, owner_choices (up to three/page), or planning_contexts, planning_projection and planning_events (one/page, next_offset), planning_gaps/evidence/sources (one reference_id/page), or planning_engines. Select planning by context_id OR typed measure/scenario_id/income_basis/opening_basis; optional case/currency/timezone/as_of_date disambiguate. Use projection_view balances/signals/provenance, each a bounded section, and 7/30/90/180/365 days. Bank and funding views are non-additive. No raw transactions, SQL or source links.",
+      description: "Read a private accepted report, owner_choices (up to three/page), or planning_contexts, planning_projection and planning_events (one/page, next_offset), planning_gaps/evidence/sources (one reference_id/page), planning_issues (original required flags; optional gap_group_id), or planning_engines. Select planning by context_id OR typed measure/scenario_id/income_basis/opening_basis; optional case/currency/timezone/as_of_date disambiguate. Use projection_view balances/signals/provenance, each a bounded section, and 7/30/90/180/365 days. Bank and funding views are non-additive. No raw transactions, SQL or source links.",
       parameters: Type.Object({
         book_id: Type.String({ minLength: 1, maxLength: 120 }),
         publication_id: Type.String({ minLength: 1, maxLength: 120 }),
@@ -205,6 +205,7 @@ export function registerTools(api: OpenClawPluginApi, runtime: PluginRuntime): v
         scenario_id: Type.Optional(Type.String({ maxLength: 16 })),
         horizon_days: Type.Optional(Type.Integer({ minimum: 7, maximum: 365 })),
         reference_id: Type.Optional(Type.String({ minLength: 1, maxLength: 80 })),
+        gap_group_id: Type.Optional(Type.String({ minLength: 1, maxLength: 80 })),
         projection_id: Type.Optional(Type.String({ minLength: 1, maxLength: 80 })),
         context_id: Type.Optional(Type.String({ minLength: 1, maxLength: 80 })),
         measure: Type.Optional(Type.Union([Type.Literal("BANK_CASH_SUBSET"), Type.Literal("CASH_EQUIVALENT_FUNDING_NOT_BANK")])),

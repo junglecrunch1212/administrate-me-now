@@ -4014,11 +4014,11 @@ function financePlanningCard(books) {
   async function events(offset, generation) {
     const answer = await request("planning_events", { context_id: contextSelect.value, horizon_days: horizonSelect.value, offset: String(offset) });
     if (generation !== requestNumber || !section.isConnected) return;
-    detail.replaceChildren(text("h3", "Dated events"), text("p", `Full context manifest: ${answer.manifest.row_count} events. This page lists events whose earliest date is within ${answer.horizon_days} days.`, "state-note"));
+    detail.replaceChildren(text("h3", "Dated events"), text("p", `Full context manifest: ${answer.manifest.row_count} events. This page lists dated events starting within ${answer.horizon_days} days, plus undated items that are not placed in this horizon.`, "state-note"));
     const table = document.createElement("table"); table.className = "finance-table";
     const head = document.createElement("tr"); for (const label of ["Dates / route", "Type", "Amount range", "Included"]) head.append(text("th", label)); table.append(head);
     for (const item of answer.events || []) {
-      const row = document.createElement("tr"); row.append(text("td", `${item.earliest_date} – ${item.latest_date} · ${item.account_route_id}`), text("td", titleCase(item.kind)), text("td", range([item.amount.lower_minor, item.amount.upper_minor], answer.context.currency)), text("td", item.included ? "Yes" : "No")); table.append(row);
+      const row = document.createElement("tr"); row.append(text("td", `${item.earliest_date ? `${item.earliest_date} – ${item.latest_date}` : `Undated (${titleCase(item.date_unknown_reason)})`} · ${item.account_route_id}`), text("td", titleCase(item.kind)), text("td", range([item.amount.lower_minor, item.amount.upper_minor], answer.context.currency)), text("td", item.included ? "Yes" : "No")); table.append(row);
     }
     detail.append(table);
     for (const [label, next] of [["Previous events", offset > 0 ? Math.max(0, offset - 50) : null], ["Next events", answer.next_offset]]) {
@@ -4038,18 +4038,24 @@ function financePlanningCard(books) {
       content.append(text("p", `${titleCase(c.scenario_id)} · Plan case ${c.plan_case_id} · ${incomeLabel(c.income_basis)} · ${openingLabel(c.opening_basis)}`, "state-note"));
       content.append(text("p", `${h.start_inclusive} inclusive to ${h.end_exclusive} exclusive · ${c.timezone}. Cash safety: ${h.safety_state === "SOURCE_VERIFIED" ? "historically verified by source; current safety unverified" : "not established"}.`, "state-note"));
       const stats = document.createElement("dl"); stats.className = "finance-scenario-stats";
-      for (const [label, value] of [["Opening range", h.opening], ["Closing range", h.closing], ["Minimum range", h.minimum], ["Encumbered range", h.encumbered], ["Cash-in range", h.cash_in], ["Cash-out range", h.cash_out]]) { const item = document.createElement("div"); item.append(text("dt", label), text("dd", range(value, c.currency))); stats.append(item); }
+      for (const [label, value] of [["Opening range", h.opening], ["Closing range", h.closing], [Array.isArray(h.minimum) ? "Minimum range" : "Conservative minimum", h.minimum], ["Encumbered range", h.encumbered], ["Cash-in range", h.cash_in], ["Cash-out range", h.cash_out]]) { const item = document.createElement("div"); item.append(text("dt", label), text("dd", Array.isArray(value) ? range(value, c.currency) : `${exact(value.value_minor, c.currency)}${value.unknown_reason ? ` (${titleCase(value.unknown_reason)})` : ""}`)); stats.append(item); }
       content.append(stats, text("p", "These measures cannot be added. Positive remainder is not available surplus. Modeled net funding is not payroll or guaranteed bank income.", "state-note"));
       content.append(text("p", `Reserve threshold: ${exact(h.reserve_threshold, c.currency)}. Checking threshold: ${exact(h.checking_threshold, c.currency)}.`, "state-note"));
       for (const [label, value] of [["Reserve breach", h.reserve_breach], ["Negative bank cash", h.negative_bank_cash], ["Checking shortage", h.checking_shortage]]) content.append(text("p", `${label}: ${value == null ? "Unknown" : value ? "Yes" : "No"}.`, "state-note"));
       for (const [label, key] of [["Minimum date", "minimum_date"], ["First negative date", "first_negative_date"], ["First zero-crossing date", "first_zero_crossing_date"], ["First reserve-breach date", "first_reserve_breach_date"]]) { const dated = h[key]; content.append(text("p", `${label}: ${dated.date || `Unknown (${titleCase(dated.unknown_reason)})`}.`, "state-note")); }
       const references = document.createElement("div"); references.className = "finance-gap-details";
-      async function reference(report, referenceId, target, offset = 0) {
-        const info = await request(report, { context_id:c.context_id, horizon_days:String(h.days), offset:String(offset), ...(referenceId ? {reference_id:referenceId} : {}) });
+      async function reference(report, referenceId, target, offset = 0, gapGroupId = null) {
+        const info = await request(report, { context_id:c.context_id, horizon_days:String(h.days), offset:String(offset), ...(gapGroupId ? {gap_group_id:gapGroupId} : {}), ...(referenceId ? {reference_id:referenceId} : {}) });
         if (generation !== requestNumber || !section.isConnected) return;
         target.replaceChildren();
         for (const record of info.records || []) {
-          if (report === "planning_gaps") {
+          if (report === "planning_gaps" || report === "planning_issues") {
+            if (record.issue_id) target.append(text("p", `${record.required ? "Required" : "Optional"} source issue: ${record.issue_id}`, "state-note"));
+            if (record.issue_group) {
+              target.append(text("p", `${record.issue_counts.required} required of ${record.issue_counts.total} original issues in this context and horizon.`, "state-note"));
+              const issues = text("button", "Original source issues", "button button-quiet"); issues.type = "button"; const issueBody = document.createElement("div");
+              issues.addEventListener("click", () => { void reference("planning_issues", null, issueBody, 0, record.gap_id).catch(() => { issueBody.textContent = "Source issues are unavailable in this private context."; }); }); target.append(issues, issueBody);
+            }
             target.append(text("p", record.explanation), text("p", `Required input: ${record.required_input}`), text("p", `When: ${titleCase(record.timing)}`, "state-note"));
             for (const evidenceId of record.evidence_ids) { const evidence = text("button", "Evidence details", "button button-quiet"); evidence.type = "button"; const evidenceBody = document.createElement("div"); evidence.addEventListener("click", () => { void reference("planning_evidence", evidenceId, evidenceBody).catch(() => { evidenceBody.textContent = "Evidence details are unavailable in this private context."; }); }); target.append(evidence, evidenceBody); }
           } else {
@@ -4061,7 +4067,7 @@ function financePlanningCard(books) {
         for (const [label, next] of [["Previous references", offset > 0 ? Math.max(0, offset - 50) : null], ["Next references", info.next_offset]]) {
           if (next == null) continue;
           const button = text("button", label, "button button-quiet"); button.type = "button";
-          button.addEventListener("click", () => { button.disabled = true; void reference(report, referenceId, target, next).catch(() => { button.disabled = false; status.textContent = "Reference details could not be loaded."; }); }); target.append(button);
+          button.addEventListener("click", () => { button.disabled = true; void reference(report, referenceId, target, next, gapGroupId).catch(() => { button.disabled = false; status.textContent = "Reference details could not be loaded."; }); }); target.append(button);
         }
       }
       for (const condition of h.conditions) {

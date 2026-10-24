@@ -244,6 +244,52 @@
           "const": "unsupported"
         }
       }
+    },
+    "shared_event_inventory": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/shared_event"
+      },
+      "minItems": 0,
+      "maxItems": 10000
+    },
+    "shared_inventory_sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "gap_issues": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 256,
+      "items": {
+        "$ref": "#/$defs/gap_issue"
+      },
+      "description": "Original source issues, each with its unchanged required flag and exact context/horizon memberships. Groups remain capped separately; consumers page individual issues."
+    },
+    "issue_manifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "row_count",
+        "required_count",
+        "rows_sha256"
+      ],
+      "properties": {
+        "row_count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 256
+        },
+        "required_count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 256
+        },
+        "rows_sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      }
     }
   },
   "$defs": {
@@ -427,7 +473,14 @@
           "$ref": "#/$defs/range"
         },
         "minimum": {
-          "$ref": "#/$defs/range"
+          "oneOf": [
+            {
+              "$ref": "#/$defs/range"
+            },
+            {
+              "$ref": "#/$defs/conservative_minimum"
+            }
+          ]
         },
         "reserve_threshold": {
           "$ref": "#/$defs/threshold"
@@ -599,11 +652,17 @@
           "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$"
         },
         "earliest_date": {
-          "type": "string",
+          "type": [
+            "string",
+            "null"
+          ],
           "format": "date"
         },
         "latest_date": {
-          "type": "string",
+          "type": [
+            "string",
+            "null"
+          ],
           "format": "date"
         },
         "kind": {
@@ -662,8 +721,46 @@
           },
           "minItems": 0,
           "maxItems": 8
+        },
+        "date_unknown_reason": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[a-z][a-z0-9_]{0,79}$"
         }
-      }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "earliest_date": {
+              "type": "string"
+            },
+            "latest_date": {
+              "type": "string"
+            },
+            "date_unknown_reason": {
+              "type": "null"
+            }
+          }
+        },
+        {
+          "required": [
+            "date_unknown_reason"
+          ],
+          "properties": {
+            "earliest_date": {
+              "type": "null"
+            },
+            "latest_date": {
+              "type": "null"
+            },
+            "date_unknown_reason": {
+              "type": "string"
+            }
+          }
+        }
+      ]
     },
     "manifest": {
       "type": "object",
@@ -686,6 +783,15 @@
         "rows_sha256": {
           "type": "string",
           "pattern": "^[a-f0-9]{64}$"
+        },
+        "record_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$"
+          },
+          "minItems": 0,
+          "maxItems": 10000
         }
       }
     },
@@ -871,6 +977,9 @@
           },
           "maxItems": 8,
           "minItems": 0
+        },
+        "issue_group": {
+          "const": true
         }
       }
     },
@@ -931,6 +1040,328 @@
           "const": "not_included"
         }
       }
+    },
+    "shared_event": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "record_id",
+        "event_id",
+        "earliest_date",
+        "latest_date",
+        "kind",
+        "account_route_id",
+        "recognition_id",
+        "included",
+        "direction",
+        "amount",
+        "bank_effect",
+        "debt_effect",
+        "evidence_ids",
+        "conditions"
+      ],
+      "properties": {
+        "event_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$"
+        },
+        "earliest_date": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date"
+        },
+        "latest_date": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date"
+        },
+        "kind": {
+          "enum": [
+            "income",
+            "expense",
+            "card_purchase",
+            "card_settlement",
+            "internal_transfer",
+            "provision",
+            "bill",
+            "other"
+          ]
+        },
+        "account_route_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$"
+        },
+        "recognition_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$"
+        },
+        "included": {
+          "type": "boolean"
+        },
+        "direction": {
+          "enum": [
+            "inflow",
+            "outflow",
+            "neutral"
+          ]
+        },
+        "amount": {
+          "$ref": "#/$defs/range"
+        },
+        "bank_effect": {
+          "$ref": "#/$defs/range"
+        },
+        "debt_effect": {
+          "$ref": "#/$defs/range"
+        },
+        "evidence_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$"
+          },
+          "minItems": 1,
+          "maxItems": 8
+        },
+        "conditions": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$"
+          },
+          "minItems": 0,
+          "maxItems": 8
+        },
+        "date_unknown_reason": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[a-z][a-z0-9_]{0,79}$"
+        },
+        "record_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$"
+        }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "earliest_date": {
+              "type": "string"
+            },
+            "latest_date": {
+              "type": "string"
+            },
+            "date_unknown_reason": {
+              "type": "null"
+            }
+          }
+        },
+        {
+          "required": [
+            "date_unknown_reason"
+          ],
+          "properties": {
+            "earliest_date": {
+              "type": "null"
+            },
+            "latest_date": {
+              "type": "null"
+            },
+            "date_unknown_reason": {
+              "type": "string"
+            }
+          }
+        }
+      ]
+    },
+    "conservative_minimum": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "value_minor",
+        "unknown_reason"
+      ],
+      "properties": {
+        "kind": {
+          "const": "CONSERVATIVE_SOURCE_SCALAR"
+        },
+        "value_minor": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": -9000000000000000,
+          "maximum": 9000000000000000
+        },
+        "unknown_reason": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[a-z][a-z0-9_]{0,79}$"
+        }
+      }
+    },
+    "gap_issue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "gap_id",
+        "audience_member_ids",
+        "explanation",
+        "required_input",
+        "timing",
+        "evidence_ids",
+        "issue_id",
+        "required",
+        "memberships"
+      ],
+      "properties": {
+        "gap_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$"
+        },
+        "audience_member_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$"
+          },
+          "maxItems": 1,
+          "minItems": 1
+        },
+        "explanation": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 240
+        },
+        "required_input": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 240
+        },
+        "timing": {
+          "enum": [
+            "before_safety_conclusion",
+            "before_source_refresh",
+            "before_selected_decision"
+          ]
+        },
+        "evidence_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$"
+          },
+          "maxItems": 8,
+          "minItems": 0
+        },
+        "issue_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$"
+        },
+        "required": {
+          "type": "boolean"
+        },
+        "memberships": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 48,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "context_id",
+              "horizon_days"
+            ],
+            "properties": {
+              "context_id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$"
+              },
+              "horizon_days": {
+                "type": "array",
+                "items": {
+                  "enum": [
+                    7,
+                    30,
+                    90,
+                    180,
+                    365
+                  ]
+                },
+                "maxItems": 5,
+                "minItems": 1,
+                "uniqueItems": true
+              }
+            }
+          }
+        }
+      }
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": {
+        "required": [
+          "shared_event_inventory"
+        ]
+      },
+      "then": {
+        "required": [
+          "shared_inventory_sha256"
+        ],
+        "properties": {
+          "detail_events": {
+            "maxItems": 0
+          },
+          "detail_manifest": {
+            "items": {
+              "required": [
+                "record_ids"
+              ]
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "shared_inventory_sha256": false,
+          "detail_manifest": {
+            "items": {
+              "not": {
+                "required": [
+                  "record_ids"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "gap_issues"
+        ]
+      },
+      "then": {
+        "required": [
+          "issue_manifest"
+        ]
+      },
+      "else": {
+        "properties": {
+          "issue_manifest": false
+        }
+      }
+    }
+  ]
 }

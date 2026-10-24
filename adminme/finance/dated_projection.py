@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections import defaultdict
+from collections.abc import Iterable
 from datetime import date, datetime, timedelta
 from functools import lru_cache
 from pathlib import Path
@@ -32,8 +33,16 @@ def schema_hash() -> str:
     return hashlib.sha256(SCHEMA_PATH.read_bytes()).hexdigest()
 
 
-def rows_hash(rows: list[dict[str, Any]]) -> str:
-    return hashlib.sha256(canonical_bytes(rows)).hexdigest()
+def rows_hash(rows: Iterable[dict[str, Any]]) -> str:
+    """Canonical ordered-array digest without building a repeated JSON array."""
+    digest = hashlib.sha256(b"[")
+    separator = b""
+    for row in rows:
+        digest.update(separator)
+        digest.update(canonical_bytes(row))
+        separator = b","
+    digest.update(b"]")
+    return digest.hexdigest()
 
 
 @lru_cache(maxsize=1)
@@ -59,7 +68,17 @@ def _range(value: dict[str, Any], *, nonnegative: bool = False) -> None:
 
 
 def _known(value: dict[str, Any]) -> bool:
+    if value.get("kind") == "CONSERVATIVE_SOURCE_SCALAR":
+        return value["value_minor"] is not None
     return value["lower_minor"] is not None and value["upper_minor"] is not None
+
+
+def _minimum_values(value: dict[str, Any]) -> list[int | None]:
+    if value.get("kind") == "CONSERVATIVE_SOURCE_SCALAR":
+        _nullable(value["value_minor"], value["unknown_reason"])
+        return [value["value_minor"]]
+    _range(value)
+    return [value["lower_minor"], value["upper_minor"]]
 
 
 def _zero(value: dict[str, Any]) -> bool:
@@ -90,20 +109,18 @@ def _context(context: dict[str, Any], chosen: str) -> None:
             raise PublicationError("projection_verified_opening_unavailable")
         for name in ("cash_in", "cash_out"):
             _range(horizon[name], nonnegative=True)
-        for name in ("closing", "minimum"):
-            _range(horizon[name])
-            if horizon["estimate_state"] == "UNAVAILABLE" and any(
-                horizon[name][endpoint] is not None
-                for endpoint in ("lower_minor", "upper_minor")
-            ):
-                raise PublicationError("projection_unavailable_has_values")
+        _range(horizon["closing"])
+        estimates = [
+            horizon["closing"]["lower_minor"],
+            horizon["closing"]["upper_minor"],
+            *_minimum_values(horizon["minimum"]),
+        ]
+        if horizon["estimate_state"] == "UNAVAILABLE" and any(
+            value is not None for value in estimates
+        ):
+            raise PublicationError("projection_unavailable_has_values")
         if horizon["estimate_state"] == "PROVIDED" and (
-            not horizon["evidence_ids"]
-            or all(
-                horizon[name][endpoint] is None
-                for name in ("closing", "minimum")
-                for endpoint in ("lower_minor", "upper_minor")
-            )
+            not horizon["evidence_ids"] or all(value is None for value in estimates)
         ):
             raise PublicationError("projection_estimate_evidence_required")
         if horizon["completeness_state"] == "INCOMPLETE" and not horizon["conditions"]:
@@ -187,7 +204,10 @@ def _events(
         seen.add((context_id, row["event_id"]))
         start = date.fromisoformat(context["as_of_date"]) + timedelta(days=1)
         end = start + timedelta(days=365)
-        if (
+        if row["earliest_date"] is None:
+            if row["latest_date"] is not None or not row.get("date_unknown_reason"):
+                raise PublicationError("projection_undated_reason_required")
+        elif (
             not start
             <= date.fromisoformat(row["earliest_date"])
             <= date.fromisoformat(row["latest_date"])
@@ -222,6 +242,86 @@ def _events(
                 raise PublicationError("projection_settlement_legs_invalid")
         grouped[context_id].append(row)
     return grouped
+
+
+def _validate_issues(
+    result: dict[str, Any],
+    contexts: dict[str, dict[str, Any]],
+    gaps: dict[str, dict[str, Any]],
+    evidence: dict[str, dict[str, Any]],
+) -> None:
+    """Require reversible groups without weakening original required flags."""
+    issues = result.get("gap_issues", [])
+    if "gap_issues" in result:
+        manifest = result["issue_manifest"]
+        if (
+            manifest["row_count"] != len(issues)
+            or manifest["required_count"] != sum(issue["required"] for issue in issues)
+            or manifest["rows_sha256"] != rows_hash(issues)
+        ):
+            raise PublicationError("projection_issue_manifest_mismatch")
+    seen: set[str] = set()
+    applicable: dict[tuple[str, int], set[str]] = defaultdict(set)
+    required: dict[tuple[str, int], set[str]] = defaultdict(set)
+    group_contexts: dict[str, set[str]] = defaultdict(set)
+    group_horizons: dict[str, set[int]] = defaultdict(set)
+    for issue in result.get("gap_issues", []):
+        group = gaps.get(issue["gap_id"])
+        if issue["issue_id"] in seen or not group or not group.get("issue_group"):
+            raise PublicationError("projection_issue_identity_or_group_invalid")
+        seen.add(issue["issue_id"])
+        if issue["audience_member_ids"] != [result["owner_id"]]:
+            raise PublicationError("projection_issue_audience_invalid")
+        if any("://" in issue[name] for name in ("explanation", "required_input")):
+            raise PublicationError("projection_private_link_not_permitted")
+        if not set(issue["evidence_ids"]) <= evidence.keys():
+            raise PublicationError("projection_issue_evidence_unknown")
+        seen_contexts = set()
+        for membership in issue["memberships"]:
+            context_id = membership["context_id"]
+            days = set(membership["horizon_days"])
+            if (
+                context_id in seen_contexts
+                or context_id not in contexts
+                or context_id not in group["context_ids"]
+                or not days <= set(group["horizon_days"])
+            ):
+                raise PublicationError("projection_issue_membership_invalid")
+            if any(
+                context_id not in evidence[e]["context_ids"]
+                for e in issue["evidence_ids"]
+            ):
+                raise PublicationError("projection_issue_evidence_scope_invalid")
+            seen_contexts.add(context_id)
+            group_contexts[issue["gap_id"]].add(context_id)
+            group_horizons[issue["gap_id"]].update(days)
+            for day in days:
+                applicable[(context_id, day)].add(issue["gap_id"])
+                if issue["required"]:
+                    required[(context_id, day)].add(issue["gap_id"])
+    for group_id, group in gaps.items():
+        if group.get("issue_group") and (
+            set(group["context_ids"]) != group_contexts[group_id]
+            or set(group["horizon_days"]) != group_horizons[group_id]
+        ):
+            raise PublicationError("projection_issue_group_coverage_invalid")
+    for context_id, context in contexts.items():
+        for horizon in context["horizons"]:
+            key = (context_id, horizon["days"])
+            conditions = set(horizon["conditions"])
+            if not required[key] <= conditions:
+                raise PublicationError("projection_required_issue_unrepresented")
+            if required[key] and (
+                horizon["completeness_state"] != "INCOMPLETE"
+                or horizon["safety_state"] != "NOT_ESTABLISHED"
+            ):
+                raise PublicationError("projection_required_issue_safety_conflict")
+            if any(
+                gaps[g].get("issue_group") and g not in applicable[key]
+                for g in conditions
+                if g in gaps
+            ):
+                raise PublicationError("projection_issue_condition_scope_invalid")
 
 
 def validate_projection(value: dict[str, Any]) -> dict[str, Any]:
@@ -358,33 +458,71 @@ def validate_projection(value: dict[str, Any]) -> dict[str, Any]:
                     for e in horizon["evidence_ids"]
                 ):
                     raise PublicationError("projection_evidence_context_invalid")
-        grouped = _events(contexts, result["detail_events"], evidence)
-        for row in result["detail_events"]:
-            if any(
-                row["context_id"] not in records[e]["context_ids"]
-                for e in row["evidence_ids"]
-            ):
-                raise PublicationError("projection_evidence_context_invalid")
-            if any(
-                g not in gaps or row["context_id"] not in gaps[g]["context_ids"]
-                for g in row["conditions"]
-            ):
-                raise PublicationError("projection_gap_scope_invalid")
+        _validate_issues(result, contexts, gaps, records)
         manifests = {m["context_id"]: m for m in result["detail_manifest"]}
         if len(manifests) != len(result["detail_manifest"]) or set(manifests) != set(
             contexts
         ):
             raise PublicationError("projection_manifest_contexts_mismatch")
-        for context_id, manifest in manifests.items():
-            rows = grouped.get(context_id, [])
+        inventory = None
+        referenced: set[str] = set()
+        grouped = {}
+        if "shared_event_inventory" in result:
+            inventory = {
+                row["record_id"]: row for row in result["shared_event_inventory"]
+            }
+            if len(inventory) != len(result["shared_event_inventory"]):
+                raise PublicationError("projection_shared_event_identity_conflict")
+            if result["shared_inventory_sha256"] != rows_hash(
+                result["shared_event_inventory"]
+            ):
+                raise PublicationError("projection_shared_inventory_hash_mismatch")
+        else:
+            grouped = _events(contexts, result["detail_events"], evidence)
+        # Validate one bounded context at a time. Shared inventory bodies are
+        # never expanded into the union of all context selections in memory.
+        bank_paths: dict[tuple[Any, ...], bytes] = {}
+        for context_id, context in contexts.items():
+            manifest = manifests[context_id]
+            if inventory is not None:
+                record_ids = manifest["record_ids"]
+                if (
+                    len(record_ids) != len(set(record_ids))
+                    or not set(record_ids) <= inventory.keys()
+                ):
+                    raise PublicationError("projection_shared_reference_invalid")
+                referenced.update(record_ids)
+                rows = [
+                    {
+                        **{
+                            k: v
+                            for k, v in inventory[record_id].items()
+                            if k != "record_id"
+                        },
+                        "context_id": context_id,
+                    }
+                    for record_id in record_ids
+                ]
+                _events({context_id: context}, rows, evidence)
+            else:
+                rows = grouped.get(context_id, [])
+            for row in rows:
+                if any(
+                    context_id not in records[e]["context_ids"]
+                    for e in row["evidence_ids"]
+                ):
+                    raise PublicationError("projection_evidence_context_invalid")
+                if any(
+                    g not in gaps or context_id not in gaps[g]["context_ids"]
+                    for g in row["conditions"]
+                ):
+                    raise PublicationError("projection_gap_scope_invalid")
             if manifest["row_count"] != len(rows) or manifest[
                 "rows_sha256"
             ] != rows_hash(rows):
                 raise PublicationError("projection_manifest_coverage_mismatch")
-        # Income replacement never changes a bank path. Compare only declared
-        # contexts; no missing combinations or sums of measures are invented.
-        bank_paths: dict[tuple[Any, ...], bytes] = {}
-        for context_id, context in contexts.items():
+            # Bank aliases retain the same source path across income selectors.
+            # Hash only compares source values; it never computes a forecast.
             if context["measure"] != BANK:
                 continue
             coordinate = tuple(
@@ -398,26 +536,30 @@ def validate_projection(value: dict[str, Any]) -> dict[str, Any]:
                     "as_of_date",
                 )
             )
-            path = canonical_bytes(
-                {
-                    "context": {
-                        k: v
-                        for k, v in context.items()
-                        if k not in {"context_id", "income_basis"}
-                    },
-                    "events": [
-                        {
+            path = hashlib.sha256(
+                canonical_bytes(
+                    {
+                        "context": {
                             k: v
-                            for k, v in row.items()
-                            if k not in {"event_id", "context_id"}
-                        }
-                        for row in grouped.get(context_id, [])
-                    ],
-                }
-            )
+                            for k, v in context.items()
+                            if k not in {"context_id", "income_basis"}
+                        },
+                        "events_sha256": rows_hash(
+                            {
+                                k: v
+                                for k, v in row.items()
+                                if k not in {"event_id", "context_id"}
+                            }
+                            for row in rows
+                        ),
+                    }
+                )
+            ).digest()
             if coordinate in bank_paths and bank_paths[coordinate] != path:
                 raise PublicationError("projection_bank_income_basis_changed")
             bank_paths[coordinate] = path
+        if inventory is not None and referenced != set(inventory):
+            raise PublicationError("projection_shared_inventory_unreferenced")
         return result
     except PublicationError:
         raise
