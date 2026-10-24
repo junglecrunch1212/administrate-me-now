@@ -3862,8 +3862,8 @@
     "missing_source_candidate_cells": [],
     "object_lifecycles": 28,
     "source_candidate_cells": 143,
-    "technical_event_schemas": 374,
-    "technical_event_types": 295,
+    "technical_event_schemas": 381,
+    "technical_event_types": 300,
     "uncataloged_event_types": [],
     "unproved_exact_lifecycle_transitions": [],
     "unproved_supported_source_candidate_cells": []
@@ -10301,6 +10301,87 @@
     },
     {
       "additional_properties": false,
+      "event_type": "cos.action.request_grounded",
+      "family": "language_evidence",
+      "properties": {
+        "action": {
+          "additionalProperties": true,
+          "title": "Action",
+          "type": "object"
+        },
+        "action_fingerprint": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Action Fingerprint",
+          "type": "string"
+        },
+        "action_id": {
+          "title": "Action Id",
+          "type": "string"
+        },
+        "evidence": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "maxItems": 8,
+          "minItems": 1,
+          "title": "Evidence",
+          "type": "array"
+        },
+        "expires_at": {
+          "title": "Expires At",
+          "type": "string"
+        },
+        "issued_at": {
+          "title": "Issued At",
+          "type": "string"
+        },
+        "member_id": {
+          "title": "Member Id",
+          "type": "string"
+        },
+        "request_fingerprint": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Request Fingerprint",
+          "type": "string"
+        },
+        "rule_id": {
+          "const": "current-human-request.apple-reminder-create.v1",
+          "title": "Rule Id",
+          "type": "string"
+        },
+        "skill_event_id": {
+          "title": "Skill Event Id",
+          "type": "string"
+        },
+        "source_event_id": {
+          "title": "Source Event Id",
+          "type": "string"
+        },
+        "source_fingerprint": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Fingerprint",
+          "type": "string"
+        }
+      },
+      "required": [
+        "member_id",
+        "source_event_id",
+        "action_id",
+        "request_fingerprint",
+        "action_fingerprint",
+        "rule_id",
+        "source_fingerprint",
+        "skill_event_id",
+        "action",
+        "evidence",
+        "issued_at",
+        "expires_at"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
       "event_type": "cos.channels.activated",
       "family": "governance",
       "properties": {
@@ -10581,6 +10662,243 @@
         "operator_principal_id"
       ],
       "schema_version": 2
+    },
+    {
+      "additional_properties": false,
+      "event_type": "cos.conversation.activation",
+      "family": "openclaw",
+      "properties": {
+        "activated_at": {
+          "format": "date-time",
+          "title": "Activated At",
+          "type": "string"
+        },
+        "channel": {
+          "const": "gmail",
+          "title": "Channel",
+          "type": "string"
+        },
+        "rule": {
+          "const": "new_authenticated_instructions_only",
+          "title": "Rule",
+          "type": "string"
+        }
+      },
+      "required": [
+        "activated_at",
+        "channel",
+        "rule"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "cos.conversation.delivery",
+      "family": "openclaw",
+      "properties": {
+        "instruction_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Instruction Event Id",
+          "type": "string"
+        },
+        "reason": {
+          "maxLength": 120,
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        },
+        "recorded_at": {
+          "format": "date-time",
+          "title": "Recorded At",
+          "type": "string"
+        },
+        "state": {
+          "enum": [
+            "awaiting_live",
+            "running",
+            "answered",
+            "unknown",
+            "expired",
+            "failed"
+          ],
+          "title": "State",
+          "type": "string"
+        }
+      },
+      "required": [
+        "instruction_event_id",
+        "state",
+        "reason",
+        "recorded_at"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "cos.conversation.instruction",
+      "family": "openclaw",
+      "properties": {
+        "account_id": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Account Id",
+          "type": "string"
+        },
+        "actor_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Actor Id",
+          "type": "string"
+        },
+        "agent_id": {
+          "maxLength": 120,
+          "minLength": 1,
+          "title": "Agent Id",
+          "type": "string"
+        },
+        "authentication_rule": {
+          "enum": [
+            "authenticated_member_session",
+            "enrolled_receiver_authenticated_sender"
+          ],
+          "title": "Authentication Rule",
+          "type": "string"
+        },
+        "channel_id": {
+          "enum": [
+            "administrateme-portal",
+            "gmail"
+          ],
+          "title": "Channel Id",
+          "type": "string"
+        },
+        "member_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Member Id",
+          "type": "string"
+        },
+        "message_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Message Id",
+          "type": "string"
+        },
+        "request_id": {
+          "maxLength": 120,
+          "minLength": 8,
+          "title": "Request Id",
+          "type": "string"
+        },
+        "session_key": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Session Key",
+          "type": "string"
+        },
+        "source_message_event_id": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Message Event Id"
+        },
+        "submitted_at": {
+          "format": "date-time",
+          "title": "Submitted At",
+          "type": "string"
+        },
+        "text": {
+          "maxLength": 32000,
+          "minLength": 1,
+          "title": "Text",
+          "type": "string"
+        },
+        "thread_id": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Thread Id"
+        }
+      },
+      "required": [
+        "member_id",
+        "text",
+        "submitted_at",
+        "channel_id",
+        "account_id",
+        "actor_id",
+        "agent_id",
+        "session_key",
+        "message_id",
+        "request_id",
+        "authentication_rule"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "cos.conversation.reply_authorized",
+      "family": "openclaw",
+      "properties": {
+        "approval_event_id": {
+          "title": "Approval Event Id",
+          "type": "string"
+        },
+        "authorized_at": {
+          "title": "Authorized At",
+          "type": "string"
+        },
+        "automatic_retry_allowed": {
+          "const": false,
+          "default": false,
+          "title": "Automatic Retry Allowed",
+          "type": "boolean"
+        },
+        "content_fingerprint": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Content Fingerprint",
+          "type": "string"
+        },
+        "host_decision": {
+          "additionalProperties": true,
+          "title": "Host Decision",
+          "type": "object"
+        },
+        "member_id": {
+          "title": "Member Id",
+          "type": "string"
+        },
+        "source_event_id": {
+          "title": "Source Event Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "member_id",
+        "approval_event_id",
+        "source_event_id",
+        "content_fingerprint",
+        "authorized_at",
+        "host_decision"
+      ],
+      "schema_version": 1
     },
     {
       "additional_properties": false,
@@ -13728,6 +14046,216 @@
         "expires_at"
       ],
       "schema_version": 3
+    },
+    {
+      "additional_properties": false,
+      "event_type": "cos.response.approved",
+      "family": "external_write",
+      "properties": {
+        "approved_at": {
+          "title": "Approved At",
+          "type": "string"
+        },
+        "authorization_method": {
+          "default": "exact",
+          "enum": [
+            "exact",
+            "standing_self_reply",
+            "requested_self_reminder",
+            "authenticated_conversation"
+          ],
+          "title": "Authorization Method",
+          "type": "string"
+        },
+        "body": {
+          "maxLength": 8000,
+          "minLength": 1,
+          "title": "Body",
+          "type": "string"
+        },
+        "channel": {
+          "enum": [
+            "email",
+            "imessage"
+          ],
+          "title": "Channel",
+          "type": "string"
+        },
+        "content_fingerprint": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Content Fingerprint",
+          "type": "string"
+        },
+        "contract": {
+          "const": "cos-response-plain-text-v1",
+          "title": "Contract",
+          "type": "string"
+        },
+        "conversation_source_event_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Conversation Source Event Id"
+        },
+        "expires_at": {
+          "title": "Expires At",
+          "type": "string"
+        },
+        "in_reply_to": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "In Reply To"
+        },
+        "member_id": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Member Id",
+          "type": "string"
+        },
+        "policy_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Policy Event Id",
+          "type": "string"
+        },
+        "policy_revision": {
+          "minimum": 1,
+          "title": "Policy Revision",
+          "type": "integer"
+        },
+        "provider_account_id": {
+          "maxLength": 320,
+          "minLength": 1,
+          "title": "Provider Account Id",
+          "type": "string"
+        },
+        "recipient": {
+          "maxLength": 320,
+          "minLength": 1,
+          "title": "Recipient",
+          "type": "string"
+        },
+        "reminder_binding_event_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reminder Binding Event Id"
+        },
+        "reminder_event_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reminder Event Id"
+        },
+        "reply_index": {
+          "default": 0,
+          "maximum": 15,
+          "minimum": 0,
+          "title": "Reply Index",
+          "type": "integer"
+        },
+        "self_reply_binding": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Self Reply Binding"
+        },
+        "service_channel_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Service Channel Id",
+          "type": "string"
+        },
+        "source_message_event_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Message Event Id"
+        },
+        "standing_authorization_event_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Standing Authorization Event Id"
+        },
+        "subject": {
+          "maxLength": 300,
+          "title": "Subject",
+          "type": "string"
+        },
+        "thread_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Thread Id"
+        }
+      },
+      "required": [
+        "contract",
+        "member_id",
+        "channel",
+        "service_channel_id",
+        "provider_account_id",
+        "recipient",
+        "subject",
+        "body",
+        "content_fingerprint",
+        "policy_event_id",
+        "policy_revision",
+        "approved_at",
+        "expires_at"
+      ],
+      "schema_version": 4
     },
     {
       "additional_properties": false,
@@ -29363,6 +29891,170 @@
         "provenance"
       ],
       "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "openclaw.approval.received",
+      "family": "openclaw",
+      "properties": {
+        "action": {
+          "maxLength": 120,
+          "minLength": 1,
+          "title": "Action",
+          "type": "string"
+        },
+        "action_fingerprint": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Action Fingerprint"
+        },
+        "approval_method": {
+          "enum": [
+            "allow_once",
+            "standing_order",
+            "authenticated_request"
+          ],
+          "title": "Approval Method",
+          "type": "string"
+        },
+        "consumed_at": {
+          "minLength": 1,
+          "title": "Consumed At",
+          "type": "string"
+        },
+        "domain_approval_event_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Domain Approval Event Id"
+        },
+        "expires_at": {
+          "minLength": 1,
+          "title": "Expires At",
+          "type": "string"
+        },
+        "issued_at": {
+          "minLength": 1,
+          "title": "Issued At",
+          "type": "string"
+        },
+        "member_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Member Id",
+          "type": "string"
+        },
+        "openclaw_commit": {
+          "minLength": 7,
+          "title": "Openclaw Commit",
+          "type": "string"
+        },
+        "openclaw_version": {
+          "minLength": 1,
+          "title": "Openclaw Version",
+          "type": "string"
+        },
+        "provenance": {
+          "additionalProperties": true,
+          "title": "Provenance",
+          "type": "object"
+        },
+        "receipt_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Receipt Id",
+          "type": "string"
+        },
+        "request_authorization_event_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Request Authorization Event Id"
+        },
+        "request_fingerprint": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Request Fingerprint",
+          "type": "string"
+        },
+        "resource_fingerprint": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Resource Fingerprint",
+          "type": "string"
+        },
+        "rule_id": {
+          "anyOf": [
+            {
+              "const": "current-human-request.apple-reminder-create.v1",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rule Id"
+        },
+        "single_use": {
+          "const": true,
+          "title": "Single Use",
+          "type": "boolean"
+        },
+        "source_event_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Event Id"
+        },
+        "tool_name": {
+          "maxLength": 120,
+          "minLength": 1,
+          "title": "Tool Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "receipt_id",
+        "member_id",
+        "tool_name",
+        "action",
+        "request_fingerprint",
+        "resource_fingerprint",
+        "issued_at",
+        "expires_at",
+        "consumed_at",
+        "single_use",
+        "approval_method",
+        "openclaw_version",
+        "openclaw_commit",
+        "provenance"
+      ],
+      "schema_version": 2
     },
     {
       "additional_properties": false,

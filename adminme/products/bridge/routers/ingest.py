@@ -2536,6 +2536,11 @@ async def authorize_apple_command(
         observation = getattr(runtime, "observation", None)
         if observation is None or await observation.is_active():
             raise HTTPException(409, "Observation mode suppresses Apple writes")
+        from adminme.products.openclaw.request_authorization import (
+            require_current_bridge_request,
+        )
+
+        await require_current_bridge_request(runtime, event)
         try:
             proof = command_proof(runtime, member_id, command)
         except (ValueError, KeyError) as exc:

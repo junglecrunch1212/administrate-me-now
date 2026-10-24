@@ -139,6 +139,11 @@ def gmail_source_member(runtime: Any, source: dict[str, Any]) -> str | None:
         or payload.get("provider") != "gmail"
         or payload.get("service_principal_id") != COS_SERVICE_PRINCIPAL_ID
         or payload.get("authenticated_member_route") is not True
+        or payload.get("to_identifiers") != [account]
+        or bool(payload.get("cc_identifiers"))
+        or bool(payload.get("bcc_identifiers"))
+        or payload.get("reply_to_identifier")
+        not in {None, "", payload.get("from_identifier")}
         or payload.get("route_assurance")
         not in {"exact_dkim_identity", "receiver_aligned_sender"}
         or not isinstance(account, str)

@@ -11,7 +11,7 @@ import type { PluginRuntime } from "./runtime.js";
 const RULE = "current-human-request.apple-reminder-create.v1";
 const CONTRACT = "authenticated-request-v1";
 const TOOL = "administrateme_execute_pending_provider_action";
-type Context = { runId?: string; sessionKey?: string; agentId?: string; toolCallId?: string };
+type Context = { runId?: string | undefined; sessionKey?: string | undefined; agentId?: string | undefined; toolCallId?: string | undefined };
 type Input = { provenance: Provenance; source_message_event_id: string; instruction_text: string };
 type Ticket = {
   contract: string; member_id: string; domain_approval_event_id: string;
@@ -78,6 +78,7 @@ export async function prepareRequestedApproval(runtime: PluginRuntime, toolName:
   if (!ticket) return undefined; // Legacy pending work retains its independent manual path.
   if (!context.toolCallId) throw new Error("Current native tool identity is unavailable");
   const input = await peekReminderInput(runtime, context);
+  if (!input) throw new Error("Current trusted request is unavailable");
   validateTicket(runtime, ticket, input);
   if (Object.keys(params).some((key) => key !== "domain_approval_event_id")) {
     throw new Error("Request approval parameters cannot be supplied by the model");

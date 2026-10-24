@@ -13,6 +13,7 @@ from typing import Any
 
 from fastapi import HTTPException
 
+from adminme.request_actions_control import request_actions_allowed
 from adminme.conversation_instructions import (
     capture_instruction,
     gmail_binding,
@@ -113,7 +114,7 @@ class GmailConversationIntake:
 
     async def handle(self, event: dict[str, Any]) -> None:
         runtime = self.runtime
-        if self.activated_at is None:
+        if self.activated_at is None or not request_actions_allowed(runtime):
             return
         if event["type"] == "cos.channels.activated":
             # Resume only new feature-owned inputs held by maintenance. Never
@@ -183,6 +184,11 @@ class GmailConversationIntake:
     async def _dispatch(self, instruction: dict[str, Any]) -> None:
         runtime = self.runtime
         identity = instruction["event_id"]
+        if not request_actions_allowed(
+            runtime, issued_at=instruction["payload"]["submitted_at"]
+        ):
+            await self._receipt(instruction, "expired", "request_authority_revoked")
+            return
         # A run that may have executed is never silently rerun. The same member
         # can inspect/modify/cancel its retained task through any genuine channel.
         started = await runtime.event_log.get_by_idempotency(

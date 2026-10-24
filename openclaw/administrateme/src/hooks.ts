@@ -68,7 +68,7 @@ export function registerHooks(api: OpenClawPluginApi, runtime: PluginRuntime): v
       try {
         const requested = await prepareRequestedApproval(runtime, event.toolName, event.params, {
           runId: context.runId, sessionKey: context.sessionKey, agentId: context.agentId,
-          toolCallId: context.toolCallId ?? event.toolCallId,
+          toolCallId: typeof context.toolCallId === "string" ? context.toolCallId : event.toolCallId,
         });
         if (requested) return { params: requested };
       } catch {

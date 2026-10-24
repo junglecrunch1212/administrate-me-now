@@ -853,7 +853,7 @@ async def _consume_openclaw_approval(
 
     receipt_id = body.openclaw_approval_receipt_id
     if not receipt_id:
-        raise HTTPException(403, "independent OpenClaw allow-once approval is required")
+        raise HTTPException(403, "independent OpenClaw approval is required")
     runtime = _runtime(request)
     if runtime.openclaw_approval_store is None:
         raise HTTPException(503, "OpenClaw approval storage is unavailable")

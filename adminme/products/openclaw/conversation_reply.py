@@ -13,6 +13,7 @@ from typing import Any, Literal
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from adminme.request_actions_control import request_actions_allowed
 from adminme.cos_response_policy import normalize_recipient
 from adminme.cos_responses import RESPONSE_CONTRACT, content_fingerprint
 from adminme.products.openclaw import main as seam
@@ -57,6 +58,19 @@ def validate_host(
     host = body.host_decision
     values = host.model_dump(exclude={"signature"})
     secret = runtime.settings.openclaw_shared_secret
+    if (
+        not secret
+        or not request_actions_allowed(
+            runtime, issued_at=source["payload"]["submitted_at"]
+        )
+        or not request_actions_allowed(
+            runtime,
+            issued_at=datetime.fromtimestamp(
+                host.issued_at_ms / 1000, timezone.utc
+            ).isoformat(),
+        )
+    ):
+        raise HTTPException(409, "Conversation reply authority is revoked for recovery")
     now = int(time.time() * 1000)
     expected = hmac.new(
         secret.encode(), (CONTRACT + "|" + canonical(values)).encode(), hashlib.sha256
@@ -118,7 +132,9 @@ async def conversation_reply(
             403, "one exact authenticated email sender is required"
         ) from exc
     if (
-        original_payload.get("cc_identifiers")
+        original_payload.get("to_identifiers")
+        != [original_payload["provider_account_id"]]
+        or original_payload.get("cc_identifiers")
         or original_payload.get("bcc_identifiers")
         or original_payload.get("reply_to_identifier") not in {None, "", recipient}
         or not original_payload.get("thread_id")

@@ -155,8 +155,14 @@ async def apple_reminder_status(
         if grounding is not None:
             expires = grounding["payload"]["expires_at"]
             receipt["authorization_expires_at"] = expires
+            from adminme.request_actions_control import request_actions_allowed
+
             receipt["request_authorization_state"] = (
-                "expired"
+                "revoked"
+                if not request_actions_allowed(
+                    runtime, issued_at=grounding["payload"]["issued_at"]
+                )
+                else "expired"
                 if datetime.fromisoformat(expires) <= datetime.now(timezone.utc)
                 else "current"
             )
@@ -300,7 +306,10 @@ async def confirm_apple_reminder(
                 )
 
                 grounding = await grounding_for_domain(runtime, session, prior)
-                if grounding is not None:
+                if (
+                    grounding is not None
+                    and receipt.get("request_authorization_state") == "current"
+                ):
                     receipt["request_authorization"] = ticket(
                         runtime, session, prior, grounding
                     )

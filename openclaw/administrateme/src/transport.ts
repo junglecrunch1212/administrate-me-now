@@ -51,7 +51,11 @@ export class AdministrateMeTransport {
       throw new TransportError("AdministrateMe transport path is outside the narrow API", "incompatible");
     }
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), this.config.timeoutMs);
+    // One explicit source-grounding model invocation has a 30s deadline plus
+    // the existing 2s completion allowance. Other calls keep their bounded limit.
+    const timeoutMs = path === "/api/openclaw/v1/tools/confirm-apple-reminder"
+      ? Math.max(this.config.timeoutMs, 35_000) : this.config.timeoutMs;
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const response = await this.#fetch(`${this.config.baseUrl}${path}`, {
         method: "POST",

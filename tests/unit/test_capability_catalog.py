@@ -305,6 +305,12 @@ def test_native_reminder_tools_separate_confirmation_execution_and_readback(
     assert status["stage"] == "terminal_readback"
     assert status["provider_write_grant_required"] is False
     assert tools["domain_confirmation_is_execution_approval"] is False
+    assert tools["execution_authority_modes"] == [
+        "authenticated_current_request_policy",
+        "legacy_independent_allow_once",
+    ]
+    assert tools["policy_receipt_is_human_approval"] is False
+    assert tools["historical_pending_auto_resume"] is False
     assert item["trust_stage"] == "not_established"
     assert item["trust_stage_basis"] == "effective_operating_agreement"
     assert item["consent"]["member_state"] == "complete"
