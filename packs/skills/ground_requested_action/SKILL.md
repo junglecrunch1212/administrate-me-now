@@ -1,7 +1,7 @@
 ---
 name: ground_requested_action
 namespace: adminme
-version: 1.0.1
+version: 1.0.2
 description: Compare one proposed action with one authenticated human instruction; produce grounded evidence, never permission.
 input_schema: ./schemas/input.schema.json
 output_schema: ./schemas/output.schema.json
@@ -22,3 +22,10 @@ on_failure:
 This skill supplies semantic evidence to independent policy engines. It cannot
 choose identities, grant permissions or execute actions. Both engines still
 validate the trusted source, exact action, current authority and expiry.
+
+Version 1.0.2 returns strict quote-only evidence (`{"text": "exact quote"}`).
+Deterministic code accepts only unique exact, non-overlapping occurrences and
+computes Unicode code-point spans before recording/signing the existing domain
+receipt. Existing retained span receipts are unchanged. Unusable extraction is
+an authorization verification failure, not proof of ambiguous intent or accounts;
+no action is confirmed, and the same failed model result is not blindly retried.
