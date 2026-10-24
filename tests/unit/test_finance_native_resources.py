@@ -379,3 +379,13 @@ def test_synthetic_mime_setup_does_not_read_host_configuration(monkeypatch):
     assert mimetypes.guess_type("synthetic.txt") == ("text/plain", None)
     reader.assert_not_called()
     assert mimetypes.knownfiles == []
+
+
+def test_parent_stop_channel_closure_stops_the_owned_child():
+    wire = Mock()
+    wire.poll.return_value = True
+    wire.recv.side_effect = EOFError()
+    child = native.StopReceiver(wire)
+    assert child.is_set()
+    assert child.is_set()
+    wire.recv.assert_called_once()

@@ -323,3 +323,36 @@ async def test_native_target_failure_retains_terminal_and_cleanup(tmp_path):
     assert any(
         "synthetic target failure" in fault for fault in failed.terminal["faults"]
     )
+
+
+@pytest.mark.skipif(
+    os.getenv("ADMINME_FINANCE_NATIVE_SMOKE") != "1",
+    reason="explicit hosted native smoke",
+)
+async def test_native_parent_stop_channel_closure(tmp_path):
+    root = tmp_path / "parent-channel-closure"
+    root.mkdir()
+    registry = Registry(root, 49152, identity())
+    worker = registry.spawn("worker")
+    try:
+        assert await receive(worker) == {"worker_ready": True}
+        await registry.barrier("before-parent-closure")
+        worker.stop.close()
+        for _ in range(100):
+            registry.drain()
+            if worker.terminal:
+                break
+            await asyncio.sleep(0.05)
+        await asyncio.to_thread(worker.process.join, 3)
+    finally:
+        result = await registry.close()
+        output = Path(os.environ["FINANCE_NATIVE_ARTIFACT_DIR"])
+        output.mkdir(parents=True, exist_ok=True)
+        (output / "parent-closure-lifecycle.jsonl").write_bytes(
+            (root / "lifecycle.jsonl").read_bytes()
+        )
+        (output / "parent-closure-cleanup.json").write_text(
+            json.dumps(result, indent=2)
+        )
+    assert result["all_registered_processes_stopped"]
+    assert result["registered_coverage_complete"]
