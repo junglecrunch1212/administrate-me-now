@@ -933,8 +933,6 @@ class AdministrateMeRuntime:
                 event_log=self.event_log,
                 channels=self.settings.service_channel_accounts,
             )
-            self.gmail_conversations = GmailConversationIntake(self)
-            await self.gmail_conversations.initialize()
             self.messages_reply_reconciler = MessagesReplyReconciler(
                 self.event_log, self.events
             )
@@ -969,6 +967,8 @@ class AdministrateMeRuntime:
             self.observation = ObservationManager(
                 self.events, self.settings.instance.config_dir / "runtime.yaml"
             )
+            self.gmail_conversations = GmailConversationIntake(self)
+            await self.gmail_conversations.initialize()
             if self.settings.deterministic_member_chat_fixture:
                 self.member_chat = DeterministicOpenClawChatTransport()
             elif self.settings.openclaw_gateway_token:
