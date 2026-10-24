@@ -385,6 +385,30 @@ COS_SERVICE_WORK_COMPONENT_PATHS = frozenset(
         COS_SERVICE_WORK_MEMBER,
         COS_SERVICE_WORK_INGEST,
         "adminme/products/openclaw/apple_reminders.py",
+        "adminme/apple_service_history.py",
+        "adminme/conversation_instructions.py",
+        "adminme/conversation_intake.py",
+        "adminme/cos_response_assurance.py",
+        "adminme/cos_responses.py",
+        "adminme/events/schemas/conversation.py",
+        "adminme/events/schemas/conversation_responses.py",
+        "adminme/member_chat.py",
+        "adminme/openclaw_approvals.py",
+        "adminme/products/openclaw/conversation_reply.py",
+        "adminme/products/openclaw/cos_responses.py",
+        "adminme/products/openclaw/main.py",
+        "adminme/products/openclaw/request_authorization.py",
+        "adminme/request_actions_control.py",
+        "bootstrap/request_actions.py",
+        "openclaw/administrateme/src/approval.ts",
+        "openclaw/administrateme/src/conversation-input.ts",
+        "openclaw/administrateme/src/request-policy.ts",
+        "openclaw/administrateme/src/transport.ts",
+        "packs/skills/ground_requested_action/SKILL.md",
+        "packs/skills/ground_requested_action/pack.yaml",
+        "packs/skills/ground_requested_action/prompt.jinja2",
+        "packs/skills/ground_requested_action/schemas/input.schema.json",
+        "packs/skills/ground_requested_action/schemas/output.schema.json",
         "openclaw/administrateme/src/apple-reminders.ts",
         "openclaw/administrateme/src/tools.ts",
         "bootstrap/openclaw/programs/requested_workflows.md",
@@ -440,6 +464,14 @@ COS_SERVICE_WORK_TEST_PATHS = frozenset(
         "tests/acceptance/test_cos_service_private_work.py",
         "tests/acceptance/test_cos_member_follow_up.py",
         "tests/acceptance/test_native_apple_reminder.py",
+        "tests/acceptance/test_authenticated_conversation_channels.py",
+        "tests/acceptance/test_authenticated_conversation_reply.py",
+        "tests/acceptance/test_authenticated_request_actions.py",
+        "tests/acceptance/test_gate7_household_experience.py",
+        "tests/acceptance/test_member_chat_subscription.py",
+        "tests/unit/test_member_chat_protocol.py",
+        "tests/unit/test_openclaw_approvals.py",
+        "openclaw/administrateme/test/conversation-input.test.ts",
         "tests/acceptance/test_native_reminder_due_components.py",
         "openclaw/administrateme/test/apple-reminders.test.ts",
         "openclaw/administrateme/scripts/check-cos-imessage-text.mjs",
@@ -958,11 +990,90 @@ def _updater_dependency_fingerprint(entries: tuple[GitTreeEntry, ...]) -> str:
     ).hexdigest()
 
 
+def _remove_service_statements(body: list[ast.stmt], source: str) -> int | None:
+    """Remove one exact adjacent integration sequence, or require its absence."""
+    shapes = [
+        ast.dump(node, include_attributes=False) for node in ast.parse(source).body
+    ]
+    actual = [ast.dump(node, include_attributes=False) for node in body]
+    counts = [actual.count(shape) for shape in shapes]
+    if not any(counts):
+        return 0
+    if counts != [1] * len(shapes):
+        return None
+    index = actual.index(shapes[0])
+    if actual[index : index + len(shapes)] != shapes:
+        return None
+    del body[index : index + len(shapes)]
+    return 1
+
+
+def _service_work_gmail_wiring(module: ast.Module) -> bool:
+    """Keep startup logic frozen around four exact Gmail integration points."""
+    imports = _remove_service_statements(
+        module.body, "from adminme.conversation_intake import GmailConversationIntake"
+    )
+    classes = [
+        node
+        for node in module.body
+        if isinstance(node, ast.ClassDef) and node.name == "AdministrateMeRuntime"
+    ]
+    if len(classes) > 1:
+        return False
+    members = classes[0].body if classes else []
+    constructors = [
+        node
+        for node in members
+        if isinstance(node, ast.FunctionDef) and node.name == "__init__"
+    ]
+    starts = [
+        node
+        for node in members
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == "start"
+    ]
+    if len(constructors) > 1 or len(starts) > 1:
+        return False
+    startup = (
+        [node for node in starts[0].body if isinstance(node, ast.Try)] if starts else []
+    )
+    if len(startup) > 1:
+        return False
+    init_body = constructors[0].body if constructors else []
+    startup_body = startup[0].body if startup else []
+    slot = _remove_service_statements(
+        init_body, "self.gmail_conversations: GmailConversationIntake | None = None"
+    )
+    initialization = (
+        "self.gmail_conversations = GmailConversationIntake(self)\n"
+        "await self.gmail_conversations.initialize()"
+    )
+    subscription = (
+        'self.bus.subscribe("cos-gmail:conversation", '
+        '["messaging.received", "cos.channels.activated"], '
+        "self.gmail_conversations.handle, "
+        "consumer_version=self.gmail_conversations.CONSUMER_VERSION)"
+    )
+    startup_shapes = [ast.dump(node, include_attributes=False) for node in startup_body]
+    order = [
+        ast.dump(ast.parse(source).body[0], include_attributes=False)
+        for source in (initialization, subscription)
+    ]
+    if all(shape in startup_shapes for shape in order) and startup_shapes.index(
+        order[0]
+    ) > startup_shapes.index(order[1]):
+        return False
+    initialized = _remove_service_statements(startup_body, initialization)
+    subscribed = _remove_service_statements(startup_body, subscription)
+    return [imports, slot, initialized, subscribed] in ([0, 0, 0, 0], [1, 1, 1, 1])
+
+
 def _service_work_application(source: str) -> tuple[str, bool] | None:
-    """Normalize only the direct service-work import/router pair, never runtime logic."""
+    """Normalize reviewed router/Gmail wiring while binding all neighboring logic."""
     try:
         module = ast.parse(source)
     except SyntaxError:
+        return None
+    if not _service_work_gmail_wiring(module):
         return None
     applications = [
         node
@@ -1015,12 +1126,23 @@ def _service_work_mode(path: str) -> str:
 
 
 def _service_work_member(source: str) -> str | None:
-    """Bind every member route except the shared reminder confirmation seam."""
+    """Bind every member route except reminder confirmation and actual chat intake."""
     try:
         module = ast.parse(source)
     except SyntaxError:
         return None
-    names = {"reminder_command", "confirm_reminder_command"}
+    names = {"reminder_command", "confirm_reminder_command", "chat_stream"}
+    imported = _remove_service_statements(
+        module.body, "from adminme.openclaw_topology import member_agent_id"
+    )
+    if imported is None or (
+        imported
+        and not any(
+            isinstance(node, ast.AsyncFunctionDef) and node.name == "chat_stream"
+            for node in module.body
+        )
+    ):
+        return None
     for name in names:
         if (
             sum(
@@ -1041,11 +1163,41 @@ def _service_work_member(source: str) -> str | None:
 
 
 def _service_work_ingest(source: str) -> str | None:
-    """Only terminal replay validation and its exact returned-envelope plumbing."""
+    """Terminal replay and one final-admission pair; all other bridge logic is bound."""
     try:
         module = ast.parse(source)
     except SyntaxError:
         return None
+    commands = [
+        node
+        for node in module.body
+        if isinstance(node, ast.AsyncFunctionDef)
+        and node.name == "authorize_apple_command"
+    ]
+    if len(commands) > 1:
+        return None
+    for command in commands:
+        locked = [
+            node
+            for node in command.body
+            if isinstance(node, ast.AsyncWith)
+            and len(node.items) == 1
+            and ast.dump(node.items[0].context_expr, include_attributes=False)
+            == ast.dump(ast.Name(id="lock", ctx=ast.Load()), include_attributes=False)
+            and node.items[0].optional_vars is None
+        ]
+        if len(locked) > 1:
+            return None
+        if (
+            locked
+            and _remove_service_statements(
+                locked[0].body,
+                "from adminme.products.openclaw.request_authorization import require_current_bridge_request\n"
+                "await require_current_bridge_request(runtime, event)",
+            )
+            is None
+        ):
+            return None
     terminal = [
         node
         for node in module.body
@@ -1095,7 +1247,7 @@ def _service_work_dependency_fingerprint(
     repository: Path, revision: str, entries: tuple[GitTreeEntry, ...]
 ) -> tuple[str, bool] | None:
     # Freeze every outside source/test/dependency byte and mode. The central
-    # runtime is not a general exemption: only the exact router AST pair differs.
+    # runtime is not a general exemption: only exact integration AST statements differ.
     application = next(
         (entry for entry in entries if entry.path == COS_SERVICE_WORK_APPLICATION), None
     )
