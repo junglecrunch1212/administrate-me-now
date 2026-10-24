@@ -7,9 +7,19 @@ on:
       - 'adminme/projections/money/**'
       - 'tests/**/test_finance*'
       - 'tests/fixtures/finance_resource_diagnostic.py'
+      - 'tests/fixtures/finance_native_resources.py'
+      - 'scripts/finance_resource_acceptance.py'
       - '.github/workflows/finance-development.yml'
   workflow_dispatch:
     inputs:
+      legacy_relative_gates:
+        description: 'Explicitly reproduce the superseded v1 10-percent gate (historical only)'
+        type: boolean
+        default: false
+      sustained_resources:
+        description: 'Explicitly repeat the completed fixed Linux resource pair (not acceptance)'
+        type: boolean
+        default: false
       exploratory_profiles:
         description: 'Explicitly repeat the preserved exploratory profiles (not acceptance)'
         type: boolean
@@ -62,6 +72,8 @@ jobs:
           tests/unit/test_finance_capabilities.py
           tests/unit/test_finance_resources.py
           tests/unit/test_finance_resource_diagnostic.py
+          tests/unit/test_finance_native_resources.py
+          tests/unit/test_finance_resource_acceptance.py
           tests/unit/test_finance_readiness.py
           tests/unit/test_finance_delegation_snapshot.py
           tests/unit/test_finance_admission.py
@@ -136,12 +148,12 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
       - name: Synthetic light mixed-load measurement
-        if: '!cancelled()'
+        if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && inputs.legacy_relative_gates }}
         env:
           ADMINME_FINANCE_BENCHMARK: '1'
         run: poetry run pytest -q -s tests/acceptance/test_finance_mixed_load.py
       - name: Synthetic accepted-planning mixed-load measurement
-        if: '!cancelled()'
+        if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && inputs.legacy_relative_gates }}
         env:
           ADMINME_FINANCE_PLANNING_BENCHMARK: '1'
         run: poetry run pytest -q -s tests/acceptance/test_finance_mixed_load.py::test_accepted_planning_mixed_load_p95_gate
@@ -184,6 +196,7 @@ jobs:
           retention-days: 7
 
   resource-diagnostic:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.sustained_resources }}
     name: Diagnostic resource envelope (${{ matrix.workload }})
     runs-on: ubuntu-latest
     timeout-minutes: 35
@@ -226,5 +239,45 @@ jobs:
         with:
           name: finance-resource-diagnostic-${{ matrix.workload }}
           path: ${{ runner.temp }}/finance-resources
+          if-no-files-found: error
+          retention-days: 7
+
+  native-resource-smoke:
+    name: Native macOS self-report correctness
+    runs-on: macos-15
+    timeout-minutes: 20
+    env:
+      ADMINME_TEST_MODE: '1'
+      PYTHONPATH: bridge
+      PYTHONDONTWRITEBYTECODE: '1'
+      FINANCE_CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.14.7'
+      - run: pipx install poetry==2.4.1
+      - run: poetry sync --with dev
+      - name: Verify self counters, registered lifecycle and short production composition
+        env:
+          ADMINME_FINANCE_NATIVE_SMOKE: '1'
+          FINANCE_NATIVE_ARTIFACT_DIR: ${{ runner.temp }}/native-finance
+        run: >-
+          poetry run pytest -q -s
+          --junitxml="${{ runner.temp }}/native-finance/results.xml"
+          tests/unit/test_finance_native_resources.py
+          tests/unit/test_finance_resource_acceptance.py
+          tests/acceptance/test_finance_native_resources.py
+      - name: Retain raw synthetic evidence including failure and cleanup
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: finance-native-self-report
+          path: |
+            ${{ runner.temp }}/native-finance/**/*.json
+            ${{ runner.temp }}/native-finance/**/*.jsonl
+            ${{ runner.temp }}/native-finance/results.xml
           if-no-files-found: error
           retention-days: 7

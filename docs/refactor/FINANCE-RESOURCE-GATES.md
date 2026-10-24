@@ -4,6 +4,60 @@ Semantic classification: **MODERNIZE** the bounded domain interface under
 ADR-0001; **PRESERVE** OpenClaw scheduling/orchestration and privileged scope.
 The accepted-publication finance contract is disabled pending activation.
 
+
+## Current acceptance policy — v2 approved 2026-10-24
+
+**SUPERSEDE** the relative 10% release criterion with
+`finance-resource-v2.2026-10-24`, implemented by
+`scripts/finance_resource_acceptance.py`. Owner approval at 18:20:42 UTC covers
+this policy/code change, not native lab execution, private access, grants,
+import, merge or deployment. All v1 failures below remain historical failures;
+they are never recalculated as v2 passes. The v1 executable assertions remain
+available through the explicit `legacy_relative_gates` workflow input.
+Correctness, protected release, privacy, audit and recovery checks are retained.
+
+| Metric | Inclusive v2 limit |
+|---|---|
+| Core p95 | 25 ms total **and** 5 ms added |
+| Core p99 | 75 ms total **and** 15 ms added |
+| Added CPU, normal | 0.25 logical core |
+| Added CPU, burst and sustained stress | 1 logical core |
+| Added RSS | 64 MiB light; 128 MiB accepted planning |
+| Retained RSS growth | 8 MiB |
+
+Both light and accepted-planning workloads must qualify on the exact new native
+candidate/checkout/environment binding. A missing or duplicate scheduled request,
+missing sample/exit/receipt, counter gap/regression, evidence retention failure,
+stale identity or smoke-only/Linux artifact cannot pass. Complete request errors,
+timeouts, cancellations and rejections also fail; they are retained, never dropped
+from evidence. Warm finance status/calculation/planning p95 targets remain
+strictly below 100/500/500 ms. Cold and warm-up results and startup lifetime peaks
+are retained separately; the loaded-phase latency budgets are not cold-start or
+end-to-end CoS answer guarantees. No missed-reminder, heavy-worker or large-private-
+ledger qualification is implied.
+
+The fixed prospective native plan includes 15 minutes at 2 core/0.2 finance
+requests per second with 60-second core-only bracketing baselines; a 30-second
+20/10 burst with 25-second 20/0 baselines; and a distinct 120-second 20/10
+sustained stress with 120-second 20/0 baselines. Cold (one second) and warm-up
+(30 seconds) precede these phases. Stress uses the approved stress CPU ceiling;
+the short burst conservatively uses that same ceiling. Total scheduled phase
+time is 1,591 seconds per workload, excluding startup and cleanup. The full
+sequence is opt-in and has not run. The normal phase still has only 180 finance
+samples, so its empirical p99 is not a confident rare-tail guarantee.
+
+Added latency and CPU compare with the larger matched bracketing baseline.
+Added RSS uses loaded current/lifetime high water minus **pre-load** current RSS;
+it never subtracts the larger after-baseline. Retained growth independently uses
+the maximum end-of-loaded/post-load RSS minus pre-load warm RSS. Startup and
+lifetime peaks remain visible even if current RSS later falls. CPU arithmetic
+allows only 1e-9 core of floating-point roundoff at an inclusive boundary.
+Raw records, not supplied quantile summaries, drive the offline decision.
+Collector correctness on the same head and reviewed artifact provenance are
+separate prerequisites; the offline evaluator cannot attest its own provenance.
+A passed workload verdict grants no runtime authority. Both workloads and full
+system release validation remain required before Finance activation.
+
 ## Implemented boundaries
 
 `adminme.finance.admission` gives ordinary HTTP work priority over light
@@ -58,7 +112,7 @@ Explicit invalidation removes affected pointers without changing accepted
 history. Limits are 50 entries/10 MiB per member, 24-hour maximum TTL, 128
 member buckets and 32 MiB globally. No private result is written to disk.
 
-## Accepted-planning resource coverage
+## Historical v1 accepted-planning resource coverage
 
 A separate hosted workload imports the synthetic accepted accounting publication
 and shared planning inventory through the production composition root: 3,307
@@ -102,16 +156,16 @@ delivery, expiry, correction and hypothetical isolation. They must run in
 hosted CI or an approved disposable lab, not against the family runtime.
 They do not establish latency or incremental memory on the deployment host.
 
-Mixed-load release acceptance must measure baseline and finance-loaded p95
-for ordinary What Now/calendar/reminder work through the production
-composition root, including cold/warm caches and long conversations. Require
-no missed authorized reminders and at most 10% p95 regression. Starting warm
-status/report targets are 100/500 ms. No measured result is asserted here;
+Current acceptance uses the v2 policy above. The historical v1 harness measured
+baseline and finance-loaded p95 through production composition and required a
+10% relative ceiling. Its failures remain failures. Broader ordinary calendar/
+reminder work, long conversations and no missed authorized reminders still need
+their own evidence. Starting warm status/report targets are 100/500 ms;
 heavy admission and live activation remain blocked until that evidence is
 available. A caller/runtime restart must terminate any in-flight model turn;
 the volatile budget store does not prove prior-turn continuity after restart.
 
-An opt-in preliminary harness is
+The preserved historical v1 harness is
 `tests/acceptance/test_finance_mixed_load.py`. In an authorized hosted runner:
 
 ```sh
@@ -472,7 +526,7 @@ reader trials were flat through 1,000 further reads, with initial RSS deltas
 shutdown deltas 7,450,624–7,483,392; each reader thread exited. No deployment
 hardware or heavy-worker claim follows.
 
-The decision boundary is now structural, not another timing adjustment:
+The historical v1 decision boundary, before the later v2 approval, was:
 
 - Keep the existing 10% gate and investigate reducing shared audit/projection
   work with a bounded causal experiment before another production candidate.
@@ -528,19 +582,21 @@ a causal cure or a passing alternative phase. Its RSS includes trace buffers;
 all diagnostic reports remain `acceptance_eligible=false`. No production
 no-op optimization or delay tuning follows from this mixed result.
 
-The decision remains explicit: either retain the 10% relative gate and develop
+At that historical checkpoint the decision was to retain the 10% relative gate and develop
 a causally supported structural reduction, or have the owner separately approve
 a representative absolute-latency/rate contract with its tradeoff stated. The
 latter could accept the observed sub-millisecond increase while weakening the
-current relative-isolation guarantee; it has not been adopted. Metadata-only
+then-current relative-isolation guarantee. V2 was approved later; this old run
+is not new-policy acceptance. Metadata-only
 reads and dated snapshot delivery must not be represented as resource-qualified
 full finance activation. The separate daily Sheets refresh engine is not a
 dependency of an accurately labeled accepted dated snapshot.
 
-## Proposed acceptance revision — not adopted
+## Historical proposal preceding v2 approval
 
-The current 10% requirement remains failed. These are proposed product budgets
-for explicit review, not thresholds fitted to make a failed run pass. Raw gates
+The historical 10% requirement failed. The following was the proposal reviewed
+before v2 approval; only the explicit v2 limits above are now adopted. Additional
+proposed p99 finance and whole-tree limits below remain proposals. Raw gates
 retain p95 summaries, not raw samples/p99; p99 cannot be reconstructed from those
 reports. Whole-process CPU and deployment-hardware headroom are unmeasured.
 Instrumented diagnostic p99/CPU spans cannot replace those missing measurements.
@@ -571,31 +627,102 @@ capacity budgets. It does not qualify LLM response time, background reminders,
 heavy analysis, daily Sheets recalculation or live source freshness. Hosted
 Linux and intended deployment hardware require separate evidence.
 
-No local lab is already authorized here. A disposable VM is one proposed
-isolation choice, not a repository requirement. A reviewable setup is a local VM with 2 vCPUs, 2 GiB memory,
-loopback-only networking, no shared home/Keychain/service directories, a clean
-immutable candidate checkout and the prepared pinned Python 3.14.7/Node 24.19.0
-toolchain. Approve that VM, private scratch directory, resource ceiling and
-cleanup window before execution. The existing probe below can run once inside
-it with a 10-minute VM watchdog and no automatic retry:
+## Native disposable fixture plan — no local execution authorization
 
-    ADMINME_TEST_MODE=1 ADMINME_FINANCE_BENCHMARK=1 \
-    ADMINME_FINANCE_PLANNING_BENCHMARK=1 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=bridge \
+The next bounded deliverable is collector correctness in hosted macOS CI. No
+VM is provisioned. No Mini candidate, resource probe, production endpoint,
+private state or credentials are accessed. Prior process-listing, hardware
+lookup, production HTTP and browser denials remain respected; the exact
+private evidence stays outside Git. Unknown historical command flags remain
+unknown. Self resource APIs overlap the resource-measurement topic but do not
+retry those denied operations: each freshly spawned synthetic child reports
+only itself, with no PID input, process discovery, foreign task port or fallback.
+
+`tests/fixtures/finance_native_resources.py` uses Darwin
+`getrusage(RUSAGE_SELF)` for CPU seconds and lifetime RSS peak, plus
+`task_info(MACH_TASK_BASIC_INFO)` on `mach_task_self_` for current RSS and a
+second lifetime peak. [XNU task_info layout](https://github.com/apple-oss-distributions/xnu/blob/main/osfmk/mach/task_info.h)
+uses four-byte structure packing and twelve integer words; [XNU resource implementation](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/kern/kern_resource.c)
+assigns `ru_maxrss` from `resident_size_max` in **bytes**. Do not apply Linux's
+KiB conversion or use Mach basic-info CPU fields, which omit live threads.
+CPU includes the sampling thread. Current RSS is sampled, lifetime peaks retain
+startup peaks, and summed lifetime peaks are an upper bound, not a simultaneous
+whole-tree peak or PSS. Phase boundaries request fresh authenticated samples;
+parent receipt times and per-process sample times are retained, not atomic.
+
+A registry launches only fixed fixture targets and records each unique birth,
+owned process handle, PID, candidate SHA and evaluated checkout SHA. Separate
+inherited channels carry bounded, sequenced, HMAC-authenticated JSON, never
+pickle messages. Explicit registered workers and their threads are covered;
+OS-wide process-tree completeness is **not proven**. Missing registration,
+samples or terminal receipts, sampling gaps/counter regressions, denied metrics,
+retention failures, nonzero exits and forced cancellation make coverage
+incomplete. PID reuse cannot reuse another birth's receipt. Exited workers'
+final CPU remains counted; their RSS is removed. Cleanup addresses only owned
+handles. Python subprocess launches are denied; native code can bypass that
+hook, so an unregistered native child remains an explicit coverage limitation.
+
+The hosted smoke runs eight one-second phases through the production HTTP
+composition: 32 core requests and eight finance requests, preserving scheduled,
+started, terminal, queue, HTTP/error and cancellation records. Two additional
+lifecycle cases cover normal worker exit, forced cancellation and target failure.
+It is a correctness smoke, not sustained performance qualification. Raw JSONL,
+phase counts, units, startup/terminal samples, growth, exact identities and
+cleanup receipts are retained for seven days, including failures. No private
+database or configuration tree is uploaded.
+
+A later native disposable lab would need an explicitly approved disposable
+account/environment, a fresh mode-0700 scratch directory, a clean immutable
+candidate checkout without ignored private files, and its prepared Python
+3.14.7/Poetry 2.4.1 locked environment (Node 24.19.0 for broader release checks).
+Bind only a newly allocated `127.0.0.1` ephemeral port; pass that exact endpoint
+to fresh children. No production directories, Keychain, provider operation,
+external network, service configuration or security permission changes belong
+to the fixture. The test guard restricts Python file/network calls, but **does
+not enforce OS filesystem/network/Keychain confinement** against native code.
+Environment variables and audit hooks are not an OS sandbox; that remaining
+boundary must be reviewed before any local lab approval.
+
+Implemented limits are five registered processes, authenticated 8-KiB telemetry
+and 4-MiB work frames, 20,000 telemetry frames per process, per-child hard CPU
+limit at most 60 seconds (preserving a lower inherited limit), zero core dumps,
+a 180-second checked smoke watchdog (1,800 seconds only for the separately
+scoped full qualification), and a cooperative 512-MiB per-child RSS stop.
+The watchdog and RSS stop are not hard OS memory/wall limits; the hosted job
+has a 20-minute outer timeout. Normal cleanup allows ten seconds, then terminates
+or kills only its owned handles and records incomplete coverage. No broad kill,
+PID lookup or retry after a measurement denial is supported.
+
+For a future approved lab, set `FINANCE_CANDIDATE_SHA` to the immutable source
+SHA, `GITHUB_SHA` to the exact evaluated checkout SHA, and
+`FINANCE_NATIVE_ARTIFACT_DIR` to the new private evidence directory. The bounded
+command is:
+
+    ADMINME_TEST_MODE=1 ADMINME_FINANCE_NATIVE_SMOKE=1 \
+    PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=bridge \
     /absolute/approved/lab-venv/bin/python -m pytest -q -s \
-      tests/acceptance/test_finance_mixed_load.py::test_light_finance_mixed_load_p95_gate \
-      tests/acceptance/test_finance_mixed_load.py::test_accepted_planning_mixed_load_p95_gate \
-      --basetemp=/absolute/approved/lab-scratch/finance-probe
+      tests/unit/test_finance_native_resources.py \
+      tests/acceptance/test_finance_native_resources.py \
+      --basetemp=/absolute/approved/fresh-scratch/native-fixture
 
-That is an executable existing p95 probe, not complete proposed qualification.
-The diagnostic harness below adds sustained-load, raw p99 and process-tree
-CPU/RSS collection; its exact-head hosted evidence must be reviewed before any
-hardware run. Proposed budget enforcement has not been adopted. A VM watchdog
-stops only the lab; retain synthetic reports, stop its processes, then remove
-only the approved VM/scratch path. No installed release, private state, Keychain,
-TCC or provider connection is needed by the synthetic fixtures. Direct candidate
-execution alongside the household service remains prohibited; shared resource
-contention is an operational effect even without a file mutation. No local VM, hardware probe or acceptance-policy change has been run or
-approved here.
+For the separately scoped full native qualification, first retain passing
+same-head policy/collector correctness and smoke evidence. In the explicitly
+approved native environment only, set `FINANCE_NATIVE_ENVIRONMENT` to its reviewed
+binding and `ADMINME_FINANCE_NATIVE_QUALIFICATION=1`; invoke the two parameterized
+`test_native_resource_qualification` cases with the same exact immutable pins,
+fresh per-workload state and private artifact directory. Leave the smoke flag
+unset. Each workload has 1,591 seconds of scheduled phases, a checked 1,800-second
+watchdog, 60 CPU seconds per child, five-process cap and 512-MiB cooperative RSS
+per child; allow a bounded 70-minute outer lab window for both, then owned cleanup.
+No automatic retry or alternate collector follows denial. Evaluate each retained
+directory using `python -m scripts.finance_resource_acceptance DIRECTORY
+--candidate EXACT_HEAD --checkout EXACT_CHECKOUT --environment REVIEWED_BINDING`;
+both verdicts must pass. This plan's wall/RSS and Python guards are not OS sandbox
+claims. Approving this exact native environment/footprint remains separate.
+
+This is a plan, not permission to execute it on the household host. Retain raw
+synthetic receipts, verify all registered processes stopped, and remove only
+that run's owned scratch after review. No VM or Mini probe is authorized by the approved budget-policy change.
 
 ## Diagnostic sustained/resource harness (not acceptance)
 
@@ -608,8 +735,8 @@ finance load generators. Its fixed full sequence is cold (1 second), warm-up
 matching core-only baseline (60 seconds), burst baseline (25 seconds at 20
 core/s), mixed burst (30 seconds at 20 core/10 finance/s), and matching burst
 baseline (25 seconds). Light and accepted-planning fixtures run once each on
-separate hosted jobs. The existing two 10% mixed-load gates retain their exact
-workloads, assertions and execution; this diagnostic cannot clear them.
+separate hosted jobs. The historical two 10% tests retain their exact workloads and assertions as
+explicit opt-ins; this diagnostic cannot clear them or establish v2 acceptance.
 
 Every scheduled request receives a terminal JSONL record. Fixed arrival times
 continue during slow responses; bounded client queues retain overflow as a
@@ -659,3 +786,71 @@ The terminal `b1ac7a25` light baseline was 4.498/4.486 ms and mixed p95 was
 (+0.999 ms, +26.199%). Both unchanged 10% gates failed. These older summary-only
 runs still provide neither raw p99 nor whole-process CPU evidence. The new
 collector does not retroactively fill those gaps.
+
+
+## Completed sustained pair and release boundary
+
+At candidate `c2fd0293afd576bfaa717132f8aacadea799bf90`, evaluated checkout
+`9b25dead16e28bb3b8896d0cf0d96b13ac714dcd`, [Finance run 40115277440](https://github.com/junglecrunch1212/administrate-me-now/actions/runs/40115277440)
+retained 3,701 core and 511 finance requests per workload with no request errors,
+timeouts, rejections or cancellations. Light/planning normal core p95/p99 were
+4.616/5.180 and 4.618/4.910 ms; normal CPU was 0.00728/0.00709 logical cores,
+peak RSS 160.625/205.461 MiB and retained growth 1.625/3.125 MiB. All
+4,577/4,607 resource samples were retained without collection errors. Both
+load generators exited zero; the runtime was explicitly stopped by SIGTERM and
+all owned processes stopped. Complete phase tables, cold/outlier observations,
+artifact hashes and limitations are recorded in PR #486. This Linux pair is
+complete and now requires explicit `workflow_dispatch.sustained_resources` to
+repeat. The short native collector change does not justify repeating it.
+
+The unchanged real 10% gates at that head still failed: light
+4.168/4.231 → 5.362 ms (+26.742%); planning 4.442/4.384 → 5.761 ms (+29.701%).
+The later v2 approval does not convert these historical results to acceptance.
+Mac development checks passed 2,240 cases plus 106
+bridge cases and packaged installation; the final draft guard correctly failed.
+Development results do not prove full system qualification or activation.
+
+This PR remains system-wide. After draft correctness checks, the release path
+is the existing protected-PR path, not a reduced component release:
+
+1. With authority to proceed to qualification, fetch protected `main`, integrate
+   any new base through a normal merge on this branch, and record the exact
+   head/base/evaluated test-merge identities. Do not force-push or remove guards.
+   Ready status triggers the full workers; this task does not change it merely
+   to make a draft guard pass.
+2. Run both existing workflows on that exact ready PR. Linux requires
+   `release-scope` and `system-consistency`; macOS requires `release-scope`,
+   `bridge-installed-runtime` and `system-rehearsal`. Retain all their current
+   stages, including complete Python/acceptance, static, package, browser,
+   isolation and recovery checks. `scripts.release_scope gate` must accept the
+   actual validated checkout SHA for each selected worker. Missing, skipped,
+   failed, cancelled or stale required workers fail closed.
+3. Re-read GitHub branch protection immediately before merge. At this checkpoint
+   strict up-to-date `deterministic-consistency` is required, administrators are
+   covered and conversation resolution is enabled. The affected macOS aggregate
+   `credential-free-rehearsal` and fresh native v2 qualification for both finance
+   workloads also remain obligations. Base
+   movement requires fresh valid evidence under the implemented selector; no
+   older draft result is relabeled full release validation.
+4. Only after protected merge and operational authorization, use the supported
+   CLI from the clean protected-main recovery checkout with exact reviewed paths:
+   `python -m bootstrap.cli --instance-root /absolute/reviewed/instance upgrade
+   /absolute/immutable/protected-main-candidate`. Preserve updater prerequisites,
+   compatible encrypted backup/state and the known-working predecessor; do not
+   add runtime-migration or provider-binding override flags. Recovery is
+   `python -m bootstrap.cli --instance-root /absolute/reviewed/instance rollback
+   --recovery-repository /absolute/clean/protected-main-checkout` only when retained
+   schemas are compatible. Feature revocation on the schema-aware runtime is
+   required when an older binary cannot read new history.
+
+The first bounded operational check remains owner-only metadata: enable its
+flag, inspect the authorized binding receipt, then disable both flags using the
+current revision and verify disabled read denial while retaining audits. This
+adds no CoS grant or financial import. Missing/wrong ownership, missing audit,
+unexpected disclosure, failed read-back or failed disable is a failure signal;
+revoke on the schema-aware runtime and preserve evidence. Actual member rendering
+requires the authorized member-device workflow. Full Finance/CoS use still needs
+canonical book/entity/publisher/history choices, approved private handoff,
+import/read-back, narrow finance authority and supported activation. A dated,
+truthfully PARTIAL snapshot is separate from the disabled daily Sheets engine
+and from unavailable complete formal statements. None is claimed activated here.

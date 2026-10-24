@@ -220,7 +220,10 @@ never imply daily-current data or reliable affordability/payment safety.
    release-scope evidence plus Linux `system-consistency`, macOS
    `system-rehearsal` and `bridge-installed-runtime`; the protected
    `deterministic-consistency` result and current updater evidence remain binding.
-   Development-draft guards and the full-finance 10% latency gates stay unchanged.
+   Development-draft guards remain. Full finance now requires fresh native
+   qualification under owner-approved `finance-resource-v2.2026-10-24`; historical
+   10% failures remain failures and are not retroactive acceptance. See
+   `docs/refactor/FINANCE-RESOURCE-GATES.md` for exact limits and execution scope.
    A genuinely separate metadata release would first require a bounded component
    contract and positive/negative selector tests; no relabeling substitutes for it.
    Recommendation: retain this PR's system-wide artifact path and, if qualified

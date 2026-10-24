@@ -2,7 +2,7 @@
 
 The client event loop is independent from the application. The old TestClient
 harness also regressed with an empty control request; those failed v1 results
-remain documented. The <=10% raw client p95 gate is unchanged. Run only in
+remain documented. The preserved v1 <=10% assertion is historical; v2 qualification is separate. Run only in
 hosted CI/an authorized disposable lab, never the family runtime.
 """
 
@@ -523,6 +523,7 @@ def _serve(
     planning_workload: bool = False,
     authority_control: bool = False,
     tasks_noop_mode: str | None = None,
+    stop_event=None,
 ) -> None:
     diagnostic = None
     diagnostic_context = None
@@ -644,13 +645,28 @@ def _serve(
             else:
                 ready.send(binding)
             ready.close()
-            yield
+
+            async def stop_when_requested():
+                while not stop_event.is_set():
+                    await asyncio.sleep(0.05)
+                server.should_exit = True
+
+            watcher = (
+                asyncio.create_task(stop_when_requested())
+                if stop_event is not None
+                else None
+            )
+            try:
+                yield
+            finally:
+                if watcher is not None:
+                    watcher.cancel()
+                    await asyncio.gather(watcher, return_exceptions=True)
 
     app.router.lifespan_context = lifespan
+    server = uvicorn.Server(uvicorn.Config(app, log_level="error", access_log=False))
     try:
-        uvicorn.Server(uvicorn.Config(app, log_level="error", access_log=False)).run(
-            sockets=[listener]
-        )
+        server.run(sockets=[listener])
     finally:
         if diagnostic_context is not None:
             diagnostic_context.__exit__(None, None, None)
