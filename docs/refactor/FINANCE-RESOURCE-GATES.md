@@ -72,7 +72,10 @@ p95 target of 500 ms. The original status/calculator workload retains its
 100/500 ms targets and runs independently. The longer 120-second synthetic
 startup allowance covers fixture import only, not measured request latency.
 
-This additional gate is pending hosted execution. It measures accepted planning
+At `e5483133`, this additional gate failed: before core p95 3.483 ms, after
+3.189 ms, mixed 4.182 ms (20.07%), with 251 admitted finance calls. Summary/detail
+p95 was 20.113/21.027 ms. The inventory cardinalities and exact returned rows
+passed, but that does not clear the resource gate. It measures accepted planning
 retrieval, not a full raw accounting ledger, heavy computation, reminder delivery
 or deployment hardware. Passing the simpler status/calculator workload cannot
 substitute for it. Run only in hosted CI or an authorized disposable lab with
@@ -142,6 +145,7 @@ evidence, not passing acceptance.
 | `cc159d8a` | 816 Python, 100 native/static and synthetic desktop checks passed | 3.857 → 4.838 ms (1.254260); after baseline 3.695 ms | Fail |
 | `34d2bfe8` | 847 Python, 100 native/static and synthetic desktop checks passed | Before 1.885, after 2.767 → mixed 3.007 ms (1.086922) | Bounded pass; baseline drift limits generalization |
 | `1323abd5` | 867 Python passed; two new raw-render fixtures lacked `answer_ref`. 100 native/static/browser passed | Before 4.395, after 4.270 → mixed 5.191 ms (1.181163) | Fail; earlier pass does not establish stable isolation |
+| `e5483133` | 871 Python, 100 native/static/browser passed | Before 3.426, after 3.491 → mixed 4.356 ms (1.247873) | Fail; dedicated-reader performance remains insufficient |
 
 The [de8 hosted run](https://github.com/junglecrunch1212/administrate-me-now/actions/runs/40042497072)
 retains 251 admitted finance calls, 18.381/19.970 ms warm status/calculation
@@ -200,7 +204,13 @@ reader thread. Writers retain their existing owner. Final authority still reads
 current committed SQL data synchronously and never caches a grant. Publication
 excludes new reader submissions, drains/closes the old handle before replacing
 the DB, and permits readers only after the replacement; shutdown joins both
-workers. Focused hosted checks hold the writer busy while a fresh grant read
+workers. Source review also identified that a read must not overtake an already
+queued Parties mutation. A pending-mutation fence preserves the original writer
+FIFO for those reads, including queued revocations, role changes, maintenance
+writes and publication. Only unrelated writer work is bypassed; no authority
+result is cached. A dedicated regression queues a revocation behind a held
+writer and requires the later read to wait and reject the revoked grant.
+Focused hosted checks hold the writer busy while a fresh grant read
 finishes, then verify committed revocation, and hold publication while a new read
 must wait for the replacement. Existing lifecycle/identity tests remain included.
 The additional thread's memory cost and its latency benefit are not yet measured.
@@ -218,3 +228,12 @@ measured 50 final authorization calls on the HTTP loop: 18.079 ms total,
 100 worker session resolutions had 0.853 ms p95. These instrumented values are
 not acceptance timings and do not authorize removing fresh revocation checks.
 No identical rerun is substituted for a fix or used to erase earlier failures.
+
+At `e5483133`, the dedicated reader's held-writer/rebuild tests passed, but both
+raw latency gates failed. Diagnostic final-authority p95 was 0.396 ms in the light
+workload and 0.408 ms with planning; planning query p95 was 7.667 ms on the writer
+worker. Lower final-authority timing is insufficient. The next diagnostic records
+per-operation executor wait separately from execution, including core snapshot
+queries, authority reads and event-log work. Instrumentation remains confined
+to separate profile servers; no profile value substitutes for either raw gate.
+The queued-revocation fence and its regression are pending their own hosted run.

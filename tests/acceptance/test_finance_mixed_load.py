@@ -103,9 +103,60 @@ class _SyntheticCpuProfile:
         # from work already dispatched to the native projection worker. It is
         # installed only in this separate profile server, never the p95 gate.
         import threading
+        import concurrent.futures
         from adminme.finance import disclosure, planning_store
         from adminme.products.openclaw import main as native
         from adminme.projections.runner import ProjectionRunner
+
+        self.wall_lock = threading.Lock()
+
+        def record(label, elapsed):
+            with self.wall_lock:
+                self.wall_calls.setdefault(label, []).append(elapsed)
+
+        original_submit = concurrent.futures.ThreadPoolExecutor.submit
+
+        def observed_submit(executor, func, /, *args, **kwargs):
+            queued_at = time.perf_counter()
+            active = self.started and not self.completed
+            prefix = getattr(executor, "_thread_name_prefix", "other")
+            lane = (
+                prefix
+                if prefix
+                in {
+                    "adminme-projections",
+                    "adminme-authority-reader",
+                    "adminme-event-log",
+                }
+                else "other"
+            )
+            operation = getattr(func, "__name__", "callback")
+            if (
+                args
+                and isinstance(args[0], str)
+                and args[0]
+                in {
+                    "parties",
+                    "money",
+                    "commitments",
+                    "tasks",
+                    "lists",
+                    "recurrences",
+                }
+            ):
+                operation += ":" + args[0]
+
+            def begin():
+                if active:
+                    record(
+                        f"executor_wait:{lane}:{operation}",
+                        time.perf_counter() - queued_at,
+                    )
+                return func(*args, **kwargs)
+
+            return original_submit(executor, begin)
+
+        concurrent.futures.ThreadPoolExecutor.submit = observed_submit
 
         def instrument(owner, name, label):
             original = getattr(owner, name)
@@ -126,9 +177,7 @@ class _SyntheticCpuProfile:
                             )
                             else "worker"
                         )
-                        self.wall_calls.setdefault(f"{label}:{thread}", []).append(
-                            time.perf_counter() - started
-                        )
+                        record(f"{label}:{thread}", time.perf_counter() - started)
 
             setattr(owner, name, timed)
 
@@ -138,6 +187,7 @@ class _SyntheticCpuProfile:
         instrument(ProjectionRunner, "_execute_sync", "projection_dispatch")
         instrument(ProjectionRunner, "_execute_statement", "projection_statement")
         instrument(ProjectionRunner, "_apply_one_for", "projection_event_apply")
+        instrument(ProjectionRunner, "_call_many_query", "core_snapshot")
 
     async def __call__(self, scope, receive, send):
         finance = scope["type"] == "http" and scope.get("path", "").startswith(
@@ -174,6 +224,10 @@ class _SyntheticCpuProfile:
                         "cumulative_ms": round(cumulative * 1000, 3),
                     }
 
+                with self.wall_lock:
+                    wall_calls = {
+                        key: list(values) for key, values in self.wall_calls.items()
+                    }
                 self.output_path.write_text(
                     json.dumps(
                         {
@@ -186,7 +240,7 @@ class _SyntheticCpuProfile:
                                     "p95": round(_p95(values) * 1000, 3),
                                     "max": round(max(values) * 1000, 3),
                                 }
-                                for key, values in self.wall_calls.items()
+                                for key, values in wall_calls.items()
                             },
                             "top_self": [
                                 row(item)

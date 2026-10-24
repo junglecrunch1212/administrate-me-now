@@ -237,3 +237,53 @@ async def test_authority_read_during_publish_waits_for_new_database(
             await asyncio.gather(reading, return_exceptions=True)
         await runner.stop()
         await log.close()
+
+
+@pytest.mark.asyncio
+async def test_dedicated_reader_cannot_overtake_queued_revocation(tmp_path):
+    runner, log = await start_runner(tmp_path)
+    entered, release = threading.Event(), threading.Event()
+    held = mutation = reading = None
+    try:
+        writer = runner._unsafe_maintenance_connection("parties")
+        grant(writer)
+        approve(writer)
+        reader = runner.connection("parties")
+        assert resolve(reader).authority_grant_id == "grant-synthetic"
+
+        def occupy_writer():
+            entered.set()
+            assert release.wait(10), "synthetic writer hold was not released"
+
+        held = asyncio.create_task(runner._run_on_worker(occupy_writer))
+        assert await asyncio.to_thread(entered.wait, 5)
+        mutation = asyncio.create_task(
+            asyncio.to_thread(
+                writer.execute,
+                "UPDATE service_delegation_grants SET revoked_at='2026-01-02T00:00:00Z'",
+            )
+        )
+        for _ in range(100):
+            if runner._parties_pending_mutations:
+                break
+            await asyncio.sleep(0.001)
+        assert runner._parties_pending_mutations
+        reading = asyncio.create_task(asyncio.to_thread(resolve, reader))
+        await asyncio.sleep(0.02)
+        assert not reading.done(), "fresh read overtook an accepted revocation"
+        release.set()
+        await held
+        await mutation
+        with pytest.raises(ServiceDelegationResolutionError):
+            await reading
+        assert runner._parties_pending_mutations == 0
+    finally:
+        release.set()
+        if held is not None:
+            await asyncio.gather(held, return_exceptions=True)
+        if mutation is not None:
+            await asyncio.gather(mutation, return_exceptions=True)
+        if reading is not None:
+            await asyncio.gather(reading, return_exceptions=True)
+        await runner.stop()
+        await log.close()

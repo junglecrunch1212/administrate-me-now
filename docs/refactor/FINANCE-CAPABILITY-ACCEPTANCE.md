@@ -303,3 +303,12 @@ images. The mixed-load gate failed again at 18.12%, so the prior bounded pass
 has not established stable resource isolation. The next candidate isolates
 fresh authority reads from unrelated projection writes and separately adds
 synthetic shared-inventory workload measurement; neither is claimed passed yet.
+
+At `e5483133`, all 871 Python checks, 100 native checks, static checks and the
+synthetic browser flow passed, including the repaired overlap replay/restart
+cases and initial dedicated-reader lifecycle cases. The light raw p95 gate
+failed at 24.79%; the separate shared-planning workload failed at 20.07% despite
+correct source rows and sub-500 ms report timing. Resource isolation is still
+incomplete. Source review adds a fence against overtaking queued authority
+mutations and a focused queued-revocation regression; these and more precise
+executor-wait diagnostics require the next candidate's hosted evidence.

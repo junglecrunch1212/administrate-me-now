@@ -354,6 +354,7 @@ class ProjectionRunner:
         self._worker_thread_id: int | None = None
         self._parties_reader_thread_id: int | None = None
         self._parties_submission_lock = threading.Lock()
+        self._parties_pending_mutations = 0
         self._closing = False
         self._closed = False
         self._executor = concurrent.futures.ThreadPoolExecutor(
@@ -1049,7 +1050,28 @@ class ProjectionRunner:
         with self._submission_lock:
             if self._closing or self._closed:
                 raise RuntimeError("projection runner is closing")
-            return self._executor.submit(func, *args)
+            # Preserve the writer FIFO for already-enqueued authority changes.
+            # Only a known query callback may bypass this mutation fence.
+            parties_mutation = bool(
+                args and args[0] == "parties" and func != self._call_query
+            )
+            if not parties_mutation:
+                return self._executor.submit(func, *args)
+            self._parties_pending_mutations += 1
+            try:
+                return self._executor.submit(self._run_parties_mutation, func, args)
+            except BaseException:
+                self._parties_pending_mutations -= 1
+                raise
+
+    def _run_parties_mutation(
+        self, func: Callable[..., _T], args: tuple[Any, ...]
+    ) -> _T:
+        try:
+            return func(*args)
+        finally:
+            with self._submission_lock:
+                self._parties_pending_mutations -= 1
 
     async def _run_on_worker(self, func: Callable[..., _T], *args: Any) -> _T:
         if threading.get_ident() == self._worker_thread_id:
@@ -1081,16 +1103,34 @@ class ProjectionRunner:
             # Serialize submissions with database publication: a request either
             # finishes against the prior inode before close, or opens the newly
             # published database afterwards. No grant values are cached.
-            with self._submission_lock, self._parties_submission_lock:
+            with self._submission_lock:
+                on_writer = threading.get_ident() == self._worker_thread_id
                 # A callback already accepted on the writer may finish its
                 # nested reads before the queued close. Reject new callers.
-                if self._closed or (
-                    self._closing and threading.get_ident() != self._worker_thread_id
-                ):
+                if self._closed or (self._closing and not on_writer):
                     raise RuntimeError("projection runner is closing")
-                call = self._parties_executor.submit(
-                    self._execute_statement, name, sql, parameters, many, read_only
-                )
+                if self._parties_pending_mutations and not on_writer:
+                    # Do not overtake a queued revocation, role change or
+                    # publication. Once this reaches its original FIFO place,
+                    # the writer delegates the actual SQL to the reader owner.
+                    call = self._executor.submit(
+                        self._execute_sync,
+                        name,
+                        sql,
+                        parameters,
+                        many=many,
+                        read_only=read_only,
+                    )
+                else:
+                    with self._parties_submission_lock:
+                        call = self._parties_executor.submit(
+                            self._execute_statement,
+                            name,
+                            sql,
+                            parameters,
+                            many,
+                            read_only,
+                        )
             return call.result()
         if threading.get_ident() == self._worker_thread_id:
             return self._execute_statement(name, sql, parameters, many, read_only)

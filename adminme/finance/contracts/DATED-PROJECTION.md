@@ -29,9 +29,10 @@ horizon-crossing windows account for 18 source-group/24 alias occurrences. The
 semantic overlap repair is pinned at
 `1323abd5738bf6d1f7d58994e8b40a1b49b94217`: all 20 synthetic inline/shared
 boundary cases and browser acceptance passed. Two replay-render fixture failures
-(`answer_ref` missing from direct-query results) are corrected in the next
-candidate and require its hosted completion. The original performance gate
-still failed at 18.12%, independently of source-window conformance.
+(`answer_ref` missing from direct-query results) were corrected at `e5483133`,
+whose 871 Python checks and browser flow passed. That revision's light and
+shared-planning latency gates still failed, independently of source-window
+conformance. The exact validator file and schema hashes remain unchanged.
 The producer separately reports the overlap delta verified against that exact
 implementation and validator SHA-256
 `7a2c74fa3e4dac7e05e6f07ccbde3f2f362638740032e788897214f14374c0dd`:
