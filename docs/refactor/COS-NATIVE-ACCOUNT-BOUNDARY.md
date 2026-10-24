@@ -14,7 +14,9 @@ Failed reconciliation restores its exact predecessor bytes. A legacy target does
 not silently re-enable ambient accounts merely because it lacks the declaration.
 
 The pin produces an explicit `apps._default` denial for ordinary new and resumed
-Codex threads. Isolated checks exercise that actual native configuration path,
+Codex threads. Existing legacy or changed app-policy bindings rotate through the
+pinned thread lifecycle; an already loaded thread must not be trusted to apply
+resume overrides alone. Isolated checks exercise that native configuration path,
 including unchanged native code mode and reviewed dynamic tools. They make no
 account, model or provider calls and do not prove a household account's effective
 runtime catalog.

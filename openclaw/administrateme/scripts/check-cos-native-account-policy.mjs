@@ -16,8 +16,8 @@ const requirePinned = createRequire(path.join(source, "package.json"));
 const { createJiti } = requirePinned("jiti");
 const jiti = createJiti(path.join(source, "package.json"), { tsconfigPaths: path.join(source, "tsconfig.json") });
 const load = (relative) => jiti.import(path.join(source, relative));
-const { resolveCodexPluginThreadConfigStartupPolicy } = await load("extensions/codex/src/app-server/plugin-thread-config-deadline.ts");
-const { buildCodexPluginThreadConfig } = await load("extensions/codex/src/app-server/plugin-thread-config.ts");
+const { resolveCodexPluginThreadConfigStartupPolicy, createCodexPluginThreadConfigStartupProvider } = await load("extensions/codex/src/app-server/plugin-thread-config-deadline.ts");
+const { buildCodexPluginThreadConfig, isCodexPluginThreadBindingStale } = await load("extensions/codex/src/app-server/plugin-thread-config.ts");
 const { shouldEnableCodexAppServerNativeToolSurface } = await load("extensions/codex/src/app-server/dynamic-tool-build.ts");
 const { buildThreadStartParams, buildThreadResumeParams } = await load("extensions/codex/src/app-server/thread-requests.ts");
 const prepared = JSON.parse(execFileSync(process.argv[3], ["-c", `import json; from pathlib import Path; from bootstrap.native_account_policy import prepare_native_account_policy; print(json.dumps(prepare_native_account_policy({"plugins":{"entries":{"codex":{"enabled":True}}}}, Path.cwd())))`], {
@@ -26,10 +26,23 @@ const prepared = JSON.parse(execFileSync(process.argv[3], ["-c", `import json; f
 assert.deepEqual(prepared, { plugins: { entries: { codex: { enabled: true, config: { codexPlugins: { enabled: false } } } } } });
 const pluginConfig = prepared.plugins.entries.codex.config;
 assert.equal(resolveCodexPluginThreadConfigStartupPolicy({ pluginConfig: {}, nativeToolSurfaceEnabled: true }).pluginThreadConfigRequired, false, "unconfigured ordinary run did not request app suppression");
-assert.equal(resolveCodexPluginThreadConfigStartupPolicy({ pluginConfig, nativeToolSurfaceEnabled: true }).pluginThreadConfigRequired, true);
+const startupPolicy = resolveCodexPluginThreadConfigStartupPolicy({ pluginConfig, nativeToolSurfaceEnabled: true });
+assert.equal(startupPolicy.pluginThreadConfigRequired, true);
 const selected = await buildCodexPluginThreadConfig({ pluginConfig, appCacheKey: "synthetic-ordinary-service", request: async (method) => { throw new Error(`Unexpected account or provider call: ${method}`); } });
 assert.deepEqual(selected.configPatch, { apps: { _default: { enabled: false, destructive_enabled: false, open_world_enabled: false } } });
 assert.deepEqual(selected.policyContext.apps, {});
+const startupProvider = createCodexPluginThreadConfigStartupProvider({
+  pluginConfig, inputFingerprint: selected.inputFingerprint,
+  policy: startupPolicy.resolvedPluginPolicy, enabledPluginConfigKeys: startupPolicy.enabledPluginConfigKeys,
+  appCacheKey: "synthetic-ordinary-service", requestTimeoutMs: 1000, signal: new AbortController().signal,
+  client: { request: async () => { throw new Error("App exclusion must not inspect account inventory"); } },
+});
+assert.equal(startupProvider.enabled, true, "explicit app denial must enter native thread policy reconciliation");
+assert.deepEqual((await startupProvider.build()).configPatch, selected.configPatch);
+// A loaded legacy thread can ignore resume overrides; the pin rotates its stale binding.
+assert.equal(isCodexPluginThreadBindingStale({ codexPluginsEnabled: startupProvider.enabled, currentInputFingerprint: selected.inputFingerprint }), true);
+assert.equal(isCodexPluginThreadBindingStale({ codexPluginsEnabled: startupProvider.enabled, bindingFingerprint: "previous-app-policy", bindingInputFingerprint: "previous-app-input", currentInputFingerprint: selected.inputFingerprint, hasBindingPolicyContext: true }), true);
+assert.equal(isCodexPluginThreadBindingStale({ codexPluginsEnabled: startupProvider.enabled, bindingFingerprint: selected.fingerprint, bindingInputFingerprint: selected.inputFingerprint, currentInputFingerprint: selected.inputFingerprint, hasBindingPolicyContext: true }), false);
 const params = { sessionId: "fixture-ordinary-service", sessionKey: "agent:fixture-service:ordinary", runId: "fixture-run", provider: "openai", modelId: "gpt-5.4", config: prepared, authProfileStore: { version: 1, profiles: {} }, prompt: "Retain a private working note" };
 assert.equal(shouldEnableCodexAppServerNativeToolSurface(params), true, "app exclusion must not remove native shell/file capability");
 const dynamicTools = [{ type: "function", name: "administrateme_workstation_inventory", description: "Reviewed fixture tool", inputSchema: { type: "object", properties: {} } }, { type: "function", name: "browser", description: "Reviewed native browser route", inputSchema: { type: "object", properties: {} } }];
