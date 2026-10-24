@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import copy
 import json
 from dataclasses import replace
@@ -24,6 +25,7 @@ from adminme.adapters.cos_apple_reminders import (
 from adminme.adapters.cos_apple_reminders_native import SelectedSnapshot
 from adminme.adapters.cursor_store import AdapterCursorStore
 from adminme.adapters.loader import load_builtin_adapters
+from adminme.daemons.adapter_supervisor import AdapterSupervisor
 from adminme.events.bus import EventBus
 from adminme.events.log import EventLog
 from adminme.events.writer import EventWriter
@@ -144,6 +146,94 @@ async def _facts(log: EventLog) -> list[dict[str, Any]]:
     ]
 
 
+async def _start(
+    adapter: Any, ctx: AdapterContext, log: EventLog
+) -> asyncio.Task[None]:
+    """Start the long-lived adapter and wait for its persisted startup receipt."""
+    before = sum(
+        [row["type"] == "adapter.authenticated" async for row in log.read_since()]
+    )
+    task = asyncio.create_task(adapter.start(ctx=ctx))
+    try:
+        async with asyncio.timeout(3):
+            while True:
+                if task.done():
+                    await task
+                    raise AssertionError(
+                        "adapter returned instead of staying supervised"
+                    )
+                authenticated = sum(
+                    [
+                        row["type"] == "adapter.authenticated"
+                        async for row in log.read_since()
+                    ]
+                )
+                if authenticated > before:
+                    return task
+                await asyncio.sleep(0.005)
+    except BaseException:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        raise
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("shutdown", ["stop", "cancel"])
+async def test_loaded_empty_list_stays_supervised_and_restarts_without_duplicate_facts(
+    tmp_path: Path, runtime: Any, shutdown: str
+) -> None:
+    ctx, log = runtime
+    reader = Reader()
+    reader.snapshot = replace(reader.snapshot, items=())
+    # This is the production loader's actual pack class, exact service binding,
+    # durable cursor store and encrypted event sink. Only native I/O is fake.
+    adapter = _adapter(tmp_path, reader)
+    adapter._interval = 0.01
+    for cycle in range(2):
+        before = reader.calls
+        supervisor = AdapterSupervisor(
+            config_path=tmp_path / "unused.yaml",
+            config_data={"adapter_supervisor_port": 0},
+            ctx_factory=lambda: ctx,
+            adapter_loader=lambda config: [adapter],
+        )
+        try:
+            await supervisor.start()
+            async with asyncio.timeout(3):
+                while reader.calls < before + 3:
+                    await asyncio.sleep(0.005)
+            inventory = supervisor.inventory()[_selection().adapter_id]
+            assert inventory["state"] == "running"
+            assert inventory["last_error"] is None
+            assert inventory["restart_count"] == 0
+            assert (
+                supervisor.snapshot()["adapters"][_selection().adapter_id]["state"]
+                == "running"
+            )
+            events = [row async for row in log.read_since()]
+            assert [(row["type"], row["schema_version"]) for row in events] == [
+                ("list.created", 2),
+            ] + [("adapter.authenticated", 3)] * (cycle + 1)
+            assert events[0]["payload"]["list_external_id"] == _selection().list_id
+            if shutdown == "cancel":
+                managed = supervisor._managed[_selection().adapter_id]
+                assert managed.task is not None
+                managed.task.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await managed.task
+                assert adapter.status().state == "stopped"
+                assert (
+                    supervisor.inventory()[_selection().adapter_id]["state"]
+                    == "stopped"
+                )
+        finally:
+            await supervisor.stop()
+        assert adapter.status().state == "stopped"
+        stopped_calls = reader.calls
+        await asyncio.sleep(0.04)
+        assert reader.calls == stopped_calls, "polling survived supervised shutdown"
+
+
 @pytest.mark.asyncio
 async def test_real_adapter_persists_updates_completion_and_restart_tombstones(
     tmp_path: Path, runtime: Any
@@ -152,7 +242,7 @@ async def test_real_adapter_persists_updates_completion_and_restart_tombstones(
     reader = Reader()
     adapter = _adapter(tmp_path, reader)
     try:
-        await adapter.start(ctx=ctx)
+        await _start(adapter, ctx, log)
         assert adapter.status().state == "running"
         facts = await _facts(log)
         assert [(row["type"], row["schema_version"]) for row in facts] == [
@@ -188,7 +278,7 @@ async def test_real_adapter_persists_updates_completion_and_restart_tombstones(
     restarted = _adapter(tmp_path, reader)
     reader.snapshot = replace(reader.snapshot, items=())
     try:
-        await restarted.start(ctx=ctx)
+        await _start(restarted, ctx, log)
         assert [row["type"] for row in await _facts(log)] == [
             "list.created",
             "list_item.added",
@@ -212,7 +302,7 @@ async def test_unavailable_or_foreign_snapshot_never_creates_false_deletions(
     reader = Reader()
     adapter = _adapter(tmp_path, reader)
     try:
-        await adapter.start(ctx=ctx)
+        await _start(adapter, ctx, log)
         before = await _facts(log)
         reader.error = PermissionError("private native error")
         with pytest.raises(PermissionError):
@@ -676,7 +766,7 @@ async def test_native_absolute_alarm_and_missing_modified_clock_are_stable(
     )
     adapter = _adapter(tmp_path, reader)
     try:
-        await adapter.start(ctx=ctx)
+        await _start(adapter, ctx, log)
         payload = (await _facts(log))[-1]["payload"]
         assert payload["alarms"][0]["absolute_at"] == "2026-10-02T00:00:00Z"
         later_ctx = replace(

@@ -5,6 +5,11 @@ set -euo pipefail
 case "${1:-}" in linux|macos) ;; *) echo "Expected linux or macos" >&2; exit 1 ;; esac
 
 tests=(
+  tests/acceptance/test_native_apple_reminder.py
+  tests/acceptance/test_apple_service_permissions.py
+  tests/acceptance/test_member_apple_approval.py
+  tests/acceptance/test_apple_service_notes.py
+  tests/unit/test_apple_service_permission_contract.py
   tests/acceptance/test_cos_member_follow_up.py
   tests/acceptance/test_cos_service_private_work.py
   tests/acceptance/test_cos_service_working_context.py
@@ -43,6 +48,9 @@ tests=(
   tests/unit/bootstrap/test_cos_guard_release.py
   tests/unit/test_ci_release_gates.py
 )
+if [[ "$1" == macos ]]; then
+  tests+=(tests/acceptance/test_native_reminder_due_components.py)
+fi
 python_checks() {
   local status=0
   poetry run pytest -p no:cacheprovider --runxfail -q -ra \

@@ -23,6 +23,8 @@ from scripts.release_scope import (
     COS_SERVICE_WORK_COMPONENT_PATHS,
     COS_SERVICE_WORK_REQUIRED_PATHS,
     _service_work_application,
+    _service_work_member,
+    _service_work_ingest,
     UPDATER_COMPONENT_PATHS,
     UPDATER_TEST_PATHS,
     UPDATER_REQUIRED_PATHS,
@@ -36,6 +38,7 @@ from scripts.release_scope import (
     COS_RECOVERY_CONTROLLER,
     COS_RECOVERY_HISTORY,
     COS_RECOVERY_TEST_PATHS,
+    COS_RETAINED_SOURCE_HISTORY_PATHS,
     ENROLLMENT_INGEST_PATH,
     MEMBER_GOOGLE_SETTINGS_WIRING,
     MEMBER_GOOGLE_SETTINGS_CHECK_SCRIPT,
@@ -1283,6 +1286,9 @@ def test_recovery_worker_requires_affected_persistence_and_compatibility_contrac
     assert "if" not in job["steps"][-1]
     commands = "\n".join(step.get("run", "") for step in job["steps"])
     for required in (
+        "test_cos_apple_source_history.py",
+        "test_historical_attribution.py",
+        "test_lifecycle_catalog.py",
         "test_cos_recovery_history.py",
         "test_cos_recovery_history_operation.py",
         "test_cos_channel_activation.py",
@@ -1915,6 +1921,10 @@ def _service_work_candidate(path: Path) -> tuple[str, str]:
     for relative in COS_SERVICE_WORK_REQUIRED_PATHS:
         target = path / relative
         target.parent.mkdir(parents=True, exist_ok=True)
+        if relative == ENROLLMENT_INGEST_PATH and target.exists():
+            # The shared router's unrelated baseline remains outside this lane.
+            # Only its terminal receipt seam may change, not the whole module.
+            continue
         target.write_text(
             _SERVICE_WIRED_RUNTIME
             if relative == COS_SERVICE_WORK_APPLICATION
@@ -2978,3 +2988,138 @@ def test_native_boundary_is_visible_before_remaining_macos_suite() -> None:
     )
     assert "cos-reminders-native.xml" in native["run"]
     assert "('skipped', 'failures', 'errors')" in native["run"]
+
+
+@pytest.mark.parametrize(
+    "defect", ["none", "missing-proof", "unknown", "storage", "mode"]
+)
+def test_retained_service_history_uses_existing_recovery_worker_with_closed_inputs(
+    repository: tuple[Path, str], defect: str
+) -> None:
+    path, _ = repository
+    _recovery_candidate(path)
+    base = _git(path, "rev-parse", "HEAD")
+    for source in sorted(COS_RETAINED_SOURCE_HISTORY_PATHS):
+        if (
+            defect == "missing-proof"
+            and source == "tests/acceptance/test_cos_apple_source_history.py"
+        ):
+            continue
+        _commit(path, source, "# Exact retained source recovery contract\n")
+    if defect == "unknown":
+        _commit(path, "adminme/unrelated_runtime.py", "# Unrelated\n")
+    elif defect == "storage":
+        _commit(path, "adminme/events/log.py", "# Persistence change\n")
+    elif defect == "mode":
+        source = path / "bootstrap/cos_apple_source_history.py"
+        source.chmod(0o755)
+        _git(path, "add", "--all")
+        _git(path, "commit", "-m", "Unexpected executable mode")
+    head = _git(path, "rev-parse", "HEAD")
+    proof = select_scope(path, _event(base, head), checkout_sha=head)
+    assert proof["scope"] == (
+        "cos-recovery-history" if defect == "none" else "system-wide"
+    )
+    if defect == "none":
+        for platform in ("linux", "macos"):
+            verify_gate(proof, _needs(proof, platform), platform=platform)
+
+
+def test_native_reminder_member_scope_retains_every_other_route() -> None:
+    before = "async def reminder_command(body, request, session):\n    return old(body)\n\nasync def unrelated():\n    return protected()\n"
+    after = (
+        before.replace(
+            "return old(body)",
+            "return await confirm_reminder_command(body, request, session)",
+        )
+        + "\nasync def confirm_reminder_command(body, runtime, session):\n    return guarded(body)\n"
+    )
+    assert _service_work_member(before) == _service_work_member(after)
+    assert _service_work_member(
+        after.replace("return protected()", "return bypass()")
+    ) != _service_work_member(before)
+    assert (
+        _service_work_member(after + "\nasync def reminder_command():\n    pass\n")
+        is None
+    )
+    assert _service_work_member("async def [") is None
+
+
+def test_native_reminder_router_scope_rejects_partial_or_nested_wiring() -> None:
+    pair = "    from adminme.products.openclaw.apple_reminders import router as apple_reminder_router\n    app.include_router(apple_reminder_router)\n"
+    before = _SERVICE_WIRED_RUNTIME
+    after = before.replace("    return app\n", pair + "    return app\n")
+    assert _service_work_application(before) == _service_work_application(after)
+    assert (
+        _service_work_application(
+            after.replace("    app.include_router(apple_reminder_router)\n", "")
+        )
+        is None
+    )
+    assert _service_work_application(
+        after.replace(
+            pair,
+            "    if enabled:\n" + "    " + pair.replace("\n    app", "\n        app"),
+        )
+    ) != _service_work_application(before)
+
+
+@pytest.mark.parametrize(
+    "relative",
+    [
+        "adminme/products/openclaw/apple_reminders.py",
+        "openclaw/administrateme/src/apple-reminders.ts",
+        "bootstrap/openclaw/programs/requested_workflows.md",
+    ],
+)
+def test_native_reminder_changes_use_affected_service_lane(
+    repository: tuple[Path, str], relative: str
+) -> None:
+    path, _ = repository
+    _, base = _service_work_candidate(path)
+    head = _commit(path, relative, "# Reviewed native reminder change\n")
+    assert (
+        select_scope(path, _event(base, head), checkout_sha=head)["scope"]
+        == "cos-service-work"
+    )
+
+
+def test_native_reminder_shared_member_route_cannot_hide_other_changes(
+    repository: tuple[Path, str],
+) -> None:
+    path, _ = repository
+    _, base = _service_work_candidate(path)
+    head = _commit(
+        path,
+        "adminme/products/member/main.py",
+        "async def unrelated():\n    return unsafe()\n",
+    )
+    assert (
+        select_scope(path, _event(base, head), checkout_sha=head)["scope"]
+        == "system-wide"
+    )
+
+
+def test_native_terminal_ingest_scope_preserves_unrelated_authorization() -> None:
+    old = "async def _enforce_terminal_result(request, envelope, authorization):\n    return check(envelope)\n\nasync def _enforce_active_bridge_contract(request, envelope, authorization):\n    require_owner()\n    if terminal:\n        await _enforce_terminal_result(request, envelope, authorization)\n        return envelope\n    require_acquisition()\n"
+    new = old.replace(
+        "return check(envelope)", "return exact_replay(envelope)"
+    ).replace(
+        "await _enforce_terminal_result(request, envelope, authorization)\n        return envelope",
+        "return await _enforce_terminal_result(request, envelope, authorization)",
+    )
+    assert _service_work_ingest(old) == _service_work_ingest(new)
+    assert _service_work_ingest(
+        new.replace("require_owner()", "skip_owner()")
+    ) != _service_work_ingest(old)
+    assert (
+        _service_work_ingest(
+            new.replace(
+                "return await _enforce_terminal_result(request, envelope, authorization)",
+                "return envelope",
+            )
+        )
+        is None
+    )
+    assert _service_work_ingest("async def [") is None
+    assert _service_work_ingest(new + new) is None

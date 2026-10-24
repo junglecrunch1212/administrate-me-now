@@ -4032,6 +4032,11 @@ def create_application(settings: RuntimeSettings) -> FastAPI:
     from adminme.products.openclaw.service_work import router as service_work_router
 
     app.include_router(service_work_router)
+    from adminme.products.openclaw.apple_reminders import (
+        router as apple_reminder_router,
+    )
+
+    app.include_router(apple_reminder_router)
     app.include_router(member_router)
     app.include_router(member_bridge_setup_router)
     app.include_router(member_cos_router)

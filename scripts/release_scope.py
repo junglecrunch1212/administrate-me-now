@@ -244,6 +244,16 @@ COS_RECOVERY_COMPONENT_PATHS = frozenset(
         "bootstrap/member_bridge_component.py",
     }
 )
+COS_RETAINED_SOURCE_HISTORY_PATHS = frozenset(
+    {
+        "bootstrap/cos_apple_source_history.py",
+        "adminme/cos_apple_source_history.py",
+        "adminme/events/schemas/cos_apple_source_history.py",
+        "adminme/historical_attribution.py",
+        "tests/unit/test_cos_apple_source_history.py",
+        "tests/acceptance/test_cos_apple_source_history.py",
+    }
+)
 COS_RECOVERY_TEST_PATHS = frozenset(
     {
         "tests/unit/bootstrap/test_cos_channel_activation.py",
@@ -365,11 +375,20 @@ UPDATER_REQUIRED_PATHS = (
     UPDATER_COMPONENT_PATHS | UPDATER_TEST_PATHS | {UPDATER_CHECK_SCRIPT}
 ) - (UPDATER_OPTIONAL_MODULE_TESTS.keys() | UPDATER_OPTIONAL_MODULE_TESTS.values())
 COS_SERVICE_WORK_APPLICATION = "adminme/runtime/application.py"
+COS_SERVICE_WORK_MEMBER = "adminme/products/member/main.py"
+COS_SERVICE_WORK_INGEST = "adminme/products/bridge/routers/ingest.py"
 COS_SERVICE_WORK_CHECK_SCRIPT = "scripts/acceptance/cos-service-work-release.sh"
 COS_SERVICE_WORK_NATIVE_INSTALL = "scripts/acceptance/openclaw-source-install.sh"
 COS_SERVICE_WORK_COMPONENT_PATHS = frozenset(
     {
         COS_SERVICE_WORK_APPLICATION,
+        COS_SERVICE_WORK_MEMBER,
+        COS_SERVICE_WORK_INGEST,
+        "adminme/products/openclaw/apple_reminders.py",
+        "openclaw/administrateme/src/apple-reminders.ts",
+        "openclaw/administrateme/src/tools.ts",
+        "bootstrap/openclaw/programs/requested_workflows.md",
+        "openclaw/administrateme/workspace/AGENTS.md",
         "adminme/lib/principal.py",
         "adminme/lib/scope.py",
         "adminme/service_identities.py",
@@ -420,6 +439,13 @@ COS_SERVICE_WORK_TEST_PATHS = frozenset(
         "tests/acceptance/test_cos_identity_delegation_kernel.py",
         "tests/acceptance/test_cos_service_private_work.py",
         "tests/acceptance/test_cos_member_follow_up.py",
+        "tests/acceptance/test_native_apple_reminder.py",
+        "tests/acceptance/test_native_reminder_due_components.py",
+        "openclaw/administrateme/test/apple-reminders.test.ts",
+        "openclaw/administrateme/scripts/check-cos-imessage-text.mjs",
+        "tests/acceptance/test_apple_service_permissions.py",
+        "tests/acceptance/test_member_apple_approval.py",
+        "tests/acceptance/test_apple_service_notes.py",
         "openclaw/administrateme/test/member-work.test.ts",
         "openclaw/administrateme/test/self-replies.test.ts",
         "openclaw/administrateme/test/self-reminders.test.ts",
@@ -608,7 +634,10 @@ def choose_scope(
     ):
         return "updater-delivery"
     recovery_allowed = (
-        COS_RECOVERY_COMPONENT_PATHS | COS_RECOVERY_TEST_PATHS | POLICY_PATHS
+        COS_RECOVERY_COMPONENT_PATHS
+        | COS_RECOVERY_TEST_PATHS
+        | COS_RETAINED_SOURCE_HISTORY_PATHS
+        | POLICY_PATHS
     )
     if (
         cos_recovery_interfaces_equal
@@ -619,7 +648,12 @@ def choose_scope(
             for status, path in changes
         )
         and any(
-            path in {COS_RECOVERY_CONTROLLER, COS_RECOVERY_HISTORY}
+            path
+            in {
+                COS_RECOVERY_CONTROLLER,
+                COS_RECOVERY_HISTORY,
+                "bootstrap/cos_apple_source_history.py",
+            }
             for _, path in changes
         )
     ):
@@ -884,7 +918,12 @@ def _cos_recovery_dependency_fingerprint(entries: tuple[GitTreeEntry, ...]) -> s
     # Only this closed controller/history/compatibility edit set may differ.
     # Every other tracked byte and mode, including tests and unknown inputs,
     # stays frozen across the protected base, head, and exact-parent test merge.
-    allowed = COS_RECOVERY_COMPONENT_PATHS | COS_RECOVERY_TEST_PATHS | POLICY_PATHS
+    allowed = (
+        COS_RECOVERY_COMPONENT_PATHS
+        | COS_RECOVERY_TEST_PATHS
+        | COS_RETAINED_SOURCE_HISTORY_PATHS
+        | POLICY_PATHS
+    )
     coordinates = sorted(
         (entry.path, entry.mode, entry.object_id)
         for entry in entries
@@ -946,10 +985,24 @@ def _service_work_application(source: str) -> tuple[str, bool] | None:
         return None
     if counts == [1, 1] and body_shapes.index(shapes[0]) > body_shapes.index(shapes[1]):
         return None
+    reminder_shapes = [
+        ast.dump(node, include_attributes=False)
+        for node in ast.parse(
+            "from adminme.products.openclaw.apple_reminders import router as apple_reminder_router\n"
+            "app.include_router(apple_reminder_router)\n"
+        ).body
+    ]
+    reminder_counts = [body_shapes.count(shape) for shape in reminder_shapes]
+    if reminder_counts not in ([0, 0], [1, 1]):
+        return None
+    if reminder_counts == [1, 1] and body_shapes.index(
+        reminder_shapes[0]
+    ) > body_shapes.index(reminder_shapes[1]):
+        return None
     application.body = [
         node
         for node, shape in zip(application.body, body_shapes, strict=True)
-        if shape not in shapes
+        if shape not in shapes + reminder_shapes
     ]
     digest = hashlib.sha256(
         ast.dump(module, include_attributes=False).encode()
@@ -959,6 +1012,83 @@ def _service_work_application(source: str) -> tuple[str, bool] | None:
 
 def _service_work_mode(path: str) -> str:
     return "100755" if path == COS_SERVICE_WORK_NATIVE_INSTALL else "100644"
+
+
+def _service_work_member(source: str) -> str | None:
+    """Bind every member route except the shared reminder confirmation seam."""
+    try:
+        module = ast.parse(source)
+    except SyntaxError:
+        return None
+    names = {"reminder_command", "confirm_reminder_command"}
+    for name in names:
+        if (
+            sum(
+                isinstance(node, ast.AsyncFunctionDef) and node.name == name
+                for node in module.body
+            )
+            > 1
+        ):
+            return None
+    module.body = [
+        node
+        for node in module.body
+        if not (isinstance(node, ast.AsyncFunctionDef) and node.name in names)
+    ]
+    return hashlib.sha256(
+        ast.dump(module, include_attributes=False).encode()
+    ).hexdigest()
+
+
+def _service_work_ingest(source: str) -> str | None:
+    """Only terminal replay validation and its exact returned-envelope plumbing."""
+    try:
+        module = ast.parse(source)
+    except SyntaxError:
+        return None
+    terminal = [
+        node
+        for node in module.body
+        if isinstance(node, ast.AsyncFunctionDef)
+        and node.name == "_enforce_terminal_result"
+    ]
+    active = [
+        node
+        for node in module.body
+        if isinstance(node, ast.AsyncFunctionDef)
+        and node.name == "_enforce_active_bridge_contract"
+    ]
+    if len(terminal) > 1 or len(active) > 1:
+        return None
+    module.body = [node for node in module.body if node not in terminal]
+    old = ast.parse(
+        "async def f():\n    await _enforce_terminal_result(request, envelope, authorization)\n    return envelope\n"
+    ).body[0]
+    new = ast.parse(
+        "async def f():\n    return await _enforce_terminal_result(request, envelope, authorization)\n"
+    ).body[0]
+    assert isinstance(old, ast.AsyncFunctionDef) and isinstance(
+        new, ast.AsyncFunctionDef
+    )
+    variants = [
+        [ast.dump(node, include_attributes=False) for node in fn.body]
+        for fn in (old, new)
+    ]
+    replaced = 0
+    for function in active:
+        for node in ast.walk(function):
+            if (
+                isinstance(node, ast.If)
+                and [ast.dump(item, include_attributes=False) for item in node.body]
+                in variants
+            ):
+                node.body = [ast.Pass()]
+                replaced += 1
+    if active and replaced != 1:
+        return None
+    return hashlib.sha256(
+        ast.dump(module, include_attributes=False).encode()
+    ).hexdigest()
 
 
 def _service_work_dependency_fingerprint(
@@ -977,6 +1107,20 @@ def _service_work_dependency_fingerprint(
     if normalized is None:
         return None
     identity, wired = normalized
+    shared_identities: list[tuple[str, str, str]] = []
+    for path, normalize in (
+        (COS_SERVICE_WORK_MEMBER, _service_work_member),
+        (COS_SERVICE_WORK_INGEST, _service_work_ingest),
+    ):
+        entry = next((entry for entry in entries if entry.path == path), None)
+        if entry is not None and entry.mode != "100644":
+            return None
+        shared_identity = normalize(
+            _git(repository, "show", f"{revision}:{path}") if entry else ""
+        )
+        if shared_identity is None:
+            return None
+        shared_identities.append((path, "100644", shared_identity))
     allowed = COS_SERVICE_WORK_REQUIRED_PATHS | POLICY_PATHS
     coordinates = sorted(
         (
@@ -991,6 +1135,8 @@ def _service_work_dependency_fingerprint(
             and (entry.path in allowed or _prose(entry.path))
         )
     )
+    coordinates.extend(shared_identities)
+    coordinates.sort()
     digest = hashlib.sha256(
         json.dumps(coordinates, separators=(",", ":")).encode()
     ).hexdigest()
@@ -1297,9 +1443,16 @@ def select_scope(
         required_recovery_paths = COS_RECOVERY_COMPONENT_PATHS - (
             {COS_RECOVERY_HISTORY} if revision == base else set()
         )
-        recovery_sources_present[revision] = required_recovery_paths <= {
+        regular_recovery_paths = {
             entry.path for entry in entries if entry.mode == "100644"
         }
+        recovery_sources_present[revision] = (
+            required_recovery_paths <= regular_recovery_paths
+            and (
+                "bootstrap/cos_apple_source_history.py" not in regular_recovery_paths
+                or COS_RETAINED_SOURCE_HISTORY_PATHS <= regular_recovery_paths
+            )
+        )
         enrollment_route_present[revision] = any(
             entry.path == ENROLLMENT_INGEST_PATH and entry.mode == "100644"
             for entry in entries
