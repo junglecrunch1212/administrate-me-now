@@ -244,6 +244,12 @@ print(json.dumps([enabled, entry["hooks"]]))
   // The owner's new policy is a real host decision, not a forged human
   // allow-once. Exercise the exact pinned native hook runner and its later-veto
   // semantics with synthetic signed domain grounding and no provider client.
+  for (const ownCoS of [false, true]) {
+  const { registerCoSReminderTools } = await import(pathToFileURL(path.join(appleDirectory, "cos-reminders.js")).href);
+  const policyRule = ownCoS ? "current-human-request.cos-reminder-create.v1" : "current-human-request.apple-reminder-create.v1";
+  const confirmTool = ownCoS ? "administrateme_confirm_cos_apple_reminder" : "administrateme_confirm_apple_reminder";
+  const confirmEndpoint = ownCoS ? "/cos-apple-reminders/confirm" : "/confirm-apple-reminder";
+  const policyText = ownCoS ? "Add a reminder to your own Apple work list to call my parent at 9:30 AM today" : appleMessage;
   const policySecret = crypto.randomBytes(32).toString("hex");
   const policySecretName = "ADMINME_NATIVE_REQUEST_PROBE_SECRET";
   process.env[policySecretName] = policySecret;
@@ -254,7 +260,9 @@ print(json.dumps([enabled, entry["hooks"]]))
   const policyRegistration = nativeRegistration(preparedPolicies[0]);
   const policyTools = new Map();
   const policyCalls = [];
-  const action = { provider: "apple_reminders", operation: "create_reminder", resource_owner: "requester",
+  const action = { provider: "apple_reminders", operation: "create_reminder", resource_owner: ownCoS ? "service-principal:chief-of-staff" : "requester",
+    ...(ownCoS ? {operating_principal: "service-principal:chief-of-staff", provider_account_id: "cos-native-fixture", source_id: "fixture-source",
+      device_identity_sha256: "a".repeat(64), os_uid: 501, selection_sha256: "b".repeat(64), write_policy_sha256: "c".repeat(64)} : {}),
     title: appleCommand.title, due_at: "2026-10-24T13:30:00+00:00", notes: null, list_id: "fixture-list", selected_by_policy: false };
   const actionFingerprint = crypto.createHash("sha256").update(approvalCanonical(action)).digest("hex");
   const policyRuntime = { trackedSessions: new Map(), transport: {
@@ -266,7 +274,7 @@ print(json.dumps([enabled, entry["hooks"]]))
         assert.equal(value.decision, "authenticated_request");
         assert.equal(value.authorization.source_event_id, "native-request-source");
         assert.equal(value.authorization.action_fingerprint, actionFingerprint);
-        assert.equal(value.authorization.rule_id, "current-human-request.apple-reminder-create.v1");
+        assert.equal(value.authorization.rule_id, policyRule);
         assert.equal(value.signature, crypto.createHmac("sha256", policySecret).update([
           "administrateme-request-approval-v1", value.receipt_id, value.tool_name, value.request_fingerprint,
           String(value.issued_at_ms), String(value.expires_at_ms), "authenticated_request", versions.openclaw.version,
@@ -278,15 +286,15 @@ print(json.dumps([enabled, entry["hooks"]]))
       assert.equal(value.provenance.actor_id, incoming.senderId);
       assert.equal(value.provenance.session_key, policySession);
       if (endpoint.endsWith("/forward")) return { intent_event_id: value.provenance.message_id === "native-request-input" ? "native-request-source" : "native-other-source" };
-      if (endpoint.endsWith("/confirm-apple-reminder")) {
+      if (endpoint.endsWith(confirmEndpoint)) {
         assert.equal(value.source_message_event_id, "native-request-source");
         assert.equal(value.request_authorization, true);
         const issued = Date.now();
         const ticket = { contract: "authenticated-request-v1", member_id: policyMember,
           domain_approval_event_id: "native-request-domain", grounding_event_id: "native-request-grounding",
           source_event_id: "native-request-source", action_fingerprint: actionFingerprint, action,
-          rule_id: "current-human-request.apple-reminder-create.v1", issued_at: new Date(issued).toISOString(),
-          expires_at: new Date(issued + 600000).toISOString(), evidence: [{ start: 0, end: Array.from(appleMessage).length, text: appleMessage }] };
+          rule_id: policyRule, issued_at: new Date(issued).toISOString(),
+          expires_at: new Date(issued + 600000).toISOString(), evidence: [{ start: 0, end: Array.from(policyText).length, text: policyText }] };
         return { state: "request_authorized", domain_approval_event_id: ticket.domain_approval_event_id,
           request_authorization: { ...ticket, signature: crypto.createHmac("sha256", policySecret).update("authenticated-request-v1|" + approvalCanonical(ticket)).digest("hex") } };
       }
@@ -298,7 +306,7 @@ print(json.dumps([enabled, entry["hooks"]]))
     },
   } };
   const policyApi = { ...api, on: policyRegistration.on, registerTool: (factory, options) => policyTools.set(options.name, factory) };
-  registerHooks(policyApi, policyRuntime); registerAppleReminderTools(policyApi, policyRuntime); registerTools(policyApi, policyRuntime);
+  registerHooks(policyApi, policyRuntime); registerAppleReminderTools(policyApi, policyRuntime); registerCoSReminderTools(policyApi, policyRuntime); registerTools(policyApi, policyRuntime);
   const policyHook = (name) => policyRegistration.state.registry.typedHooks.find((row) => row.hookName === name).handler;
   const runner = createHookRunner(policyRegistration.state.registry, { catchErrors: false });
   const deliverPolicyInput = async (messageId, content) => {
@@ -308,10 +316,10 @@ print(json.dumps([enabled, entry["hooks"]]))
     await policyHook("message_received")(received, { agentId: policyAgent, sessionKey: policySession, channelId: "imessage", accountId: "fixture" });
     await policyHook("before_agent_reply")({ cleanedBody: content }, policyContext);
   };
-  await deliverPolicyInput("native-request-input", appleMessage);
-  const confirmGate = await runner.runBeforeToolCall({ toolName: "administrateme_confirm_apple_reminder", toolCallId: "native-request-confirm", params: appleCommand }, policyContext);
+  await deliverPolicyInput("native-request-input", policyText);
+  const confirmGate = await runner.runBeforeToolCall({ toolName: confirmTool, toolCallId: "native-request-confirm", params: appleCommand }, policyContext);
   assert.notEqual(confirmGate?.block, true);
-  await policyTools.get("administrateme_confirm_apple_reminder")(policyContext).execute("native-request-confirm", appleCommand);
+  await policyTools.get(confirmTool)(policyContext).execute("native-request-confirm", appleCommand);
   const executeParams = { domain_approval_event_id: "native-request-domain" };
   const execution = await runner.runBeforeToolCall({ toolName: "administrateme_execute_pending_provider_action", toolCallId: "native-request-execute", params: executeParams }, policyContext);
   assert.notEqual(execution.block, true);
@@ -324,10 +332,10 @@ print(json.dumps([enabled, entry["hooks"]]))
     const expired = await runner.runBeforeToolCall({ toolName: "administrateme_execute_pending_provider_action", toolCallId: "native-request-expired", params: executeParams }, policyContext);
     assert.equal(expired.block, true);
   } finally { Date.now = originalNow; }
-  await deliverPolicyInput("native-other-input", appleMessage + " for another day");
+  await deliverPolicyInput("native-other-input", policyText + " for another day");
   const wrongSource = await runner.runBeforeToolCall({ toolName: "administrateme_execute_pending_provider_action", toolCallId: "native-request-wrong-source", params: executeParams }, policyContext);
   assert.equal(wrongSource.block, true);
-  await policyHook("before_agent_reply")({ cleanedBody: appleMessage }, policyContext);
+  await policyHook("before_agent_reply")({ cleanedBody: policyText }, policyContext);
   policyRegistration.on("before_tool_call", () => ({ block: true, blockReason: "Synthetic later host veto" }), { priority: -1 });
   const vetoed = await runner.runBeforeToolCall({ toolName: "administrateme_execute_pending_provider_action", toolCallId: "native-request-vetoed", params: executeParams }, policyContext);
   assert.equal(vetoed.block, true, "Automatic authorization bypassed a later native hook veto");
@@ -335,6 +343,8 @@ print(json.dumps([enabled, entry["hooks"]]))
   assert.equal(vetoed.requireApproval, undefined);
   assert.equal(policyCalls.filter((row) => row.endpoint.endsWith("/execute-pending-provider-action")).length, 1);
   delete process.env[policySecretName];
+
+  }
 
   const literalCases = [...corpus.cases.map((row) => row.text.replace(/\s+/gu, " ").trim()),
     "**bold** _italic_ ~~strike~~ `code` <u>underline</u> [link](https://example.invalid/?x=1&y=2)",

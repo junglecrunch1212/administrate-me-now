@@ -188,7 +188,10 @@ class RequestedActionGroundedV1(BaseModel):
     action_id: str
     request_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
     action_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
-    rule_id: Literal["current-human-request.apple-reminder-create.v1"]
+    rule_id: Literal[
+        "current-human-request.apple-reminder-create.v1",
+        "current-human-request.cos-reminder-create.v1",
+    ]
     source_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
     skill_event_id: str
     action: dict[str, Any]
@@ -205,7 +208,13 @@ class OpenClawApprovalReceivedV2(OpenClawApprovalReceivedV1):
     source_event_id: str | None = None
     domain_approval_event_id: str | None = None
     action_fingerprint: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
-    rule_id: Literal["current-human-request.apple-reminder-create.v1"] | None = None
+    rule_id: (
+        Literal[
+            "current-human-request.apple-reminder-create.v1",
+            "current-human-request.cos-reminder-create.v1",
+        ]
+        | None
+    ) = None
 
     @model_validator(mode="after")
     def distinct_authority(self) -> "OpenClawApprovalReceivedV2":

@@ -16,6 +16,10 @@ from adminme.cos_apple_source_history import (
     receipt_idempotency_key,
     source_owner_matches,
 )
+from adminme.cos_reminders_commands import (
+    CONTRACT as COS_REMINDER_CONTRACT,
+    command_owner_matches as cos_reminder_owner_matches,
+)
 from adminme.cos_response_assurance import APPROVED, ATTEMPTED
 from adminme.cos_responses import RESPONSE_CONTRACT
 from adminme.direct_intake import DirectIntakeProcessor
@@ -541,6 +545,21 @@ async def audit_historical_attribution(
             if await _cos_response_owner_matches(event_log, str(event["event_id"])):
                 binding_state = "internal_cos_member_source_reconciled"
                 workspace = "personal"
+                attributed += 1
+        elif apple_command is not None and (
+            (apple_command.get("payload", {}).get("payload") or {}).get("contract")
+            == COS_REMINDER_CONTRACT
+            or apple_command.get("payload", {}).get("privacy_guard_version")
+            == COS_REMINDER_CONTRACT
+        ):
+            # The private receipt belongs to the requester; the exact retained
+            # native account and list belong to CoS. Never borrow a current
+            # member provider binding or reinterpret a revoked historical grant.
+            if await cos_reminder_owner_matches(
+                event_log, apple_command, through=watermark or ""
+            ):
+                binding_state = "internal_cos_owned_reminder_source_reconciled"
+                workspace = "service"
                 attributed += 1
         elif apple_command is not None and (
             apple_command.get("payload", {}).get("provider") == "apple_notes"
