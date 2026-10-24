@@ -551,6 +551,7 @@ COS_SERVICE_WORK_TEST_PATHS = frozenset(
         "openclaw/administrateme/test/fixtures/openclaw-2026.7.2/plugin-entry.d.ts",
         "openclaw/administrateme/scripts/check-service-work-gateway.mjs",
         "tests/fixtures/openclaw_service_work_probe.mjs",
+        "tests/fixtures/openclaw_reminder_choice_probe.mjs",
         "tests/unit/bootstrap/test_cos_service_topology.py",
     }
 )

@@ -3399,6 +3399,7 @@ def test_workstation_scope_requires_exact_complete_router_pair(
         "packs/skills/ground_reminder_choice/schemas/output.schema.json",
         "tests/acceptance/test_reminder_choice_continuation.py",
         "tests/unit/test_reminder_choices.py",
+        "tests/fixtures/openclaw_reminder_choice_probe.mjs",
     ],
 )
 def test_authenticated_action_paths_use_the_affected_lane(repository, relative) -> None:
