@@ -89,7 +89,9 @@ class _SyntheticServerTiming:
 class _SyntheticCpuProfile:
     """Diagnostic only: never used by the latency acceptance measurement."""
 
-    def __init__(self, app, output_path, authority_control=False):
+    def __init__(
+        self, app, output_path, authority_control=False, tasks_diagnostic=None
+    ):
         import cProfile
 
         self.app = app
@@ -97,6 +99,7 @@ class _SyntheticCpuProfile:
         self.profile = cProfile.Profile()
         self.cpu_detail = os.getenv("ADMINME_FINANCE_CPU_DETAIL") == "1"
         self.authority_control = authority_control
+        self.tasks_diagnostic = tasks_diagnostic
         self.count = 0
         self.started = False
         self.completed = False
@@ -162,6 +165,7 @@ class _SyntheticCpuProfile:
                     "tasks",
                     "lists",
                     "recurrences",
+                    *({"context_fabric"} if tasks_diagnostic is not None else set()),
                 }
             ):
                 operation += ":" + args[0]
@@ -358,6 +362,8 @@ class _SyntheticCpuProfile:
             if operation == "start":
                 import threading
 
+                if self.tasks_diagnostic is not None:
+                    await self.tasks_diagnostic.start()
                 self.loop_thread_id = threading.get_ident()
                 self.profile_started_at = time.perf_counter()
                 self.phase = "before"
@@ -372,8 +378,15 @@ class _SyntheticCpuProfile:
                 "after",
             }:
                 self.phase = operation
+                if self.tasks_diagnostic is not None:
+                    self.tasks_diagnostic.set_phase(operation)
             elif operation == "stop":
                 self._finish()
+                if self.tasks_diagnostic is not None:
+                    extra = await self.tasks_diagnostic.finish()
+                    report = json.loads(self.output_path.read_text())
+                    report["tasks_noop_diagnostic"] = extra
+                    self.output_path.write_text(json.dumps(report))
             else:
                 raise AssertionError("unknown synthetic profile control")
             await send({"type": "http.response.start", "status": 200, "headers": []})
@@ -509,7 +522,18 @@ def _serve(
     profile: bool = False,
     planning_workload: bool = False,
     authority_control: bool = False,
+    tasks_noop_mode: str | None = None,
 ) -> None:
+    diagnostic = None
+    diagnostic_context = None
+    if tasks_noop_mode is not None:
+        assert profile and not authority_control
+        assert tasks_noop_mode in {"baseline", "control"}
+        from tests.fixtures.finance_tasks_noop import TasksNoopDiagnostic
+
+        diagnostic = TasksNoopDiagnostic(control=tasks_noop_mode == "control")
+        diagnostic_context = diagnostic.install()
+        diagnostic_context.__enter__()
     if authority_control:
         assert profile, "authority control cannot run in an acceptance server"
         from adminme.finance import disclosure
@@ -540,6 +564,7 @@ def _serve(
             _SyntheticCpuProfile,
             output_path=root / "finance-cpu-profile.json",
             authority_control=authority_control,
+            tasks_diagnostic=diagnostic,
         )
     original = app.router.lifespan_context
 
@@ -547,6 +572,8 @@ def _serve(
     async def lifespan(application):
         async with original(application):
             runtime = application.state.runtime
+            if diagnostic is not None:
+                diagnostic.runtime = runtime
             ids = await runtime.events.write_batch(
                 canonical_seed_events(runtime.settings.instance.tenant_id)
             )
@@ -620,9 +647,13 @@ def _serve(
             yield
 
     app.router.lifespan_context = lifespan
-    uvicorn.Server(uvicorn.Config(app, log_level="error", access_log=False)).run(
-        sockets=[listener]
-    )
+    try:
+        uvicorn.Server(uvicorn.Config(app, log_level="error", access_log=False)).run(
+            sockets=[listener]
+        )
+    finally:
+        if diagnostic_context is not None:
+            diagnostic_context.__exit__(None, None, None)
 
 
 async def _finance_call(
@@ -1024,7 +1055,9 @@ async def test_profile_final_authority_sql_control(tmp_path, planning_workload):
     )
 
 
-async def _profile_workload(tmp_path, *, planning_workload, authority_control=False):
+async def _profile_workload(
+    tmp_path, *, planning_workload, authority_control=False, tasks_noop_mode=None
+):
     context = multiprocessing.get_context("spawn")
     receive, send = context.Pipe(duplex=False)
     listener = socket.socket()
@@ -1041,6 +1074,7 @@ async def _profile_workload(tmp_path, *, planning_workload, authority_control=Fa
             True,
             planning_workload,
             authority_control,
+            tasks_noop_mode,
         ),
     )
     server.start()
@@ -1075,9 +1109,13 @@ async def _profile_workload(tmp_path, *, planning_workload, authority_control=Fa
                 assert response.status_code == 200
                 await _finance_call(finance, actor, session, index + 1000, planning)
 
+            diagnostic_core_samples: dict[str, list[float]] = {}
+            current_phase = "before"
+
             async def core_calls():
                 started = time.perf_counter()
                 for index in range(100):
+                    request_started = time.perf_counter()
                     response = await core.get(
                         "/api/core/v1/what-now"
                         if index % 2 == 0
@@ -1085,6 +1123,10 @@ async def _profile_workload(tmp_path, *, planning_workload, authority_control=Fa
                         headers=HEADERS,
                     )
                     assert response.status_code == 200
+                    if tasks_noop_mode is not None:
+                        diagnostic_core_samples.setdefault(current_phase, []).append(
+                            (time.perf_counter() - request_started) * 1000
+                        )
                     await asyncio.sleep(
                         max(0, started + (index + 1) * 0.05 - time.perf_counter())
                     )
@@ -1099,6 +1141,7 @@ async def _profile_workload(tmp_path, *, planning_workload, authority_control=Fa
                 ("mixed-37.5", 0.0375),
             )
             for phase_index, (phase, delay) in enumerate(phases):
+                current_phase = phase
                 assert (
                     await core.get("/__synthetic/profile/" + phase)
                 ).status_code == 200
@@ -1142,6 +1185,7 @@ async def _profile_workload(tmp_path, *, planning_workload, authority_control=Fa
                         await asyncio.to_thread(load.join, 5)
                     load_receive.close()
                 assert load.exitcode == 0
+            current_phase = "after"
             assert (await core.get("/__synthetic/profile/after")).status_code == 200
             await core_calls()
             assert (await core.get("/__synthetic/profile/stop")).status_code == 200
@@ -1151,6 +1195,10 @@ async def _profile_workload(tmp_path, *, planning_workload, authority_control=Fa
                     break
                 await asyncio.sleep(0.01)
             report = json.loads(report_path.read_text())
+            if tasks_noop_mode is not None:
+                report["tasks_noop_diagnostic"]["raw_core_samples_ms"] = (
+                    diagnostic_core_samples
+                )
             if planning is not None:
                 report["planning_inventory"] = {
                     "bodies": planning["inventory_bodies"],
@@ -1167,6 +1215,7 @@ async def _profile_workload(tmp_path, *, planning_workload, authority_control=Fa
                     / (
                         ("planning" if planning_workload else "light")
                         + ("-authority-control" if authority_control else "")
+                        + ("-tasks-noop-" + tasks_noop_mode if tasks_noop_mode else "")
                         + "-profile.json"
                     )
                 ).write_text(json.dumps(report, indent=2))
@@ -1210,7 +1259,12 @@ async def _profile_workload(tmp_path, *, planning_workload, authority_control=Fa
                         k: v
                         for k, v in report.items()
                         if k
-                        not in {"executor_spans", "http_spans", "loop_callback_spans"}
+                        not in {
+                            "executor_spans",
+                            "http_spans",
+                            "loop_callback_spans",
+                            "tasks_noop_diagnostic",
+                        }
                     }
                 ),
                 flush=True,
@@ -1226,8 +1280,15 @@ async def _profile_workload(tmp_path, *, planning_workload, authority_control=Fa
                 )
             waits = report["wall_calls_instrumented_ms"]
             assert "executor_wait:adminme-projections:_call_many_query" in waits
-            assert "executor_wait:adminme-projections:_apply_one_for:tasks" in waits
+            if tasks_noop_mode != "control":
+                assert "executor_wait:adminme-projections:_apply_one_for:tasks" in waits
+            else:
+                assert (
+                    "executor_wait:adminme-projections:_apply_one_for:tasks"
+                    not in waits
+                )
             assert not any(":timed" in key for key in waits)
+            return report
     finally:
         receive.close()
         listener.close()

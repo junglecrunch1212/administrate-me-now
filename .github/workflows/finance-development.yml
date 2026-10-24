@@ -141,6 +141,17 @@ jobs:
           ADMINME_FINANCE_AUTHORITY_CONTROL: '1'
           FINANCE_PROFILE_ARTIFACT_DIR: ${{ runner.temp }}/finance-profiles
         run: poetry run pytest -q -s tests/acceptance/test_finance_mixed_load.py::test_profile_final_authority_sql_control
+      - name: Check the diagnostic Tasks control against fixed durable history
+        if: always()
+        env:
+          ADMINME_FINANCE_TASKS_NOOP_DIAGNOSTIC: '1'
+        run: poetry run pytest -q -s tests/acceptance/test_finance_tasks_noop.py::test_fixed_corpus_order_projection_checkpoint_replay_restart_and_cancellation
+      - name: Single matched Tasks no-op diagnostic across both workloads
+        if: always()
+        env:
+          ADMINME_FINANCE_TASKS_NOOP_DIAGNOSTIC: '1'
+          FINANCE_PROFILE_ARTIFACT_DIR: ${{ runner.temp }}/finance-profiles
+        run: poetry run pytest -q -s tests/acceptance/test_finance_tasks_noop.py::test_paired_tasks_noop_diagnostic
       - name: Retain synthetic operation queue and execution spans
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
