@@ -29,8 +29,7 @@ export async function startWorkstationWorkFixtures({ secret, agent, sessions, va
           step = outputs === 0 ? ["browser", { action: "snapshot" }] : undefined;
           if (outputs > 0) assert(encoded.includes("Review the garage plan on Friday."), "browser model did not receive the retained native observation");
         } else if (worker) {
-          assert(names.includes("administrateme_service_private_state"), "worker lacks real private read tool");
-          assert(!names.includes("exec") && !names.includes("browser"));
+          assert.deepEqual([...names].sort(), ["administrateme_service_private_state", "administrateme_service_private_work"], "worker exposes only its finite admitted tools");
           const plan = [
             ["administrateme_service_private_work", { request_id: `note:${source}`, title: "Private garage plan", description: "Sort, label, store.", record_kind: "scratchpad" }],
             ["administrateme_service_private_state", { task_id: `task:${source}` }],

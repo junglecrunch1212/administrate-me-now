@@ -529,6 +529,29 @@ def _prepare_service_topology(
     return config
 
 
+def _prepare_workstation_hook(config: dict[str, Any], release: Path) -> dict[str, Any]:
+    """Enable only the reviewed plugin's finite per-run tool-policy hook.
+
+    The pinned host groups toolsAllow with prompt construction. The installed
+    hook returns no prose; this capability is captured in the complete supported
+    activation configuration, never changed through a live-file patch.
+    """
+    manifest = json.loads(
+        (release / "openclaw/administrateme/openclaw.plugin.json").read_text()
+    )
+    if "administrateme_workstation_work" not in manifest.get("contracts", {}).get(
+        "tools", []
+    ):
+        return config
+    plugin = config.get("plugins", {}).get("entries", {}).get("administrateme", {})
+    if (
+        plugin.get("enabled") is True
+        and plugin.get("config", {}).get("serviceWorkEnabled") is not False
+    ):
+        plugin.setdefault("hooks", {})["allowPromptInjection"] = True
+    return config
+
+
 def prepare_service_topology(
     gateway: dict[str, Any], paths: DeploymentPaths, release: Path
 ) -> dict[str, Any]:
@@ -538,11 +561,14 @@ def prepare_service_topology(
     The installer uses the same transformation; no agent, tool or grant field
     is omitted from the later compatibility comparison.
     """
-    return _prepare_service_topology(
-        gateway,
-        paths,
-        _service_release_workspace(release),
-        native_service_tools(gateway, paths, release),
+    return _prepare_workstation_hook(
+        _prepare_service_topology(
+            gateway,
+            paths,
+            _service_release_workspace(release),
+            native_service_tools(gateway, paths, release),
+        ),
+        release,
     )
 
 
@@ -554,7 +580,9 @@ def reconcile_service_topology(paths: DeploymentPaths, release: Path) -> dict[st
         raise RuntimeError("service topology requires the runtime configuration")
     previous = json.loads(config_path.read_text("utf-8"))
     native_tools = native_service_tools(previous, paths, release)
-    config = _prepare_service_topology(previous, paths, files, native_tools)
+    config = _prepare_workstation_hook(
+        _prepare_service_topology(previous, paths, files, native_tools), release
+    )
     if files is not None:
         workspace = service_workspace_path(
             paths.instance_dir / "openclaw",

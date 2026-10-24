@@ -41,7 +41,8 @@ try {
   }
   const module = (name) => import(pathToFileURL(path.join(plugin, name)).href);
   const { registerWorkstationWorkHooks } = await module("workstation-work.js");
-  const { registerWorkstationBrowserHooks } = await module("workstation-browser-hooks.js");
+  const hasBrowser = (await readdir(sourceModules)).includes("workstation-browser-hooks.ts");
+  const registerWorkstationBrowserHooks = hasBrowser ? (await module("workstation-browser-hooks.js")).registerWorkstationBrowserHooks : undefined;
   const { serviceAgentId, serviceSessionKey } = await module("service-private.js");
   const { readPluginConfig } = await module("config.js");
   const secret = "synthetic-native-hook-proof-never-production";
@@ -52,7 +53,8 @@ try {
     runId: "fixture-native-run", config: { tools: { loopDetection: { enabled: false } } },
     preToolUseLoopDetection: false,
   };
-  for (const kind of ["scratchpad", "browser"]) {
+  for (const kind of hasBrowser ? ["scratchpad", "browser"] : ["scratchpad"]) {
+    for (const capability of [false, true]) {
     let bound = true, unavailable = false;
     const state = createPluginRegistryState({ runtime: {}, logger: {}, activateGlobalSideEffects: false });
     const registrar = createToolHookRegistrars(state);
@@ -60,7 +62,7 @@ try {
       source: path.join(plugin, "index.js"), hookCount: 0 };
     const api = {
       config: {}, logger: { warn() {}, info() {}, error() {} },
-      on: (name, fn, options) => registrar.registerTypedHook(record, name, fn, options, { allowConversationAccess: true, allowPromptInjection: false }),
+      on: (name, fn, options) => registrar.registerTypedHook(record, name, fn, options, { allowConversationAccess: true, allowPromptInjection: capability }),
       registerAgentToolResultMiddleware() {}, // This probe tests native admission, not result projection.
       runtime: { config: { current: () => ({}) } },
     };
@@ -76,6 +78,13 @@ try {
     assert.equal(nativeHookRelayEventHasLocalWork(registration, "pre_tool_use"), true);
     assert.equal(nativeHookRelayEventToolMatcher(registration, "pre_tool_use"), undefined, "native relay must match ambient connectors, not only dynamic exec");
     const tools = await getGlobalHookRunner().runBeforePromptBuild({ prompt: "fixture exact request", messages: [] }, registration);
+    if (!capability) {
+      assert.equal(tools, undefined, "false-setting must reject the entire prompt-build hook");
+      assert(state.registry.diagnostics.some((row) => row.message.includes("allowPromptInjection=false")));
+      resetGlobalHookRunner();
+      continue;
+    }
+    assert.deepEqual(Object.keys(tools), ["toolsAllow"], "worker hook must not inject prose");
     assert.deepEqual(tools.toolsAllow, kind === "browser" ? ["browser"] : ["administrateme_service_private_work", "administrateme_service_private_state"]);
     assert.equal(shouldEnableCodexAppServerNativeToolSurface({ toolsAllow: tools.toolsAllow, config: {}, sessionId: registration.sessionId, sessionKey: registration.sessionKey }), false);
     const invoke = async (name, input = {}) => {
@@ -96,6 +105,7 @@ try {
     assert.equal(unbound.exitCode, 0);
     assert(!unbound.stdout.includes('"deny"'), "ordinary unbound service work was globally disabled");
     resetGlobalHookRunner();
+    }
   }
   console.log("PINNED CODEX WORKER POLICY: finite native surface, all-name relay, ambient MCP/apps denial, outage denial, ordinary service preserved: PASS");
 } finally {

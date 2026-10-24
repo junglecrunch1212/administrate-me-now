@@ -276,3 +276,41 @@ def test_service_request_session_is_signed_and_does_not_reuse_context() -> None:
         assert not service_session_valid(principal, secret, invalid)
     assert not service_session_valid(principal, secret + "different", first)
     assert not service_session_valid("service-principal:unknown", secret, first)
+
+
+def test_supported_workstation_hook_changes_only_exact_reviewed_capability(
+    tmp_path: Path,
+) -> None:
+    paths, release, config_path, previous = _fixture(tmp_path)
+    plugin = previous["plugins"]["entries"]["administrateme"]
+    plugin["enabled"] = True
+    plugin["config"].update(
+        {
+            "serviceWorkEnabled": True,
+            "standingSelfReplyBindings": ["retained-reply"],
+            "scheduledSelfReminderBindings": ["retained-reminder"],
+        }
+    )
+    plugin["hooks"] = {"allowConversationAccess": True, "allowPromptInjection": False}
+    config_path.write_text(json.dumps(previous))
+    baseline = prepare_service_topology(previous, paths, release)
+    manifest_path = release / "openclaw/administrateme/openclaw.plugin.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["contracts"]["tools"].append("administrateme_workstation_work")
+    manifest_path.write_text(json.dumps(manifest))
+    selected = prepare_service_topology(previous, paths, release)
+    expected = copy.deepcopy(baseline)
+    expected["plugins"]["entries"]["administrateme"]["hooks"][
+        "allowPromptInjection"
+    ] = True
+    assert selected == expected
+    assert json.loads(config_path.read_text()) == previous
+    reconcile_service_topology(paths, release)
+    assert json.loads(config_path.read_text()) == selected
+    previous["plugins"]["entries"]["administrateme"]["config"]["serviceWorkEnabled"] = (
+        False
+    )
+    assert (
+        prepare_service_topology(previous, paths, release)["plugins"]
+        == previous["plugins"]
+    )
