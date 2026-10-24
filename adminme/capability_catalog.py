@@ -267,6 +267,7 @@ _DOMAIN_DEFINITIONS: tuple[dict[str, Any], ...] = (
 
 
 _DOMAIN_IMPLEMENTATION_PATHS = {
+    "product:cos-requested-email": "adminme/products/openclaw/requested_email.py",
     "product:cos-owned-apple-reminders": "adminme/products/openclaw/cos_apple_reminders.py",
     "product:member-chat": "adminme/member_chat.py",
     "product:member-surfaces": "adminme/products/member/surfaces.py",
