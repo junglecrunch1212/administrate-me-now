@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from adminme.adapters.cos_apple_reminders import (
+    CoSRemindersSelection,
     NativeHelperBinding,
     local_device_identity,
     policy_from_config as read_policy_from_config,
@@ -111,6 +112,7 @@ def main() -> None:
     )
     if args.disable and (binding is not None or args.request_permission):
         raise ValueError("Disabling does not inspect, replace or prompt for a helper")
+    selected: CoSRemindersSelection | None
     if args.inspect:
         read_policy = read_policy_from_config(previous)
         if read_policy is None or read_policy.selection is None or binding is None:

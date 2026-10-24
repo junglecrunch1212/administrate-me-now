@@ -219,8 +219,8 @@ async def confirm(
                 )
             assert policy is not None
             intent = CoSReminderIntent(
-                resource_owner=COS_SERVICE_PRINCIPAL_ID,
-                operating_principal=COS_SERVICE_PRINCIPAL_ID,
+                resource_owner="service-principal:chief-of-staff",
+                operating_principal="service-principal:chief-of-staff",
                 selection=selection,
                 write_policy=policy,
                 source_event_id=source["event_id"],

@@ -1185,6 +1185,7 @@ def _service_work_observation(source: str) -> str | None:
         if (
             len(event_types) != 1
             or not isinstance(event_types[0], ast.Constant)
+            or not isinstance(event_types[0].value, str)
             or event_types[0].value not in {"observation.suppressed", "external.sent"}
         ):
             continue

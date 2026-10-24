@@ -39,12 +39,25 @@ Google, reply and reminder grants. No synthetic member request is required.
 Verify normal health, both loaded tools, current no-write helper inspection and
 unchanged v1 reader state. A real authorized request is usable only after its
 terminal status reports `succeeded` with native read-back. A pending or unknown
-receipt is not success. On a regression, use `bootstrap.cos_reminders_write
---disable --previous-config ... --owner-authorization-sha256 ... --output ...`
-and guarded activation to revoke only future CoS native writes. Retain the
-schema-aware runtime and attempt/terminal history after any new write; an older
-binary cannot safely reinterpret those records. Before any new records exist,
-the supported updater may restore its known-working predecessor.
+receipt is not success. On a regression, immediately stop authenticated-request
+actions on the deployed schema-aware runtime, using the actual private instance:
+
+```sh
+"$protected_release/.venv/bin/python" -m bootstrap.request_actions --instance-dir "$instance_dir" disable
+"$protected_release/.venv/bin/python" -m bootstrap.request_actions --instance-dir "$instance_dir" status
+```
+
+The control is read dynamically at confirmation, execution approval and final
+native admission; it does not wait for maintenance. A native call already handed
+off cannot be recalled: preserve its terminal or unknown result and never retry.
+Then use `bootstrap.cos_reminders_write --disable --previous-config ...
+--owner-authorization-sha256 ... --output ...` and guarded activation to revoke
+only future CoS native writes. A prepared file alone does not change live policy.
+Re-enabling request actions preserves the cutoff, so old pending actions do not
+automatically resume. Retain the schema-aware runtime and attempt/terminal history
+after any new write; an older binary cannot safely reinterpret those records.
+Before any new records exist, the supported updater may restore its known-working
+predecessor.
 
 Focused proof covers the real application composition from all three channels,
 actual sent/suppressed envelopes, retained attribution after revocation, native

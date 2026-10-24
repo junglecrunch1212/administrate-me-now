@@ -124,7 +124,8 @@ class NativeRemindersWriter:
             raise PermissionError("The selected CoS list does not permit changes")
         shim = _shim()
 
-        class SelectedStore(shim.PyObjCEventStore):
+        # The reviewed adapter shim is loaded dynamically by its exact file path.
+        class SelectedStore(shim.PyObjCEventStore):  # type: ignore[name-defined]
             def __init__(self) -> None:
                 # Reuse the permission-checked native store. The generic store's
                 # constructor may request consent; runtime writes must never do so.

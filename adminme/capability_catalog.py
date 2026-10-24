@@ -244,6 +244,7 @@ _DOMAIN_DEFINITIONS: tuple[dict[str, Any], ...] = (
 
 
 _DOMAIN_IMPLEMENTATION_PATHS = {
+    "product:cos-owned-apple-reminders": "adminme/products/openclaw/cos_apple_reminders.py",
     "product:member-chat": "adminme/member_chat.py",
     "product:member-surfaces": "adminme/products/member/surfaces.py",
     "product:google-tasks-create-production-v2": "adminme/google_tasks_execution.py",
@@ -1449,7 +1450,7 @@ def compose_member_catalog(
                 and openclaw_state == "healthy"
                 and not viewing_as
             )
-            available = []
+            own_reminder_tools: list[str] = []
             for tool in declared_tools:
                 permission = (
                     "prepare_external_actions"
@@ -1463,9 +1464,9 @@ def compose_member_catalog(
                     and openclaw_state == "healthy"
                     and (status_tool or eligible)
                 ):
-                    available.append(tool)
+                    own_reminder_tools.append(tool)
             row["openclaw"].update(
-                effective_tools=available,
+                effective_tools=own_reminder_tools,
                 current_request_rule=RULE_ID,
                 execution_authority_modes=["authenticated_current_request_policy"],
                 policy_receipt_is_human_approval=False,
@@ -1480,9 +1481,10 @@ def compose_member_catalog(
                 execute_authorized=False,
             )
             row["effective"].update(
-                read_available="administrateme_cos_apple_reminder_status" in available,
+                read_available="administrateme_cos_apple_reminder_status"
+                in own_reminder_tools,
                 prepare_available="administrateme_confirm_cos_apple_reminder"
-                in available,
+                in own_reminder_tools,
                 execute_available=None if eligible else False,
                 execution_basis="current_request_and_native_admission_not_evaluated_by_catalog",
             )
