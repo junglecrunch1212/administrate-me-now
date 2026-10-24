@@ -311,6 +311,16 @@ def test_native_reminder_tools_separate_confirmation_execution_and_readback(
     ]
     assert tools["policy_receipt_is_human_approval"] is False
     assert tools["historical_pending_auto_resume"] is False
+    bridge = item["bridge_state"]
+    assert bridge["write_execution"] == "ask_every_time"
+    assert (
+        bridge["write_execution_basis"]
+        == "legacy_grant_mode_not_current_request_decision"
+    )
+    current = bridge["current_request_authorization"]
+    assert current["rule_id"] == "current-human-request.apple-reminder-create.v1"
+    assert current["manual_repeat_required"] is False
+    assert current["catalog_authorizes_execution"] is False
     assert item["trust_stage"] == "not_established"
     assert item["trust_stage_basis"] == "effective_operating_agreement"
     assert item["consent"]["member_state"] == "complete"
@@ -416,3 +426,55 @@ def test_cos_reminders_catalog_is_service_owned_read_only_and_local() -> None:
     assert source["prerequisites"] == ["member_consent", "local_permission"]
     assert source["prerequisite_classes"]["partner_service"] == "not_required"
     assert source["terminal_result_support"] is False
+
+
+def test_cos_owned_reminder_catalog_is_distinct_from_member_permission(
+    tmp_path, monkeypatch
+):
+    from adminme import capability_catalog as catalog_module
+    from tests.unit.adapters.reminders.test_cos_reminders_write_policy import (
+        _configuration_pair,
+    )
+
+    catalog = load_catalog(REPO_ROOT)
+    catalog["items"] = [
+        row
+        for row in catalog["items"]
+        if row["capability_id"] == "domain.cos_owned_apple_reminders"
+    ]
+    runtime, session, _ = _apple_catalog_runtime(
+        monkeypatch,
+        provider="apple_reminders",
+        permissions=("read_context", "prepare_external_actions"),
+    )
+    monkeypatch.setattr(catalog_module, "load_catalog", lambda _: catalog)
+    _, runtime.settings.adapter_config = _configuration_pair(tmp_path)
+    composed = catalog_module.compose_member_catalog(
+        runtime, session, settings_state={}
+    )
+    assert composed["summary"]["execute_available"] == 0
+    item = composed["items"][0]
+    assert item["native_source"]["resource_owner"] == "service-principal:chief-of-staff"
+    assert (
+        item["native_source"]["current_native_permission"] == "not_inspected_by_catalog"
+    )
+    assert item["native_source"]["member_bridge_permission_is_authority"] is False
+    assert item["effective"]["prepare_available"] is True
+    assert item["effective"]["execute_available"] is None
+    assert item["administrateme_authority"]["execute_authorized"] is False
+    assert (
+        item["openclaw"]["current_request_rule"]
+        == "current-human-request.cos-reminder-create.v1"
+    )
+    assert (
+        "administrateme_confirm_apple_reminder"
+        not in item["openclaw"]["declared_tools"]
+    )
+    runtime.settings.adapter_config["cos_apple_reminders_writes"]["enabled"] = False
+    disabled = catalog_module.compose_member_catalog(
+        runtime, session, settings_state={}
+    )["items"][0]
+    assert disabled["effective"]["execute_available"] is False
+    assert disabled["openclaw"]["effective_tools"] == [
+        "administrateme_cos_apple_reminder_status"
+    ]

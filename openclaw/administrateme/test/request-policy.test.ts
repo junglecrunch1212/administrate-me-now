@@ -2,7 +2,7 @@ import { createHash, createHmac } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { canonical } from "../src/approval.js";
 import { readPluginConfig } from "../src/config.js";
-import { rememberRequestAuthorization } from "../src/request-policy.js";
+import { COS_REMINDER_RULE, rememberRequestAuthorization } from "../src/request-policy.js";
 import type { PluginRuntime } from "../src/runtime.js";
 import type { Provenance } from "../src/contract.js";
 import { AdministrateMeTransport, TransportError } from "../src/transport.js";
@@ -50,22 +50,44 @@ describe("host request policy independently binds precise evidence", () => {
       expect(() => rememberRequestAuthorization(f.runtime, f.sign(f.ticket), f.input, requested)).toThrow("differs");
     }
   });
+  it("binds a CoS-owned request to the dedicated confirmation rule and exact native coordinates", () => {
+    const f = fixture();
+    const action = {...f.ticket.action, resource_owner: "service-principal:chief-of-staff",
+      operating_principal: "service-principal:chief-of-staff", provider_account_id: "cos-native-fixture",
+      source_id: "native-source", device_identity_sha256: "a".repeat(64), os_uid: 501,
+      selection_sha256: "b".repeat(64), write_policy_sha256: "c".repeat(64)};
+    const ticket = {...f.ticket, rule_id: COS_REMINDER_RULE, action,
+      action_fingerprint: createHash("sha256").update(canonical(action)).digest("hex")};
+    expect(() => rememberRequestAuthorization(f.runtime, f.sign(ticket), f.input, f.requested, COS_REMINDER_RULE)).not.toThrow();
+    expect(() => rememberRequestAuthorization(f.runtime, f.sign(ticket), f.input, f.requested)).toThrow();
+    expect(() => rememberRequestAuthorization(f.runtime, f.sign(f.ticket), f.input, f.requested, COS_REMINDER_RULE)).toThrow();
+    for (const field of ["operating_principal", "provider_account_id", "device_identity_sha256", "write_policy_sha256"]) {
+      const altered = {...action, [field]: ""};
+      const wrong = {...ticket, action: altered, action_fingerprint: createHash("sha256").update(canonical(altered)).digest("hex")};
+      expect(() => rememberRequestAuthorization(f.runtime, f.sign(wrong), f.input, f.requested, COS_REMINDER_RULE)).toThrow();
+    }
+  });
   it("gives only grounding confirmation its bounded model deadline", async () => {
     fixture();
     const timer = vi.spyOn(globalThis, "setTimeout");
     const transport = new AdministrateMeTransport(readPluginConfig({}), vi.fn(async () => new Response("{}", {status: 200})) as typeof fetch);
     await transport.request("/api/openclaw/v1/tools/confirm-apple-reminder", {});
     expect(timer.mock.calls.at(-1)?.[1]).toBe(35_000);
+    await transport.request("/api/openclaw/v1/tools/cos-apple-reminders/confirm", {});
+    expect(timer.mock.calls.at(-1)?.[1]).toBe(35_000);
     await transport.request("/api/openclaw/v1/tools/apple-reminder-status", {});
     expect(timer.mock.calls.at(-1)?.[1]).toBe(readPluginConfig({}).timeoutMs);
   });
 });
 
-it.each(["request_authorization_unavailable", "request_clarification_required"])("exposes only the fixed safe %s diagnostic", async (code) => {
+it.each(["request_authorization_unavailable", "request_clarification_required"].flatMap((code) => [
+  { code, path: "/api/openclaw/v1/tools/confirm-apple-reminder" },
+  { code, path: "/api/openclaw/v1/tools/cos-apple-reminders/confirm" },
+]))("exposes only the fixed safe $code diagnostic for $path", async ({ code, path }) => {
   fixture();
   const fetcher = vi.fn(async () => new Response(JSON.stringify({ detail: { code, reason: "PRIVATE provider token and source text", debug: "PRIVATE" } }), { status: 409 }));
   const transport = new AdministrateMeTransport(readPluginConfig({}), fetcher as typeof fetch);
-  const failure = await transport.request("/api/openclaw/v1/tools/confirm-apple-reminder", {}).catch((error) => error);
+  const failure = await transport.request(path, {}).catch((error) => error);
   if (!(failure instanceof TransportError)) throw new Error("Expected transport rejection");
   expect(failure.message).toContain(code);
   expect(failure.message).not.toContain("PRIVATE");
