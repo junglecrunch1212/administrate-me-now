@@ -322,7 +322,7 @@ def _self_planning(event: dict[str, Any], session: ServiceSession) -> bool:
     )
 
 
-def _source_authority(
+def source_authority(
     runtime: Any,
     session: ServiceSession,
     event: dict[str, Any],
@@ -574,7 +574,7 @@ def fact_for(
         event["type"] == "task.created" and event["schema_version"] >= 4
     ):
         return None
-    authority = _source_authority(runtime, session, event, contexts)
+    authority = source_authority(runtime, session, event, contexts)
     if authority is None or not _current_source(runtime, event):
         return None
     own_mail = _self_mail(event, session)
@@ -655,7 +655,7 @@ async def work_authorized(
         # updated. Current grants and inherited policy still govern every reuse.
         # This also supports typed internal intents that are not discovery facts.
         authority = (
-            _source_authority(runtime, session, event, contexts) if event else None
+            source_authority(runtime, session, event, contexts) if event else None
         )
         if authority is not None and source.get("authority_kind") == "service_self":
             if (

@@ -1988,6 +1988,10 @@ def test_service_work_scope_rejects_missing_or_broader_runtime_edits(
         "adminme/projections/calendars/handlers.py",
         "adminme/projections/lists/handlers.py",
         "tests/acceptance/test_cos_service_planning_context.py",
+        "tests/acceptance/test_cos_member_follow_up.py",
+        "openclaw/administrateme/src/member-work.ts",
+        "openclaw/administrateme/src/self-replies.ts",
+        "openclaw/administrateme/test/member-work.test.ts",
     ],
 )
 def test_service_work_source_receipt_changes_keep_focused_proof(
@@ -1996,7 +2000,7 @@ def test_service_work_source_receipt_changes_keep_focused_proof(
 ) -> None:
     path, _ = repository
     _base, base = _service_work_candidate(path)
-    if relative.startswith("tests/"):
+    if relative.startswith(("tests/", "openclaw/administrateme/test/")):
         # A test path belongs to the focused proof alongside its component edit;
         # the existing selector intentionally requires a component change.
         _commit(
@@ -2137,6 +2141,7 @@ def test_service_work_worker_requires_affected_identity_replay_and_recovery_chec
         "--runxfail",
         "--junitxml=",
         "PY_CHECK",
+        "test_cos_member_follow_up.py",
         "test_cos_service_private_work.py",
         "test_cos_service_working_context.py",
         "test_cos_service_planning_context.py",

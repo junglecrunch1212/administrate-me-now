@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import time
 from datetime import datetime, timezone
 from typing import Annotated, Any, Literal, cast
@@ -18,7 +19,12 @@ from pydantic import AwareDatetime, BaseModel, Field, field_validator, model_val
 from adminme.events.envelope import EventEnvelope, Sensitivity
 from adminme.events.log import IdempotencyConflict
 from adminme.lib.principal import PrincipalIdentity, ServiceSession
-from adminme.openclaw_topology import service_agent_id, service_session_valid
+from adminme.openclaw_topology import (
+    member_agent_id,
+    service_agent_id,
+    service_session_valid,
+)
+from adminme.cos_self_replies import self_reply_session
 from adminme.products.openclaw import main as seam
 from adminme.products.openclaw.service_context import (
     FACT_FIELDS,
@@ -27,6 +33,7 @@ from adminme.products.openclaw.service_context import (
     fact_for,
     retained_sources,
     source_facts,
+    source_authority,
     validate_context_cursor,
     work_view,
 )
@@ -116,19 +123,27 @@ class ReadServiceContextRequest(SourceFactsRequest):
     limit: int = Field(default=20, ge=1, le=50)
 
 
+class MemberFollowUpRequest(ServiceOnlyRequest):
+    """One current native instruction, never a caller-chosen audience or scope."""
+
+    action: Literal["create", "status"]
+    source_message_event_id: str = Field(min_length=1, max_length=240)
+    instruction: str | None = Field(default=None, min_length=1, max_length=2000)
+    follow_up_source_id: str | None = Field(default=None, min_length=1, max_length=240)
+
+    @model_validator(mode="after")
+    def shape(self) -> MemberFollowUpRequest:
+        if self.action == "create":
+            if not self.instruction or self.follow_up_source_id is not None:
+                raise ValueError("creation requires only an exact instruction excerpt")
+        elif self.instruction is not None or not self.follow_up_source_id:
+            raise ValueError("status requires only the original follow-up reference")
+        return self
+
+
 def _session(request: Request, provenance: seam.Provenance) -> ServiceSession:
     seam._authenticate(request)
     runtime = seam._runtime(request)
-    principals = [
-        principal
-        for principal in runtime.settings.service_principals
-        if principal.service_principal_id == COS_SERVICE_PRINCIPAL_ID
-        and principal.kind == "chief_of_staff"
-        and principal.party_id == COS_PARTY_ID
-        and principal.private_scope == service_private_scope(COS_SERVICE_PRINCIPAL_ID)
-    ]
-    if len(principals) != 1:
-        raise HTTPException(503, "exactly one configured CoS principal is required")
     secret = runtime.settings.openclaw_shared_secret
     if (
         provenance.call_kind != "tool"
@@ -143,6 +158,21 @@ def _session(request: Request, provenance: seam.Provenance) -> ServiceSession:
         )
     ):
         raise HTTPException(403, "exact service agent and private session required")
+    return _internal_session(runtime, provenance.correlation_id)
+
+
+def _internal_session(runtime: Any, correlation_id: str) -> ServiceSession:
+    """Trusted server ownership after the caller's independent authorization."""
+    principals = [
+        principal
+        for principal in runtime.settings.service_principals
+        if principal.service_principal_id == COS_SERVICE_PRINCIPAL_ID
+        and principal.kind == "chief_of_staff"
+        and principal.party_id == COS_PARTY_ID
+        and principal.private_scope == service_private_scope(COS_SERVICE_PRINCIPAL_ID)
+    ]
+    if len(principals) != 1:
+        raise HTTPException(503, "exactly one configured CoS principal is required")
     scope = principals[0].private_scope
     context = ServiceRequestContext(
         tenant_id=runtime.settings.instance.tenant_id,
@@ -165,8 +195,186 @@ def _session(request: Request, provenance: seam.Provenance) -> ServiceSession:
             "service_principal", COS_SERVICE_PRINCIPAL_ID, COS_PARTY_ID
         ),
         service_context=context,
-        correlation_id=provenance.correlation_id,
+        correlation_id=correlation_id,
     )
+
+
+async def _instruction_source(
+    runtime: Any, member: Any, event_id: str
+) -> dict[str, Any]:
+    source = await runtime.event_log.get(event_id)
+    scope = f"private:{member.auth_member_id}"
+    if (
+        source is None
+        or source["tenant_id"] != member.tenant_id
+        or source["type"] != "triage.intent.submitted"
+        or source["schema_version"] != 2
+        or source["owner_scope"] != scope
+        or source["visibility_scope"] != scope
+        or source["actor_identity"] != member.auth_member_id
+        or source["payload"].get("member_id") != member.auth_member_id
+        or source["payload"].get("submission_kind") != "member_forwarded"
+        or source["payload"].get("intake_channel") not in {"imessage", "apple_imessage"}
+    ):
+        raise HTTPException(404, "private member instruction not found")
+    return source
+
+
+@router.post("/service-follow-up")
+async def member_follow_up(
+    body: MemberFollowUpRequest, request: Request
+) -> dict[str, Any]:
+    """Accept one bounded instruction; disclose a receipt, never private work content."""
+    member = seam._session(request, body.provenance)
+    runtime = seam._runtime(request)
+    p = body.provenance
+    if (
+        member.auth_role != "principal"
+        or p.call_kind != "bridge"
+        or p.channel_id != "imessage"
+        or not p.account_id
+        or not p.message_id
+        or p.thread_id is not None
+        or p.agent_id != member_agent_id(member.auth_member_id)
+        or p.session_key
+        != self_reply_session(member.auth_member_id, p.account_id, p.actor_id)
+    ):
+        raise HTTPException(403, "a current private member instruction is required")
+    identity = [p.channel_id, p.account_id, p.actor_id, p.message_id]
+    digest = hashlib.sha256(
+        json.dumps(identity, separators=(",", ":")).encode()
+    ).hexdigest()
+    current = await runtime.event_log.get_by_idempotency(
+        member.tenant_id, f"openclaw-forward:{digest}"
+    )
+    if current is None or current["event_id"] != body.source_message_event_id:
+        raise HTTPException(
+            403, "instruction does not match the current native message"
+        )
+    current = await _instruction_source(runtime, member, current["event_id"])
+    age = (
+        datetime.now(timezone.utc)
+        - datetime.fromisoformat(current["payload"]["submitted_at"])
+    ).total_seconds()
+    if not 0 <= age <= 3600:
+        raise HTTPException(403, "current member instruction expired")
+    context = member.service_context
+    # This exact instruction authorizes bounded internal organization. The CoS
+    # owns her work under service-self authority, without a delegated-work grant.
+    # Existing read_context still governs the source and every later reuse.
+    if context is None:
+        raise HTTPException(403, "standing source context is unavailable")
+    source = (
+        current
+        if body.action == "create"
+        else await _instruction_source(runtime, member, str(body.follow_up_source_id))
+    )
+    session = _internal_session(runtime, p.correlation_id)
+    authority = source_authority(runtime, session, source, [context])
+    if authority is None:
+        raise HTTPException(
+            403, "current source policy does not permit internal processing"
+        )
+    source_id = source["event_id"]
+    request_id = f"member-follow-up:{source_id}"
+    task_id = (
+        "cos-member-follow-up:"
+        + hashlib.sha256(f"{member.tenant_id}|{source_id}".encode()).hexdigest()[:32]
+    )
+    async with runtime.settings_command_locks.setdefault(
+        f"cos-private-work:{member.tenant_id}:{task_id}", asyncio.Lock()
+    ):
+        previous = await runtime.event_log.get_by_idempotency(
+            member.tenant_id, _key(session, "task.created", request_id)
+        )
+        duplicate = previous is not None
+        if body.action == "create":
+            instruction = body.instruction
+            assert instruction is not None
+            if (
+                instruction != instruction.strip()
+                or instruction not in source["payload"]["text"]
+            ):
+                raise HTTPException(
+                    422, "retain an exact bounded excerpt of the current instruction"
+                )
+            fingerprint = seam._fingerprint(
+                {
+                    "member_id": member.auth_member_id,
+                    "source_event_id": source_id,
+                    "instruction": instruction,
+                }
+            )
+            previous = await _prior(
+                runtime, session, "task.created", request_id, fingerprint
+            )
+            if previous is None:
+                event_id = await _append(
+                    runtime,
+                    session,
+                    event_type="task.created",
+                    version=4,
+                    request_id=request_id,
+                    fingerprint=fingerprint,
+                    causation_id=source_id,
+                    sensitivity=source["sensitivity"],
+                    payload={
+                        "task_id": task_id,
+                        "title": "Follow up on a private member instruction",
+                        "description": instruction,
+                        "record_kind": "work",
+                        "source_authorities": [authority],
+                        "service_work_type": "follow_up",
+                        "work_kind": "service_operational",
+                        "owner_party_id": COS_PARTY_ID,
+                        "responsible_party_id": COS_PARTY_ID,
+                        "assignee_party_id": COS_PARTY_ID,
+                        "service_party_id": COS_PARTY_ID,
+                        "service_assignment_role": "internal",
+                        "authority_kind": "service_self",
+                        "authority_grant_id": None,
+                        "source_invocation_id": p.correlation_id,
+                        "created_by": COS_SERVICE_PRINCIPAL_ID,
+                        "source_system": "member-requested-cos-follow-up",
+                        "provider_effect_count": 0,
+                    },
+                )
+                previous = await runtime.event_log.get(event_id)
+        if previous is None:
+            raise HTTPException(404, "requested CoS follow-up not found")
+        # Check the immutable intake link, not later private text or source unions.
+        if previous["payload"].get("source_authorities") != [authority]:
+            raise HTTPException(
+                404, "original follow-up authority is no longer available"
+            )
+        await runtime.wait_for_projection("tasks", previous["event_id"])
+        row = get_task(
+            runtime.projections.connection("tasks"), session, task_id=task_id
+        )
+        if row is None:
+            raise HTTPException(
+                503, "requested follow-up has not reached its read model"
+            )
+        await seam._record_tool_call(
+            request,
+            member,
+            p,
+            operation="tools.service-follow-up." + body.action,
+            result_event_ids=[previous["event_id"]],
+        )
+        return {
+            "follow_up_source_id": source_id,
+            "task_id": task_id,
+            "receipt_event_id": previous["event_id"],
+            "last_event_id": row["last_event_id"],
+            "status": row["status"],
+            "duplicate": duplicate,
+            "audience": [member.auth_member_id],
+            "owner_party_id": COS_PARTY_ID,
+            "private_body_withheld": True,
+            "provider_effect_count": 0,
+            "timer_registered": False,
+        }
 
 
 def _key(session: ServiceSession, event_type: str, request_id: str) -> str:
