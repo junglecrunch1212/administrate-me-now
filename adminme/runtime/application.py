@@ -241,6 +241,10 @@ class RuntimeSettings:
             raise ValueError(
                 "legacy obligation extraction is limited to credential-free fixtures"
             )
+        if (
+            self.finance_publications_enabled or self.finance_model_members
+        ) and not self._credential_free_fixture:
+            raise ValueError("production Finance access requires the owner control")
         if len(self.encryption_key) != 32:
             raise ValueError("runtime encryption_key must be exactly 32 bytes")
         root = self.repository_root.resolve()
@@ -833,6 +837,16 @@ class AdministrateMeRuntime:
         self.today_command_locks: dict[str, asyncio.Lock] = {}
         self.communication_command_locks: dict[str, asyncio.Lock] = {}
         self.settings_command_locks: dict[str, asyncio.Lock] = {}
+        from adminme.finance.access_control import FinanceAccessCache
+
+        self.finance_access = FinanceAccessCache(
+            settings.instance.tenant_id,
+            frozenset(
+                member
+                for member, role in settings.member_roles.items()
+                if role == "principal"
+            ),
+        )
         self.member_chat_locks: dict[str, asyncio.Lock] = {}
         self.member_chat_limiter = RateLimiter()
         self.finance_admission = FinanceAdmissionGate()
@@ -910,6 +924,19 @@ class AdministrateMeRuntime:
                 self.event_log, self.settings.instance.bus_checkpoint_path
             )
             self.events = EventWriter(self.event_log, self.bus)
+            from adminme.finance.access_control import (
+                FinanceAccessError,
+                refresh_control,
+            )
+
+            for member, role in self.settings.member_roles.items():
+                if role == "principal":
+                    try:
+                        await refresh_control(self, member)
+                    except FinanceAccessError:
+                        # A failed bounded control read disables this owner's
+                        # Finance only; unrelated household services can start.
+                        pass
             await recover_response_attempts(self)
             if not self.settings.legacy_personal_obligation_compatibility:
                 epoch = await read_policy_epoch(
@@ -1251,8 +1278,9 @@ class AdministrateMeRuntime:
                 self._xlsx_query_context(),
                 event_sink=self.events,
                 guarded_write=self.guarded_write,
-                # One legacy household Finance file cannot remain a second
-                # write authority when accepted Books ingress is selected.
+                # Production owner controls select a private Books namespace;
+                # they never disable another member's shared legacy workbook.
+                # Only historical credential-free fixtures use this global flag.
                 finance_reverse_enabled=not self.settings.finance_publications_enabled,
             )
             if policy_from_adapter_config(self.settings.adapter_config) is None:
@@ -4035,8 +4063,8 @@ def create_application(settings: RuntimeSettings) -> FastAPI:
         lifespan=lifespan,
     )
     app.state.runtime = runtime
-    if settings.finance_publications_enabled:
-        app.add_middleware(FinancePriorityMiddleware, gate=runtime.finance_admission)
+    # Owner activation after startup must retain foreground admission priority.
+    app.add_middleware(FinancePriorityMiddleware, gate=runtime.finance_admission)
     app.include_router(core_router)
     app.include_router(comms_router)
     app.include_router(capture_router)
@@ -4076,6 +4104,12 @@ def create_application(settings: RuntimeSettings) -> FastAPI:
     app.include_router(apple_notes_commands_router)
     app.include_router(system_router)
     app.include_router(finance_metadata_router)
+    from adminme.products.member.finance_access import router as finance_access_router
+
+    app.include_router(finance_access_router)
+    from adminme.products.member.finance_import import router as finance_import_router
+
+    app.include_router(finance_import_router)
     return app
 
 

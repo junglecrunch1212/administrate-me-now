@@ -8290,10 +8290,9 @@ async def chat_stream(
             async with lock:
                 marked = await session_has_finance(runtime, session, session_key)
                 await check_disclosure(runtime, session, session_key)
-                buffer_text = marked or bool(
-                    runtime.settings.finance_publications_enabled
-                    and session.auth_member_id in runtime.settings.finance_model_members
-                )
+                from adminme.finance.access_control import analysis_enabled
+
+                buffer_text = marked or analysis_enabled(runtime, session)
                 pending_text = ""
                 run_id = None
                 saw_final = False
@@ -8734,12 +8733,14 @@ class FinancePreferenceChoiceRequest(FinanceChoiceRequest):
 
 
 def _finance_choice_owner(runtime: Any, session: Session) -> None:
+    from adminme.finance.access_control import books_enabled
+
     require_principal(session)
     if (
         session.is_view_as
         or session.service_context is not None
         or runtime.settings.member_roles.get(session.auth_member_id) != "principal"
-        or not runtime.settings.finance_publications_enabled
+        or not books_enabled(runtime, session)
     ):
         raise HTTPException(403, "finance_explicit_owner_choice_required")
 
@@ -8756,6 +8757,12 @@ async def finance_choices(
 
     runtime = _runtime(request)
     _finance_choice_owner(runtime, session)
+    from adminme.finance.access_control import bound_book, FinanceAccessError
+
+    try:
+        book_id = bound_book(runtime, session, book_id)
+    except FinanceAccessError:
+        raise HTTPException(403, "finance_book_not_authorized") from None
     conn = runtime.projections.connection("money")
     try:
         publication = publication_status(conn, session, book_id)
@@ -8801,6 +8808,12 @@ async def _save_finance_choice(
     event_type = (
         "finance.goal_recorded" if kind == "goal" else "finance.preference_recorded"
     )
+    from adminme.finance.access_control import bound_book, FinanceAccessError
+
+    try:
+        bound_book(runtime, session, body.book_id)
+    except FinanceAccessError:
+        raise HTTPException(403, "finance_book_not_authorized") from None
     key = f"finance-choice:{session.tenant_id}:{session.auth_member_id}:{body.book_id}:{kind}:{choice_id}"
     async with runtime.settings_command_locks.setdefault(key, asyncio.Lock()):
         fingerprint = _member_command_fingerprint(kind, choice_id, body)
@@ -9739,7 +9752,10 @@ async def finance_planning(
 
     runtime = _runtime(request)
     _finance_choice_owner(runtime, session)
+    from adminme.finance.access_control import bound_book
+
     try:
+        bound_book(runtime, session, book_id)
         result = await runtime.projections.read(
             "money",
             lambda conn: query_projection(

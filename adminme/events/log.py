@@ -1167,6 +1167,80 @@ class EventLog:
             )
         )
 
+    async def read_finance_import_approval(
+        self, tenant_id: str, owner_id: str, event_id: str
+    ) -> dict[str, Any] | None:
+        if any(
+            not isinstance(value, str) or not 1 <= len(value) <= 160
+            for value in (tenant_id, owner_id, event_id)
+        ):
+            raise ValueError("exact bounded approval coordinates required")
+        return await self._run_locked(
+            self._read_finance_import_approval, tenant_id, owner_id, event_id
+        )
+
+    def _read_finance_import_approval(
+        self, tenant_id: str, owner_id: str, event_id: str
+    ) -> dict[str, Any] | None:
+        row = self._conn.execute(
+            "SELECT event_id,tenant_id,type,schema_version,actor_identity,source_adapter,"
+            "source_account_id,owner_scope,visibility_scope,"
+            "CASE WHEN length(CAST(payload AS BLOB))<=32768 THEN payload END AS payload "
+            "FROM events WHERE event_id=? AND tenant_id=? AND owner_scope=? "
+            "AND type='settings.finance_import_approved' LIMIT 1",
+            (event_id, tenant_id, f"private:{owner_id}"),
+        ).fetchone()
+        if row is None:
+            return None
+        try:
+            value = dict(row)
+            value["payload"] = json.loads(value["payload"])
+            return value
+        except (TypeError, ValueError):
+            raise RuntimeError("finance_import_approval_unavailable") from None
+
+    async def read_finance_access_control(
+        self, tenant_id: str, owner_id: str
+    ) -> dict[str, Any] | None:
+        """Bounded owner control read; the caller supplies current authority."""
+        if not 1 <= len(tenant_id) <= 160 or not 1 <= len(owner_id) <= 160:
+            raise ValueError("exact bounded tenant and owner are required")
+        return await self._run_locked(
+            self._read_finance_access_control, tenant_id, owner_id
+        )
+
+    def _read_finance_access_control(
+        self, tenant_id: str, owner_id: str
+    ) -> dict[str, Any] | None:
+        deadline = time.monotonic() + 0.1
+        steps = 0
+
+        def bounded() -> int:
+            nonlocal steps
+            steps += 1000
+            return int(steps > 100_000 or time.monotonic() > deadline)
+
+        self._conn.set_progress_handler(bounded, 1000)
+        try:
+            row = self._conn.execute(
+                "SELECT event_id,tenant_id,type,schema_version,actor_identity,"
+                "source_adapter,source_account_id,owner_scope,visibility_scope,"
+                "CASE WHEN length(CAST(payload AS BLOB))<=4096 THEN payload END AS payload "
+                "FROM events WHERE tenant_id=? AND owner_scope=? "
+                "AND type='settings.finance_access_changed' "
+                "ORDER BY event_id DESC LIMIT 1",
+                (tenant_id, f"private:{owner_id}"),
+            ).fetchone()
+            if row is None:
+                return None
+            value = dict(row)
+            value["payload"] = json.loads(value["payload"])
+            return value
+        except (sqlcipher3.DatabaseError, TypeError, ValueError):
+            raise RuntimeError("finance_control_unavailable") from None
+        finally:
+            self._conn.set_progress_handler(None, 0)
+
     async def get_by_idempotency(
         self, tenant_id: str, idempotency_key: str
     ) -> dict[str, Any] | None:

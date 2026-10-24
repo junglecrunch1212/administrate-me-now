@@ -1719,11 +1719,15 @@ def build_surface(
     elif surface == "finance":
         if session.auth_role == "child":
             raise HTTPException(404, "surface not found")
+        from adminme.finance.access_control import books_enabled, bound_book
+
+        enabled = books_enabled(runtime, session) and session.service_context is None
         cockpit = finance_snapshot(
             runtime.projections.connection("money"),
             session,
             as_of=now,
-            accepted_books_enabled=runtime.settings.finance_publications_enabled,
+            accepted_books_enabled=enabled,
+            accepted_book_id=bound_book(runtime, session) if enabled else None,
         )
         base["cockpit"] = cockpit
         base["contract"] = {

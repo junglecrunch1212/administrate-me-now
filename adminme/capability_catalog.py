@@ -1212,14 +1212,14 @@ def compose_member_catalog(
         )
         declared_tools = sorted(set(row.get("openclaw_tools") or []) & plugin_tools)
         if capability_id == "domain.household_finance":
+            from adminme.finance.access_control import analysis_enabled
+
             read_available = bool(
                 read_available
                 and not viewing_as
                 and session.auth_role == "principal"
                 and "read_context" in permissions
-                and getattr(runtime.settings, "finance_publications_enabled", False)
-                and member_id
-                in getattr(runtime.settings, "finance_model_members", frozenset())
+                and analysis_enabled(runtime, session)
             )
             setup = (
                 "explicit_activation_required" if not read_available else "configured"

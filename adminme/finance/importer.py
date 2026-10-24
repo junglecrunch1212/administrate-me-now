@@ -43,7 +43,9 @@ async def _settled(runtime: Any) -> None:
 
 
 def require_import_owner(runtime: Any, session: Session) -> None:
-    if not runtime.settings.finance_publications_enabled:
+    from adminme.finance.access_control import books_enabled
+
+    if not books_enabled(runtime, session):
         raise PublicationError("publication_ingress_disabled")
     if (
         session.auth_role != "principal"
@@ -84,6 +86,9 @@ async def import_publication(
             timezone.utc
         ) + timedelta(minutes=5):
             raise PublicationError("publication_future_clock")
+        from adminme.finance.access_control import require_publication_binding
+
+        require_publication_binding(runtime, session, p)
         event_key = _key(p)
         existing = await runtime.event_log.get_by_idempotency(
             session.tenant_id, event_key

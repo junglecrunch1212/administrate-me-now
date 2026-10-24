@@ -204,6 +204,7 @@ def finance_snapshot(
     *,
     as_of: datetime,
     accepted_books_enabled: bool = False,
+    accepted_book_id: str | None = None,
 ) -> dict[str, Any]:
     """Compose the deterministic Finance projection consumed by workbook/UI.
 
@@ -220,9 +221,24 @@ def finance_snapshot(
     if (
         session.auth_role != "principal"
         or session.is_view_as
+        or session.service_context is not None
         or f"private:{session.auth_member_id}" not in session.allowed_scopes
     ):
         return _unavailable_finance_snapshot(as_of)
+    if accepted_books_enabled:
+        # A private accepted Book is a separate authority from the shared legacy
+        # workbook. Do not even query legacy/provider totals for this view.
+        result = _unavailable_finance_snapshot(as_of)
+        result["accepted_books"] = _accepted_books_snapshot(
+            conn, session, accepted_book_id
+        )
+        result["focus"] = {
+            "state": "books_outputs",
+            "title": "Books outputs",
+            "why": "Source publication limits apply.",
+            "action": "Review the accepted publication.",
+        }
+        return result
     month_start = as_of.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     previous_month = (
         month_start.replace(day=1)
@@ -627,10 +643,11 @@ def _unavailable_finance_snapshot(as_of: datetime) -> dict[str, Any]:
 def _accepted_books_snapshot(
     conn: sqlcipher3.Connection,
     session: Session,
+    book_id: str | None = None,
 ) -> dict[str, Any]:
     """Bounded exact published metrics; never map arbitrary IDs onto legacy totals."""
     try:
-        status = publication_status(conn, session)
+        status = publication_status(conn, session, book_id=book_id)
         if "publication_id" not in status:
             return status
         reports = [

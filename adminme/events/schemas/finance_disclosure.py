@@ -13,6 +13,7 @@ class FinanceDisclosureV1(BaseModel):
     member_id: str = Field(min_length=1, max_length=240)
     session_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     authority_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    book_binding_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     run_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     slot: int | None = Field(default=None, ge=1, le=6)
     result_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")

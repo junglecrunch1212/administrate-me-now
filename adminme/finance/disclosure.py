@@ -17,6 +17,12 @@ from typing import Any
 
 from adminme.events.envelope import EventEnvelope
 from adminme.lib.session import Session
+from adminme.finance.access_control import (
+    FinanceAccessError,
+    analysis_enabled,
+    policy_for_session,
+    refresh_control,
+)
 from adminme.projections.parties.queries import resolve_service_delegation
 from adminme.service_identities import (
     COS_AUTOMATION_OPERATOR_ID,
@@ -50,13 +56,12 @@ def _check_current_owner(runtime: Any, session: Session) -> None:
         or session.is_view_as
         or runtime.settings.member_roles.get(session.auth_member_id) != "principal"
         or runtime.settings.instance.tenant_id != session.tenant_id
-        or not runtime.settings.finance_publications_enabled
-        or session.auth_member_id not in runtime.settings.finance_model_members
+        or not analysis_enabled(runtime, session)
     ):
         raise FinanceDisclosureError("finance_disclosure_authority_changed")
 
 
-def _authority_digest(session: Session, context: Any) -> str:
+def _authority_digest(runtime: Any, session: Session, context: Any) -> str:
     if (
         "read_context" not in context.permissions
         or f"private:{session.auth_member_id}" not in context.allowed_scopes
@@ -70,6 +75,9 @@ def _authority_digest(session: Session, context: Any) -> str:
             "audience": f"private:{session.auth_member_id}",
             "grant": context.audit_payload(),
             "permissions": sorted(context.permissions),
+            "finance_access": policy_for_session(
+                runtime, session
+            ).authority_coordinates(),
         }
     )
 
@@ -92,7 +100,7 @@ def validate_current_authority(
         )
     except Exception:
         raise FinanceDisclosureError("finance_disclosure_authority_changed") from None
-    digest = _authority_digest(session, context)
+    digest = _authority_digest(runtime, session, context)
     if expected_digest is not None and digest != expected_digest:
         raise FinanceDisclosureError("finance_disclosure_authority_changed")
     return digest
@@ -184,7 +192,7 @@ async def record_disclosure(
         # its audit append. Bind that authority to the receipt; the synchronous
         # check after persistence still queries the current grant before release.
         # A direct human/internal caller without that context resolves it here.
-        authority_hash = _authority_digest(session, session.service_context)
+        authority_hash = _authority_digest(runtime, session, session.service_context)
     else:
         authority_hash = await runtime.projections.read(
             "parties", lambda _conn: validate_current_authority(runtime, session)
@@ -201,7 +209,11 @@ async def record_disclosure(
         }
         marker = existing.get(_marker_key(session_hash))
         now = datetime.now(timezone.utc)
+        access = policy_for_session(runtime, session)
         common = {
+            "book_binding_sha256": _digest(access.binding.model_dump())
+            if access.binding
+            else None,
             "member_id": session.auth_member_id,
             "session_sha256": session_hash,
             "authority_sha256": authority_hash,
@@ -259,6 +271,12 @@ async def record_disclosure(
             from adminme.finance.budgets import FinanceBudgetError
 
             raise FinanceBudgetError("finance_core_capacity_busy")
+        try:
+            await refresh_control(runtime, session.auth_member_id)
+        except FinanceAccessError:
+            raise FinanceDisclosureError(
+                "finance_disclosure_authority_changed"
+            ) from None
         validate_current_authority(runtime, session, authority_hash)
 
 
@@ -318,6 +336,14 @@ async def check_disclosure(
         for item in receipts
     ):
         raise FinanceDisclosureError("finance_disclosure_receipt_expired")
+    try:
+        await refresh_control(runtime, session.auth_member_id)
+        access = policy_for_session(runtime, session)
+    except FinanceAccessError:
+        raise FinanceDisclosureError("finance_disclosure_authority_changed") from None
+    binding_hash = _digest(access.binding.model_dump()) if access.binding else None
+    if marker.get("book_binding_sha256") != binding_hash:
+        raise FinanceDisclosureError("finance_disclosure_book_changed")
     # No awaited work may follow dependency checks before final authorization.
     for receipt in receipts:
         if receipt.get("book_id") and receipt.get("publication_id"):

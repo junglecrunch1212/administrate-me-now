@@ -6,12 +6,12 @@ Date: 2026-10-23
 **SUPERSEDE** ADR-0007's XLSX planning authority for a Books-owned book. Books
 owns accepted accounting/planning publications and its scenario math. The legacy
 XLSX path is not reused for this namespace. No automatic migration or dual write
-is authorized. Selecting accepted Books ingress disables reverse processing of
-the single legacy household Finance workbook for that runtime lifetime, including
-scheduled and direct cycles. Operations workbook processing remains enabled.
-This preserves the old file and sidecars without accepting a second financial
-write authority. Switching authority requires a restart; it is not a hot toggle.
-Hosted composition-root coverage must prove this exclusion before activation.
+is authorized. Production activation is an encrypted, self-owned control bound
+to one existing book/entity/audience-policy tuple. That owner's dashboard reads
+only the selected accepted book. Other members and the shared legacy Finance
+workbook retain their existing authority and reverse processing. No global
+workbook disable or household-wide cutover follows from one owner's activation.
+Legacy static Finance switches remain restricted to credential-free fixtures.
 
 **PRESERVE** ADR-0001's dependency direction, one Python runtime, OpenClaw model
 and scheduling boundary, domain approval, privileged owner access, observation,
@@ -79,8 +79,8 @@ or vector corpus. Resource limits and remaining gates are recorded in
 `FINANCE-RESOURCE-GATES.md` and the capability acceptance ledger.
 
 Activation requires separate owner authorization, exporter schema adoption,
-private accepted-data comparisons, model/policy/tool verification, legacy XLSX
-exclusion, guarded update/backup/rollback, authenticated member acceptance and
+private accepted-data comparisons, model/policy/tool verification, shared XLSX
+preservation, guarded update/backup/rollback, authenticated member acceptance and
 measured general-CoS performance. This candidate authorizes none of those live
 operations.
 
@@ -102,3 +102,40 @@ measures are not separately defined in v1; a later reviewed schema version must
 specify them rather than relabel cash or accounting numbers. The dated synthetic
 fixture is `accepted-publication.dated.synthetic.json`. Schema adoption remains
 a coordinating review gate, independent from this producer-neutral reader.
+
+
+## Owner activation and approved package import
+
+**MODERNIZE** activation: the authenticated principal saves a fixed existing
+book binding and separate Books-dashboard / CoS-analysis permissions at
+`/api/member/v1/settings/finance`. Both default off. CoS additionally requires
+the existing private-context read grant; the Finance control never creates or
+widens generic delegations. Current owner/book authority is re-read after tool
+retrieval and audit, before disclosure. Revocation closes delivery immediately;
+an unavailable or malformed owner control disables that owner's Finance without
+preventing unrelated household services from starting. Durable controls survive
+restart. Source identity creation and provider enrollment are outside this seam.
+
+The owner separately approves a `household-books.closed-import.v1` manifest with
+exact component hashes, byte limits, source snapshot and independently reviewed
+evidence hashes. Approval expires in 30 minutes and is invalid after any control
+revision. The closed upload carries only those pinned canonical publications,
+provenance index and blobs as base64 JSON. It cannot supply its own approval,
+resolve paths/URLs, edit the Sheet or enable a refresh schedule. One global import
+admission bounds body/decoder concurrency; decoding is off the HTTP loop and
+admission remains held until cancelled native work has settled.
+
+Accounting and dated projection remain independent immutable events. An accepted
+accounting import followed by a rejected dated projection returns an explicit
+incomplete receipt. Conflicts never replace the last good head, and retrying exact
+accepted bytes uses the existing idempotent receipts. Imports preserve owner
+choices and chosen baselines. Terminal receipts contain identifiers and outcomes,
+not financial values. Synthetic production-composition coverage lives in
+`tests/acceptance/test_finance_activation.py`.
+
+Recovery for these new control/import events uses the schema-aware runtime:
+disable both Books and CoS analysis with the current control revision and verify
+denied disclosure. Keep accepted history, shared workbooks and existing generic
+grants intact. An older binary lacking these event schemas is not an automatic
+rollback target. Qualified activation must name its concrete supported updater
+recovery command and preserve compatible encrypted state.

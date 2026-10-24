@@ -4329,7 +4329,20 @@ async def _finance_session(request: Request, provenance: Provenance) -> Session:
     context = values.get("service_context")
     if context is not None:
         values["service_context"] = ServiceRequestContext(**context)
-    return Session(**values)
+    session = Session(**values)
+    if not hasattr(request.state, "finance_access_at_read"):
+        from adminme.finance.access_control import (
+            FinanceAccessError,
+            policy_for_session,
+        )
+
+        try:
+            request.state.finance_access_at_read = policy_for_session(
+                runtime, session
+            ).authority_coordinates()
+        except FinanceAccessError:
+            request.state.finance_access_at_read = None
+    return session
 
 
 def _private_member_tool_context(
@@ -4439,11 +4452,12 @@ async def finance_bindings(
 
 
 def _finance_permitted(runtime: Any, session: Session, provenance: Provenance) -> bool:
+    from adminme.finance.access_control import analysis_enabled
+
     return bool(
         session.auth_role == "principal"
         and session.auth_member_id == session.view_member_id
-        and session.auth_member_id
-        in getattr(runtime.settings, "finance_model_members", frozenset())
+        and analysis_enabled(runtime, session)
         and f"private:{session.auth_member_id}" in session.allowed_scopes
         and _finance_private_context(runtime, session, provenance)
     )
@@ -4487,7 +4501,25 @@ async def _finance_delivery(
         from adminme.finance.admission import admission_busy_result
 
         return admission_busy_result()
+    from adminme.finance.access_control import (
+        FinanceAccessError,
+        policy_for_session,
+        refresh_control,
+    )
+
+    if private_result:
+        try:
+            await refresh_control(runtime, session.auth_member_id)
+        except FinanceAccessError:
+            raise HTTPException(403, "finance_authority_changed") from None
     latest = await _finance_session(request, body.provenance)
+    if private_result:
+        try:
+            current_access = policy_for_session(runtime, latest).authority_coordinates()
+        except FinanceAccessError:
+            raise HTTPException(403, "finance_authority_changed") from None
+        if current_access != getattr(request.state, "finance_access_at_read", None):
+            raise HTTPException(403, "finance_authority_changed")
     # Frozen Session equality includes tenant, actor/view identity, allowed
     # audience via the exact service grant, grant ID, permissions and quorum.
     # A newly authorized different owner/grant cannot receive this old result.
@@ -4495,9 +4527,9 @@ async def _finance_delivery(
         latest != session or not _finance_permitted(runtime, latest, body.provenance)
     ):
         raise HTTPException(403, "finance_authority_changed")
-    if private_result and not getattr(
-        runtime.settings, "finance_publications_enabled", False
-    ):
+    from adminme.finance.access_control import books_enabled
+
+    if private_result and not books_enabled(runtime, latest):
         raise HTTPException(403, "finance_processing_disabled")
     result["provider_effect_count"] = 0
     if receipt is not None and private_result:
@@ -4555,7 +4587,9 @@ def _finance_blocked(
             "state": "permission_required",
             "reason": "Current owner authority for private finance processing is required.",
         }
-    if not getattr(runtime.settings, "finance_publications_enabled", False):
+    from adminme.finance.access_control import books_enabled
+
+    if not books_enabled(runtime, session):
         return {
             "state": "temporarily_unavailable",
             "reason": "Finance publication processing is disabled.",
@@ -4603,7 +4637,9 @@ async def finance_status(
             )
         receipt = None
         permitted = _finance_permitted(runtime, session, body.provenance)
-        enabled = bool(getattr(runtime.settings, "finance_publications_enabled", False))
+        from adminme.finance.access_control import books_enabled, bound_book
+
+        enabled = books_enabled(runtime, session)
         result: dict[str, Any] = {
             "registry_version": REGISTRY_VERSION,
             "implementation_state": "implemented",
@@ -4612,6 +4648,10 @@ async def finance_status(
         try:
             receipt = _finance_admit(runtime, session, body.provenance)
             blocked = _finance_blocked(runtime, session, body.provenance)
+            if blocked is None and not body.calculator_id:
+                body = body.model_copy(
+                    update={"book_id": bound_book(runtime, session, body.book_id)}
+                )
             if body.include_bindings:
                 from adminme.finance.metadata import binding_metadata
 
@@ -4825,7 +4865,10 @@ async def finance_query(body: FinanceQueryRequest, request: Request) -> dict[str
             result = _finance_blocked(runtime, session, body.provenance)
             private_result = result is None
             if result is None:
+                from adminme.finance.access_control import bound_book
                 from adminme.finance.choices import query_choices
+
+                bound_book(runtime, session, body.book_id)
 
                 if body.report_id.startswith("planning_"):
                     from adminme.finance.planning_store import query_projection

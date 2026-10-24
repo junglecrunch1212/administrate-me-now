@@ -110,6 +110,7 @@ jobs:
           tests/integration/test_projection_rebuild.py
           tests/unit/test_xlsx_finance_workbook.py
           tests/unit/test_xlsx_reverse_finance.py
+          tests/acceptance/test_finance_activation.py
           tests/acceptance/test_finance_publications.py
           tests/acceptance/test_finance_metadata.py
           tests/acceptance/test_finance_metadata_capability.py

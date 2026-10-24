@@ -5542,6 +5542,103 @@ function cosPrivatePermissionsCard(data, updateDelegations) {
   lock(); void reconcile(); return card;
 }
 
+function financeAccessSettingsCard(data) {
+  const card = document.createElement("section"); card.className = "card finance-access-settings";
+  card.append(text("h2", "My Books dashboard and CoS analysis"), text("p", "Choose the reviewed book that supplies your Finance dashboard. Importing an accepted snapshot preserves its source date and completeness. Daily refresh and changes to the source workbook remain separate."));
+  const identity = data.control.identity;
+  if (!identity.can_mutate || identity.authenticated_role !== "principal" || identity.viewing_as || identity.authenticated_member_id !== identity.view_member_id) {
+    card.append(text("p", "Available only in your own authenticated principal view.", "state-note")); return card;
+  }
+  let policy = null, busy = false, manifest = null, approval = null;
+  const status = text("p", "Checking Books access…", "state-note"); status.setAttribute("role", "status");
+  const form = document.createElement("form"); form.className = "dialog-form";
+  const bindings = {};
+  const bindingReview = document.createElement("details"); bindingReview.append(text("summary", "Reviewed book identity"), text("p", "Use the existing identifiers from the approved Books binding receipt. These become fixed after the first save."));
+  for (const [name, label] of [["book_id", "Book ID"], ["entity_id", "Entity ID"], ["audience_policy_id", "Audience policy ID"], ["audience_policy_version", "Audience policy version"]]) {
+    const input = document.createElement("input"); input.type = "text"; input.name = name; input.maxLength = 96; input.required = true; bindings[name] = input; bindingReview.append(field(label, input));
+  }
+  form.append(bindingReview);
+  const books = document.createElement("input"); books.type = "checkbox"; books.name = "books_enabled";
+  const cos = document.createElement("input"); cos.type = "checkbox"; cos.name = "cos_analysis_enabled";
+  for (const [input, label] of [[books, "Use this book for my Finance dashboard"], [cos, "Allow CoS to analyze my accepted data from this book"]]) {
+    const wrap = document.createElement("label"); wrap.className = "bridge-capability-choice"; wrap.append(input, text("span", label)); form.append(wrap);
+  }
+  form.append(text("p", "CoS also needs your existing private-context read permission. This Finance consent changes no other grants. Disabling access preserves accepted history and your selected baseline.", "state-note"));
+  const save = text("button", "Save Books access", "button button-primary"); save.type = "submit";
+  const refresh = text("button", "Check Books access", "button button-secondary"); refresh.type = "button"; form.append(save, refresh);
+  const transfer = document.createElement("details"); transfer.append(text("summary", "Import a reviewed Books snapshot"));
+  const manifestFile = document.createElement("input"); manifestFile.type = "file"; manifestFile.accept = ".json,application/json";
+  const preview = text("pre", "Select the separately reviewed manifest first."); preview.style.whiteSpace = "pre-wrap"; preview.style.overflowWrap = "anywhere";
+  const reviewed = document.createElement("input"); reviewed.type = "checkbox";
+  const reviewLabel = document.createElement("label"); reviewLabel.className = "bridge-capability-choice"; reviewLabel.append(reviewed, text("span", "I reviewed this source snapshot, binding and evidence hashes independently of the upload."));
+  const approve = text("button", "Approve this manifest for 30 minutes", "button button-secondary"); approve.type = "button";
+  const packetFile = document.createElement("input"); packetFile.type = "file"; packetFile.accept = ".json,application/json";
+  const upload = text("button", "Import exact approved snapshot", "button button-primary"); upload.type = "button";
+  transfer.append(field("Reviewed manifest", manifestFile), preview, reviewLabel, approve, field("Closed Books package", packetFile), upload);
+  const receipt = text("pre", ""); receipt.style.whiteSpace = "pre-wrap"; receipt.style.overflowWrap = "anywhere"; transfer.append(receipt);
+  function controls() {
+    for (const el of [books, cos, save, ...Object.values(bindings)]) el.disabled = busy || !policy;
+    for (const el of Object.values(bindings)) el.readOnly = Boolean(policy?.revision);
+    refresh.disabled = busy; cos.disabled = busy || !policy || !books.checked;
+    for (const el of [manifestFile, packetFile, reviewed]) el.disabled = busy || !policy?.books_enabled;
+    approve.disabled = busy || !policy?.books_enabled || !manifest || !reviewed.checked || Boolean(approval);
+    upload.disabled = busy || !approval || !packetFile.files.length;
+  }
+  function apply(value) {
+    policy = value; books.checked = value.books_enabled; cos.checked = value.cos_analysis_enabled;
+    for (const [key, input] of Object.entries(bindings)) input.value = value.binding?.[key] || "";
+    bindingReview.open = !value.binding;
+  }
+  async function reload() {
+    busy = true; approval = null; controls();
+    try { apply(await api("/api/member/v1/settings/finance")); status.textContent = policy.books_enabled ? `Books dashboard enabled. Finance analysis consent ${policy.cos_analysis_enabled ? "enabled; the existing private-context grant is also required" : "disabled"}.` : "Books dashboard and Finance analysis are disabled."; }
+    catch (error) { policy = null; status.textContent = `Books access could not be verified. ${error.message}`; }
+    finally { busy = false; controls(); }
+  }
+  books.addEventListener("change", () => { if (!books.checked) cos.checked = false; controls(); });
+  refresh.addEventListener("click", () => { void reload(); });
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault(); if (busy || !policy) return;
+    const body = { request_id: crypto.randomUUID(), expected_revision: policy.revision, binding: Object.fromEntries(Object.entries(bindings).map(([key, input]) => [key, input.value.trim()])), books_enabled: books.checked, cos_analysis_enabled: cos.checked };
+    busy = true; approval = null; controls();
+    try { apply(await api("/api/member/v1/settings/finance", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })); status.textContent = "Books access saved. Accepted history and existing CoS grants are preserved."; }
+    catch (error) { policy = null; status.textContent = `Save could not be verified. Check Books access before another change. ${error.message}`; }
+    finally { busy = false; controls(); }
+  });
+  manifestFile.addEventListener("change", async () => {
+    manifest = null; approval = null; reviewed.checked = false; controls();
+    const file = manifestFile.files[0]; if (!file) return;
+    try {
+      if (file.size > 32768) throw new Error("The reviewed manifest exceeds the supported size.");
+      const value = JSON.parse(await file.text());
+      if (value.contract !== "household-books.closed-import.v1" || !value.binding || !policy?.binding || Object.keys(bindings).some(key => value.binding[key] !== policy.binding[key])) throw new Error("The manifest must match your saved book binding.");
+      manifest = value; preview.textContent = JSON.stringify(value, null, 2);
+    } catch (error) { preview.textContent = error.message; }
+    controls();
+  });
+  reviewed.addEventListener("change", controls); packetFile.addEventListener("change", controls);
+  approve.addEventListener("click", async () => {
+    if (busy || !manifest || !reviewed.checked || !policy?.books_enabled) return;
+    busy = true; controls();
+    try { approval = await api("/api/member/v1/finance/import-approvals", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ request_id: crypto.randomUUID(), expected_policy_revision: policy.revision, manifest }) }); status.textContent = `This exact manifest is approved until ${new Date(approval.expires_at).toLocaleTimeString()}.`; }
+    catch (error) { approval = null; status.textContent = `Approval could not be verified. No package was uploaded. ${error.message}`; }
+    finally { busy = false; controls(); }
+  });
+  upload.addEventListener("click", async () => {
+    const file = packetFile.files[0]; if (busy || !approval || !file) return;
+    if (file.size > 64 * 1024 * 1024) { status.textContent = "The package exceeds the supported size."; return; }
+    busy = true; controls(); status.textContent = "Checking and importing the exact approved snapshot…";
+    try {
+      const result = await api(`/api/member/v1/finance/imports/${encodeURIComponent(approval.approval_event_id)}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: file });
+      receipt.textContent = JSON.stringify(result, null, 2); status.textContent = "Approved snapshot accepted. Open Finance to review its source date, completeness and projections.";
+    } catch (error) {
+      receipt.textContent = JSON.stringify(error.body?.detail || {}, null, 2);
+      status.textContent = `Import was not confirmed complete. Review the receipt and current Finance data before another upload. ${error.message}`;
+    } finally { busy = false; approval = null; packetFile.value = ""; controls(); }
+  });
+  card.append(status, form, transfer); controls(); void reload(); return card;
+}
+
 function financeMetadataSettingsCard(data) {
   const card = document.createElement("section"); card.className = "card finance-metadata-settings";
   const identity = data.control.identity;
@@ -5614,7 +5711,7 @@ function howCosWorksSettings(data) {
     if (!items.length) delegationList.append(text("li", "No delegation is visible in this context.", "empty"));
   }
   updateDelegations(model.delegations || []);
-  fragment.append(cosPrivatePermissionsCard(data, updateDelegations), financeMetadataSettingsCard(data), delegations);
+  fragment.append(cosPrivatePermissionsCard(data, updateDelegations), financeAccessSettingsCard(data), financeMetadataSettingsCard(data), delegations);
   const compiled = model.compiled_context; if (compiled) { const contextCard = document.createElement("details"); contextCard.className = "card settings-advanced"; contextCard.append(text("summary", "Compiled effective CoS context"), text("p", `Digest ${compiled.digest} · built only from typed state.`, "state-note")); contextCard.append(permissionList("Explicitly excluded", compiled.excluded || [])); fragment.append(contextCard); }
   return fragment;
 }

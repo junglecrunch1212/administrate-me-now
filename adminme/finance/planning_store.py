@@ -232,8 +232,10 @@ def apply_projection(envelope: dict[str, Any], conn: Any) -> None:
 async def import_projection(
     runtime: Any, session: Session, value: dict[str, Any]
 ) -> dict[str, Any]:
-    if not runtime.settings.finance_publications_enabled:
-        raise PublicationError("projection_ingress_disabled")
+    from adminme.finance.importer import require_import_owner
+    from adminme.finance.access_control import bound_book
+
+    require_import_owner(runtime, session)
     if (
         session.auth_role != "principal"
         or session.is_view_as
@@ -256,6 +258,7 @@ async def import_projection(
             timezone.utc
         ) + timedelta(minutes=5):
             raise PublicationError("projection_future_clock")
+        bound_book(runtime, session, p["book_id"])
         event_key = (
             "finance-dated-projection:"
             + hashlib.sha256(
@@ -281,6 +284,8 @@ async def import_projection(
             ):
                 raise PublicationError("projection_identity_or_prior_conflict")
             await _settled(runtime)
+            require_import_owner(runtime, session)
+            bound_book(runtime, session, p["book_id"])
             return {
                 "state": "verified",
                 "projection_id": p["projection_id"],
@@ -308,6 +313,8 @@ async def import_projection(
         await runtime.projections.read("money", check)
         now = datetime.now(timezone.utc)
         scope = f"private:{session.auth_member_id}"
+        require_import_owner(runtime, session)
+        bound_book(runtime, session, p["book_id"])
         event_id = await runtime.events.write(
             EventEnvelope(
                 event_at_ms=int(now.timestamp() * 1000),
@@ -326,6 +333,8 @@ async def import_projection(
             )
         )
         await _settled(runtime)
+        require_import_owner(runtime, session)
+        bound_book(runtime, session, p["book_id"])
         return {
             "state": "verified",
             "projection_id": p["projection_id"],
