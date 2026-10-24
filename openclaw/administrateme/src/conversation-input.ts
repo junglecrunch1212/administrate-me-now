@@ -19,7 +19,7 @@ const matches = (input: Input, context: Context) => input.provenance.session_key
 /** Non-consuming immutable copy for the independent host authorization policy. */
 export function peekConversationInput(runtime: PluginRuntime, context: Context) {
   const input = context.runId ? turns.get(runtime)?.get(context.runId) : undefined;
-  return input && matches(input, context) ? {
+  return input && matches(input, context) && typeof input.instructionText === "string" ? {
     provenance: { ...input.provenance }, source_message_event_id: input.source_message_event_id, instruction_text: input.instructionText,
   } : undefined;
 }
@@ -43,7 +43,7 @@ export function bindConversationTool(runtime: PluginRuntime, context: Context, c
 export function takeConversationInput(runtime: PluginRuntime, callId: string, context: Context) {
   const input = calls.get(runtime)?.get(callId);
   calls.get(runtime)?.delete(callId);
-  if (!input || !matches(input, context)) return undefined;
+  if (!input || !matches(input, context) || typeof input.instructionText !== "string") return undefined;
   return { provenance: { ...input.provenance }, source_message_event_id: input.source_message_event_id, host_binding: "", instruction_text: input.instructionText };
 }
 
