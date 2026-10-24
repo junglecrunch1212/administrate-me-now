@@ -207,14 +207,20 @@ async def _instruction_source(
     if (
         source is None
         or source["tenant_id"] != member.tenant_id
-        or source["type"] != "triage.intent.submitted"
-        or source["schema_version"] != 2
+        or (source["type"], source["schema_version"])
+        not in {("triage.intent.submitted", 2), ("cos.conversation.instruction", 1)}
         or source["owner_scope"] != scope
         or source["visibility_scope"] != scope
         or source["actor_identity"] != member.auth_member_id
         or source["payload"].get("member_id") != member.auth_member_id
-        or source["payload"].get("submission_kind") != "member_forwarded"
-        or source["payload"].get("intake_channel") not in {"imessage", "apple_imessage"}
+        or (
+            source["type"] == "triage.intent.submitted"
+            and (
+                source["payload"].get("submission_kind") != "member_forwarded"
+                or source["payload"].get("intake_channel")
+                not in {"imessage", "apple_imessage"}
+            )
+        )
     ):
         raise HTTPException(404, "private member instruction not found")
     return source
@@ -233,6 +239,13 @@ async def current_private_instruction(
     member = seam._session(request, provenance, required_permission=required_permission)
     runtime = seam._runtime(request)
     p = provenance
+    if p.channel_id in {"administrateme-portal", "gmail"}:
+        from adminme.conversation_instructions import current_conversation_instruction
+
+        current = await current_conversation_instruction(
+            runtime, member, p, source_message_event_id
+        )
+        return member, current
     if (
         member.auth_role != "principal"
         or p.call_kind != "bridge"

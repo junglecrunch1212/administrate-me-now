@@ -75,6 +75,8 @@ class CoSResponsePermit:
     member_id: str
     approval_event_id: str
     final_check: Callable[[bool], Awaitable[None]]
+    thread_id: str | None = None
+    in_reply_to: str | None = None
 
 
 _PERMIT: ContextVar[CoSResponsePermit | None] = ContextVar(
@@ -107,7 +109,15 @@ async def guard_gmail_response(
         or message.channel != "gmail"
         or message.recipient != permit.recipient
         or message.body != permit.body
-        or message.metadata != {"subject": permit.subject}
+        or message.metadata
+        != {
+            "subject": permit.subject,
+            **(
+                {"thread_id": permit.thread_id, "in_reply_to": permit.in_reply_to}
+                if permit.thread_id and permit.in_reply_to
+                else {}
+            ),
+        }
     ):
         raise PermissionError(
             "CoS Gmail send requires an exact governed response permit"

@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "instruction",
+    "submitted_at",
+    "timezone",
+    "action"
+  ],
+  "properties": {
+    "instruction": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 32000
+    },
+    "submitted_at": {
+      "type": "string"
+    },
+    "timezone": {
+      "type": "string"
+    },
+    "action": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "provider",
+        "operation",
+        "resource_owner",
+        "title",
+        "due_at",
+        "list_id",
+        "selected_by_policy"
+      ],
+      "properties": {
+        "provider": {
+          "const": "apple_reminders"
+        },
+        "operation": {
+          "const": "create_reminder"
+        },
+        "resource_owner": {
+          "const": "requester"
+        },
+        "title": {
+          "type": "string"
+        },
+        "notes": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "due_at": {
+          "type": "string"
+        },
+        "list_id": {
+          "type": "string"
+        },
+        "selected_by_policy": {
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}

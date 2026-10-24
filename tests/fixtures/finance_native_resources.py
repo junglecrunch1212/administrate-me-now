@@ -185,6 +185,9 @@ class FixtureGuard:
         self.faults = faults
         self.read_roots = (
             Path(sys.prefix).resolve(),
+            Path(sys.base_prefix).resolve(),
+            Path("/usr/share/zoneinfo").resolve(),
+            Path("/var/db/timezone/zoneinfo").resolve(),
             Path(__file__).resolve().parents[2],
         )
 

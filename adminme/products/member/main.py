@@ -72,6 +72,7 @@ from adminme.messages_reply import (
     reply_control_for,
     validate_exact_body,
 )
+from adminme.openclaw_topology import member_agent_id
 from adminme.member_chat import MemberChatError
 from adminme.member_chat_approvals import pending_cos_approvals, resolve_cos_approval
 from adminme.products.auth import require_principal, session_from_request
@@ -8250,6 +8251,29 @@ async def chat_stream(
             429, {"code": "rate_limited", "retry_after_s": decision.retry_after_s}
         )
     correlation_id = session.correlation_id or str(uuid.uuid4())
+    # The actual authenticated chat request supplies human input.
+    # No portal form, model-generated provenance or second request.
+    from adminme.conversation_instructions import capture_instruction, input_ticket
+
+    actor_id, _ = runtime.member_chat_binding(session.auth_member_id)
+    instruction = None
+    if runtime.observation is not None and not await runtime.observation.is_active():
+        instruction = await capture_instruction(
+            runtime,
+            member_id=session.auth_member_id,
+            text=body.message,
+            request_id=body.request_id,
+            provenance={
+                "channel_id": "administrateme-portal",
+                "account_id": "member-portal",
+                "actor_id": actor_id,
+                "agent_id": member_agent_id(session.auth_member_id),
+                "session_key": session_key,
+                "message_id": body.request_id,
+                "thread_id": None,
+                "correlation_id": correlation_id,
+            },
+        )
 
     async def generate() -> AsyncIterator[bytes]:
         from adminme.finance.disclosure import (
@@ -8277,6 +8301,9 @@ async def chat_stream(
                     session_key=session_key,
                     message=body.message,
                     idempotency_key=f"member:{session.auth_member_id}:{body.request_id}",
+                    instruction_ticket=input_ticket(runtime, instruction)
+                    if instruction is not None
+                    else None,
                 ):
                     runtime.member_chat_last_failure = None
                     if chunk.run_id is not None:

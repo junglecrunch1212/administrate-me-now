@@ -59,11 +59,20 @@ try {
   }
   // Exercise the production standing-reply escape function against the actual
   // pinned sender pipeline, including punctuation that exact manual replies reject.
-  const selfReplySource = await readFile(path.join(repository, "openclaw/administrateme/src/self-replies.ts"), "utf8");
-  const selfReplyModule = path.join(directory, "self-replies.mjs");
-  await writeFile(selfReplyModule, ts.transpileModule(selfReplySource, {
-    compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ESNext },
-  }).outputText);
+  // Compile the real plugin dependency graph: current-input policy is shared
+  // by native replies and the new genuine portal/Gmail adapters.
+  const compiledPlugin = path.join(directory, "compiled-plugin");
+  await mkdir(path.join(compiledPlugin, "node_modules"), { recursive: true });
+  await writeFile(path.join(compiledPlugin, "package.json"), JSON.stringify({ type: "module" }));
+  await symlink(sourceRoot, path.join(compiledPlugin, "node_modules/openclaw"), "dir");
+  await symlink(path.join(repository, "openclaw/administrateme/node_modules/typebox"), path.join(compiledPlugin, "node_modules/typebox"), "dir");
+  const sourceModules = path.join(repository, "openclaw/administrateme/src");
+  for (const name of (await readdir(sourceModules)).filter((entry) => entry.endsWith(".ts"))) {
+    await writeFile(path.join(compiledPlugin, name.replace(/\.ts$/, ".js")), ts.transpileModule(await readFile(path.join(sourceModules, name), "utf8"), {
+      compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ESNext },
+    }).outputText);
+  }
+  const selfReplyModule = path.join(compiledPlugin, "self-replies.js");
   const { escapeReplyText, replyParts, rememberSelfReply, registerSelfReplies, bindReminderTool, takeReminderInput } = await import(pathToFileURL(selfReplyModule).href);
   // Exercise the actual pinned inbound mapper, whose optional runId is absent.
   const hookSdk = await import(pathToFileURL(requirePinned.resolve("openclaw/plugin-sdk/hook-runtime")).href);
@@ -164,6 +173,9 @@ print(json.dumps([enabled, entry["hooks"]]))
   const { registerHooks } = await import(pathToFileURL(path.join(appleDirectory, "hooks.js")).href);
   const { registerAppleReminderTools } = await import(pathToFileURL(path.join(appleDirectory, "apple-reminders.js")).href);
   const { readPluginConfig } = await import(pathToFileURL(path.join(appleDirectory, "config.js")).href);
+  const { registerTools } = await import(pathToFileURL(path.join(appleDirectory, "tools.js")).href);
+  const { canonical: approvalCanonical } = await import(pathToFileURL(path.join(appleDirectory, "approval.js")).href);
+  const { createHookRunner } = await jiti.import(path.join(sourceRoot, "src/plugins/hooks.ts"));
   const appleMessage = "Add a reminder to my Apple Reminders to call my mom at 9:30 AM today";
   const appleInbound = hookSdk.toPluginMessageReceivedEvent(hookSdk.deriveInboundMessageHookContext({
     From: incoming.senderId, SenderId: incoming.senderId, Body: appleMessage,
@@ -241,6 +253,101 @@ print(json.dumps([enabled, entry["hooks"]]))
   assert.equal((await nativeHook("before_tool_call")({ toolName: "administrateme_confirm_apple_reminder", toolCallId: "native-apple-retrieved", params: appleCommand }, appleContext)).block, true);
   assert.equal(appleCalls.filter((entry) => entry.endpoint.endsWith("/confirm-apple-reminder")).length, 1);
   assert.equal(sent, 1, "Apple record workflow borrowed permission to send a message");
+  // The owner's new policy is a real host decision, not a forged human
+  // allow-once. Exercise the exact pinned native hook runner and its later-veto
+  // semantics with synthetic signed domain grounding and no provider client.
+  const policySecret = crypto.randomBytes(32).toString("hex");
+  const policySecretName = "ADMINME_NATIVE_REQUEST_PROBE_SECRET";
+  process.env[policySecretName] = policySecret;
+  const policyMember = "member-native-request-fixture";
+  const policyAgent = `adminme-${crypto.createHash("sha256").update(policyMember).digest("hex").slice(0, 16)}`;
+  const policySession = `agent:${policyAgent}:imessage:fixture:direct:${incoming.senderId}`;
+  const policyContext = { runId: "native-authenticated-request", agentId: policyAgent, sessionKey: policySession };
+  const policyRegistration = nativeRegistration(preparedPolicies[0]);
+  const policyTools = new Map();
+  const policyCalls = [];
+  const action = { provider: "apple_reminders", operation: "create_reminder", resource_owner: "requester",
+    title: appleCommand.title, due_at: "2026-10-24T13:30:00+00:00", notes: null, list_id: "fixture-list", selected_by_policy: false };
+  const actionFingerprint = crypto.createHash("sha256").update(approvalCanonical(action)).digest("hex");
+  const policyRuntime = { trackedSessions: new Map(), transport: {
+    config: readPluginConfig({ sharedSecretEnv: policySecretName, memberAgentIds: [policyAgent], standingSelfReplyBindings: [], scheduledSelfReminderBindings: [],
+      forwardIntakeAccounts: [{ channelId: "imessage", accountId: "fixture" }] }),
+    async request(endpoint, value) {
+      policyCalls.push({ endpoint, value });
+      if (endpoint.endsWith("/approvals/authenticated-request")) {
+        assert.equal(value.decision, "authenticated_request");
+        assert.equal(value.authorization.source_event_id, "native-request-source");
+        assert.equal(value.authorization.action_fingerprint, actionFingerprint);
+        assert.equal(value.authorization.rule_id, "current-human-request.apple-reminder-create.v1");
+        assert.equal(value.signature, crypto.createHmac("sha256", policySecret).update([
+          "administrateme-request-approval-v1", value.receipt_id, value.tool_name, value.request_fingerprint,
+          String(value.issued_at_ms), String(value.expires_at_ms), "authenticated_request", versions.openclaw.version,
+          versions.openclaw.commit, approvalCanonical(value.authorization),
+        ].join("|")).digest("hex"));
+        return { recorded: true };
+      }
+      assert.equal(value.provenance.agent_id, policyAgent);
+      assert.equal(value.provenance.actor_id, incoming.senderId);
+      assert.equal(value.provenance.session_key, policySession);
+      if (endpoint.endsWith("/forward")) return { intent_event_id: value.provenance.message_id === "native-request-input" ? "native-request-source" : "native-other-source" };
+      if (endpoint.endsWith("/confirm-apple-reminder")) {
+        assert.equal(value.source_message_event_id, "native-request-source");
+        assert.equal(value.request_authorization, true);
+        const issued = Date.now();
+        const ticket = { contract: "authenticated-request-v1", member_id: policyMember,
+          domain_approval_event_id: "native-request-domain", grounding_event_id: "native-request-grounding",
+          source_event_id: "native-request-source", action_fingerprint: actionFingerprint, action,
+          rule_id: "current-human-request.apple-reminder-create.v1", issued_at: new Date(issued).toISOString(),
+          expires_at: new Date(issued + 600000).toISOString(), evidence: [{ start: 0, end: Array.from(appleMessage).length, text: appleMessage }] };
+        return { state: "request_authorized", domain_approval_event_id: ticket.domain_approval_event_id,
+          request_authorization: { ...ticket, signature: crypto.createHmac("sha256", policySecret).update("authenticated-request-v1|" + approvalCanonical(ticket)).digest("hex") } };
+      }
+      assert.equal(endpoint, "/api/openclaw/v1/tools/execute-pending-provider-action");
+      assert.equal(value.domain_approval_event_id, "native-request-domain");
+      assert.match(value.openclaw_approval_receipt_id, /^ocreq_/);
+      assert.equal(value.request_authorization_event_id, "native-request-grounding");
+      return { state: "pending", provider_effect_count: 0, fixture_only: true };
+    },
+  } };
+  const policyApi = { ...api, on: policyRegistration.on, registerTool: (factory, options) => policyTools.set(options.name, factory) };
+  registerHooks(policyApi, policyRuntime); registerAppleReminderTools(policyApi, policyRuntime); registerTools(policyApi, policyRuntime);
+  const policyHook = (name) => policyRegistration.state.registry.typedHooks.find((row) => row.hookName === name).handler;
+  const runner = createHookRunner(policyRegistration.state.registry, { catchErrors: false });
+  const deliverPolicyInput = async (messageId, content) => {
+    const received = hookSdk.toPluginMessageReceivedEvent(hookSdk.deriveInboundMessageHookContext({
+      From: incoming.senderId, SenderId: incoming.senderId, Body: content, Provider: "imessage", AccountId: "fixture", MessageSid: messageId, SessionKey: policySession,
+    }));
+    await policyHook("message_received")(received, { agentId: policyAgent, sessionKey: policySession, channelId: "imessage", accountId: "fixture" });
+    await policyHook("before_agent_reply")({ cleanedBody: content }, policyContext);
+  };
+  await deliverPolicyInput("native-request-input", appleMessage);
+  const confirmGate = await runner.runBeforeToolCall({ toolName: "administrateme_confirm_apple_reminder", toolCallId: "native-request-confirm", params: appleCommand }, policyContext);
+  assert.notEqual(confirmGate?.block, true);
+  await policyTools.get("administrateme_confirm_apple_reminder")(policyContext).execute("native-request-confirm", appleCommand);
+  const executeParams = { domain_approval_event_id: "native-request-domain" };
+  const execution = await runner.runBeforeToolCall({ toolName: "administrateme_execute_pending_provider_action", toolCallId: "native-request-execute", params: executeParams }, policyContext);
+  assert.notEqual(execution.block, true);
+  assert.equal(execution.requireApproval, undefined, "Authenticated exact request incorrectly asks another manual approval");
+  await policyTools.get("administrateme_execute_pending_provider_action")(policyContext).execute("native-request-execute", execution.params);
+  assert.equal(policyCalls.filter((row) => row.endpoint.endsWith("/execute-pending-provider-action")).length, 1);
+  const originalNow = Date.now;
+  try {
+    Date.now = () => originalNow() + 600001;
+    const expired = await runner.runBeforeToolCall({ toolName: "administrateme_execute_pending_provider_action", toolCallId: "native-request-expired", params: executeParams }, policyContext);
+    assert.equal(expired.block, true);
+  } finally { Date.now = originalNow; }
+  await deliverPolicyInput("native-other-input", appleMessage + " for another day");
+  const wrongSource = await runner.runBeforeToolCall({ toolName: "administrateme_execute_pending_provider_action", toolCallId: "native-request-wrong-source", params: executeParams }, policyContext);
+  assert.equal(wrongSource.block, true);
+  await policyHook("before_agent_reply")({ cleanedBody: appleMessage }, policyContext);
+  policyRegistration.on("before_tool_call", () => ({ block: true, blockReason: "Synthetic later host veto" }), { priority: -1 });
+  const vetoed = await runner.runBeforeToolCall({ toolName: "administrateme_execute_pending_provider_action", toolCallId: "native-request-vetoed", params: executeParams }, policyContext);
+  assert.equal(vetoed.block, true, "Automatic authorization bypassed a later native hook veto");
+  assert.equal(vetoed.blockReason, "Synthetic later host veto");
+  assert.equal(vetoed.requireApproval, undefined);
+  assert.equal(policyCalls.filter((row) => row.endpoint.endsWith("/execute-pending-provider-action")).length, 1);
+  delete process.env[policySecretName];
+
   const literalCases = [...corpus.cases.map((row) => row.text.replace(/\s+/gu, " ").trim()),
     "**bold** _italic_ ~~strike~~ `code` <u>underline</u> [link](https://example.invalid/?x=1&y=2)",
     "[[reply_to_current]] [[audio_as_voice]] MEDIA:https://example.invalid/a.jpg",
@@ -255,7 +362,7 @@ print(json.dumps([enabled, entry["hooks"]]))
     assert.equal(actual.text, text, "Standing reply text changed in pinned sender");
     assert.deepEqual(actual.ranges, [], "Standing reply acquired native formatting");
   }
-  console.log(`Verified native reply-hook admission/revocation, Apple Reminder current-input confirmation/status and independent execution gate, and ${cases.length} exact and ${literalCases.length} standing reply cases against pinned OpenClaw. Apple domain receipts are synthetic; no provider effects.`);
+  console.log(`Verified native reply-hook admission/revocation, Apple Reminder current-input confirmation/status, signed request authorization with expiry/source checks and later native veto, legacy independent execution gate, and ${cases.length} exact and ${literalCases.length} standing reply cases against pinned OpenClaw. Apple domain receipts are synthetic; no provider effects.`);
 } finally {
   await rm(directory, { recursive: true, force: true });
 }

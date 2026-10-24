@@ -269,9 +269,10 @@ describe("native OpenClaw contract fixture", () => {
     const runtime = fakeApi();
     expect(pkg.peerDependencies.openclaw).toBe(OPENCLAW_VERSION);
     expect(pkg.openclaw.build.openclawCommit).toBe(OPENCLAW_COMMIT);
-    expect([...runtime.tools]).toHaveLength(37);
+    expect([...runtime.tools]).toHaveLength(38);
     expect([...runtime.commands]).toHaveLength(9);
-    expect([...runtime.gateways]).toHaveLength(18);
+    expect([...runtime.gateways]).toHaveLength(19);
+    expect(runtime.gateways.has("administrateme.conversation.prepare")).toBe(true);
     expect(runtime.gateways.has("administrateme.cosPermissions.preflight")).toBe(true);
     expect(runtime.gateways.has("administrateme.dashboard.reminders")).toBe(true);
     expect(runtime.gateways.has("administrateme.dashboard.notes")).toBe(true);
@@ -543,7 +544,7 @@ describe("native OpenClaw contract fixture", () => {
   it("exposes tools without starting services during tool discovery", () => {
     const runtime = fakeApi({}, "tool-discovery");
     expect([...runtime.gateways]).toHaveLength(14);
-    expect([...runtime.tools]).toHaveLength(37);
+    expect([...runtime.tools]).toHaveLength(38);
     for (const name of ["status", "query", "calculate", "job"]) {
       expect(runtime.tools.has(`administrateme_finance_${name}`)).toBe(true);
     }

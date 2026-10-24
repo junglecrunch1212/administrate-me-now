@@ -67,7 +67,8 @@
       "administrateme_service_private_work",
       "administrateme_service_private_work_state",
       "administrateme_service_private_state",
-      "administrateme_service_context"
+      "administrateme_service_context",
+      "administrateme_workstation_inventory"
     ]
   },
   "toolMetadata": {
@@ -105,7 +106,8 @@
     "administrateme_service_private_work": { "optional": true },
     "administrateme_service_private_work_state": { "optional": true },
     "administrateme_service_private_state": { "optional": true },
-    "administrateme_service_context": { "optional": true }
+    "administrateme_service_context": { "optional": true },
+    "administrateme_workstation_inventory": { "optional": true }
   },
   "dashboard": {
     "dataBindings": [

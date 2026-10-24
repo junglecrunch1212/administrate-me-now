@@ -86,6 +86,7 @@ export const TOOL_NAMES = [
   "administrateme_service_private_work_state",
   "administrateme_service_private_state",
   "administrateme_service_context",
+  "administrateme_workstation_inventory",
 ] as const;
 
 export const SIDE_EFFECT_TOOL_NAMES = new Set<string>([

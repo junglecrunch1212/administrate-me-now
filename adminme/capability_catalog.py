@@ -1314,6 +1314,13 @@ def compose_member_catalog(
                             "native_tool_authority": native_tool_authority,
                             "tool_availability_basis": "plugin_contract_and_current_authority",
                             "domain_confirmation_is_execution_approval": False,
+                            "execution_authority_modes": [
+                                "authenticated_current_request_policy",
+                                "legacy_independent_allow_once",
+                            ],
+                            "current_request_rule": "current-human-request.apple-reminder-create.v1",
+                            "policy_receipt_is_human_approval": False,
+                            "historical_pending_auto_resume": False,
                         }
                         if native_reminders
                         else {}

@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { OpenClawPluginApi, PluginHookAgentContext } from "openclaw/plugin-sdk/plugin-entry";
 import type { Provenance } from "./contract.js";
 import type { PluginRuntime } from "./runtime.js";
+import { bindConversationTool, takeConversationInput, peekConversationInput } from "./conversation-input.js";
 
 type Inbound = { provenance: Provenance; sourceId: Promise<string | undefined>; binding: string; capturedAt: number; runId: string | undefined; text: string };
 const pending = new WeakMap<PluginRuntime, Map<string, Inbound>>();
@@ -35,6 +36,7 @@ const reminderTurns = new WeakMap<PluginRuntime, Map<string, Inbound>>();
 const reminderCalls = new WeakMap<PluginRuntime, Map<string, Inbound>>();
 
 export function bindReminderTool(runtime: PluginRuntime, context: { runId?: string | undefined; sessionKey?: string | undefined; agentId?: string | undefined }, callId: string | undefined): boolean {
+  if (bindConversationTool(runtime, context, callId)) return true;
   if (!callId || !context.runId) return false;
   const input = reminderTurns.get(runtime)?.get(context.runId);
   if (!input || input.provenance.session_key !== context.sessionKey || input.provenance.agent_id !== context.agentId || Date.now() - input.capturedAt > 3_600_000) return false;
@@ -46,12 +48,24 @@ export function bindReminderTool(runtime: PluginRuntime, context: { runId?: stri
 }
 
 export async function takeReminderInput(runtime: PluginRuntime, callId: string, context: { sessionKey?: string; agentId?: string }) {
+  const conversation = takeConversationInput(runtime, callId, context);
+  if (conversation) return conversation;
   const input = reminderCalls.get(runtime)?.get(callId);
   reminderCalls.get(runtime)?.delete(callId);
   if (!input || input.provenance.session_key !== context.sessionKey || input.provenance.agent_id !== context.agentId || Date.now() - input.capturedAt > 3_600_000) throw new Error("No current private reminder request");
   const sourceId = await input.sourceId;
   if (!sourceId) throw new Error("Reminder request was not durably acknowledged");
-  return { provenance: input.provenance, source_message_event_id: sourceId, host_binding: input.binding };
+  return { provenance: input.provenance, source_message_event_id: sourceId, host_binding: input.binding, instruction_text: input.text };
+}
+
+/** Read-only current-input binding for independent action policy evaluation. */
+export async function peekReminderInput(runtime: PluginRuntime, context: { runId?: string | undefined; sessionKey?: string | undefined; agentId?: string | undefined }) {
+  const conversation = peekConversationInput(runtime, context);
+  if (conversation) return conversation;
+  const input = context.runId ? reminderTurns.get(runtime)?.get(context.runId) : undefined;
+  if (!input || input.provenance.session_key !== context.sessionKey || input.provenance.agent_id !== context.agentId || Date.now() - input.capturedAt > 3_600_000) return undefined;
+  const source = await input.sourceId;
+  return source ? { provenance: { ...input.provenance }, source_message_event_id: source, instruction_text: input.text } : undefined;
 }
 
 function record(value: unknown): Record<string, any> {

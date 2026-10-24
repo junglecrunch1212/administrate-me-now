@@ -6,6 +6,7 @@ from collections import defaultdict
 from collections.abc import Callable
 from datetime import datetime, timedelta
 import re
+import hashlib
 from typing import Any
 
 from adminme.cos_response_policy import POLICY_EVENT_TYPE, recipient_decision
@@ -23,6 +24,8 @@ CONTEXT_TYPES = {
     POLICY_EVENT_TYPE,
     "openclaw.approval.received",
     "cos.reply.openclaw_authorized",
+    "cos.conversation.reply_authorized",
+    "cos.conversation.instruction",
     "cos.reply.reminder_requested",
     "cos.reply.reminder_bound",
     "cos.reply.reminder_cancelled",
@@ -52,6 +55,39 @@ def _private(event: dict[str, Any], approved: dict[str, Any]) -> bool:
         and event.get("owner_scope") == f"private:{member}"
         and event.get("visibility_scope") == f"private:{member}"
         and event.get("actor_identity") in {member, COS_SERVICE_PRINCIPAL_ID}
+    )
+
+
+def _conversation_valid(
+    approved: dict[str, Any], by_id: dict[str, dict[str, Any]]
+) -> bool:
+    p = approved.get("payload") or {}
+    source = by_id.get(str(p.get("conversation_source_event_id")), {})
+    payload = source.get("payload") or {}
+    submitted, started = _time(payload.get("submitted_at")), _time(p.get("approved_at"))
+    return bool(
+        p.get("authorization_method") == "authenticated_conversation"
+        and p.get("channel") == "email"
+        and _private(source, approved)
+        and approved.get("actor_identity") == COS_SERVICE_PRINCIPAL_ID
+        and source.get("type") == "cos.conversation.instruction"
+        and source.get("schema_version") == 1
+        and source.get("source_adapter") == "cos-conversation"
+        and source.get("actor_identity")
+        == payload.get("member_id")
+        == p.get("member_id")
+        and payload.get("authentication_rule")
+        == "enrolled_receiver_authenticated_sender"
+        and payload.get("channel_id") == "gmail"
+        and payload.get("account_id") == p.get("provider_account_id")
+        and payload.get("thread_id") == p.get("thread_id")
+        and payload.get("source_message_event_id")
+        and p.get("in_reply_to")
+        and approved.get("causation_id") == source.get("event_id")
+        and submitted is not None
+        and started is not None
+        and 0 <= (started - submitted).total_seconds() <= 3600
+        and str(source.get("event_id")) < str(approved.get("event_id"))
     )
 
 
@@ -211,7 +247,9 @@ def _approval_valid(approved: dict[str, Any], by_id: dict[str, dict[str, Any]]) 
             approved.get("type") == APPROVED
             and payload.get("contract") == RESPONSE_CONTRACT
             and (
-                _standing_valid(approved, by_id)
+                _conversation_valid(approved, by_id)
+                if payload.get("authorization_method") == "authenticated_conversation"
+                else _standing_valid(approved, by_id)
                 if payload.get("authorization_method")
                 in {"standing_self_reply", "requested_self_reminder"}
                 else approved.get("actor_identity") == payload.get("member_id")
@@ -267,6 +305,74 @@ def _attempt_valid(
         and str(event["event_id"]) < str(attempt["event_id"])
     ]
     latest = max(preceding, key=lambda event: str(event["event_id"]), default={})
+    if approval.get("authorization_method") == "authenticated_conversation":
+        host = receipt.get("host_decision") or {}
+        source = (
+            by_id.get(str(approval.get("conversation_source_event_id")), {}).get(
+                "payload"
+            )
+            or {}
+        )
+        try:
+            host_timely = (
+                isinstance(host["issued_at_ms"], int)
+                and isinstance(host["expires_at_ms"], int)
+                and attempted is not None
+                and host["issued_at_ms"]
+                <= attempted.timestamp() * 1000
+                < host["expires_at_ms"]
+                and 0 < host["expires_at_ms"] - host["issued_at_ms"] <= 120_000
+            )
+        except (KeyError, TypeError):
+            host_timely = False
+        return bool(
+            _conversation_valid(approved, by_id)
+            and _private(attempt, approved)
+            and _private(openclaw, approved)
+            and payload.get("contract") == RESPONSE_CONTRACT
+            and payload.get("member_id")
+            == approval.get("member_id")
+            == receipt.get("member_id")
+            and payload.get("content_fingerprint")
+            == approval.get("content_fingerprint")
+            == receipt.get("content_fingerprint")
+            and payload.get("policy_event_id")
+            == approval.get("policy_event_id")
+            == latest.get("event_id")
+            and payload.get("automatic_retry_allowed") is False
+            and attempt.get("causation_id") == openclaw_id
+            and openclaw.get("type") == "cos.conversation.reply_authorized"
+            and openclaw.get("causation_id") == approved.get("event_id")
+            and receipt.get("approval_event_id") == approved.get("event_id")
+            and receipt.get("source_event_id")
+            == approval.get("conversation_source_event_id")
+            == host.get("source_event_id")
+            and host.get("contract") == "authenticated-conversation-reply-v1"
+            and host.get("channel") == "gmail"
+            and host.get("rule_id") == "same_conversation_reply_v1"
+            and host.get("body_sha256")
+            == hashlib.sha256(approval.get("body", "").encode()).hexdigest()
+            and all(
+                host.get(key) == source.get(key)
+                for key in (
+                    "account_id",
+                    "actor_id",
+                    "session_key",
+                    "agent_id",
+                    "message_id",
+                    "thread_id",
+                )
+            )
+            and receipt.get("automatic_retry_allowed") is False
+            and host_timely
+            and attempted is not None
+            and start is not None
+            and end is not None
+            and start <= attempted < end
+            and str(approved["event_id"])
+            < str(openclaw["event_id"])
+            < str(attempt["event_id"])
+        )
     if approval.get("authorization_method") in {
         "standing_self_reply",
         "requested_self_reminder",
