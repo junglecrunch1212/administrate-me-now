@@ -81,9 +81,17 @@ The failed request started 4.9950 seconds after the prior response completed.
 Idle expiry is a hypothesis; the original trace cannot prove it. A separately
 versioned hosted diagnostic deliberately yields between connection selection and
 header transmission across server idle expiry, retaining the failed attempt and
-comparing a shorter client idle lifetime. This is a mechanism test, not resource
-qualification or retrospective proof. No failed request is retried or omitted;
-new native qualification requires its corrected exact-head scope to be reviewed.
+comparing a shorter client idle lifetime. On evaluated checkout
+`7a49a8cbea7f77df495dfa9a9cf2855714c5a94b`, both hosted platforms reproduced a
+server-expiry failure with the five-second client; Linux returned
+`RemoteProtocolError`, while macOS reproduced the empty `ReadError` with
+`ConnectionResetError`/errno 54 underneath. The four-second control opened a new
+connection and succeeded on both platforms. The diagnostic's deliberate yield
+establishes the mechanism, not retrospective certainty about the untraced Mini
+request. The fixture now expires client connections after four seconds and
+retains bounded exception chains; no failed request is retried or omitted.
+This is not resource qualification. New native qualification requires its
+corrected exact-head scope to be reviewed.
 
 ## Implemented boundaries
 

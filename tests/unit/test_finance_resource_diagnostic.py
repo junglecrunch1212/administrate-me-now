@@ -6,6 +6,7 @@ import time
 from pathlib import Path
 
 import yaml
+import httpx
 
 import pytest
 
@@ -224,3 +225,40 @@ def test_diagnostic_runner_paths_are_only_resolved_inside_steps():
         == "${{ runner.temp }}/finance-resources"
         for step in execution_steps
     )
+
+
+async def test_empty_read_error_retains_reset_cause_and_is_not_retried(tmp_path):
+    calls = []
+
+    async def call(client, index):
+        calls.append(index)
+        try:
+            raise ConnectionResetError(54, "Connection reset by peer")
+        except ConnectionResetError as cause:
+            raise httpx.ReadError("") from cause
+
+    path = tmp_path / "requests.jsonl"
+    result = await run_phase(
+        None,
+        call,
+        phase="normal",
+        start=time.monotonic(),
+        duration=0.01,
+        rate=100,
+        operation=lambda index: "status",
+        output=path,
+    )
+    [row] = [json.loads(line) for line in path.read_text().splitlines()]
+    assert calls == [0]
+    assert result["outcomes"] == {"error": 1}
+    assert row["error_type"] == "ReadError" and row["error"] == ""
+    assert row["exception_chain"] == [
+        {"type": "ReadError", "message": "", "errno": None},
+        {
+            "type": "ConnectionResetError",
+            "message": "[Errno 54] Connection reset by peer",
+            "errno": 54,
+        },
+    ]
+    assert result["attempt_latency_ms_including_errors"]["count"] == 1
+    assert result["success_latency_ms"]["count"] == 0

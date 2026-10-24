@@ -43,6 +43,22 @@ def append_record(path: Path, value: dict) -> None:
         stream.flush()
 
 
+def exception_chain(exc):
+    result = []
+    seen = set()
+    while exc is not None and id(exc) not in seen and len(result) < 4:
+        seen.add(id(exc))
+        result.append(
+            {
+                "type": type(exc).__name__,
+                "message": str(exc)[:250],
+                "errno": getattr(exc, "errno", None),
+            }
+        )
+        exc = exc.__cause__ or exc.__context__
+    return result
+
+
 def quantiles(values: list[float]) -> dict:
     ordered = sorted(values)
     return {
@@ -158,6 +174,7 @@ async def run_phase(
                     latency_ms=(time.monotonic() - dispatched) * 1000,
                     error_type=type(exc).__name__,
                     error=str(exc)[:500],
+                    exception_chain=exception_chain(exc),
                 )
             finally:
                 TRACE.reset(token)

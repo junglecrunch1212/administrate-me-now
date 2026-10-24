@@ -20,27 +20,12 @@ import uvicorn
 from uvicorn.protocols.http.auto import AutoHTTPProtocol
 
 from tests.acceptance.test_finance_mixed_load import _client
+from tests.fixtures.finance_resource_diagnostic import exception_chain
 
 pytestmark = pytest.mark.skipif(
     os.getenv("ADMINME_FINANCE_IDLE_DIAGNOSTIC") != "1",
     reason="separate bounded hosted connection diagnostic only",
 )
-
-
-def _exception_chain(exc):
-    result = []
-    seen = set()
-    while exc is not None and id(exc) not in seen and len(result) < 4:
-        seen.add(id(exc))
-        result.append(
-            {
-                "type": type(exc).__name__,
-                "message": str(exc)[:250],
-                "errno": getattr(exc, "errno", None),
-            }
-        )
-        exc = exc.__cause__ or exc.__context__
-    return result
 
 
 async def _case(shorter_expiry):
@@ -104,6 +89,9 @@ async def _case(shorter_expiry):
         "deliberate_yield_at_header_send": True,
         "server_idle_seconds": 5,
         "protocol": AutoHTTPProtocol.__name__,
+        "client_role": "corrected_candidate"
+        if shorter_expiry
+        else "historical_control",
         "events": events,
         "requests": requests,
     }
@@ -122,11 +110,11 @@ async def _case(shorter_expiry):
                 trust_env=False,
                 transport=httpx.AsyncHTTPTransport(
                     trust_env=False,
-                    limits=httpx.Limits(keepalive_expiry=4),
+                    limits=httpx.Limits(keepalive_expiry=5),
                     socket_options=[(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)],
                 ),
             )
-            if shorter_expiry
+            if not shorter_expiry
             else _client(url)
         )
         async with client:
@@ -152,7 +140,7 @@ async def _case(shorter_expiry):
                 result["http_status"] = response.status_code
             except httpx.TransportError as exc:
                 result["outcome"] = "error"
-                result["exceptions"] = _exception_chain(exc)
+                result["exceptions"] = exception_chain(exc)
             result["second_finished_at"] = time.monotonic()
     finally:
         server.should_exit = True

@@ -778,6 +778,9 @@ def _client(url: str) -> httpx.AsyncClient:
         trust_env=False,
         transport=httpx.AsyncHTTPTransport(
             trust_env=False,
+            # Discard idle sockets before the server's five-second close.
+            # Equal deadlines race at the normal 0.2-Hz Finance cadence.
+            limits=httpx.Limits(keepalive_expiry=4),
             socket_options=[(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)],
         ),
     )
