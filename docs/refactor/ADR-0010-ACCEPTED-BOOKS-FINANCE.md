@@ -112,9 +112,11 @@ book binding and separate Books-dashboard / CoS-analysis permissions at
 the existing private-context read grant; the Finance control never creates or
 widens generic delegations. Current owner/book authority is re-read after tool
 retrieval and audit, before disclosure. Revocation closes delivery immediately;
-an unavailable or malformed owner control disables that owner's Finance without
-preventing unrelated household services from starting. Durable controls survive
-restart. Source identity creation and provider enrollment are outside this seam.
+an unavailable or malformed owner control makes that owner's Finance dashboard
+explicitly unavailable rather than substituting legacy totals, without preventing
+other owners' Finance or unrelated household services from starting. A verified
+empty or intentionally disabled control preserves the existing legacy view.
+Durable controls survive restart. Source identity creation and provider enrollment are outside this seam.
 
 The owner separately approves a `household-books.closed-import.v1` manifest with
 exact component hashes, byte limits, source snapshot and independently reviewed

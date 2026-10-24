@@ -526,6 +526,21 @@ def test_one_owner_control_failure_does_not_abort_runtime(
         assert runtime.started
         assert client.get(CONTROL, headers=DEMO_HEADERS).status_code == 503
         assert client.get(CONTROL, headers=OTHER_HEADERS).status_code == 200
+        # Failed owner authority cannot silently substitute the legacy Finance
+        # source. Another owner's default-off dashboard remains usable.
+        finance = client.get(SURFACE, headers=DEMO_HEADERS)
+        assert finance.status_code == 503
+        assert finance.json() == {"detail": "finance_control_unavailable"}
+        assert client.get(SURFACE, headers=OTHER_HEADERS).status_code == 200
+        assert (
+            client.get("/api/member/v1/finance/choices", headers=DEMO_HEADERS).status_code
+            == 403
+        )
+        _grant_cos(client, "activation-unavailable-control")
+        cos = _post(client, "status", "activation-unavailable-status")
+        assert cos.status_code == 200, cos.text
+        assert cos.json()["state"] == "permission_required"
+        assert "publication" not in cos.json()
         assert (
             client.get(
                 "/api/member/v1/surfaces/reminders", headers=DEMO_HEADERS
