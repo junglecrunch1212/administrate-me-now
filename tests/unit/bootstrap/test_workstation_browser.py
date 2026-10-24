@@ -128,7 +128,10 @@ def test_native_patch_uses_hash_guard_and_only_browser_and_existing_cos_agent(tm
             "entries": {
                 "administrateme": {
                     "enabled": True,
-                    "hooks": {"allowPromptInjection": True},
+                    "hooks": {
+                        "allowPromptInjection": True,
+                        "allowConversationAccess": True,
+                    },
                 }
             }
         },
@@ -171,6 +174,12 @@ def test_native_patch_uses_hash_guard_and_only_browser_and_existing_cos_agent(tm
     prepared["plugins"]["entries"]["administrateme"]["hooks"][
         "allowPromptInjection"
     ] = True
+    prepared["plugins"]["entries"]["administrateme"]["hooks"][
+        "allowConversationAccess"
+    ] = False
+    assert native_service_tools(prepared, paths, release) == []
+    with pytest.raises(ValueError, match="finite worker policy hook"):
+        prepare_native_patch({**snapshot, "config": prepared}, paths, release)
     prepared["plugins"]["entries"]["administrateme"]["enabled"] = False
     assert native_service_tools(prepared, paths, release) == []
     manifest.write_text(json.dumps({"contracts": {}}))
