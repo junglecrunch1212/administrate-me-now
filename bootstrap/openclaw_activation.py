@@ -542,6 +542,7 @@ def _prepare_workstation_hook(config: dict[str, Any], release: Path) -> dict[str
     plugin = config.get("plugins", {}).get("entries", {}).get("administrateme", {})
     if (
         plugin.get("enabled") is True
+        and plugin.get("hooks", {}).get("allowConversationAccess") is True
         and plugin.get("config", {}).get("serviceWorkEnabled") is not False
     ):
         plugin.setdefault("hooks", {})["allowPromptInjection"] = True
