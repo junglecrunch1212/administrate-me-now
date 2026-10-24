@@ -27,6 +27,7 @@ def test_native_pairing_preparation_preserves_tools_and_rejects_ambiguous_profil
     assert original.get("browser") is None
     assert prepared["agents"] == original["agents"]
     assert prepared["browser"]["allowSystemProfileImport"] is False
+    assert prepared["browser"]["profiles"] == {"chrome": {"driver": "extension"}}
     assert prepared["gateway"] == original["gateway"]
     assert_single_extension_profile(prepared)
     for alternate in ({"driver": "extension"}, {"driver": "existing-session"}):
@@ -37,7 +38,7 @@ def test_native_pairing_preparation_preserves_tools_and_rejects_ambiguous_profil
             ambiguous["browser"]["profiles"]["chrome"] = alternate
         with pytest.raises(ValueError):
             prepare_browser_gateway(ambiguous)
-    for field in ("userDataDir", "cdpUrl", "mcpCommand"):
+    for field in ("userDataDir", "cdpUrl", "mcpCommand", "color"):
         changed = deepcopy(prepared)
         changed["browser"]["profiles"]["chrome"][field] = "unapproved-session"
         with pytest.raises(ValueError):

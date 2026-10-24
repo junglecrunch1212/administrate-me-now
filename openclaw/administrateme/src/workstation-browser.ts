@@ -36,7 +36,7 @@ export function assertNativeBrowserRoute(config: Record<string, unknown>): void 
   if (browser.enabled !== true || browser.defaultProfile !== "chrome" ||
       browser.allowSystemProfileImport !== false || browser.evaluateEnabled !== true ||
       extensions.length !== 1 || extensions[0] !== "chrome" ||
-      Object.keys(object(profiles.chrome)).some((key) => !["driver", "color", "cdpPort"].includes(key))) {
+      Object.keys(object(profiles.chrome)).some((key) => !["driver", "cdpPort"].includes(key))) {
     throw new Error("One explicit CoS extension profile with session import disabled is required.");
   }
 }

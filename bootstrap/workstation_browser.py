@@ -124,6 +124,7 @@ def native_service_tools(
         if (
             plugins.get("enabled") is False
             or entry.get("enabled") is not True
+            or entry.get("hooks", {}).get("allowPromptInjection") is not True
             or plugins.get("entries", {}).get("browser", {}).get("enabled") is False
             or (
                 isinstance(plugins.get("allow"), list)
@@ -185,6 +186,9 @@ def prepare_native_patch(
     if disable:
         patch: dict[str, Any] = {"browser": {"enabled": False}}
     else:
+        entry = original.get("plugins", {}).get("entries", {}).get("administrateme", {})
+        if entry.get("hooks", {}).get("allowPromptInjection") is not True:
+            raise ValueError("the deployed finite worker policy hook must be enabled")
         prepared = prepare_browser_gateway(original)
         patch = {
             "browser": prepared["browser"],

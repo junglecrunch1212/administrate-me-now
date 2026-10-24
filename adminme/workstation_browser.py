@@ -198,7 +198,7 @@ def assert_single_extension_profile(gateway: dict[str, Any]) -> None:
             "the explicit browser profile must have system-profile import disabled"
         )
     row = profiles[BROWSER_PROFILE]
-    if set(row) - {"driver", "color", "cdpPort"}:
+    if set(row) - {"driver", "cdpPort"}:
         raise ValueError(
             "extension profile cannot carry another browser/session attachment"
         )
@@ -227,7 +227,7 @@ def prepare_browser_gateway(gateway: dict[str, Any]) -> dict[str, Any]:
         or profiles[BROWSER_PROFILE].get("driver") != "extension"
     ):
         raise ValueError("the chrome profile already uses another driver")
-    profiles.setdefault(BROWSER_PROFILE, {"driver": "extension", "color": "#4477AA"})
+    profiles.setdefault(BROWSER_PROFILE, {"driver": "extension"})
     browser.update(
         {
             "enabled": True,

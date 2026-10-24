@@ -561,14 +561,10 @@ def prepare_service_topology(
     The installer uses the same transformation; no agent, tool or grant field
     is omitted from the later compatibility comparison.
     """
-    return _prepare_workstation_hook(
-        _prepare_service_topology(
-            gateway,
-            paths,
-            _service_release_workspace(release),
-            native_service_tools(gateway, paths, release),
-        ),
-        release,
+    files = _service_release_workspace(release)
+    prepared = _prepare_workstation_hook(copy.deepcopy(gateway), release)
+    return _prepare_service_topology(
+        prepared, paths, files, native_service_tools(prepared, paths, release)
     )
 
 
@@ -579,10 +575,9 @@ def reconcile_service_topology(paths: DeploymentPaths, release: Path) -> dict[st
     if config_path.is_symlink() or not config_path.is_file():
         raise RuntimeError("service topology requires the runtime configuration")
     previous = json.loads(config_path.read_text("utf-8"))
-    native_tools = native_service_tools(previous, paths, release)
-    config = _prepare_workstation_hook(
-        _prepare_service_topology(previous, paths, files, native_tools), release
-    )
+    prepared = _prepare_workstation_hook(copy.deepcopy(previous), release)
+    native_tools = native_service_tools(prepared, paths, release)
+    config = _prepare_service_topology(prepared, paths, files, native_tools)
     if files is not None:
         workspace = service_workspace_path(
             paths.instance_dir / "openclaw",

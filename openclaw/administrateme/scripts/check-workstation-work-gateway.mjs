@@ -131,7 +131,7 @@ try {
     models: { mode: "replace", providers: { fixture: { baseUrl: `${fixtures.baseUrl}/v1`, apiKey: "synthetic-fixture-only", api: "openai-responses", models: [{ id: "service-work", name: "service-work", api: "openai-responses", reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 128000, maxTokens: 4096 }] } } },
     tools: { codeMode: false },
     plugins: { allow: ["administrateme", ...(browserProbe ? ["browser"] : [])], load: { paths: [plugin] }, slots: { memory: "none" }, entries: { administrateme: { enabled: true, config: { baseUrl: fixtures.baseUrl, memberAgentIds: [memberAgent] }, hooks: { allowConversationAccess: true, allowPromptInjection: true } } } },
-    channels: {}, cron: { enabled: false }, browser: browserProbe ? { enabled: true, evaluateEnabled: true, allowSystemProfileImport: false, defaultProfile: "chrome", profiles: { chrome: { driver: "extension", cdpPort: relayPort, color: "#00AA44" } } } : { enabled: false }, discovery: { mdns: { mode: "off" } }, update: { checkOnStart: false, auto: { enabled: false } }, logging: { file: path.join(state, "gateway.log") },
+    channels: {}, cron: { enabled: false }, browser: browserProbe ? { enabled: true, evaluateEnabled: true, allowSystemProfileImport: false, defaultProfile: "chrome", profiles: { chrome: { driver: "extension", cdpPort: relayPort } } } : { enabled: false }, discovery: { mdns: { mode: "off" } }, update: { checkOnStart: false, auto: { enabled: false } }, logging: { file: path.join(state, "gateway.log") },
   };
   await writeFile(configPath, JSON.stringify(config), { mode: 0o600 });
   const request = await start();

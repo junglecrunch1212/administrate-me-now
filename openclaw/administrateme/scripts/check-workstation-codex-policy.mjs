@@ -2,6 +2,7 @@
  * No Codex login, model/provider call, browser, command or connector is executed.
  */
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
@@ -42,6 +43,17 @@ try {
   const module = (name) => import(pathToFileURL(path.join(plugin, name)).href);
   const { registerWorkstationWorkHooks } = await module("workstation-work.js");
   const hasBrowser = (await readdir(sourceModules)).includes("workstation-browser-hooks.ts");
+  if (hasBrowser) {
+    const { OpenClawSchema } = await load("src/config/zod-schema.ts");
+    const prepared = JSON.parse(execFileSync(process.argv[3], ["-c", "import json; from adminme.workstation_browser import prepare_browser_gateway; print(json.dumps(prepare_browser_gateway({})))"], {
+      cwd: repository, env: { ...process.env, PYTHONPATH: `${repository}:${path.join(repository, "bridge")}` }, encoding: "utf8",
+    }));
+    OpenClawSchema.parse(prepared);
+    assert.deepEqual(prepared.browser.profiles.chrome, { driver: "extension" });
+    prepared.browser.profiles.chrome.color = "#4477AA";
+    assert.equal(OpenClawSchema.safeParse(prepared).success, false, "exact pin must reject the failed production preparation shape");
+    console.log("PINNED BROWSER CONFIG: actual supported preparation passes exact native schema; unsupported color rejected: PASS");
+  }
   const registerWorkstationBrowserHooks = hasBrowser ? (await module("workstation-browser-hooks.js")).registerWorkstationBrowserHooks : undefined;
   const { serviceAgentId, serviceSessionKey } = await module("service-private.js");
   const { readPluginConfig } = await module("config.js");

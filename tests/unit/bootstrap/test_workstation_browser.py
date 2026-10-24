@@ -124,7 +124,14 @@ def test_native_patch_uses_hash_guard_and_only_browser_and_existing_cos_agent(tm
     )
     agent = service_agent_id(COS_SERVICE_PRINCIPAL_ID)
     original = {
-        "plugins": {"entries": {"administrateme": {"enabled": True}}},
+        "plugins": {
+            "entries": {
+                "administrateme": {
+                    "enabled": True,
+                    "hooks": {"allowPromptInjection": True},
+                }
+            }
+        },
         "agents": {
             "list": [
                 {"id": agent, "tools": {"allow": list(SERVICE_PRIVATE_TOOLS)}},
@@ -150,6 +157,20 @@ def test_native_patch_uses_hash_guard_and_only_browser_and_existing_cos_agent(tm
     with pytest.raises(ValueError, match="snapshot"):
         prepare_native_patch({**snapshot, "hash": ""}, paths, release)
     prepared = prepare_browser_gateway(original)
+    prepared["plugins"]["entries"]["administrateme"]["hooks"][
+        "allowPromptInjection"
+    ] = False
+    assert native_service_tools(prepared, paths, release) == []
+    with pytest.raises(ValueError, match="finite worker policy hook"):
+        prepare_native_patch({**snapshot, "config": prepared}, paths, release)
+    assert json.loads(
+        prepare_native_patch(
+            {**snapshot, "config": prepared}, paths, release, disable=True
+        )["raw"]
+    ) == {"browser": {"enabled": False}}
+    prepared["plugins"]["entries"]["administrateme"]["hooks"][
+        "allowPromptInjection"
+    ] = True
     prepared["plugins"]["entries"]["administrateme"]["enabled"] = False
     assert native_service_tools(prepared, paths, release) == []
     manifest.write_text(json.dumps({"contracts": {}}))

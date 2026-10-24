@@ -17,6 +17,10 @@ the browser route is a shared native tool boundary, not a separate provider SDK.
 ## Supported private preparation
 
 The protected release must contain both the native hook and result middleware.
+Supported activation enables `allowPromptInjection` only for the reviewed
+AdministrateMe plugin because this pin places finite `toolsAllow` policy inside
+`before_prompt_build`. These hooks return no prompt prose. Browser admission
+requires this setting; ordinary unbound service work keeps its existing surface.
 All account/device/tab inputs and proof remain private, outside Git. Root is the
 sole live operator; candidate tests use disposable hosted state.
 
