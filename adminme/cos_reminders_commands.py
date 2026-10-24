@@ -252,7 +252,7 @@ async def _command_owner_matches(
         and host.get("type") == "openclaw.approval.received"
         and host.get("schema_version") == 2
         and host.get("source_adapter") == "openclaw-plugin"
-        and host.get("actor_identity") in {member, COS_SERVICE_PRINCIPAL_ID}
+        and host.get("actor_identity") == COS_SERVICE_PRINCIPAL_ID
         and host.get("causation_id") == domain_id
         and approval.get("member_id") == member
         and approval.get("tool_name")

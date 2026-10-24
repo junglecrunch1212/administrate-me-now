@@ -110,6 +110,7 @@ def _chain(tmp_path):
         "event_id": "ev_004",
         "type": "openclaw.approval.received",
         "schema_version": 2,
+        "actor_identity": "service-principal:chief-of-staff",
         "source_adapter": "openclaw-plugin",
         "causation_id": domain["event_id"],
         "payload": {
