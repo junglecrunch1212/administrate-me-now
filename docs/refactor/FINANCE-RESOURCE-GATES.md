@@ -153,6 +153,7 @@ evidence, not passing acceptance.
 | `d2115dd9` | 922 Python, 100 native/static/browser, query-work, reader-memory and diagnostic validity checks passed | Before 4.267, after 4.250 → mixed 5.349 ms (1.253548) | Fail; planning also fails at 29.23% |
 | `d616844e` | 922 Python, 100 native/static/browser, query-work and reader-memory checks passed; all four diagnostics failed on an incorrect response-render assertion | Before 3.630, after 3.539 → mixed 4.407 ms (1.214193) | Fail; planning also fails at 22.69% |
 | `7318f4d0` | 922 Python, 100 native/static/browser, query-work, reader-memory and all four repaired diagnostics passed | Before 3.308, after 3.052 → mixed 4.137 ms (1.250530) | Fail; planning also fails at 20.88% |
+| `f8e56dba` (removed) | 924 Python passed; five new audit assertions used the wrong event type; 100 native/static/browser, query-work, reader-memory and all four diagnostics passed | Before 3.401, after 3.391 → mixed 4.382 ms (1.288282) | Fail; planning passed at 1.23% with baseline drift |
 
 The [de8 hosted run](https://github.com/junglecrunch1212/administrate-me-now/actions/runs/40042497072)
 retains 251 admitted finance calls, 18.381/19.970 ms warm status/calculation
@@ -439,16 +440,55 @@ not proof of GIL causality or replacement acceptance. The 600 steady-state lag
 counts come from `_drain_once`; snapshot waiters account only for a few startup
 counts in light profiles, not the measured hot path.
 
-The selected bounded candidate reuses the existing finance admission wait before
-submitting tool-call audits and run receipts, outside EventWriter/projection
-locks. It leaves bus delivery, checkpointing, lag status and authority changes
-untouched. A tool audit is still attempted if the new wait is cancelled or
-expires. A timed-out receipt is durably recorded but no private answer is
-released; session markers remain eager. The existing post-write authority and
-transport checks still gate successful delivery. No cache, worker or credential
-surface is added. New production-endpoint cases cover both wait boundaries,
-durable receipt checks, revocation with projection catch-up during the wait,
-timeout history and cancellation. Evaluate this one candidate with those cases
-and both unchanged raw mixed-load gates. If either gate still fails or a
-correctness regression appears, remove the candidate and record the unresolved
-resource tradeoff instead of continuing to tune delays.
+The single bounded pre-audit-wait candidate `f8e56dba` was evaluated through
+[the complete hosted run](https://github.com/junglecrunch1212/administrate-me-now/actions/runs/40060194879)
+before removal. Light raw core p95 was 3.401/3.391/4.382 ms
+(before/after/mixed), a 28.83% regression or 0.981 ms over the larger baseline,
+with 251 actual finance calls and 13.964/13.992 ms status/calculation p95.
+Planning was 4.007/3.236/4.057 ms, a bounded 1.23% pass with material baseline
+drift, 250 actual finance calls and 18.286/15.613 ms summary/detail p95.
+Both unchanged gates were required, so this candidate failed the stop criterion.
+The planning pass does not establish stability or compensate for light failure.
+
+Functional results were 924 passing Python checks and five failed new audit
+assertions. Those assertions selected `tool.call_audited`, while the native
+writer emits `openclaw.tool_call.recorded`; they do not establish missing audit
+history. The two new receipt-wait/revocation cases passed. Remaining assertions
+after each failure were not executed, so the candidate's audit, timeout and
+cancellation coverage is not qualified. Native 100 checks, static checks,
+synthetic browser smoke, query-work, reader-memory and all four diagnostics
+passed. The rejected candidate and its seven added cases were removed together;
+production sources and the disclosure test file match `7318f4d0` byte for byte.
+That predecessor's functional evidence is reusable, but its two failed raw
+resource gates remain failed. No unqualified test result is promoted to a pass.
+
+The four diagnostic profiles remain unqualified. Real light What Now p95 at
+0/12.5/25/37.5 ms offsets was 2.355/2.271/2.314/1.542 ms, versus
+2.086/1.811 ms bracketing baselines. Real planning was
+1.817/1.125/1.106/1.193 ms, versus 1.386/1.180 ms. Different phase behavior
+reinforces that an audit-submission wait is not resource reservation. All three
+reader trials were flat through 1,000 further reads, with initial RSS deltas
+7,008,256–7,041,024 bytes, rebuild deltas 7,471,104–7,503,872 and retained
+shutdown deltas 7,450,624–7,483,392; each reader thread exited. No deployment
+hardware or heavy-worker claim follows.
+
+The decision boundary is now structural, not another timing adjustment:
+
+- Keep the existing 10% gate and investigate reducing shared audit/projection
+  work with a bounded causal experiment before another production candidate.
+  Any batching must preserve every terminal audit, append-only ordering,
+  idempotency, cancellation, projection catch-up and fresh final authority.
+  The light failure means planning-only decoding changes cannot be sufficient.
+- A bounded calculation worker could isolate planning/model CPU, but still
+  leaves parent-process audit and HTTP costs. It adds IPC validation, memory,
+  cancellation/termination and credential-handling obligations; current traces
+  do not establish that it would clear the light gate. No child-process access
+  to household data or credentials is authorized by these measurements.
+- Changing workload/rate or accepting an absolute latency budget in place of
+  the existing relative gate requires an explicit owner decision and a new
+  representative acceptance contract. The measured sub-millisecond absolute
+  increase does not authorize weakening the current 10% requirement.
+
+Heavy analysis and activation remain disabled. The full capability/workflow
+backlog remains in the acceptance ledger; removal of this unsuccessful
+optimization does not complete the original W0–W7 scope.

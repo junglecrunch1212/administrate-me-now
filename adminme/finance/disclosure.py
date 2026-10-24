@@ -142,12 +142,6 @@ def _checked_payload(row: dict[str, Any], session: Session) -> dict[str, Any]:
 async def _append(
     runtime: Any, session: Session, key: str, payload: dict[str, Any]
 ) -> None:
-    # Keep the session marker eager. Before a result receipt, the idempotency
-    # read may have yielded to new ordinary work. Defer submission, never bus
-    # delivery: foreground requests may themselves need projection catch-up.
-    foreground_ready = payload["kind"] != "run" or (
-        await runtime.finance_admission.yield_to_foreground()
-    )
     await runtime.events.write(
         EventEnvelope(
             event_at_ms=int(datetime.now(timezone.utc).timestamp() * 1000),
@@ -165,13 +159,6 @@ async def _append(
             payload=payload,
         )
     )
-    if not foreground_ready:
-        from adminme.finance.budgets import FinanceBudgetError
-
-        # Preserve the durable receipt even when the wait expires, but release
-        # no private answer. Successful delivery still requires the existing
-        # post-persistence authority check.
-        raise FinanceBudgetError("finance_core_capacity_busy")
 
 
 async def record_disclosure(

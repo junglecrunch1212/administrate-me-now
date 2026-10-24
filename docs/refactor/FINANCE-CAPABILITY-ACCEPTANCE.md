@@ -77,10 +77,15 @@ required privacy invariant or product function.
   At `7318f4d0`, the repaired diagnostics passed; raw light/planning gates
   still failed at 25.05%/20.88%. Planning metadata decoding consumes material
   worker CPU, while audit drain work overlaps core reads in both workloads.
-  The selected bounded candidate waits for foreground work before submitting
-  finance audits, preserving durable history and all post-write authority checks.
-  Its focused correctness cases and both unchanged raw gates must pass; otherwise
-  remove this candidate and retain the unresolved resource tradeoff.
+  The single pre-audit-wait candidate `f8e56dba` failed the light gate at
+  28.83% (3.401/3.391 ms before/after, 4.382 ms mixed). Planning passed at
+  1.23% (4.007/3.236 ms before/after, 4.057 ms mixed), with baseline drift.
+  Its five new audit assertions used the wrong event type; 924 other Python
+  checks, 100 native checks, browser smoke and all four diagnostics passed.
+  The candidate and its seven boundary tests were removed after the complete
+  run, restoring the `7318f4d0` runtime/test source. This restores known
+  functional behavior, not a passing resource gate. No further delay tuning
+  is selected; the shared-resource design remains unresolved.
   Production authority checks and both raw gates remain unchanged.
   Broader resource isolation remains
   unproved. Large-ledger, reminder-delivery,
