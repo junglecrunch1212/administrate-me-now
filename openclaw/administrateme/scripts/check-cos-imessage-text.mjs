@@ -281,11 +281,12 @@ print(json.dumps([enabled, entry["hooks"]]))
       if (endpoint.endsWith("/confirm-apple-reminder")) {
         assert.equal(value.source_message_event_id, "native-request-source");
         assert.equal(value.request_authorization, true);
+        const issued = Date.now();
         const ticket = { contract: "authenticated-request-v1", member_id: policyMember,
           domain_approval_event_id: "native-request-domain", grounding_event_id: "native-request-grounding",
           source_event_id: "native-request-source", action_fingerprint: actionFingerprint, action,
-          rule_id: "current-human-request.apple-reminder-create.v1", issued_at: new Date().toISOString(),
-          expires_at: new Date(Date.now() + 600000).toISOString(), evidence: [{ start: 0, end: Array.from(appleMessage).length, text: appleMessage }] };
+          rule_id: "current-human-request.apple-reminder-create.v1", issued_at: new Date(issued).toISOString(),
+          expires_at: new Date(issued + 600000).toISOString(), evidence: [{ start: 0, end: Array.from(appleMessage).length, text: appleMessage }] };
         return { state: "request_authorized", domain_approval_event_id: ticket.domain_approval_event_id,
           request_authorization: { ...ticket, signature: crypto.createHmac("sha256", policySecret).update("authenticated-request-v1|" + approvalCanonical(ticket)).digest("hex") } };
       }
@@ -330,6 +331,7 @@ print(json.dumps([enabled, entry["hooks"]]))
   policyRegistration.on("before_tool_call", () => ({ block: true, blockReason: "Synthetic later host veto" }), { priority: -1 });
   const vetoed = await runner.runBeforeToolCall({ toolName: "administrateme_execute_pending_provider_action", toolCallId: "native-request-vetoed", params: executeParams }, policyContext);
   assert.equal(vetoed.block, true, "Automatic authorization bypassed a later native hook veto");
+  assert.equal(vetoed.blockReason, "Synthetic later host veto");
   assert.equal(vetoed.requireApproval, undefined);
   assert.equal(policyCalls.filter((row) => row.endpoint.endsWith("/execute-pending-provider-action")).length, 1);
   delete process.env[policySecretName];
