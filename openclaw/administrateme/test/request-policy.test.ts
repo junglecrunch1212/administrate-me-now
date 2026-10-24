@@ -5,7 +5,7 @@ import { readPluginConfig } from "../src/config.js";
 import { rememberRequestAuthorization } from "../src/request-policy.js";
 import type { PluginRuntime } from "../src/runtime.js";
 import type { Provenance } from "../src/contract.js";
-import { AdministrateMeTransport } from "../src/transport.js";
+import { AdministrateMeTransport, TransportError } from "../src/transport.js";
 
 const secret = "request-policy-fixture-credential-free-secret";
 const member = "member-request-policy-fixture";
@@ -59,4 +59,28 @@ describe("host request policy independently binds precise evidence", () => {
     await transport.request("/api/openclaw/v1/tools/apple-reminder-status", {});
     expect(timer.mock.calls.at(-1)?.[1]).toBe(readPluginConfig({}).timeoutMs);
   });
+});
+
+it.each(["request_authorization_unavailable", "request_clarification_required"])("exposes only the fixed safe %s diagnostic", async (code) => {
+  fixture();
+  const fetcher = vi.fn(async () => new Response(JSON.stringify({ detail: { code, reason: "PRIVATE provider token and source text", debug: "PRIVATE" } }), { status: 409 }));
+  const transport = new AdministrateMeTransport(readPluginConfig({}), fetcher as typeof fetch);
+  const failure = await transport.request("/api/openclaw/v1/tools/confirm-apple-reminder", {}).catch((error) => error);
+  if (!(failure instanceof TransportError)) throw new Error("Expected transport rejection");
+  expect(failure.message).toContain(code);
+  expect(failure.message).not.toContain("PRIVATE");
+  expect(failure.message.toLowerCase()).toContain("no action was confirmed or executed");
+  expect(failure.state).toBe("degraded");
+  expect(failure.status).toBe(409);
+  expect(fetcher).toHaveBeenCalledOnce();
+});
+
+it.each([
+  { path: "/api/openclaw/v1/tools/confirm-apple-reminder", value: { detail: { code: "unknown_private_code", reason: "PRIVATE" } } },
+  { path: "/api/openclaw/v1/tools/apple-reminder-status", value: { detail: { code: "request_authorization_unavailable", reason: "PRIVATE" } } },
+  { path: "/api/openclaw/v1/tools/confirm-apple-reminder", value: { detail: "PRIVATE" } },
+])("keeps unrelated error bodies opaque ($path)", async ({ path, value }) => {
+  fixture();
+  const transport = new AdministrateMeTransport(readPluginConfig({}), vi.fn(async () => new Response(JSON.stringify(value), { status: 409 })) as typeof fetch);
+  await expect(transport.request(path, {})).rejects.toThrow("AdministrateMe transport rejected request (409)");
 });
