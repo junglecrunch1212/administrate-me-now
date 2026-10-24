@@ -35,16 +35,22 @@ conversations. Confirmation alone does not execute the action.
 Older pending confirmations have no new request authority. Inspect and report their
 original due time, age and pending/overdue status; never release an old queue or
 silently change its due time. A new explicit instruction is needed to resume or
-change it. If the policy cannot ground the exact action, ask only for the missing
-intent or destination, rather than requesting generic approval.
+change it. For `request_clarification_required`, ask only about the stated ambiguous intent.
+For `request_authorization_unavailable`, report that request verification failed
+and no action was confirmed or executed. It is not evidence of account ambiguity,
+missing consent or an unclear request. Do not invent a destination choice, ask for
+permission again, or blindly repeat an explicit verification failure; retain the
+request identifier for diagnosis. Do not reuse it against a new message or bind
+new text to an old attempt. A short follow-up such as "Yes" does not repair failed
+request verification. An unavailable verification is not a transport timeout.
 Then use `administrateme_apple_reminder_status` with the same domain receipt.
 Only terminal `succeeded` proves creation; `accepted`, waiting for approval,
 pending, failed and unknown must be described accurately. Do not claim success
 from a confirmation, execution acceptance or a saved setting. A timeout or
 unknown result must be inspected using the same receipt; never generate a new
 request identifier to retry a possibly completed create. Preserve the identifier
-and exact payload on a confirmation retry; if no receipt was returned, repeat
-that same confirmation to recover it. This workflow creates an Apple
+and exact payload only when a transport timeout lost the confirmation response;
+recover that same confirmation instead of creating another. This workflow creates an Apple
 Reminder; it does not schedule a text or replace a requested text reminder.
 
 For an explicit request to put a reminder in your own CoS Apple work list, use

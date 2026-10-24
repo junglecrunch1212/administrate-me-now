@@ -21,7 +21,11 @@ from adminme.apple_service_permissions import digest
 from adminme.lib.skill_runner.fixture import _response
 from adminme.lib.skill_runner.wrapper import run_skill
 from adminme.openclaw_approvals import sign_approval_receipt
-from adminme.products.openclaw.request_authorization import fingerprint
+from adminme.products.openclaw.request_authorization import (
+    canonical_evidence,
+    evidence_matches,
+    fingerprint,
+)
 from adminme.runtime.application import create_application
 from tests.acceptance.test_authenticated_conversation_channels import (
     gmail_observation,
@@ -72,6 +76,7 @@ def model_boundary(
     match: str = "matched",
     wrong_span: bool = False,
     malformed: bool = False,
+    quotes: list[dict[str, Any]] | None = None,
 ) -> tuple[Any, list[Any]]:
     runtime = client.app.state.runtime
     calls: list[Any] = []
@@ -95,13 +100,11 @@ def model_boundary(
                 },
             )
         text = inputs["instruction"]
-        evidence = [
-            {
-                "start": 0,
-                "end": len(text),
-                "text": "Wrong evidence" if wrong_span else text,
-            }
-        ]
+        evidence = (
+            quotes
+            if quotes is not None
+            else [{"text": "Wrong evidence" if wrong_span else text}]
+        )
         return httpx.Response(
             200,
             json={
@@ -292,7 +295,12 @@ def test_three_conversations_complete_exact_request_without_manual_allow_once(
 
 @pytest.mark.parametrize(
     "match,wrong_span",
-    [("not_requested", False), ("ambiguous", False), ("matched", True)],
+    [
+        ("not_requested", False),
+        ("ambiguous", False),
+        ("unavailable", False),
+        ("matched", True),
+    ],
 )
 def test_semantic_or_fabricated_evidence_never_authorizes_a_write(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, match: str, wrong_span: bool
@@ -319,7 +327,11 @@ def test_semantic_or_fabricated_evidence_never_authorizes_a_write(
                 json={**_body(source), "notes": None, "request_authorization": True},
             )
             assert response.status_code == 409, response.text
-            assert response.json()["detail"]["code"] == "request_clarification_required"
+            assert response.json()["detail"]["code"] == (
+                "request_authorization_unavailable"
+                if wrong_span or match == "unavailable"
+                else "request_clarification_required"
+            )
             for kind in (
                 "member.provider_action.confirmed",
                 "external_sync.write_requested",
@@ -511,7 +523,7 @@ def test_malformed_grounding_keeps_original_failure_without_provider_or_retry(
                 if event["payload"]["skill_name"] == "skill:ground_requested_action"
             ]
             assert len(failed) == 1
-            assert failed[0]["payload"]["skill_version"] == "1.1.0"
+            assert failed[0]["payload"]["skill_version"] == "1.1.1"
             assert failed[0]["payload"]["failure_class"] == "openclaw_unreachable"
             for kind in (
                 "cos.action.request_grounded",
@@ -523,3 +535,253 @@ def test_malformed_grounding_keeps_original_failure_without_provider_or_retry(
                 assert client.portal.call(_events, runtime, kind) == []
         finally:
             client.portal.call(model.aclose)
+
+
+@pytest.mark.parametrize("malformed", [False, True])
+def test_followup_cannot_rebind_failed_invocation_or_escape_as_server_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, malformed: bool
+) -> None:
+    """A genuine new 'Yes' cannot reuse a failed original action identity."""
+    monkeypatch.setenv("ADMINME_TEST_MODE", "1")
+    with TestClient(
+        create_application(configured(tmp_path)),
+        base_url="https://central-fixture.ts.net",
+    ) as client:
+        runtime = client.app.state.runtime
+        prepare_apple_sources(client, tmp_path)
+        _grant(client)
+        grant_services(client)
+        _normal_operation(client)
+        model, calls = model_boundary(client, malformed=malformed, wrong_span=True)
+        try:
+            source = _instruction(client, "original-failed-request")
+            original = {**_body(source), "notes": None, "request_authorization": True}
+            result = client.post(CONFIRM, headers=AUTH, json=original)
+            assert result.status_code == 409, result.text
+            assert (
+                result.json()["detail"]["code"] == "request_authorization_unavailable"
+            )
+
+            def grounding_receipts(kind: str) -> list[dict[str, Any]]:
+                return [
+                    event
+                    for event in client.portal.call(_events, runtime, kind)
+                    if event["payload"]["skill_name"] == "skill:ground_requested_action"
+                ]
+
+            before = {
+                kind: grounding_receipts(kind)
+                for kind in ("skill.call.recorded", "skill.call.failed")
+            }
+            assert len(before["skill.call.recorded"]) == int(not malformed)
+            assert len(before["skill.call.failed"]) == int(malformed)
+            followup = _instruction(client, "new-authenticated-followup", text="Yes")
+            assert (
+                followup["source_message_event_id"] != source["source_message_event_id"]
+            )
+            for current in (followup, followup, source):
+                response = client.post(
+                    CONFIRM, headers=AUTH, json={**original, **current}
+                )
+                assert response.status_code == 409, response.text
+                assert (
+                    response.json()["detail"]["code"]
+                    == "request_authorization_unavailable"
+                )
+            assert len(calls) == 1
+            for kind, retained in before.items():
+                assert grounding_receipts(kind) == retained
+            for kind in (
+                "cos.action.request_grounded",
+                "member.provider_action.confirmed",
+                "external_sync.write_requested",
+                "external_sync.write_completed",
+                "external.sent",
+            ):
+                assert client.portal.call(_events, runtime, kind) == []
+            # The failed identity is spent, not a blanket block on a genuinely
+            # new full instruction with its own stable identity.
+            client.portal.call(model.aclose)
+            model, fresh_calls = model_boundary(client)
+            fresh = _instruction(client, "fresh-full-request")
+            confirmed = client.post(
+                CONFIRM,
+                headers=AUTH,
+                json={
+                    **_body(fresh, "fresh-distinct-action"),
+                    "notes": None,
+                    "request_authorization": True,
+                },
+            )
+            assert confirmed.status_code == 200, confirmed.text
+            assert len(calls) == len(fresh_calls) == 1
+            for retained in before.values():
+                for event in retained:
+                    assert (
+                        client.portal.call(runtime.event_log.get, event["event_id"])
+                        == event
+                    )
+        finally:
+            client.portal.call(model.aclose)
+
+
+_QUOTE_INSTRUCTION = (
+    'Add a reminder to my Apple reminders titled "COS imessage retry" '
+    "for tomorrow at 9:30 AM Eastern"
+)
+_QUOTE_EVIDENCE = [
+    {"text": "Add a reminder to my Apple reminders"},
+    {"text": "COS imessage retry"},
+    {"text": "tomorrow at 9:30 AM Eastern"},
+]
+_CANONICAL_EVIDENCE = [
+    {"start": 0, "end": 36, "text": "Add a reminder to my Apple reminders"},
+    {"start": 45, "end": 63, "text": "COS imessage retry"},
+    {"start": 69, "end": 96, "text": "tomorrow at 9:30 AM Eastern"},
+]
+
+
+def test_quote_only_grounding_reaches_original_apple_effect_with_canonical_spans(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Reproduce the actual quote/count mismatch at the production HTTP seam."""
+    monkeypatch.setenv("ADMINME_TEST_MODE", "1")
+    store = _EventKitStore()
+    with TestClient(
+        create_application(configured(tmp_path)),
+        base_url="https://central-fixture.ts.net",
+    ) as client:
+        runtime = client.app.state.runtime
+        helper, transfer = prepare_apple_sources(client, tmp_path)
+        _grant(client)
+        grant_services(client)
+        _normal_operation(client)
+        model, calls = model_boundary(client, quotes=_QUOTE_EVIDENCE)
+        try:
+            source = _instruction(
+                client, "quote-evidence-repro", text=_QUOTE_INSTRUCTION
+            )
+            body = {
+                **_body(source),
+                "notes": None,
+                "request_authorization": True,
+                "title": "COS imessage retry",
+                "due_at": "2026-10-25T09:30:00-04:00",
+            }
+            confirmed = client.post(CONFIRM, headers=AUTH, json=body)
+            assert confirmed.status_code == 200, confirmed.text
+            receipt = confirmed.json()
+            ticket = receipt["request_authorization"]
+            assert ticket["evidence"] == _CANONICAL_EVIDENCE
+            assert ticket["action"]["resource_owner"] == "requester"
+            assert ticket["action"]["due_at"] == "2026-10-25T13:30:00+00:00"
+            retained = client.portal.call(
+                runtime.event_log.get, ticket["grounding_event_id"]
+            )
+            assert retained["schema_version"] == 1
+            assert retained["payload"]["evidence"] == _CANONICAL_EVIDENCE
+            assert (
+                client.post(CONFIRM, headers=AUTH, json=body).json()[
+                    "request_authorization"
+                ]
+                == ticket
+            )
+            assert len(calls) == 1
+            execution = policy_receipt(client, source, receipt)
+            accepted = client.post(EXECUTE, headers=AUTH, json=execution)
+            assert accepted.status_code == 200, accepted.text
+            supervisor, transport = _supervisor(
+                client, helper, transfer, tmp_path, store
+            )
+            try:
+                _run_dispatch(supervisor)
+            finally:
+                supervisor._command_ledger.close()
+            assert len(store.effects) == len(transport.submitted) == 1
+            assert store.effects[0]["due_components"] == {**COMPONENTS, "day": 25}
+            assert (
+                _status(client, source, receipt["domain_approval_event_id"])["state"]
+                == "succeeded"
+            )
+            assert (
+                client.post(EXECUTE, headers=AUTH, json=execution).json()["duplicate"]
+                is True
+            )
+            assert len(store.effects) == 1
+        finally:
+            client.portal.call(model.aclose)
+
+
+@pytest.mark.parametrize(
+    "quotes",
+    [
+        [{"text": "invented"}],
+        [{"text": "reminder"}],  # Appears in both reminder and reminders.
+        [_QUOTE_EVIDENCE[0], _QUOTE_EVIDENCE[0]],
+        [{"text": _QUOTE_INSTRUCTION}, _QUOTE_EVIDENCE[1]],
+        [{"start": 0, "end": 40, "text": _QUOTE_EVIDENCE[0]["text"]}],
+    ],
+)
+def test_unusable_model_quotes_are_system_failure_not_account_ambiguity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, quotes: list[dict[str, Any]]
+) -> None:
+    monkeypatch.setenv("ADMINME_TEST_MODE", "1")
+    with TestClient(
+        create_application(configured(tmp_path)),
+        base_url="https://central-fixture.ts.net",
+    ) as client:
+        runtime = client.app.state.runtime
+        prepare_apple_sources(client, tmp_path)
+        _grant(client)
+        grant_services(client)
+        _normal_operation(client)
+        model, calls = model_boundary(client, quotes=quotes)
+        try:
+            source = _instruction(client, "unusable-quotes", text=_QUOTE_INSTRUCTION)
+            body = {**_body(source), "notes": None, "request_authorization": True}
+            for _ in range(2):
+                result = client.post(CONFIRM, headers=AUTH, json=body)
+                assert result.status_code == 409, result.text
+                assert (
+                    result.json()["detail"]["code"]
+                    == "request_authorization_unavailable"
+                )
+            assert len(calls) == 1, (
+                "Same-ID recovery must not repeat a cached bad extraction"
+            )
+            for kind in (
+                "cos.action.request_grounded",
+                "member.provider_action.confirmed",
+                "external_sync.write_requested",
+                "external.sent",
+            ):
+                assert client.portal.call(_events, runtime, kind) == []
+        finally:
+            client.portal.call(model.aclose)
+
+
+@pytest.mark.parametrize(
+    "text,quotes,expected",
+    [
+        (_QUOTE_INSTRUCTION, list(reversed(_QUOTE_EVIDENCE)), _CANONICAL_EVIDENCE),
+        ("🙂 Add café", [{"text": "café"}], [{"start": 6, "end": 10, "text": "café"}]),
+        (
+            "👩🏽\u200d💻 call",
+            [{"text": "call"}],
+            [{"start": 5, "end": 9, "text": "call"}],
+        ),
+        ("Add cafe\u0301", [{"text": "café"}], None),
+        ("banana", [{"text": "ana"}], None),
+        ("quoted text", [{"text": "quoted", "start": 0}], None),
+        ("only spaces", [{"text": " "}], None),
+        ("only text", [], None),
+    ],
+)
+def test_quote_spans_are_exact_unicode_and_reject_ambiguous_or_legacy_model_shapes(
+    text: str, quotes: Any, expected: Any
+) -> None:
+    assert canonical_evidence(text, quotes) == expected
+    # Existing signed/retained canonical span receipts retain their validator.
+    if expected is not None:
+        assert evidence_matches(text, expected)
+    assert evidence_matches(_QUOTE_INSTRUCTION, _CANONICAL_EVIDENCE)

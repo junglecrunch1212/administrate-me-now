@@ -91,6 +91,11 @@ it.each(["request_authorization_unavailable", "request_clarification_required"].
   const failure = await transport.request(path, {}).catch((error) => error);
   if (!(failure instanceof TransportError)) throw new Error("Expected transport rejection");
   expect(failure.message).toContain(code);
+  if (code === "request_authorization_unavailable") {
+    expect(failure.message).toContain("not a transport timeout");
+    expect(failure.message).toContain("does not establish an account choice");
+    expect(failure.message).toContain("do not blindly repeat");
+  }
   expect(failure.message).not.toContain("PRIVATE");
   expect(failure.message.toLowerCase()).toContain("no action was confirmed or executed");
   expect(failure.state).toBe("degraded");

@@ -103,7 +103,7 @@ def _grant(client: TestClient, *, other: bool = False) -> None:
 
 
 def _instruction(
-    client: TestClient, native_id: str, *, other: bool = False
+    client: TestClient, native_id: str, *, other: bool = False, text: str | None = None
 ) -> dict[str, Any]:
     member = MEMBER_B if other else MEMBER_A
     actor = "actor-forward-b" if other else "actor-forward-a"
@@ -125,7 +125,8 @@ def _instruction(
         json={
             "provenance": provenance,
             "request_id": native_id,
-            "text": "Add a reminder to my Apple Reminders to call my mom at 9:30 AM today",
+            "text": text
+            or "Add a reminder to my Apple Reminders to call my mom at 9:30 AM today",
             "consent": True,
             "submission_gesture": "dedicated_intake",
         },
