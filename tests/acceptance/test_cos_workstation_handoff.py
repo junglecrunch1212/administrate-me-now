@@ -208,7 +208,6 @@ def test_real_gmail_and_dashboard_chat_private_draft_and_cross_channel_readback(
         portal_instruction,
         settings,
     )
-    from tests.acceptance.test_forwarded_channel_intake import AUTH as CHANNEL_AUTH
     from tests.acceptance.test_native_apple_reminder import (
         SECRET,
         _grant as grant,
@@ -223,7 +222,7 @@ def test_real_gmail_and_dashboard_chat_private_draft_and_cross_channel_readback(
         source = intake(client, "workstation-channel-create", text=INSTRUCTION)
 
         def send(path: str, body: dict[str, Any], status: int = 200) -> dict[str, Any]:
-            response = client.post(path, headers=CHANNEL_AUTH, json=body)
+            response = client.post(path, headers={"Authorization": f"Bearer {SECRET}"}, json=body)
             assert response.status_code == status, response.text
             return response.json()
 
@@ -319,7 +318,7 @@ def test_real_gmail_and_dashboard_chat_private_draft_and_cross_channel_readback(
         assert revoke.status_code == 200, revoke.text
         denied = client.post(
             BASE + "/read-back",
-            headers=CHANNEL_AUTH,
+            headers={"Authorization": f"Bearer {SECRET}"},
             json={
                 "provenance": service,
                 "task_id": note["task_id"],
