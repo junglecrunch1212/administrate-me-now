@@ -3150,9 +3150,23 @@ async def _execute_pending_provider_action(
         "operation": payload["operation"],
         "payload": dict(payload.get("command_payload") or {}),
     }
-    if requires_service_permission(
-        runtime, session.auth_member_id, str(payload["provider"])
-    ) or pending_command["payload"].get("apple_service_permission"):
+    from adminme.cos_reminders_commands import CONTRACT as COS_REMINDER_CONTRACT
+    from adminme.adapters.cos_reminders_write_policy import RULE_ID as COS_REMINDER_RULE
+
+    own_reminder = pending_command["payload"].get("contract") == COS_REMINDER_CONTRACT
+    if own_reminder and (
+        request_authorization is None
+        or request_authorization.get("rule_id") != COS_REMINDER_RULE
+    ):
+        raise HTTPException(
+            403, "CoS reminders require exact current request authority"
+        )
+    if not own_reminder and (
+        requires_service_permission(
+            runtime, session.auth_member_id, str(payload["provider"])
+        )
+        or pending_command["payload"].get("apple_service_permission")
+    ):
         try:
             command_permission(runtime, session.auth_member_id, pending_command)
         except ValueError as exc:
@@ -3185,6 +3199,8 @@ async def _execute_pending_provider_action(
         "privacy_guard_version": (
             "apple-messages-plain-text-exact-v1"
             if payload.get("provider") == "bluebubbles"
+            else COS_REMINDER_CONTRACT
+            if own_reminder
             else "member-provider-action-v1"
         ),
         "origin_proposal_id": payload.get("origin_proposal_id"),

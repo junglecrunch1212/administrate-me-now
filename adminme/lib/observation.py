@@ -400,7 +400,7 @@ async def outbound(
             visibility_scope=visibility_scope,
             sensitivity=sensitivity,  # type: ignore[arg-type]
             causation_id=audit.initiating_event_id if audit else None,
-            actor_identity=session.auth_member_id,
+            actor_identity=session.event_actor_identity,
             raw_ref=(f"content-sha256:{audit.content_fingerprint}" if audit else None),
             payload={
                 "attempted_action": action,
@@ -431,7 +431,7 @@ async def outbound(
         visibility_scope=visibility_scope,
         sensitivity=sensitivity,  # type: ignore[arg-type]
         causation_id=audit.initiating_event_id if audit else None,
-        actor_identity=session.auth_member_id,
+        actor_identity=session.event_actor_identity,
         raw_ref=f"content-sha256:{audit.content_fingerprint}" if audit else None,
         payload={
             "action": action,

@@ -1648,6 +1648,11 @@ class AdministrateMeRuntime:
     async def _dispatch_external_write(self, event: dict[str, Any]) -> None:
         """Execute central-hosted provider commands; Apple commands wait for bridges."""
 
+        from adminme.runtime.cos_reminders import dispatch, is_cos_reminder
+
+        if is_cos_reminder(event):
+            await dispatch(self, event)
+            return
         payload = event["payload"]
         is_v2 = int(event.get("schema_version") or 1) >= 2
         if self.event_log is not None:
@@ -4052,6 +4057,9 @@ def create_application(settings: RuntimeSettings) -> FastAPI:
     )
 
     app.include_router(apple_reminder_router)
+    from adminme.products.openclaw.cos_apple_reminders import router as cos_apple_router
+
+    app.include_router(cos_apple_router)
     from adminme.products.openclaw.workstation import router as workstation_router
 
     app.include_router(workstation_router)

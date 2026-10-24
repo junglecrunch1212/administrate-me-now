@@ -19,6 +19,28 @@ export class TransportError extends Error {
   }
 }
 
+// Only closed local error codes are exposed. Never forward backend reason text,
+// URLs, provider errors, private inputs, or arbitrary response fields to a model.
+const REQUEST_FAILURES = {
+  request_authorization_unavailable: "Request grounding could not be verified. No action was confirmed or executed; this does not establish a provider permission failure.",
+  request_clarification_required: "The proposed action did not match a clear current request. Clarify only the ambiguous intent; no action was confirmed or executed.",
+} as const;
+
+async function safeRequestFailure(response: Response, path: string): Promise<string | undefined> {
+  if (response.status !== 409 || !["/api/openclaw/v1/tools/confirm-apple-reminder", "/api/openclaw/v1/tools/cos-apple-reminders/confirm"].includes(path)) return undefined;
+  try {
+    const body: unknown = await response.json();
+    if (!body || typeof body !== "object" || !("detail" in body)) return undefined;
+    const detail = body.detail;
+    if (!detail || typeof detail !== "object" || !("code" in detail)) return undefined;
+    const code = detail.code;
+    if (code === "request_authorization_unavailable" || code === "request_clarification_required") {
+      return `${code}: ${REQUEST_FAILURES[code]}`;
+    }
+  } catch { /* Keep unknown or malformed failures opaque. */ }
+  return undefined;
+}
+
 export class AdministrateMeTransport {
   readonly config: PluginConfig;
   #state: IntegrationState = "degraded";
@@ -53,7 +75,7 @@ export class AdministrateMeTransport {
     const controller = new AbortController();
     // One explicit source-grounding model invocation has a 30s deadline plus
     // the existing 2s completion allowance. Other calls keep their bounded limit.
-    const timeoutMs = path === "/api/openclaw/v1/tools/confirm-apple-reminder"
+    const timeoutMs = (path === "/api/openclaw/v1/tools/confirm-apple-reminder" || path === "/api/openclaw/v1/tools/cos-apple-reminders/confirm")
       ? Math.max(this.config.timeoutMs, 35_000) : this.config.timeoutMs;
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
     try {
@@ -69,10 +91,11 @@ export class AdministrateMeTransport {
         signal: controller.signal,
       });
       if (!response.ok) {
-        const state: IntegrationState = response.status === 409 ? "incompatible" : "degraded";
+        const safeFailure = await safeRequestFailure(response, path);
+        const state: IntegrationState = response.status === 409 && !safeFailure ? "incompatible" : "degraded";
         this.#state = state;
         throw new TransportError(
-          `AdministrateMe transport rejected request (${response.status})`,
+          safeFailure ?? `AdministrateMe transport rejected request (${response.status})`,
           state,
           response.status,
         );

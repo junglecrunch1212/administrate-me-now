@@ -67,7 +67,11 @@ def configured(tmp_path: Path) -> Any:
 
 
 def model_boundary(
-    client: TestClient, *, match: str = "matched", wrong_span: bool = False
+    client: TestClient,
+    *,
+    match: str = "matched",
+    wrong_span: bool = False,
+    malformed: bool = False,
 ) -> tuple[Any, list[Any]]:
     runtime = client.app.state.runtime
     calls: list[Any] = []
@@ -78,6 +82,18 @@ def model_boundary(
         if "instruction" not in inputs:
             return _response(request)
         calls.append(inputs)
+        assert 'root keys: "match" and "evidence"' in data["args"]["prompt"]
+        assert "{{" not in data["args"]["prompt"]
+        if malformed:
+            # Exact public response from pinned llm-task when model output is
+            # {"result": ...}; native proof exercises its actual schema rejection.
+            return httpx.Response(
+                500,
+                json={
+                    "ok": False,
+                    "error": {"type": "tool_error", "message": "tool execution failed"},
+                },
+            )
         text = inputs["instruction"]
         evidence = [
             {
@@ -460,5 +476,50 @@ def test_schema_aware_revocation_stops_queued_policy_actions_but_preserves_legac
                 supervisor._command_ledger.close()
             assert len(store.effects) == 1
             assert _status(client, legacy_source, legacy_id)["state"] == "succeeded"
+        finally:
+            client.portal.call(model.aclose)
+
+
+def test_malformed_grounding_keeps_original_failure_without_provider_or_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ADMINME_TEST_MODE", "1")
+    with TestClient(
+        create_application(configured(tmp_path)),
+        base_url="https://central-fixture.ts.net",
+    ) as client:
+        runtime = client.app.state.runtime
+        prepare_apple_sources(client, tmp_path)
+        _grant(client)
+        grant_services(client)
+        _normal_operation(client)
+        model, calls = model_boundary(client, malformed=True)
+        try:
+            source = _instruction(client, "malformed-grounding-input")
+            body = {**_body(source), "notes": None, "request_authorization": True}
+            for _ in range(2):
+                response = client.post(CONFIRM, headers=AUTH, json=body)
+                assert response.status_code == 409, response.text
+                assert (
+                    response.json()["detail"]["code"]
+                    == "request_authorization_unavailable"
+                )
+            assert len(calls) == 1
+            failed = [
+                event
+                for event in client.portal.call(_events, runtime, "skill.call.failed")
+                if event["payload"]["skill_name"] == "skill:ground_requested_action"
+            ]
+            assert len(failed) == 1
+            assert failed[0]["payload"]["skill_version"] == "1.0.1"
+            assert failed[0]["payload"]["failure_class"] == "openclaw_unreachable"
+            for kind in (
+                "cos.action.request_grounded",
+                "member.provider_action.confirmed",
+                "external_sync.write_requested",
+                "external_sync.write_completed",
+                "external.sent",
+            ):
+                assert client.portal.call(_events, runtime, kind) == []
         finally:
             client.portal.call(model.aclose)

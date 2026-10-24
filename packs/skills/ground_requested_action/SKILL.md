@@ -1,7 +1,7 @@
 ---
 name: ground_requested_action
 namespace: adminme
-version: 1.0.0
+version: 1.0.1
 description: Compare one proposed action with one authenticated human instruction; produce grounded evidence, never permission.
 input_schema: ./schemas/input.schema.json
 output_schema: ./schemas/output.schema.json

@@ -55,6 +55,10 @@ _TOOL_PERMISSION_OPTIONS: dict[str, frozenset[str]] = {
             "coordinate_household_work",
         }
     ),
+    "administrateme_confirm_cos_apple_reminder": frozenset(
+        {"prepare_external_actions"}
+    ),
+    "administrateme_cos_apple_reminder_status": frozenset({"read_context"}),
     "administrateme_prepare_delegated_action": frozenset({"prepare_external_actions"}),
     "administrateme_execute_delegated_action": frozenset({"execute_fixture_actions"}),
     "administrateme_observe_delegated_action": frozenset({"execute_fixture_actions"}),
@@ -97,6 +101,26 @@ _DOMAIN_DEFINITIONS: tuple[dict[str, Any], ...] = (
             "administrateme_finance_calculate",
             "administrateme_finance_job",
         ],
+    },
+    {
+        "capability_id": "domain.cos_owned_apple_reminders",
+        "category": "tasks",
+        "label": "CoS Apple work reminders",
+        "outcome": "Create one explicitly requested timed reminder in the CoS-owned work list.",
+        "source": "product:cos-owned-apple-reminders",
+        "owner_kinds": ["service_principal"],
+        "verbs": {
+            "read": "supported",
+            "prepare": "supported",
+            "execute": "current_authenticated_request",
+        },
+        "openclaw_tools": [
+            "administrateme_confirm_cos_apple_reminder",
+            "administrateme_execute_pending_provider_action",
+            "administrateme_cos_apple_reminder_status",
+        ],
+        "terminal_result_support": True,
+        "later_observation_support": True,
     },
     {
         "capability_id": "domain.member_chat",
@@ -241,6 +265,7 @@ _DOMAIN_DEFINITIONS: tuple[dict[str, Any], ...] = (
 
 _DOMAIN_IMPLEMENTATION_PATHS = {
     "product:household-finance": "adminme/finance/capabilities.py",
+    "product:cos-owned-apple-reminders": "adminme/products/openclaw/cos_apple_reminders.py",
     "product:member-chat": "adminme/member_chat.py",
     "product:member-surfaces": "adminme/products/member/surfaces.py",
     "product:google-tasks-create-production-v2": "adminme/google_tasks_execution.py",
@@ -940,6 +965,19 @@ def _apple_service_bridge_state(
         else "ask_every_time"
         if grant
         else "disabled",
+        "write_execution_basis": "legacy_grant_mode_not_current_request_decision",
+        "current_request_authorization": {
+            "rule_id": "current-human-request.apple-reminder-create.v1",
+            "operation": "create_reminder",
+            "manual_repeat_required": False,
+            "requires_current_authored_instruction": True,
+            "requires_independent_host_and_domain_decisions": True,
+            "current_native_permission_and_expiry_rechecked": True,
+            "historical_pending_auto_resume": False,
+            "catalog_authorizes_execution": False,
+        }
+        if provider == "apple_reminders"
+        else None,
         "write_permission_event_id": grant["event_id"] if grant else None,
         "write_operations": list(grant["operations"]) if grant else [],
         "enrollment_id": options["enrollment"]["enrollment_id"],
@@ -1431,6 +1469,86 @@ def compose_member_catalog(
                 ),
             }
         )
+        if capability_id == "domain.cos_owned_apple_reminders":
+            from adminme.adapters.cos_reminders_write_policy import (
+                RULE_ID,
+                write_selection,
+            )
+
+            selection = None
+            try:
+                if not viewing_as:
+                    selection = write_selection(
+                        getattr(runtime.settings, "adapter_config", {})
+                    )
+            except (ValueError, PermissionError):
+                pass
+            eligible = bool(
+                selection
+                and not runtime._observation_active
+                and openclaw_state == "healthy"
+                and not viewing_as
+            )
+            own_reminder_tools: list[str] = []
+            for tool in declared_tools:
+                permission = (
+                    "prepare_external_actions"
+                    if tool == "administrateme_confirm_cos_apple_reminder"
+                    else "read_context"
+                )
+                status_tool = tool == "administrateme_cos_apple_reminder_status"
+                if (
+                    permission in permissions
+                    and not viewing_as
+                    and openclaw_state == "healthy"
+                    and (status_tool or eligible)
+                ):
+                    own_reminder_tools.append(tool)
+            row["openclaw"].update(
+                effective_tools=own_reminder_tools,
+                current_request_rule=RULE_ID,
+                execution_authority_modes=["authenticated_current_request_policy"],
+                policy_receipt_is_human_approval=False,
+                historical_pending_auto_resume=False,
+                tool_availability_basis="plugin_contract_and_configured_policy_not_native_execution_proof",
+                approval_required_for_side_effects=True,
+            )
+            row["administrateme_authority"].update(
+                state="evaluate_exact_current_request"
+                if eligible
+                else "writer_policy_unavailable_or_paused",
+                execute_authorized=False,
+            )
+            row["effective"].update(
+                read_available="administrateme_cos_apple_reminder_status"
+                in own_reminder_tools,
+                prepare_available="administrateme_confirm_cos_apple_reminder"
+                in own_reminder_tools,
+                execute_available=None if eligible else False,
+                execution_basis="current_request_and_native_admission_not_evaluated_by_catalog",
+            )
+            row["verification"].update(
+                status_tool="administrateme_cos_apple_reminder_status",
+                success_requires="exact_unsuppressed_native_terminal_and_readback",
+                accepted_is_success=False,
+            )
+            row["native_source"] = {
+                "resource_owner": COS_SERVICE_PRINCIPAL_ID,
+                "provider_account_id": selection.provider_account_id
+                if selection
+                else None,
+                "source_id": selection.source_id if selection else None,
+                "list_id": selection.list_id if selection else None,
+                "writer_configured": selection is not None,
+                "current_native_permission": "not_inspected_by_catalog",
+                "member_bridge_permission_is_authority": False,
+                "existing_reader_is_write_permission": False,
+            }
+            row["unavailable_reason"] = (
+                None
+                if eligible
+                else "CoS writer policy is absent, paused, or unavailable; inspect the exact writer without changing member bridge grants."
+            )
         rows.append(row)
     attention = [
         {
@@ -1458,7 +1576,7 @@ def compose_member_catalog(
             "installed": sum(row["installation"] == "installed" for row in rows),
             "read_available": sum(row["effective"]["read_available"] for row in rows),
             "execute_available": sum(
-                row["effective"]["execute_available"] for row in rows
+                row["effective"]["execute_available"] is True for row in rows
             ),
             "degraded": sum(row["runtime_health"] == "degraded" for row in rows),
             "attention": len(attention),
