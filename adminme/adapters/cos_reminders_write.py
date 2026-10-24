@@ -99,6 +99,20 @@ class NativeRemindersWriter:
     def __init__(self, *, reader: Any | None = None) -> None:
         self.reader = reader if reader is not None else NativeRemindersReader()
 
+    def inspect(self, selection: CoSRemindersSelection) -> dict[str, Any]:
+        """Read only native source metadata; do not request consent or save."""
+        self.reader._require_permission()
+        calendar = self.reader._calendar(selection)
+        if calendar is None or not calendar.allowsContentModifications():
+            raise PermissionError("The selected CoS list does not permit changes")
+        self.reader._require_permission()
+        return {
+            "writable": True,
+            "provider_account_id": selection.provider_account_id,
+            "source_id": selection.source_id,
+            "list_id": selection.list_id,
+        }
+
     def create(
         self, selection: CoSRemindersSelection, command: CoSReminderCreate
     ) -> dict[str, Any]:

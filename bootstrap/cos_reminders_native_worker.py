@@ -143,7 +143,7 @@ def validate_request(value: dict[str, Any], *, now_ms: int | None = None) -> Non
     elif operation == "inspect":
         if set(payload) != {"lookup"} or not isinstance(payload["lookup"], dict):
             raise ValueError("exact lookup required")
-    elif operation in {"read", "create_reminder"}:
+    elif operation in {"read", "inspect_write", "create_reminder"}:
         if (
             set(payload)
             != (
@@ -303,7 +303,7 @@ def perform(request: dict[str, Any], identity: dict[str, Any]) -> dict[str, Any]
     if operation == "inspect":
         lookup = CoSRemindersLookup.model_validate(request["payload"]["lookup"])
         result["resource"] = NativeRemindersReader().inspect_selection(lookup)
-    elif operation in {"read", "create_reminder"}:
+    elif operation in {"read", "inspect_write", "create_reminder"}:
         selected = dict(request["payload"]["selection"])
         # a10 and the helper client release share the exact provider read contract.
         # The latter additionally pins this component in configuration, never in the
@@ -319,7 +319,7 @@ def perform(request: dict[str, Any], identity: dict[str, Any]) -> dict[str, Any]
             request["os_uid"],
         ):
             raise PermissionError("selected source belongs to another work computer")
-        if operation == "create_reminder":
+        if operation in {"inspect_write", "create_reminder"}:
             manifest = json.loads(
                 (
                     Path(identity["app_path"])
@@ -336,6 +336,11 @@ def perform(request: dict[str, Any], identity: dict[str, Any]) -> dict[str, Any]
                 / "adminme/adapters/cos_reminders_write.py"
             ):
                 raise PermissionError("Native writer release differs")
+            if operation == "inspect_write":
+                result["write_source"] = writes.NativeRemindersWriter().inspect(
+                    selection
+                )
+                return result
             command = writes.CoSReminderCreate.model_validate(
                 request["payload"]["command"]
             )

@@ -449,6 +449,15 @@ def _write_transport(monkeypatch, tmp_path, *, contract="cos-reminders-native-ap
     effects = []
 
     class Writer:
+        def inspect(self, selection):
+            assert selection == selected
+            return {
+                "writable": True,
+                "provider_account_id": selection.provider_account_id,
+                "source_id": selection.source_id,
+                "list_id": selection.list_id,
+            }
+
         def create(self, selection, supplied):
             assert selection == selected and supplied == command
             writes.validate_native_create(supplied, selection)
@@ -489,6 +498,14 @@ def test_write_transport_proves_native_identity_exact_source_and_result(
     assert effects == [command.command_id]
     assert state.calls == ["create_reminder"]
     assert state.request["payload"]["command"] == command.model_dump(mode="json")
+
+
+def test_write_inspection_proves_exact_destination_without_save(monkeypatch, tmp_path):
+    selected, _command, state, effects = _write_transport(monkeypatch, tmp_path)
+    result = client.HelperRemindersWriter().inspect(selected)
+    assert result.writable is True
+    assert result.source_id == selected.source_id and result.list_id == selected.list_id
+    assert state.calls == ["inspect_write"] and effects == []
 
 
 @pytest.mark.parametrize("side", ["client", "native"])

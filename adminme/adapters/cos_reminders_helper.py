@@ -140,7 +140,9 @@ class NativeSnapshot(StrictModel):
 class NativeResult(StrictModel):
     contract: Literal["cos-reminders-helper-result-v1"]
     nonce: str
-    operation: Literal["status", "request", "inspect", "read", "create_reminder"]
+    operation: Literal[
+        "status", "request", "inspect", "read", "inspect_write", "create_reminder"
+    ]
     status: Literal["ok"]
     identity: NativeIdentity
     result: dict[str, Any]
@@ -156,6 +158,13 @@ class NativeWriteResult(StrictModel):
     requested_due_at: AwareDatetime
     observed_due: dict[str, Any]
     observed_at: AwareDatetime
+
+
+class NativeWriteSource(StrictModel):
+    writable: Literal[True]
+    provider_account_id: str
+    source_id: str
+    list_id: str
 
 
 def release_coordinates(release_root: Path | None = None) -> dict[str, Any]:
@@ -198,7 +207,9 @@ def release_coordinates(release_root: Path | None = None) -> dict[str, Any]:
 
 def invoke(
     binding: NativeHelperBinding,
-    operation: Literal["status", "request", "inspect", "read", "create_reminder"],
+    operation: Literal[
+        "status", "request", "inspect", "read", "inspect_write", "create_reminder"
+    ],
     payload: dict[str, Any],
     *,
     release_root: Path | None = None,
@@ -211,7 +222,7 @@ def invoke(
     receipt = verify_helper_app(Path(binding.app_path))
     if receipt != binding.model_dump():
         raise PermissionError("native helper differs from its reviewed component")
-    if operation == "create_reminder":
+    if operation in {"inspect_write", "create_reminder"}:
         manifest = json.loads(
             (
                 Path(binding.app_path) / "Contents/Resources/helper-manifest.json"
@@ -295,6 +306,8 @@ def invoke(
             expected_keys.add("snapshot")
         if operation == "create_reminder":
             expected_keys.add("write_result")
+        if operation == "inspect_write":
+            expected_keys.add("write_source")
         if (
             set(result) != expected_keys
             or type(result["authorization_status"]) is not int
@@ -375,6 +388,23 @@ class HelperRemindersWriter:
 
     def __init__(self, *, release_root: Path | None = None) -> None:
         self._release_root = release_root
+
+    def inspect(self, selection: CoSRemindersSelection) -> NativeWriteSource:
+        verify_device(selection, local_device_identity())
+        result = invoke(
+            selection.native_helper,
+            "inspect_write",
+            {"selection": selection.model_dump(mode="json", exclude={"native_helper"})},
+            release_root=self._release_root,
+        )
+        source = NativeWriteSource.model_validate(result["write_source"])
+        if (
+            source.provider_account_id != selection.provider_account_id
+            or source.source_id != selection.source_id
+            or source.list_id != selection.list_id
+        ):
+            raise PermissionError("Native writable source differs from selection")
+        return source
 
     def create(
         self, selection: CoSRemindersSelection, command: CoSReminderCreate

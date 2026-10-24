@@ -117,6 +117,18 @@ def test_native_create_preserves_exact_offset_time_and_reads_back(monkeypatch):
     assert result["list_id"] == _selection().list_id
 
 
+def test_native_writability_inspection_never_saves(monkeypatch):
+    writer, state = _native(monkeypatch)
+    result = writer.inspect(_selection())
+    assert result["writable"] is True
+    assert result["source_id"] == _selection().source_id
+    assert state.saves == 0
+    state.writable = False
+    with pytest.raises(PermissionError):
+        writer.inspect(_selection())
+    assert state.saves == 0
+
+
 @pytest.mark.parametrize(
     "change",
     [
