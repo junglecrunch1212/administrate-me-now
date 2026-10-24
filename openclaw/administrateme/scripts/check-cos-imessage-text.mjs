@@ -101,7 +101,7 @@ try {
   // Real pinned llm-task composition, synthetic completion only. Its schema is
   // post-validation, not a model instruction: the pack must teach the root shape.
   const { createLlmTaskTool } = await jiti.import(path.join(sourceRoot, "extensions/llm-task/src/llm-task-tool.ts"));
-  const groundingRequest = JSON.parse(execFileSync("python3", ["-c", `
+  const groundingRequest = JSON.parse(execFileSync("poetry", ["run", "python", "-c", `
 import json
 from pathlib import Path
 from adminme.lib.skill_runner.pack_loader import load_pack
