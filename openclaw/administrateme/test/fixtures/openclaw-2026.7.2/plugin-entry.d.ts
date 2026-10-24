@@ -178,7 +178,7 @@ export type OpenClawPluginApi = {
   config: Record<string, unknown>;
   runtime: {
     subagent?: {
-      run: (params: { sessionKey: string; message: string; deliver?: boolean; idempotencyKey?: string }) => Promise<{ runId: string }>;
+      run: (params: { sessionKey: string; message: string; deliver?: boolean; lane?: string; idempotencyKey?: string }) => Promise<{ runId: string }>;
       waitForRun: (params: { runId: string; timeoutMs?: number }) => Promise<{ status: "ok" | "error" | "timeout"; error?: string }>;
     };
     channel: {

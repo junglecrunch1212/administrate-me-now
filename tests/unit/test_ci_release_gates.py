@@ -3125,7 +3125,13 @@ def test_native_terminal_ingest_scope_preserves_unrelated_authorization() -> Non
     assert _service_work_ingest(new + new) is None
 
 
-@pytest.mark.parametrize("module, name", [("workstation", "workstation_router")])
+@pytest.mark.parametrize(
+    "module, name",
+    [
+        ("workstation", "workstation_router"),
+        ("workstation_work", "workstation_work_router"),
+    ],
+)
 def test_workstation_scope_requires_exact_complete_router_pair(
     module: str, name: str
 ) -> None:
@@ -3151,6 +3157,8 @@ def test_workstation_scope_requires_exact_complete_router_pair(
         "adminme/products/openclaw/workstation.py",
         "bootstrap/workstation_inventory.py",
         "openclaw/administrateme/src/workstation.ts",
+        "adminme/products/openclaw/workstation_work.py",
+        "openclaw/administrateme/src/workstation-work.ts",
     ],
 )
 def test_workstation_changes_use_affected_service_lane(

@@ -7,6 +7,7 @@ import { registerHooks } from "./hooks.js";
 import { registerService } from "./service.js";
 import { registerTools } from "./tools.js";
 import { registerWorkstationInventory } from "./workstation.js";
+import { registerWorkstationWorkTool, registerWorkstationWorkHooks } from "./workstation-work.js";
 import { registerMemberWorkTool } from "./member-work.js";
 import { registerAppleReminderTools } from "./apple-reminders.js";
 import { registerSelfReminderTools } from "./self-reminders.js";
@@ -44,8 +45,10 @@ export default definePluginEntry({
     registerSelfReminderTools(api, runtime);
     registerServicePrivateTools(api, runtime);
     registerWorkstationInventory(api, runtime);
+    registerWorkstationWorkTool(api, runtime);
     if (registrationMode === "tool-discovery") return;
     registerServiceWorkGateway(api, runtime);
+    registerWorkstationWorkHooks(api, runtime);
     registerCommands(api, runtime);
     registerHooks(api, runtime);
     registerService(api, runtime);

@@ -387,6 +387,9 @@ COS_SERVICE_WORK_COMPONENT_PATHS = frozenset(
         "adminme/products/openclaw/apple_reminders.py",
         "adminme/workstation_inventory.py",
         "adminme/products/openclaw/workstation.py",
+        "adminme/products/openclaw/workstation_work.py",
+        "openclaw/administrateme/src/workstation-work.ts",
+        "bootstrap/openclaw/programs/workstation_work.md",
         "bootstrap/workstation_inventory.py",
         "bootstrap/openclaw/programs/workstation_inventory.md",
         "openclaw/administrateme/src/workstation.ts",
@@ -446,6 +449,10 @@ COS_SERVICE_WORK_TEST_PATHS = frozenset(
         "tests/acceptance/test_cos_member_follow_up.py",
         "tests/acceptance/test_native_apple_reminder.py",
         "tests/acceptance/test_workstation_inventory.py",
+        "tests/acceptance/test_cos_workstation_handoff.py",
+        "openclaw/administrateme/test/workstation-work.test.ts",
+        "openclaw/administrateme/scripts/check-workstation-work-gateway.mjs",
+        "tests/fixtures/openclaw_workstation_work_probe.mjs",
         "tests/unit/test_workstation_inventory.py",
         "openclaw/administrateme/test/workstation.test.ts",
         "tests/acceptance/test_native_reminder_due_components.py",
@@ -1021,10 +1028,25 @@ def _service_work_application(source: str) -> tuple[str, bool] | None:
         workstation_shapes[0]
     ) > body_shapes.index(workstation_shapes[1]):
         return None
+    workstation_work_shapes = [
+        ast.dump(node, include_attributes=False)
+        for node in ast.parse(
+            "from adminme.products.openclaw.workstation_work import router as workstation_work_router\n"
+            "app.include_router(workstation_work_router)\n"
+        ).body
+    ]
+    work_counts = [body_shapes.count(shape) for shape in workstation_work_shapes]
+    if work_counts not in ([0, 0], [1, 1]):
+        return None
+    if work_counts == [1, 1] and body_shapes.index(
+        workstation_work_shapes[0]
+    ) > body_shapes.index(workstation_work_shapes[1]):
+        return None
     application.body = [
         node
         for node, shape in zip(application.body, body_shapes, strict=True)
-        if shape not in shapes + reminder_shapes + workstation_shapes
+        if shape
+        not in shapes + reminder_shapes + workstation_shapes + workstation_work_shapes
     ]
     digest = hashlib.sha256(
         ast.dump(module, include_attributes=False).encode()

@@ -80,6 +80,8 @@ if [[ "${1:-}" == --service-work ]]; then
     "$TEST_ROOT/app/openclaw/$openclaw_commit"
   node "$REPOSITORY_ROOT/openclaw/administrateme/scripts/check-service-work-gateway.mjs" \
     "$TEST_ROOT/app/openclaw/$openclaw_commit"
+  node "$REPOSITORY_ROOT/openclaw/administrateme/scripts/check-workstation-work-gateway.mjs" \
+    "$TEST_ROOT/app/openclaw/$openclaw_commit"
 else
   node "$REPOSITORY_ROOT/openclaw/administrateme/scripts/check-cos-imessage-text.mjs" \
     "$TEST_ROOT/app/openclaw/$openclaw_commit"

@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi.testclient import TestClient
+import pytest
 
 from adminme.products.openclaw.workstation_work import _content_hash
 from adminme.runtime.application import create_application
@@ -194,3 +195,131 @@ def test_fake_identity_unbound_worker_and_unproved_result_fail_closed(
             },
             403,
         )
+
+
+@pytest.mark.parametrize("channel", ["gmail", "administrateme-portal"])
+def test_real_gmail_and_dashboard_chat_private_draft_and_cross_channel_readback(
+    tmp_path: Path, channel: str
+) -> None:
+    from adminme.openclaw_topology import service_session_key
+    from adminme.service_identities import COS_SERVICE_PRINCIPAL_ID
+    from tests.acceptance.test_authenticated_conversation_channels import (
+        gmail_instruction,
+        portal_instruction,
+        settings,
+    )
+    from tests.acceptance.test_forwarded_channel_intake import AUTH as CHANNEL_AUTH
+    from tests.acceptance.test_native_apple_reminder import SECRET, _grant as grant
+
+    with TestClient(create_application(settings(tmp_path / channel))) as client:
+        grant(client)
+        grant(client, other=True)
+        intake = gmail_instruction if channel == "gmail" else portal_instruction
+        source = intake(client, "workstation-channel-create", text=INSTRUCTION)
+
+        def send(path: str, body: dict[str, Any], status: int = 200) -> dict[str, Any]:
+            response = client.post(path, headers=CHANNEL_AUTH, json=body)
+            assert response.status_code == status, response.text
+            return response.json()
+
+        admitted = send(
+            BASE + "/admit",
+            {
+                **source,
+                "action": "create",
+                "instruction": INSTRUCTION,
+                "run_nonce": NONCE,
+            },
+        )
+        service = {
+            **_service(source, NONCE),
+            "session_key": service_session_key(COS_SERVICE_PRINCIPAL_ID, SECRET, NONCE),
+        }
+        made = send(
+            CREATE,
+            {
+                "provenance": service,
+                "request_id": admitted["artifact_request_id"],
+                "title": "Garage draft",
+                "description": "Keep equipment in labeled zones.",
+                "record_kind": "scratchpad",
+            },
+            201,
+        )
+        note = send(READ, {"provenance": service, "task_id": made["task_id"]})["work"][
+            0
+        ]
+        send(
+            BASE + "/read-back",
+            {
+                "provenance": service,
+                "task_id": note["task_id"],
+                "last_event_id": note["last_event_id"],
+                "content_sha256": _content_hash(note),
+            },
+        )
+        result = send(
+            BASE + "/result",
+            {
+                **source,
+                "follow_up_source_id": admitted["follow_up_source_id"],
+                "run_nonce": NONCE,
+            },
+        )
+        assert result["status"] == "verified"
+        assert result["content"] == "Keep equipment in labeled zones."
+        assert source["provenance"]["channel_id"] == channel
+        other = portal_instruction(
+            client, "other-member-draft-status", other=True, text="Read that draft."
+        )
+        send(
+            BASE + "/admit",
+            {
+                **other,
+                "action": "status",
+                "follow_up_source_id": admitted["follow_up_source_id"],
+                "run_nonce": "b" * 32,
+            },
+            404,
+        )
+        other_channel = portal_instruction if channel == "gmail" else gmail_instruction
+        current = other_channel(
+            client, "cross-channel-draft-status", text="Read my garage draft back."
+        )
+        continued = send(
+            BASE + "/admit",
+            {
+                **current,
+                "action": "status",
+                "follow_up_source_id": admitted["follow_up_source_id"],
+                "run_nonce": "c" * 32,
+            },
+        )
+        assert continued["mode"] == "read"
+        assert continued["artifact_task_id"] == admitted["artifact_task_id"]
+        # The current domain permission remains necessary, including after the
+        # native worker has created its artifact; retained history is not a grant.
+        from tests.acceptance.test_forwarded_channel_intake import MEMBER_HEADERS
+
+        source_grant = note["source_authorities"][0]["authority_grant_id"]
+        revoke = client.request(
+            "DELETE",
+            "/api/member/v1/cos/delegations/" + source_grant,
+            headers=MEMBER_HEADERS,
+            json={
+                "request_id": "revoke-workstation-source",
+                "reason": "Fixture revocation",
+            },
+        )
+        assert revoke.status_code == 200, revoke.text
+        denied = client.post(
+            BASE + "/read-back",
+            headers=CHANNEL_AUTH,
+            json={
+                "provenance": service,
+                "task_id": note["task_id"],
+                "last_event_id": note["last_event_id"],
+                "content_sha256": _content_hash(note),
+            },
+        )
+        assert denied.status_code == 403

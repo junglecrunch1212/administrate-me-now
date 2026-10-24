@@ -40,6 +40,7 @@ function fixture() {
   const run = vi.fn(async (params: any) => {
     const worker = { agentId: serviceAgentId(), sessionKey: params.sessionKey, runId: "worker-run" };
     expect(params.deliver).toBe(false);
+    expect(params.lane).toBe("subagent");
     expect(params.sessionKey).not.toBe(member.sessionKey);
     expect(await invoke("before_prompt_build", { prompt: params.message, messages: [] }, worker)).toEqual({ toolsAllow: ["administrateme_service_private_work", "administrateme_service_private_state"] });
     await invoke("after_tool_call", { toolName: "administrateme_service_private_state", params: { task_id: note.task_id }, result: { details: { work: [note] } } }, worker);

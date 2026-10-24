@@ -4031,6 +4031,12 @@ def create_application(settings: RuntimeSettings) -> FastAPI:
     from adminme.products.openclaw.workstation import router as workstation_router
 
     app.include_router(workstation_router)
+
+    from adminme.products.openclaw.workstation_work import (
+        router as workstation_work_router,
+    )
+
+    app.include_router(workstation_work_router)
     app.include_router(member_router)
     app.include_router(member_bridge_setup_router)
     app.include_router(member_cos_router)
