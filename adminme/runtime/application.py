@@ -52,6 +52,7 @@ from adminme.runtime.communication_intake import (
 )
 from adminme.submission_interpreter import SubmissionInterpreter
 from adminme.provider_write_reconciliation import ProviderWriteReconciler
+from adminme.conversation_intake import GmailConversationIntake
 from adminme.direct_intake import (
     DirectIntakeProcessor,
     public_direct_channel_readiness,
@@ -817,6 +818,7 @@ class AdministrateMeRuntime:
             GoogleTasksExecutionReconciler | None
         ) = None
         self.direct_intake: DirectIntakeProcessor | None = None
+        self.gmail_conversations: GmailConversationIntake | None = None
         self.submission_interpreter: SubmissionInterpreter | None = None
         self.provider_write_reconciler: ProviderWriteReconciler | None = None
         self.run_skill_fn: Any = run_skill
@@ -926,6 +928,8 @@ class AdministrateMeRuntime:
                 event_log=self.event_log,
                 channels=self.settings.service_channel_accounts,
             )
+            self.gmail_conversations = GmailConversationIntake(self)
+            await self.gmail_conversations.initialize()
             self.messages_reply_reconciler = MessagesReplyReconciler(
                 self.event_log, self.events
             )
@@ -1180,6 +1184,12 @@ class AdministrateMeRuntime:
                 self.direct_intake.handle,
                 consumer_version=self.direct_intake.CONSUMER_VERSION,
                 replay_on_version_change=True,
+            )
+            self.bus.subscribe(
+                "cos-gmail:conversation",
+                ["messaging.received", "cos.channels.activated"],
+                self.gmail_conversations.handle,
+                consumer_version=self.gmail_conversations.CONSUMER_VERSION,
             )
             self.bus.subscribe(
                 "apple-messages-reply:reconciliation",

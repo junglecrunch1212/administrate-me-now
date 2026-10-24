@@ -528,9 +528,12 @@ def test_member_chat_is_openclaw_owned_isolated_and_server_authorized(
             client, ADULT, "Help me choose a small step.", "adult-chat-0001"
         )
         after = client.portal.call(_events, runtime)
-        assert len(after) == len(before), (
-            "ordinary chat must not append an AdministrateMe event"
-        )
+        assert len(after) == len(before) + 1
+        assert after[-1]["type"] == "cos.conversation.instruction"
+        assert after[-1]["payload"]["text"] == "Help me choose a small step."
+        # Only the authenticated instruction is a domain receipt; OpenClaw
+        # remains transcript owner and assistant responses are not copied.
+        assert after[-1]["actor_identity"] == ADULT
         assert "I'm here" in adult_stream
         forbidden_values = [
             SECRET,

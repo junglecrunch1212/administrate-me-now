@@ -119,6 +119,7 @@ function makeTool(
         context,
         definition.standingOrder ? "standing_order" : "tool",
         runtime.transport.config.sharedSecretEnv,
+        runtime,
       );
       trackSession(runtime, provenance);
       const typedParams = params as Record<string, unknown>;

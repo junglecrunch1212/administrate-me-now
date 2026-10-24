@@ -635,6 +635,10 @@ def _session(
                 )
             ):
                 member_id = candidate
+    if member_id is None and provenance.channel_id == "gmail":
+        from adminme.conversation_instructions import gmail_member
+
+        member_id = gmail_member(runtime, provenance)
     if not member_id:
         raise HTTPException(403, "OpenClaw actor is not mapped to a household member")
     role = runtime.settings.member_roles.get(member_id)

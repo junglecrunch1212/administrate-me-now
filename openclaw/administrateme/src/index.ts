@@ -12,6 +12,7 @@ import { registerSelfReminderTools } from "./self-reminders.js";
 import { registerServicePrivateTools, registerServiceWorkGateway } from "./service-private.js";
 import { AdministrateMeTransport } from "./transport.js";
 import { registerCosApprovalRelay } from "./cos-approval-relay.js";
+import { registerConversationInput } from "./conversation-input.js";
 import { registerCosPermissionPreflight } from "./cos-permission-preflight.js";
 import type { PluginRuntime } from "./runtime.js";
 
@@ -46,6 +47,7 @@ export default definePluginEntry({
     registerServiceWorkGateway(api, runtime);
     registerCommands(api, runtime);
     registerHooks(api, runtime);
+    registerConversationInput(api, runtime);
     registerService(api, runtime);
     runtime.cosApprovals = registerCosApprovalRelay(api, runtime);
     registerCosPermissionPreflight(api, runtime);
