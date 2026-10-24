@@ -234,3 +234,24 @@ def test_retained_hold_cannot_be_repointed_to_accept_its_original_event():
     seal_publication(successor)
     with pytest.raises(PublicationError, match="historical"):
         verify_package(successor, package, prior)
+
+
+def test_archive_schema_errors_do_not_render_private_blob_content():
+    from pydantic import ValidationError
+    from adminme.finance.publication import canonical_bytes
+    from adminme.finance.provenance_store import ProvenanceBlobArchivedV1
+
+    marker = "synthetic-private-proof-marker"
+    with pytest.raises(ValidationError) as caught:
+        ProvenanceBlobArchivedV1.model_validate(
+            {
+                "owner_id": "owner-synthetic",
+                "book_id": "book-synthetic",
+                "root_sha256": "a" * 64,
+                "content_sha256": "b" * 64,
+                "kind": "chunk",
+                "canonical_json": canonical_bytes({"private": marker}).decode(),
+                "approved_evidence": [],
+            }
+        )
+    assert marker not in str(caught.value)

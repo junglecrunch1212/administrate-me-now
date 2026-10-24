@@ -44,6 +44,7 @@ jobs:
       - name: Finance synthetic process and numerical checks
         run: >-
           poetry run pytest -q --runxfail
+          --junitxml="${{ runner.temp }}/finance-functional-results.xml"
           tests/unit/test_event_log.py
           tests/unit/test_event_bus.py
           tests/unit/events/test_event_writer.py
@@ -81,6 +82,14 @@ jobs:
           tests/acceptance/test_cos_self_replies.py
           tests/acceptance/test_cos_identity_delegation_kernel.py
           tests/acceptance/test_gate7_household_experience.py
+      - name: Retain functional results before resource diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: finance-functional-results
+          path: ${{ runner.temp }}/finance-functional-results.xml
+          if-no-files-found: error
+          retention-days: 7
       - name: Measure dedicated authority reader memory and shutdown
         if: always()
         env:

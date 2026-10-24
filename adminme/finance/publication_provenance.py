@@ -48,7 +48,7 @@ REPORT_ORDER = [
 
 
 class StrictModel(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
+    model_config = ConfigDict(extra="forbid", strict=True, hide_input_in_errors=True)
 
 
 class BlobRef(StrictModel):

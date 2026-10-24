@@ -201,7 +201,19 @@ print(json.dumps([enabled, entry["hooks"]]))
     registerTool: (factory, options) => appleTools.set(options.name, factory) };
   registerHooks(appleApi, appleRuntime);
   registerAppleReminderTools(appleApi, appleRuntime);
-  const nativeHook = (name) => appleRegistration.state.registry.typedHooks.find((row) => row.hookName === name).handler;
+  const nativeHook = (name) => {
+    const hooks = appleRegistration.state.registry.typedHooks.filter((row) => row.hookName === name);
+    assert.ok(hooks.length > 0, `Missing registered native hook: ${name}`);
+    if (name === "before_agent_reply") {
+      // Finance and member-request admission share this native lifecycle hook.
+      // Exercise every registered observer; selecting the first skips admission.
+      return async (...args) => {
+        for (const hook of hooks) assert.equal(await hook.handler(...args), undefined);
+      };
+    }
+    assert.equal(hooks.length, 1, `Use native composition for multiple ${name} hooks`);
+    return hooks[0].handler;
+  };
   const appleContext = { runId: "native-apple-run", agentId: agent, sessionKey: incoming.sessionKey };
   await nativeHook("message_received")(appleInbound, { agentId: agent, sessionKey: incoming.sessionKey, channelId: "imessage", accountId: "fixture" });
   const appleEnvelope = buildReplyPromptEnvelope({ ctx: {}, sessionCtx: {}, baseBody: appleMessage,
