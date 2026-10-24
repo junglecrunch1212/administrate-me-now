@@ -1759,3 +1759,27 @@ def test_disk_refusal_preserves_normal_state_and_history_before_service_stop(
     assert controller.services.runtime_diagnostics()["observation_active"] is (
         operation == "restore"
     )
+
+
+@pytest.mark.parametrize("maintenance", [False, True])
+def test_containment_does_not_reserve_an_unrequested_future_release(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, maintenance: bool
+) -> None:
+    controller, request = _maintenance_controller(tmp_path, monkeypatch, messages=False)
+    plan = _prepare_maintenance(controller, request)
+    stops = controller.services.stops
+    # This covers this small fixture's single backup and rehearsal plus reserve,
+    # but deliberately not a full maintenance/update/restore and release build.
+    monkeypatch.setattr(
+        "bootstrap.storage_headroom._volume", lambda _path: (1, 6 * 1024**3)
+    )
+    if maintenance:
+        with pytest.raises(CoSActivationError, match="disk headroom insufficient"):
+            controller.pause_maintenance(plan)
+        assert controller.services.stops == stops
+        assert not controller.journal_path.exists()
+        assert controller.services.runtime_diagnostics()["observation_active"] is False
+    else:
+        controller.enter_observation(plan.observation_request())
+        assert controller.services.stops == stops + 1
+        assert controller.services.runtime_diagnostics()["observation_active"] is True

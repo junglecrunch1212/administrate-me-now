@@ -56,7 +56,9 @@ remaining backup/rehearsal budget before stopping services. A refused admission
 leaves that operation's runtime state, grants, journal and release pointer
 unchanged. It reports required/free bytes without household paths or contents;
 free space through separately authorized operations, then retry. It does not
-delete backups, change retention or replace encrypted restore proof. Estimates
+delete backups, change retention or replace encrypted restore proof. A standalone
+enter-observation operation reserves only its own backup/rehearsal, without
+requiring space for an unrequested future release. Estimates
 cannot prevent another process consuming disk later, so existing guarded
 recovery remains mandatory. This modernizes admission after the observed
 backup-rehearsal disk failure; backup format and recovery checks are preserved.

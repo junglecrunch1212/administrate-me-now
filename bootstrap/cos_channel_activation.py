@@ -1495,8 +1495,10 @@ class CoSChannelActivator:
             try:
                 require_deployment_headroom(
                     self.paths,
-                    backup_copies=3,
-                    release_sources=(release, self.repository),
+                    backup_copies=3 if maintenance_plan is not None else 1,
+                    release_sources=(release, self.repository)
+                    if maintenance_plan is not None
+                    else (),
                 )
             except StorageHeadroomError as exc:
                 raise CoSActivationError(str(exc)) from exc
