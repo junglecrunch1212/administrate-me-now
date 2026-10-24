@@ -573,7 +573,7 @@ def test_followup_cannot_rebind_failed_invocation_or_escape_as_server_error(
                 kind: grounding_receipts(kind)
                 for kind in ("skill.call.recorded", "skill.call.failed")
             }
-            assert len(before["skill.call.recorded"]) == 1
+            assert len(before["skill.call.recorded"]) == int(not malformed)
             assert len(before["skill.call.failed"]) == int(malformed)
             followup = _instruction(client, "new-authenticated-followup", text="Yes")
             assert (
