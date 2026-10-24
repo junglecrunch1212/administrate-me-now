@@ -307,6 +307,17 @@ def test_supported_workstation_hook_changes_only_exact_reviewed_capability(
     assert json.loads(config_path.read_text()) == previous
     reconcile_service_topology(paths, release)
     assert json.loads(config_path.read_text()) == selected
+    for consent in (False, None):
+        denied = copy.deepcopy(previous)
+        hooks = denied["plugins"]["entries"]["administrateme"]["hooks"]
+        if consent is None:
+            hooks.pop("allowConversationAccess")
+        else:
+            hooks["allowConversationAccess"] = consent
+        assert (
+            prepare_service_topology(denied, paths, release)["plugins"]
+            == denied["plugins"]
+        )
     previous["plugins"]["entries"]["administrateme"]["config"]["serviceWorkEnabled"] = (
         False
     )
