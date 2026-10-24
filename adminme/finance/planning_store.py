@@ -183,9 +183,12 @@ def apply_projection(envelope: dict[str, Any], conn: Any) -> None:
                         canonical_bytes(scoped_record).decode(),
                     ),
                 )
-    for row in p.get("shared_event_inventory", []):
-        conn.execute(
-            "INSERT INTO finance_dated_shared_events VALUES (?,?,?,?,?,?)",
+    # Stream bounded parameters through SQLite's prepared statement instead of
+    # re-entering execute for every shared body and context reference. The
+    # enclosing projection transaction and exact row order stay unchanged.
+    conn.executemany(
+        "INSERT INTO finance_dated_shared_events VALUES (?,?,?,?,?,?)",
+        (
             (
                 *key,
                 p["projection_id"],
@@ -193,21 +196,25 @@ def apply_projection(envelope: dict[str, Any], conn: Any) -> None:
                 canonical_bytes(
                     {k: v for k, v in row.items() if k != "record_id"}
                 ).decode(),
+            )
+            for row in p.get("shared_event_inventory", [])
+        ),
+    )
+    if "shared_event_inventory" in p:
+        conn.executemany(
+            "INSERT INTO finance_dated_event_bindings VALUES (?,?,?,?,?,?,?)",
+            (
+                (
+                    *key,
+                    p["projection_id"],
+                    manifest["context_id"],
+                    ordinal,
+                    record_id,
+                )
+                for manifest in p["detail_manifest"]
+                for ordinal, record_id in enumerate(manifest["record_ids"])
             ),
         )
-    if "shared_event_inventory" in p:
-        for manifest in p["detail_manifest"]:
-            for ordinal, record_id in enumerate(manifest["record_ids"]):
-                conn.execute(
-                    "INSERT INTO finance_dated_event_bindings VALUES (?,?,?,?,?,?,?)",
-                    (
-                        *key,
-                        p["projection_id"],
-                        manifest["context_id"],
-                        ordinal,
-                        record_id,
-                    ),
-                )
     event_ordinals: dict[str, int] = {}
     for row in p["detail_events"]:
         context_id = row["context_id"]

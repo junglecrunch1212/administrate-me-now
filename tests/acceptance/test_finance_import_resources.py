@@ -53,7 +53,7 @@ SERVER_WALL_SECONDS = 180
 def _server(root, listener, channel, telemetry):
     resource.setrlimit(resource.RLIMIT_CPU, (SERVER_CPU_SECONDS, SERVER_CPU_SECONDS))
     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
-    from adminme.finance import importer, planning_store
+    from adminme.finance import importer, planning_store, provenance_store
     from adminme.products.member import finance_import
 
     started = time.monotonic()
@@ -104,6 +104,16 @@ def _server(root, listener, channel, telemetry):
     )
     planning_store.validate_projection = sync_stage(
         planning_store.validate_projection, "dated_validation"
+    )
+    provenance_store.verify_archived = sync_stage(
+        provenance_store.verify_archived, "verify_archived_provenance"
+    )
+    planning_store._anchored = sync_stage(planning_store._anchored, "dated_anchor")
+    from adminme.projections.money import handlers
+
+    handlers.apply_projection = sync_stage(handlers.apply_projection, "apply_dated")
+    handlers.apply_publication = sync_stage(
+        handlers.apply_publication, "apply_accounting"
     )
     original_lock = finance_import.control_lock
 
