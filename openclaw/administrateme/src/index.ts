@@ -49,10 +49,10 @@ export default definePluginEntry({
     registerWorkstationWorkTool(api, runtime);
     if (registrationMode === "tool-discovery") return;
     registerServiceWorkGateway(api, runtime);
-    registerWorkstationWorkHooks(api, runtime);
     registerCommands(api, runtime);
     registerHooks(api, runtime);
     registerConversationInput(api, runtime);
+    registerWorkstationWorkHooks(api, runtime);
     registerService(api, runtime);
     runtime.cosApprovals = registerCosApprovalRelay(api, runtime);
     registerCosPermissionPreflight(api, runtime);
