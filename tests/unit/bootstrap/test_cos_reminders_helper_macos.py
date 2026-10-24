@@ -42,6 +42,10 @@ pytestmark = pytest.mark.skipif(
 def test_real_sealed_worker_proves_native_permission_identity_without_prompt(
     tmp_path, release, monkeypatch, write_enabled, previous_reader
 ):
+    # Each parameter gets an independent runtime; the module fixture is a seed.
+    template = release
+    release = tmp_path.resolve() / "Protected Runtime"
+    shutil.copytree(template, release, symlinks=True)
     for name in ("adminme", "bootstrap", "packs"):
         shutil.copytree(
             ROOT / name,

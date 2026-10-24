@@ -1618,7 +1618,7 @@ def compose_member_catalog(
             "installed": sum(row["installation"] == "installed" for row in rows),
             "read_available": sum(row["effective"]["read_available"] for row in rows),
             "execute_available": sum(
-                row["effective"]["execute_available"] for row in rows
+                row["effective"]["execute_available"] is True for row in rows
             ),
             "degraded": sum(row["runtime_health"] == "degraded" for row in rows),
             "attention": len(attention),
