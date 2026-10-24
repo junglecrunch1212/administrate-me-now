@@ -64,6 +64,12 @@ function fixture(options: { acknowledged?: boolean; status?: string; serviceWork
 afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
 
 describe("native private Apple Reminder workflow", () => {
+  it("loaded confirmation guidance stops explicit verification failures without invented account choices", () => {
+    const description = fixture().confirm.description;
+    expect(description).toContain("request_authorization_unavailable");
+    expect(description).toContain("without inventing account ambiguity");
+    expect(description).toContain("If a transport timeout loses");
+  });
   it("binds exact requested due time to acknowledged current input without supplying execution approval", async () => {
     // Internal service-work enablement and self-text permission are unrelated to
     // this member's separately authorized Apple Reminders command.
