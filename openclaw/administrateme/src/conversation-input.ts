@@ -5,6 +5,7 @@ import { OPENCLAW_COMMIT, OPENCLAW_VERSION, type Provenance } from "./contract.j
 import type { PluginRuntime } from "./runtime.js";
 import { replyParts } from "./self-replies.js";
 import { canonical } from "./approval.js";
+import { TransportError } from "./transport.js";
 
 type Input = { provenance: Provenance; source_message_event_id: string; textSha256: string; capturedAt: number; instructionText?: string };
 type Context = { runId?: string | undefined; sessionKey?: string | undefined; agentId?: string | undefined };
@@ -134,8 +135,13 @@ export function registerConversationInput(api: OpenClawPluginApi, runtime: Plugi
         host_decision: { ...decision, signature: createHmac("sha256", secret).update(material).digest("hex") },
       });
       if (result.status !== "sent") api.logger.warn("CoS email reply is not terminally proven sent; inspect its receipt, do not resend.");
-    } catch {
-      api.logger.error("CoS email reply failed or has an unknown result; inspect its retained receipt, do not resend.");
+    } catch (error) {
+      // Only closed local classifications: never log response text, addresses,
+      // message bodies, credentials, or arbitrary exception names/messages.
+      const status = error instanceof TransportError && Number.isInteger(error.status) && error.status! >= 400 && error.status! <= 599
+        ? String(error.status) : "unknown";
+      const kind = error instanceof TransportError ? "transport" : "local";
+      api.logger.error(`CoS email reply failed or has an unknown result (kind=${kind}, status=${status}); inspect its retained receipt, do not resend.`);
     }
   });
 }

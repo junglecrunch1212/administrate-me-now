@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
+from email.policy import default as email_policy
 import hashlib
 import hmac
 import re
@@ -100,6 +101,79 @@ def validate_host(
         )
 
 
+def _single_mailbox(value: Any) -> str:
+    """Parse only a complete singleton header; display text conveys no authority."""
+    if (
+        not isinstance(value, str)
+        or not value
+        or len(value) > 2000
+        or any(ord(char) < 32 or ord(char) == 127 for char in value)
+    ):
+        raise ValueError("one complete mailbox header is required")
+    header = email_policy.header_factory("From", value)
+    if (
+        header.defects
+        or len(header.addresses) != 1
+        or any(group.display_name is not None for group in header.groups)
+    ):
+        raise ValueError("one unambiguous mailbox is required")
+    return normalize_recipient("email", header.addresses[0].addr_spec)
+
+
+def _reply_sender(runtime: Any, original: dict[str, Any], member_id: str) -> str:
+    """Bind a parsed sender to current enrolled, provider-authenticated routing.
+
+    Header parsing alone cannot select a recipient. The immutable Gmail source
+    and exact current account/channel route must establish the same member and
+    mailbox; the caller still applies the encrypted recipient ceiling.
+    """
+    from adminme.conversation_instructions import gmail_source_member
+
+    if gmail_source_member(runtime, original) != member_id:
+        raise HTTPException(403, "the original member email route is unavailable")
+    payload = original["payload"]
+    try:
+        sender = _single_mailbox(payload.get("from_identifier"))
+        reply_to = payload.get("reply_to_identifier")
+        if reply_to not in {None, ""} and _single_mailbox(reply_to) != sender:
+            raise ValueError("reply destination differs from the sender")
+        routes = [
+            route
+            for entry in runtime.settings.adapter_config.get("adapters", [])
+            if str(entry.get("kind", "")).removeprefix("adapter:")
+            == "messaging-gmail-api"
+            for config in [entry.get("config", {})]
+            if config.get("service_principal_id") == payload["service_principal_id"]
+            and config.get("channel_id") == payload["channel_id"]
+            and config.get("provider_account_id") == payload["provider_account_id"]
+            and config.get("user_email") == payload["provider_account_id"]
+            for route in config.get("trusted_sender_routes", [])
+            if route.get("route_key") == payload["trusted_route_key"]
+        ]
+        if len(routes) != 1:
+            raise ValueError("one current sender route is required")
+        route = routes[0]
+        # Keep the recipient policy's exact local part semantics. Do not infer
+        # alias equivalence from Gmail or from the display name.
+        if (
+            normalize_recipient("email", route.get("exact_from_identifier")) != sender
+            or route.get("authentication_policy") != payload["route_assurance"]
+            or (
+                route.get("authentication_policy") == "exact_dkim_identity"
+                and normalize_recipient(
+                    "email", route.get("exact_authenticated_identifier")
+                )
+                != sender
+            )
+        ):
+            raise ValueError("sender no longer matches its reviewed route")
+        return sender
+    except (AttributeError, KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(
+            403, "one exact currently enrolled email sender is required"
+        ) from exc
+
+
 @router.post("/reply")
 async def conversation_reply(
     body: ConversationReplyRequest, request: Request
@@ -125,18 +199,12 @@ async def conversation_reply(
     ):
         raise HTTPException(403, "the original member email route is unavailable")
     original_payload = original["payload"]
-    try:
-        recipient = normalize_recipient("email", original_payload["from_identifier"])
-    except (KeyError, TypeError, ValueError) as exc:
-        raise HTTPException(
-            403, "one exact authenticated email sender is required"
-        ) from exc
+    recipient = _reply_sender(runtime, original, session.auth_member_id)
     if (
         original_payload.get("to_identifiers")
         != [original_payload["provider_account_id"]]
         or original_payload.get("cc_identifiers")
         or original_payload.get("bcc_identifiers")
-        or original_payload.get("reply_to_identifier") not in {None, "", recipient}
         or not original_payload.get("thread_id")
         or not re.fullmatch(
             r"<[^<>\s\r\n]+>", str(original_payload.get("rfc_message_id") or "")
@@ -255,7 +323,8 @@ async def conversation_reply(
             live_original = await runtime.event_log.get(original["event_id"])
             if (
                 live_original is None
-                or gmail_source_member(runtime, live_original) != session.auth_member_id
+                or _reply_sender(runtime, live_original, session.auth_member_id)
+                != recipient
             ):
                 raise HTTPException(403, "original email authority changed")
 

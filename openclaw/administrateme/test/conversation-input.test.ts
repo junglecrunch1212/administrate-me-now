@@ -7,6 +7,7 @@ import { registerConversationInput } from "../src/conversation-input.js";
 import { provenanceFromTool } from "../src/provenance.js";
 import { bindReminderTool, peekReminderInput, takeReminderInput } from "../src/self-replies.js";
 import type { PluginRuntime } from "../src/runtime.js";
+import { TransportError } from "../src/transport.js";
 
 const secret = "conversation-input-fixture-credential-free-secret";
 const agent = "adminme-0123456789abcdef";
@@ -30,7 +31,7 @@ function fixture(channel = "gmail") {
   const prepare = async (params = sign(ticket)) => { const respond = vi.fn(); await methods.get("administrateme.conversation.prepare")!({ params, respond }); return respond; };
   const begin = () => hooks.get("before_agent_reply")!({ cleanedBody: text }, context);
   const finish = (extra = {}, messages = [{ role: "user", content: text }, { role: "assistant", phase: "final", content: "Created; terminal Apple receipt verified." }]) => hooks.get("agent_end")!({ runId: context.runId, success: true, messages, ...extra }, context);
-  return { runtime, context, ticket, sign, prepare, begin, finish, hooks, request };
+  return { runtime, context, ticket, sign, prepare, begin, finish, hooks, request, logger: api.logger };
 }
 
 afterEach(() => vi.unstubAllEnvs());
@@ -96,4 +97,15 @@ describe("real-channel trusted current instruction", () => {
     else await f.finish();
     expect(f.request).not.toHaveBeenCalled();
   });
+});
+
+
+it.each([403, 422, undefined])("logs only safe reply transport classification (%s) without retrying", async (status) => {
+  const f = fixture();
+  f.request.mockRejectedValue(new TransportError("private-body member@example.invalid secret-value", "degraded", status));
+  await f.prepare(); f.begin(); await f.finish();
+  expect(f.logger.error).toHaveBeenCalledOnce();
+  expect(f.logger.error).toHaveBeenCalledWith(`CoS email reply failed or has an unknown result (kind=transport, status=${status ?? "unknown"}); inspect its retained receipt, do not resend.`);
+  await f.finish();
+  expect(f.request).toHaveBeenCalledOnce();
 });
