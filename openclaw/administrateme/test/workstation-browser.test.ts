@@ -38,25 +38,22 @@ it("checks exact current site identity synchronously before reading any private 
   expect(correct.readBody).toHaveBeenCalledTimes(1);
 });
 
-it("binds only a real unique native tab and substitutes only the reviewed read expression", async () => {
-  const request = vi.fn(async () => ({ tabs: [{ targetId: "real-native-tab", url: policy.url }] }));
-  const native = { currentConfig: config, request };
-  const prepared = await prepareBrowserRead(native, policy, { action: "snapshot" });
-  expect(request).toHaveBeenCalledWith("browser.request", expect.objectContaining({ path: "/tabs", query: { profile: "chrome" } }));
+it("binds only the operator-observed native tab and substitutes only the reviewed read expression", () => {
+  const native = { currentConfig: config };
+  const prepared = prepareBrowserRead(native, policy, { action: "snapshot" });
   expect(prepared.params).toMatchObject({ action: "act", target: "host", profile: "chrome", targetId: "real-native-tab",
     request: { kind: "evaluate", targetId: "real-native-tab", fn: identityBoundReadExpression(policy) } });
   for (const request of [{ action: "snapshot", profile: "user" }, { action: "snapshot", target: "node" }, { action: "act", request: { kind: "evaluate", fn: "arbitrary()" } }, { action: "snapshot", selector: "body" }]) {
-    await expect(prepareBrowserRead(native, policy, request)).rejects.toThrow();
+    expect(() => prepareBrowserRead(native, policy, request)).toThrow();
   }
-  request.mockResolvedValueOnce({ tabs: [{ targetId: "one", url: policy.url }, { targetId: "two", url: policy.url }] });
-  await expect(prepareBrowserRead(native, policy, { action: "snapshot" })).rejects.toThrow("operator-verified CoS tab");
-  await expect(prepareBrowserRead(native, policy, { action: "snapshot", targetId: "fabricated" })).rejects.toThrow();
+  expect(() => prepareBrowserRead(native, { ...policy, native_target_id: "" }, { action: "snapshot" })).toThrow("verified native tab");
+  expect(() => prepareBrowserRead(native, policy, { action: "snapshot", targetId: "fabricated" })).toThrow();
 });
 
-it("withholds content after routing, target, identity or source authority changes", async () => {
+it("withholds content after routing, target, identity or source authority changes", () => {
   let current = config();
-  const native = { currentConfig: () => current, request: vi.fn(async () => ({ tabs: [{ targetId: "real-native-tab", url: policy.url }] })) };
-  const prepared = await prepareBrowserRead(native, policy, { action: "snapshot" });
+  const native = { currentConfig: () => current };
+  const prepared = prepareBrowserRead(native, policy, { action: "snapshot" });
   const result = { details: { targetId: "real-native-tab", result: page("cos@example.invalid").result } };
   expect(verifiedBrowserRead(native, prepared, policy, result).text).toBe("Authorized household planning text");
   expect(() => verifiedBrowserRead(native, prepared, { ...policy, policy_revision: 2 }, result)).toThrow("authority changed");

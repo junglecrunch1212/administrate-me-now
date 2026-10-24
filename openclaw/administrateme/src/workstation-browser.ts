@@ -18,7 +18,6 @@ export type BrowserReadPolicy = {
 };
 export type NativeBrowserAccess = {
   currentConfig: () => Record<string, unknown>;
-  request: (method: string, params: Record<string, unknown>) => Promise<unknown>;
 };
 export type PreparedBrowserRead = {
   targetId: string;
@@ -79,24 +78,23 @@ export function identityBoundReadExpression(policy: BrowserReadPolicy): string {
   }`;
 }
 
-export async function prepareBrowserRead(
+export function prepareBrowserRead(
   native: NativeBrowserAccess, policy: BrowserReadPolicy, requested: Record<string, unknown>,
-): Promise<PreparedBrowserRead> {
+): PreparedBrowserRead {
   assertNativeBrowserRoute(native.currentConfig());
   if (policy.profile !== "chrome" || requested.action !== "snapshot" ||
       Object.keys(requested).some((key) => !["action", "target", "profile", "targetId"].includes(key)) ||
       (requested.target !== undefined && requested.target !== "host") ||
-      (requested.profile !== undefined && requested.profile !== policy.profile)) {
+      (requested.profile !== undefined && requested.profile !== policy.profile) ||
+      (requested.targetId !== undefined && requested.targetId !== policy.native_target_id)) {
     throw new Error("This work permits only the exact CoS browser read; other actions and routes are unavailable.");
   }
-  const result = object(await native.request("browser.request", {
-    method: "GET", path: "/tabs", query: { profile: policy.profile }, timeoutMs: 5000,
-  }));
-  const tabs = Array.isArray(result.tabs) ? result.tabs.map(object) : [];
-  const eligible = tabs.filter((tab) => tab.url === policy.url && tab.targetId === policy.native_target_id &&
-    (requested.targetId === undefined || requested.targetId === tab.targetId));
-  if (eligible.length !== 1) throw new Error("The authorized page requires the currently shared, operator-verified CoS tab; refresh its private binding if replaced.");
-  const targetId = eligible[0]!.targetId as string;
+  // The private policy records the actual target observed through the native
+  // route after operator profile verification. The native browser invocation
+  // verifies this target still exists; the in-page expression verifies its
+  // current URL/account. Custom plugins cannot use runtime.gateway.request.
+  const targetId = policy.native_target_id;
+  if (!targetId || !policy.target_evidence_reference) throw new Error("A verified native tab binding is required.");
   return { targetId, policy, params: {
     action: "act", target: "host", profile: policy.profile, targetId,
     request: { kind: "evaluate", targetId, fn: identityBoundReadExpression(policy) },
