@@ -6,6 +6,17 @@ case "${1:-}" in linux|macos) ;; *) echo "Expected linux or macos" >&2; exit 1 ;
 
 tests=(
   tests/acceptance/test_cos_workstation_handoff.py
+  tests/acceptance/test_cos_owned_apple_reminder.py
+  tests/unit/adapters/reminders/test_cos_reminders_write.py
+  tests/unit/adapters/reminders/test_cos_reminders_write_policy.py
+  tests/unit/bootstrap/test_cos_reminders_helper.py
+  tests/unit/bootstrap/test_cos_reminders_helper_app.py
+  tests/unit/bootstrap/test_cos_reminders_write.py
+  tests/unit/test_cos_reminders_commands.py
+  tests/unit/test_cos_reminders_dispatch.py
+  tests/unit/test_cos_reminders_status.py
+  tests/unit/test_observation.py
+  tests/unit/test_historical_attribution.py
   tests/acceptance/test_authenticated_request_actions.py
   tests/acceptance/test_authenticated_conversation_channels.py
   tests/acceptance/test_authenticated_conversation_reply.py
@@ -60,7 +71,11 @@ tests=(
   tests/unit/test_ci_release_gates.py
 )
 if [[ "$1" == macos ]]; then
-  tests+=(tests/acceptance/test_native_reminder_due_components.py)
+  tests+=(
+    tests/acceptance/test_native_reminder_due_components.py
+    tests/unit/bootstrap/test_cos_reminders_helper_app_macos.py
+    tests/unit/bootstrap/test_cos_reminders_helper_macos.py
+  )
 fi
 python_checks() {
   local status=0

@@ -29,6 +29,10 @@ from adminme.adapters.cos_channel_acquisition import (
     policy_from_config,
     restrict_cos_adapter_config,
 )
+from adminme.adapters.cos_reminders_write_policy import (
+    policy_from_config as reminders_write_policy,
+    validate_authorized_change as validate_reminders_write_change,
+)
 from adminme.adapters.cos_apple_reminders import (
     selected_entries as selected_reminders_entries,
     validate_authorized_change as validate_reminders_change,
@@ -365,6 +369,7 @@ def prepare_configuration(
         raise CoSActivationError(
             "the CoS overlay does not preserve the original selection"
         )
+    reminders_write_policy(requested)
     selected_workspace = selected_workspace_entries(
         requested
     ) | selected_reminders_entries(requested)
@@ -2019,6 +2024,11 @@ class CoSChannelActivator:
                     owner_authorization_sha256=request.owner_authorization_sha256,
                 )
                 validate_reminders_change(
+                    original,
+                    request.adapter_config,
+                    owner_authorization_sha256=request.owner_authorization_sha256,
+                )
+                validate_reminders_write_change(
                     original,
                     request.adapter_config,
                     owner_authorization_sha256=request.owner_authorization_sha256,

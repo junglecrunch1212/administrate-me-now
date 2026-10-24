@@ -20,11 +20,15 @@ from scripts.release_scope import (
     COS_SERVICE_WORK_APPLICATION,
     COS_SERVICE_WORK_CHECK_SCRIPT,
     COS_SERVICE_WORK_NATIVE_INSTALL,
+    COS_SERVICE_WORK_OBSERVATION,
+    COS_SERVICE_WORK_HISTORY,
     COS_SERVICE_WORK_COMPONENT_PATHS,
     COS_SERVICE_WORK_REQUIRED_PATHS,
     _service_work_application,
     _service_work_member,
     _service_work_ingest,
+    _service_work_observation,
+    _service_work_history,
     UPDATER_COMPONENT_PATHS,
     UPDATER_TEST_PATHS,
     UPDATER_REQUIRED_PATHS,
@@ -3418,3 +3422,261 @@ def test_workstation_changes_use_affected_service_lane(
         select_scope(path, _event(base, head), checkout_sha=head)["scope"]
         == "cos-service-work"
     )
+
+
+_OWN_APPLE_DISPATCH = '''    async def _dispatch_external_write(self, event):
+        """Retained central dispatch."""
+        payload = event["payload"]
+        await existing_dispatch(payload)
+'''
+_OWN_APPLE_PREFIX = """        from adminme.runtime.cos_reminders import dispatch, is_cos_reminder
+        if is_cos_reminder(event):
+            await dispatch(self, event)
+            return
+"""
+_OWN_APPLE_ROUTER = """    from adminme.products.openclaw.cos_apple_reminders import router as cos_apple_router
+    app.include_router(cos_apple_router)
+"""
+_OWN_APPLE_BASE_RUNTIME = (
+    "class AdministrateMeRuntime:\n"
+    + _OWN_APPLE_DISPATCH
+    + "\n"
+    + _SERVICE_WIRED_RUNTIME
+)
+_OWN_APPLE_WIRED_RUNTIME = _OWN_APPLE_BASE_RUNTIME.replace(
+    '        payload = event["payload"]',
+    _OWN_APPLE_PREFIX + '        payload = event["payload"]',
+).replace("    return app", _OWN_APPLE_ROUTER + "    return app")
+_OWN_APPLE_OBSERVATION = """async def outbound(session, manager, action_fn):
+    if await manager.is_active():
+        suppressed = EventEnvelope(type="observation.suppressed", actor_identity=session.auth_member_id)
+        return suppressed
+    result = await action_fn()
+    sent = EventEnvelope(type="external.sent", actor_identity=session.auth_member_id)
+    return sent, result
+"""
+_OWN_APPLE_OBSERVATION_WIRED = _OWN_APPLE_OBSERVATION.replace(
+    "session.auth_member_id", "session.event_actor_identity"
+)
+_OWN_APPLE_HISTORY_IMPORT = """from adminme.cos_reminders_commands import (
+    CONTRACT as COS_REMINDER_CONTRACT,
+    command_owner_matches as cos_reminder_owner_matches,
+)
+"""
+_OWN_APPLE_HISTORY_BRANCH = """        elif apple_command is not None and (
+            (apple_command.get("payload", {}).get("payload") or {}).get("contract") == COS_REMINDER_CONTRACT
+            or apple_command.get("payload", {}).get("privacy_guard_version") == COS_REMINDER_CONTRACT
+        ):
+            if await cos_reminder_owner_matches(event_log, apple_command, through=watermark or ""):
+                binding_state = "internal_cos_owned_reminder_source_reconciled"
+                workspace = "service"
+                attributed += 1
+"""
+_OWN_APPLE_HISTORY = """async def audit_historical_attribution(event_log, watermark):
+    async for event in event_log.read_attribution_metadata_since():
+        if event_type == ATTEMPTED:
+            await retained_response_audit(event)
+        elif apple_command is not None and (
+            apple_command.get("payload", {}).get("provider") == "apple_notes"
+            or (apple_command.get("payload", {}).get("payload") or {}).get("apple_service_permission")
+        ):
+            await retained_member_audit(event)
+        else:
+            await retained_fallback(event)
+"""
+_OWN_APPLE_HISTORY_WIRED = _OWN_APPLE_HISTORY_IMPORT + _OWN_APPLE_HISTORY.replace(
+    "        elif apple_command",
+    _OWN_APPLE_HISTORY_BRANCH + "        elif apple_command",
+    1,
+)
+
+
+@pytest.mark.parametrize(
+    ("normalize", "before", "after"),
+    [
+        (_service_work_application, _OWN_APPLE_BASE_RUNTIME, _OWN_APPLE_WIRED_RUNTIME),
+        (
+            _service_work_observation,
+            _OWN_APPLE_OBSERVATION,
+            _OWN_APPLE_OBSERVATION_WIRED,
+        ),
+        (_service_work_history, _OWN_APPLE_HISTORY, _OWN_APPLE_HISTORY_WIRED),
+    ],
+)
+def test_own_apple_scope_normalizes_only_complete_reviewed_integration(
+    normalize, before: str, after: str
+) -> None:
+    assert normalize(before) is not None
+    assert normalize(before) == normalize(after)
+    assert normalize(after + "\nUNRELATED = True\n") != normalize(before)
+    assert normalize(after + after) is None
+    assert normalize("async def [") is None
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        (_OWN_APPLE_PREFIX, ""),
+        (_OWN_APPLE_ROUTER, ""),
+        (_OWN_APPLE_PREFIX, _OWN_APPLE_PREFIX * 2),
+        (_OWN_APPLE_ROUTER, _OWN_APPLE_ROUTER * 2),
+        ("if is_cos_reminder(event):", "if True:"),
+        ("await dispatch(self, event)", "await dispatch(self, payload)"),
+        ("            return\n", "            pass\n"),
+        (_OWN_APPLE_PREFIX, "        await unrelated_effect()\n" + _OWN_APPLE_PREFIX),
+        (
+            _OWN_APPLE_PREFIX,
+            "        if enabled:\n"
+            + "\n".join("    " + line for line in _OWN_APPLE_PREFIX.splitlines())
+            + "\n",
+        ),
+        ("app.include_router(cos_apple_router)", "app.include_router(other_router)"),
+        ("await existing_dispatch(payload)", "await changed_dispatch(payload)"),
+    ],
+)
+def test_own_apple_scope_rejects_partial_reordered_or_broader_dispatch(
+    old: str, new: str
+) -> None:
+    assert _service_work_application(
+        _OWN_APPLE_WIRED_RUNTIME.replace(old, new)
+    ) != _service_work_application(_OWN_APPLE_BASE_RUNTIME)
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        _OWN_APPLE_OBSERVATION_WIRED.replace(
+            "session.event_actor_identity", "session.auth_member_id", 1
+        ),
+        _OWN_APPLE_OBSERVATION_WIRED.replace(
+            "session.event_actor_identity", "session.member_id"
+        ),
+        _OWN_APPLE_OBSERVATION_WIRED.replace(
+            "if await manager.is_active():", "if False:"
+        ),
+        _OWN_APPLE_OBSERVATION_WIRED.replace(
+            "result = await action_fn()", "result = None"
+        ),
+        _OWN_APPLE_OBSERVATION_WIRED.replace(
+            'type="external.sent"', 'type="observation.suppressed"'
+        ),
+    ],
+)
+def test_own_apple_scope_keeps_observation_guards_and_actor_pair_bound(
+    source: str,
+) -> None:
+    assert _service_work_observation(source) != _service_work_observation(
+        _OWN_APPLE_OBSERVATION
+    )
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        (_OWN_APPLE_HISTORY_IMPORT, ""),
+        (_OWN_APPLE_HISTORY_BRANCH, ""),
+        (_OWN_APPLE_HISTORY_IMPORT, _OWN_APPLE_HISTORY_IMPORT * 2),
+        ('through=watermark or ""', 'through=""'),
+        (
+            "if await cos_reminder_owner_matches",
+            "if not await cos_reminder_owner_matches",
+        ),
+        ('workspace = "service"', 'workspace = "personal"'),
+        ("event_type == ATTEMPTED", "event_type == APPROVED"),
+        ('== "apple_notes"', '== "apple_reminders"'),
+        ("await retained_fallback(event)", "await changed_fallback(event)"),
+    ],
+)
+def test_own_apple_scope_keeps_historical_owner_and_neighbor_checks_bound(
+    old: str, new: str
+) -> None:
+    assert _service_work_history(
+        _OWN_APPLE_HISTORY_WIRED.replace(old, new)
+    ) != _service_work_history(_OWN_APPLE_HISTORY)
+
+
+@pytest.mark.parametrize(
+    ("relative", "before", "after"),
+    [
+        (
+            COS_SERVICE_WORK_APPLICATION,
+            _OWN_APPLE_BASE_RUNTIME,
+            _OWN_APPLE_WIRED_RUNTIME,
+        ),
+        (
+            COS_SERVICE_WORK_OBSERVATION,
+            _OWN_APPLE_OBSERVATION,
+            _OWN_APPLE_OBSERVATION_WIRED,
+        ),
+        (COS_SERVICE_WORK_HISTORY, _OWN_APPLE_HISTORY, _OWN_APPLE_HISTORY_WIRED),
+    ],
+)
+def test_own_apple_scope_binds_shared_hunks_to_immutable_git(
+    repository: tuple[Path, str], relative: str, before: str, after: str
+) -> None:
+    path, _ = repository
+    _service_work_candidate(path)
+    base = _commit(path, relative, before)
+    head = _commit(path, relative, after)
+    (path / relative).write_text("UNCOMMITTED = True\n")
+    assert (
+        select_scope(path, _event(base, head), checkout_sha=head)["scope"]
+        == "cos-service-work"
+    )
+    bad = _commit(path, relative, after + "\nUNRELATED = True\n")
+    assert (
+        select_scope(path, _event(base, bad), checkout_sha=bad)["scope"]
+        == "system-wide"
+    )
+
+
+@pytest.mark.parametrize(
+    "relative",
+    [
+        "adminme/adapters/cos_reminders_write.py",
+        "adminme/adapters/cos_reminders_write_policy.py",
+        "adminme/cos_reminders_commands.py",
+        "adminme/events/schemas/cos_native_reminders.py",
+        "adminme/products/openclaw/cos_apple_reminders.py",
+        "adminme/runtime/cos_reminders.py",
+        "bootstrap/cos_reminders_write.py",
+        "bootstrap/cos_reminders_helper_app.py",
+        "bootstrap/cos_reminders_native_worker.py",
+        "bootstrap/native/cos_reminders_launcher.m",
+        "openclaw/administrateme/src/cos-reminders.ts",
+    ],
+)
+def test_own_apple_scope_accepts_closed_command_and_native_component_paths(
+    repository: tuple[Path, str], relative: str
+) -> None:
+    path, _ = repository
+    _, base = _service_work_candidate(path)
+    head = _commit(path, relative, "# Reviewed own-account action change\n")
+    assert (
+        select_scope(path, _event(base, head), checkout_sha=head)["scope"]
+        == "cos-service-work"
+    )
+
+
+def test_own_apple_focused_lane_keeps_native_helper_proof_on_macos() -> None:
+    script = (ROOT / COS_SERVICE_WORK_CHECK_SCRIPT).read_text()
+    portable, native = script.split('if [[ "$1" == macos ]]; then', 1)
+    for name in (
+        "test_cos_owned_apple_reminder.py",
+        "test_cos_reminders_write.py",
+        "test_cos_reminders_write_policy.py",
+        "test_cos_reminders_helper.py",
+        "test_cos_reminders_helper_app.py",
+        "test_cos_reminders_commands.py",
+        "test_cos_reminders_dispatch.py",
+        "test_cos_reminders_status.py",
+        "test_observation.py",
+        "test_historical_attribution.py",
+    ):
+        assert name in portable
+    for name in (
+        "test_cos_reminders_helper_app_macos.py",
+        "test_cos_reminders_helper_macos.py",
+    ):
+        assert name not in portable
+        assert name in native.split("fi", 1)[0]

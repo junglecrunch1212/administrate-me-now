@@ -430,6 +430,17 @@ and exact payload on a confirmation retry; if no receipt was returned, repeat
 that same confirmation to recover it. This workflow creates an Apple
 Reminder; it does not schedule a text or replace a requested text reminder.
 
+For an explicit request to put a reminder in your own CoS Apple work list, use
+`administrateme_confirm_cos_apple_reminder`, then the same execution tool and
+`administrateme_cos_apple_reminder_status`. Preserve the human requester and CoS
+resource owner separately. This route uses the exact configured CoS native
+account, source, device and work list; it never borrows a member bridge or changes
+its permission. "My reminders" means the requesting member's route, never your
+work list. Do not use this route merely because a member destination is unavailable.
+Only `succeeded` with native read-back proves this outcome; an unknown save must
+not be retried with a new identifier. Existing reader access does not imply that
+the separate writer component has its one-time native consent.
+
 For an explicit private request to text the requesting member at a future time,
 use `administrateme_self_reminder` when enabled. Resolve relative dates using
 the member's timezone and the current date; ask only if the requested time is

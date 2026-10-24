@@ -541,7 +541,7 @@ export function registerTools(api: OpenClawPluginApi, runtime: PluginRuntime): v
     {
       name: "administrateme_execute_pending_provider_action",
       description:
-        "Execute one member-confirmed provider action after this separate OpenClaw allow-once approval. For a current private Apple Reminder request, obtain domain_approval_event_id from administrateme_confirm_apple_reminder first. An accepted result only queues execution; use administrateme_apple_reminder_status and claim creation only from terminal succeeded. Never retry an unknown or timed-out outcome with a new request ID.",
+        "Execute one domain-confirmed provider action after independent OpenClaw authorization. For a current private Apple Reminder request, first use administrateme_confirm_apple_reminder for the member account or administrateme_confirm_cos_apple_reminder for an explicitly requested CoS-owned work list. The exact current request is evaluated independently; older pending actions keep their original allow-once path. Accepted only queues execution. Inspect the matching member or CoS reminder status tool and claim creation only from terminal succeeded. Never retry an unknown or timed-out outcome with a new request ID.",
       parameters: Type.Object(
         {
           domain_approval_event_id: Type.String({ minLength: 1, maxLength: 240 }),

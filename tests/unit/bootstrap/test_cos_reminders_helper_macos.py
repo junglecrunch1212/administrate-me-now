@@ -11,6 +11,7 @@ import sysconfig
 import tempfile
 import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -35,9 +36,16 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+@pytest.mark.parametrize(
+    "write_enabled,previous_reader", [(False, False), (True, False), (False, True)]
+)
 def test_real_sealed_worker_proves_native_permission_identity_without_prompt(
-    tmp_path, release, monkeypatch
+    tmp_path, release, monkeypatch, write_enabled, previous_reader
 ):
+    # Each parameter gets an independent runtime; the module fixture is a seed.
+    template = release
+    release = tmp_path.resolve() / "Protected Runtime"
+    shutil.copytree(template, release, symlinks=True)
     for name in ("adminme", "bootstrap", "packs"):
         shutil.copytree(
             ROOT / name,
@@ -48,10 +56,33 @@ def test_real_sealed_worker_proves_native_permission_identity_without_prompt(
     site.rmdir()
     site.symlink_to(Path(sysconfig.get_path("purelib")))
     sources = {name: (ROOT / name).read_bytes() for name in helper.BUILD_SOURCES}
+    if previous_reader:
+        # The old sealed launcher/worker runs unchanged against the new runtime.
+        # This is the protected predecessor, never an installed household app.
+        predecessor = "01877e4d75df90fad13bbbcbe139401e9b798eb6"
+        sources = {
+            name: subprocess.check_output(
+                ["git", "show", f"{predecessor}:{name}"], cwd=ROOT
+            )
+            for name in helper.BUILD_SOURCES
+        }
     app = tmp_path.resolve() / "Production Reminders Helper.app"
     receipt = helper._build_app(
-        app, sources, include_dir=Path(sysconfig.get_path("include"))
+        app,
+        sources,
+        include_dir=Path(sysconfig.get_path("include")),
+        write_enabled=write_enabled,
     )
+    retained_reader_digest = helper.helper_artifact_sha256(app)
+    if previous_reader:
+        writer_receipt = helper._build_app(
+            tmp_path.resolve() / "Separate Reminders Writer.app",
+            {name: (ROOT / name).read_bytes() for name in helper.BUILD_SOURCES},
+            include_dir=Path(sysconfig.get_path("include")),
+            write_enabled=True,
+        )
+        assert writer_receipt["bundle_identifier"] == helper.WRITE_BUNDLE_IDENTIFIER
+        assert helper.helper_artifact_sha256(app) == retained_reader_digest
     device, uid = local_device_identity()
     request, value = _request(
         tmp_path, release, device_identity_sha256=device, os_uid=uid
@@ -70,6 +101,9 @@ def test_real_sealed_worker_proves_native_permission_identity_without_prompt(
     identity_status = result["result"]["authorization_status"]
     identity = result["identity"]
     assert {key: identity[key] for key in receipt} == receipt
+    assert identity["bundle_identifier"] == (
+        helper.WRITE_BUNDLE_IDENTIFIER if write_enabled else helper.BUNDLE_IDENTIFIER
+    )
     assert identity["native_executable"] == str(
         app / "Contents/MacOS" / helper.EXECUTABLE
     )
@@ -113,6 +147,7 @@ def test_real_sealed_worker_proves_native_permission_identity_without_prompt(
     assert len(request_paths) == 1
     assert str(request_paths[0]).startswith("/private/var/")
     assert not request_paths[0].parent.exists()
+    assert helper.helper_artifact_sha256(app) == retained_reader_digest
 
 
 def test_native_main_loop_services_completion_while_operation_waits(monkeypatch):
@@ -142,3 +177,16 @@ def test_foundation_string_bridge_is_supported_on_native_wire():
 
     notes = NSString.stringWithString_("Private fixture notes")
     assert worker._wire({"notes": notes}) == {"notes": "Private fixture notes"}
+
+
+def test_native_foundation_due_components_preserve_the_requested_instant():
+    from adminme.adapters.cos_apple_reminders_native import _shim
+    from adminme.adapters.cos_reminders_write import exact_due_observed
+
+    # Foundation value conversion only: no EventKit store, permission or provider save.
+    due = datetime.fromisoformat("2026-10-24T09:30:00-04:00")
+    shim = _shim()
+    native = shim._native_components(None, due.astimezone(timezone.utc))
+    observed = shim._components_dict(native)
+    assert exact_due_observed(observed, due)
+    assert observed["hour"] == 13 and observed["minute"] == 30
