@@ -74,7 +74,11 @@ try {
       source: path.join(plugin, "index.js"), hookCount: 0 };
     const api = {
       config: {}, logger: { warn() {}, info() {}, error() {} },
-      on: (name, fn, options) => registrar.registerTypedHook(record, name, fn, options, { allowConversationAccess: true, allowPromptInjection: capability }),
+      on: (name, fn, options) => registrar.registerTypedHook(record, name, name === "before_prompt_build" ? async (...args) => {
+        const result = await fn(...args);
+        if (result !== undefined) assert.deepEqual(Object.keys(result), ["toolsAllow"], "candidate hook must supply only finite toolsAllow");
+        return result;
+      } : fn, options, { allowConversationAccess: true, allowPromptInjection: capability }),
       registerAgentToolResultMiddleware() {}, // This probe tests native admission, not result projection.
       runtime: { config: { current: () => ({}) } },
     };
@@ -96,7 +100,7 @@ try {
       resetGlobalHookRunner();
       continue;
     }
-    assert.deepEqual(Object.keys(tools), ["toolsAllow"], "worker hook must not inject prose");
+    assert.deepEqual(Object.entries(tools).filter(([, value]) => value !== undefined).map(([key]) => key), ["toolsAllow"], "merged hook must contain no defined prose");
     assert.deepEqual(tools.toolsAllow, kind === "browser" ? ["browser"] : ["administrateme_service_private_work", "administrateme_service_private_state"]);
     assert.equal(shouldEnableCodexAppServerNativeToolSurface({ toolsAllow: tools.toolsAllow, config: {}, sessionId: registration.sessionId, sessionKey: registration.sessionKey }), false);
     const invoke = async (name, input = {}) => {
