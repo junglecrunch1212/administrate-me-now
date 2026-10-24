@@ -377,6 +377,8 @@ UPDATER_REQUIRED_PATHS = (
 COS_SERVICE_WORK_APPLICATION = "adminme/runtime/application.py"
 COS_SERVICE_WORK_MEMBER = "adminme/products/member/main.py"
 COS_SERVICE_WORK_INGEST = "adminme/products/bridge/routers/ingest.py"
+COS_SERVICE_WORK_OBSERVATION = "adminme/lib/observation.py"
+COS_SERVICE_WORK_HISTORY = "adminme/historical_attribution.py"
 COS_SERVICE_WORK_CHECK_SCRIPT = "scripts/acceptance/cos-service-work-release.sh"
 COS_SERVICE_WORK_NATIVE_INSTALL = "scripts/acceptance/openclaw-source-install.sh"
 COS_SERVICE_WORK_COMPONENT_PATHS = frozenset(
@@ -384,6 +386,21 @@ COS_SERVICE_WORK_COMPONENT_PATHS = frozenset(
         COS_SERVICE_WORK_APPLICATION,
         COS_SERVICE_WORK_MEMBER,
         COS_SERVICE_WORK_INGEST,
+        COS_SERVICE_WORK_OBSERVATION,
+        COS_SERVICE_WORK_HISTORY,
+        "adminme/adapters/cos_apple_reminders.py",
+        "adminme/adapters/cos_reminders_helper.py",
+        "adminme/adapters/cos_reminders_write.py",
+        "adminme/adapters/cos_reminders_write_policy.py",
+        "adminme/cos_reminders_commands.py",
+        "adminme/events/schemas/cos_native_reminders.py",
+        "adminme/products/openclaw/cos_apple_reminders.py",
+        "adminme/runtime/cos_reminders.py",
+        "bootstrap/cos_reminders_helper_app.py",
+        "bootstrap/cos_reminders_native_worker.py",
+        "bootstrap/cos_reminders_write.py",
+        "bootstrap/native/cos_reminders_launcher.m",
+        "openclaw/administrateme/src/cos-reminders.ts",
         "adminme/products/openclaw/apple_reminders.py",
         "adminme/apple_service_history.py",
         "adminme/conversation_instructions.py",
@@ -462,6 +479,19 @@ COS_SERVICE_WORK_COMPONENT_PATHS = frozenset(
 COS_SERVICE_WORK_TEST_PATHS = frozenset(
     {
         "tests/unit/test_service_work_principal.py",
+        "tests/acceptance/test_cos_owned_apple_reminder.py",
+        "tests/unit/adapters/reminders/test_cos_reminders_write.py",
+        "tests/unit/adapters/reminders/test_cos_reminders_write_policy.py",
+        "tests/unit/bootstrap/test_cos_reminders_helper.py",
+        "tests/unit/bootstrap/test_cos_reminders_helper_app.py",
+        "tests/unit/bootstrap/test_cos_reminders_helper_app_macos.py",
+        "tests/unit/bootstrap/test_cos_reminders_helper_macos.py",
+        "tests/unit/bootstrap/test_cos_reminders_write.py",
+        "tests/unit/test_cos_reminders_commands.py",
+        "tests/unit/test_cos_reminders_dispatch.py",
+        "tests/unit/test_cos_reminders_status.py",
+        "tests/unit/test_observation.py",
+        "tests/unit/test_historical_attribution.py",
         "tests/unit/test_service_identities.py",
         "tests/unit/test_operating_agreements.py",
         "tests/unit/test_projection_tasks.py",
@@ -1078,13 +1108,193 @@ def _service_work_gmail_wiring(module: ast.Module) -> bool:
     return [imports, slot, initialized, subscribed] in ([0, 0, 0, 0], [1, 1, 1, 1])
 
 
+def _service_work_cos_reminders_wiring(module: ast.Module) -> bool:
+    """Admit only the exact own-account dispatch prefix and matching router."""
+    classes = [
+        node
+        for node in module.body
+        if isinstance(node, ast.ClassDef) and node.name == "AdministrateMeRuntime"
+    ]
+    applications = [
+        node
+        for node in module.body
+        if isinstance(node, ast.FunctionDef) and node.name == "create_application"
+    ]
+    if len(classes) > 1 or len(applications) != 1:
+        return False
+    methods = [
+        node
+        for node in (classes[0].body if classes else [])
+        if isinstance(node, ast.AsyncFunctionDef)
+        and node.name == "_dispatch_external_write"
+    ]
+    if len(methods) > 1:
+        return False
+    body = methods[0].body if methods else []
+    prefix = (
+        "from adminme.runtime.cos_reminders import dispatch, is_cos_reminder\n"
+        "if is_cos_reminder(event):\n"
+        "    await dispatch(self, event)\n"
+        "    return"
+    )
+    # This branch must precede all existing dispatch effects, after only a docstring.
+    expected = ast.dump(ast.parse(prefix).body[0], include_attributes=False)
+    actual = [ast.dump(node, include_attributes=False) for node in body]
+    first = (
+        1
+        if body
+        and isinstance(body[0], ast.Expr)
+        and isinstance(body[0].value, ast.Constant)
+        and isinstance(body[0].value.value, str)
+        else 0
+    )
+    if expected in actual and actual.index(expected) != first:
+        return False
+    dispatched = _remove_service_statements(body, prefix)
+    routed = _remove_service_statements(
+        applications[0].body,
+        "from adminme.products.openclaw.cos_apple_reminders import router as cos_apple_router\n"
+        "app.include_router(cos_apple_router)",
+    )
+    return [dispatched, routed] in ([0, 0], [1, 1])
+
+
+def _service_work_observation(source: str) -> str | None:
+    """Normalize only both outbound audit actors; retain every other guard byte."""
+    try:
+        module = ast.parse(source)
+    except SyntaxError:
+        return None
+    functions = [
+        node
+        for node in module.body
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == "outbound"
+    ]
+    if len(functions) > 1:
+        return None
+    actors: list[ast.keyword] = []
+    kinds: list[str] = []
+    for node in ast.walk(functions[0]) if functions else []:
+        if (
+            not isinstance(node, ast.Call)
+            or not isinstance(node.func, ast.Name)
+            or node.func.id != "EventEnvelope"
+        ):
+            continue
+        event_types = [kw.value for kw in node.keywords if kw.arg == "type"]
+        if (
+            len(event_types) != 1
+            or not isinstance(event_types[0], ast.Constant)
+            or event_types[0].value not in {"observation.suppressed", "external.sent"}
+        ):
+            continue
+        kinds.append(event_types[0].value)
+        actors.extend(kw for kw in node.keywords if kw.arg == "actor_identity")
+    if actors or kinds:
+        if (
+            sorted(kinds) != ["external.sent", "observation.suppressed"]
+            or len(actors) != 2
+        ):
+            return None
+        values = [ast.dump(actor.value, include_attributes=False) for actor in actors]
+        original = ast.dump(
+            ast.parse("session.auth_member_id", mode="eval").body,
+            include_attributes=False,
+        )
+        current = ast.dump(
+            ast.parse("session.event_actor_identity", mode="eval").body,
+            include_attributes=False,
+        )
+        if values not in ([original, original], [current, current]):
+            return None
+        for actor in actors:
+            actor.value = ast.parse("session.auth_member_id", mode="eval").body
+    return hashlib.sha256(
+        ast.dump(module, include_attributes=False).encode()
+    ).hexdigest()
+
+
+def _service_work_history(source: str) -> str | None:
+    """Keep the history audit frozen except the exact retained own-Apple branch."""
+    try:
+        module = ast.parse(source)
+    except SyntaxError:
+        return None
+    imported = _remove_service_statements(
+        module.body,
+        "from adminme.cos_reminders_commands import ("
+        "CONTRACT as COS_REMINDER_CONTRACT, command_owner_matches as cos_reminder_owner_matches)",
+    )
+    functions = [
+        node
+        for node in module.body
+        if isinstance(node, ast.AsyncFunctionDef)
+        and node.name == "audit_historical_attribution"
+    ]
+    if len(functions) > 1:
+        return None
+    expected = ast.parse(
+        "if apple_command is not None and (\n"
+        '    (apple_command.get("payload", {}).get("payload") or {}).get("contract") == COS_REMINDER_CONTRACT\n'
+        '    or apple_command.get("payload", {}).get("privacy_guard_version") == COS_REMINDER_CONTRACT\n'
+        "):\n"
+        '    if await cos_reminder_owner_matches(event_log, apple_command, through=watermark or ""):\n'
+        '        binding_state = "internal_cos_owned_reminder_source_reconciled"\n'
+        '        workspace = "service"\n'
+        "        attributed += 1\n"
+    ).body[0]
+    assert isinstance(expected, ast.If)
+    previous = ast.dump(
+        ast.parse("event_type == ATTEMPTED", mode="eval").body, include_attributes=False
+    )
+    following = ast.dump(
+        ast.parse(
+            'apple_command is not None and (apple_command.get("payload", {}).get("provider") == "apple_notes" '
+            'or (apple_command.get("payload", {}).get("payload") or {}).get("apple_service_permission"))',
+            mode="eval",
+        ).body,
+        include_attributes=False,
+    )
+    branches = 0
+    for node in ast.walk(functions[0]) if functions else []:
+        if (
+            not isinstance(node, ast.If)
+            or len(node.orelse) != 1
+            or not isinstance(node.orelse[0], ast.If)
+        ):
+            continue
+        branch = node.orelse[0]
+        if ast.dump(branch.test, include_attributes=False) == ast.dump(
+            expected.test, include_attributes=False
+        ) and [ast.dump(part, include_attributes=False) for part in branch.body] == [
+            ast.dump(part, include_attributes=False) for part in expected.body
+        ]:
+            if (
+                ast.dump(node.test, include_attributes=False) != previous
+                or len(branch.orelse) != 1
+                or not isinstance(branch.orelse[0], ast.If)
+                or ast.dump(branch.orelse[0].test, include_attributes=False)
+                != following
+            ):
+                return None
+            branches += 1
+            node.orelse = branch.orelse
+    if [imported, branches] not in ([0, 0], [1, 1]):
+        return None
+    return hashlib.sha256(
+        ast.dump(module, include_attributes=False).encode()
+    ).hexdigest()
+
+
 def _service_work_application(source: str) -> tuple[str, bool] | None:
     """Normalize reviewed router/Gmail wiring while binding all neighboring logic."""
     try:
         module = ast.parse(source)
     except SyntaxError:
         return None
-    if not _service_work_gmail_wiring(module):
+    if not _service_work_gmail_wiring(module) or not _service_work_cos_reminders_wiring(
+        module
+    ):
         return None
     applications = [
         node
@@ -1333,6 +1543,8 @@ def _service_work_dependency_fingerprint(
     for path, normalize in (
         (COS_SERVICE_WORK_MEMBER, _service_work_member),
         (COS_SERVICE_WORK_INGEST, _service_work_ingest),
+        (COS_SERVICE_WORK_OBSERVATION, _service_work_observation),
+        (COS_SERVICE_WORK_HISTORY, _service_work_history),
     ):
         entry = next((entry for entry in entries if entry.path == path), None)
         if entry is not None and entry.mode != "100644":
