@@ -148,6 +148,7 @@ def _apple_catalog_runtime(
     observation=False,
     settled=True,
     permission=True,
+    permissions=(),
 ):
     from types import SimpleNamespace
     import adminme.apple_service_permissions as service
@@ -161,6 +162,16 @@ def _apple_catalog_runtime(
         and row["source_kind"] == "bridge_manifest"
     ]
     monkeypatch.setattr(catalog_module, "load_catalog", lambda _root: catalog)
+    monkeypatch.setattr(
+        catalog_module,
+        "_active_authority",
+        lambda _runtime, context: (
+            [],
+            set(permissions)
+            if context.auth_member_id == context.view_member_id
+            else set(),
+        ),
+    )
     member = "catalog-owner"
     capability = {
         "state": "settled" if settled else "observing",
@@ -239,7 +250,12 @@ def test_self_service_catalog_write_grant_is_separate_from_observation_pause(
                     "items"
                 ][0]
                 assert item["effective"]["read_available"] is True
-                assert item["freshness"] == "current"
+                assert item["freshness"] == "unknown"
+                assert item["bridge_state"]["last_successful_observation"]
+                assert (
+                    item["bridge_state"]["freshness_basis"]
+                    == "historical_source_observation_only"
+                )
                 assert item["verbs"]["execute"] == "ask_every_time"
                 assert item["effective"]["execute_available"] is (not observation)
                 assert (
@@ -253,6 +269,105 @@ def test_self_service_catalog_write_grant_is_separate_from_observation_pause(
                 assert item["openclaw"]["approval_required_for_side_effects"] is True
                 assert item["verification"]["terminal_result_support"] is True
                 assert item["verification"]["last_verified_result"] is None
+
+
+def test_native_reminder_tools_separate_confirmation_execution_and_readback(
+    monkeypatch,
+) -> None:
+    from adminme.capability_catalog import compose_member_catalog
+
+    runtime, session, _calls = _apple_catalog_runtime(
+        monkeypatch,
+        provider="apple_reminders",
+        permissions=("read_context", "prepare_external_actions"),
+    )
+    catalog = compose_member_catalog(runtime, session, settings_state={})
+    item = catalog["items"][0]
+    tools = item["openclaw"]
+    assert tools["plugin_declared"] is True
+    assert tools["effective_tools"] == sorted(
+        [
+            "administrateme_confirm_apple_reminder",
+            "administrateme_execute_pending_provider_action",
+            "administrateme_apple_reminder_status",
+        ]
+    )
+    confirm = tools["native_tool_authority"]["administrateme_confirm_apple_reminder"]
+    execute = tools["native_tool_authority"][
+        "administrateme_execute_pending_provider_action"
+    ]
+    status = tools["native_tool_authority"]["administrateme_apple_reminder_status"]
+    assert confirm["required_permission"] == "prepare_external_actions"
+    assert confirm["stage"] == "domain_confirmation"
+    assert confirm["independent_openclaw_approval_required"] is False
+    assert execute["independent_openclaw_approval_required"] is True
+    assert execute["stage"] == "independent_execution_approval"
+    assert status["stage"] == "terminal_readback"
+    assert status["provider_write_grant_required"] is False
+    assert tools["domain_confirmation_is_execution_approval"] is False
+    assert item["trust_stage"] == "not_established"
+    assert item["trust_stage_basis"] == "effective_operating_agreement"
+    assert item["consent"]["member_state"] == "complete"
+    assert item["required_actions"]["member"] == "none"
+    assert item["verification"]["last_verified_result"] is None
+    assert item["verification"]["accepted_is_success"] is False
+    assert item["verification"]["status_tool"] == "administrateme_apple_reminder_status"
+    assert catalog["provider_effect_count"] == 0
+    assert catalog["provider_effect_count_scope"] == "this_read_only_catalog_request"
+
+
+def test_native_reminder_status_survives_revocation_and_observation_mode(
+    monkeypatch,
+) -> None:
+    from adminme.capability_catalog import compose_member_catalog
+
+    for enabled, observation in ((False, False), (True, True)):
+        with monkeypatch.context() as patch:
+            runtime, session, _calls = _apple_catalog_runtime(
+                patch,
+                provider="apple_reminders",
+                enabled=enabled,
+                observation=observation,
+                permissions=("read_context", "prepare_external_actions"),
+            )
+            item = compose_member_catalog(runtime, session, settings_state={})["items"][
+                0
+            ]
+            assert item["openclaw"]["effective_tools"] == [
+                "administrateme_apple_reminder_status"
+            ]
+            assert item["effective"]["execute_available"] is False
+
+
+def test_native_reminder_tools_do_not_infer_delegation_from_native_permission(
+    monkeypatch,
+) -> None:
+    from adminme.capability_catalog import compose_member_catalog
+
+    for permissions, expected in (
+        ((), []),
+        (
+            ("read_context",),
+            [
+                "administrateme_apple_reminder_status",
+                "administrateme_execute_pending_provider_action",
+            ],
+        ),
+        (("prepare_external_actions",), ["administrateme_confirm_apple_reminder"]),
+    ):
+        with monkeypatch.context() as patch:
+            runtime, session, _calls = _apple_catalog_runtime(
+                patch, provider="apple_reminders", permissions=permissions
+            )
+            item = compose_member_catalog(runtime, session, settings_state={})["items"][
+                0
+            ]
+            assert item["openclaw"]["effective_tools"] == expected
+            session.view_member_id = "other-catalog-owner"
+            item = compose_member_catalog(runtime, session, settings_state={})["items"][
+                0
+            ]
+            assert item["openclaw"]["effective_tools"] == []
 
 
 def test_self_service_catalog_unverified_and_view_as_do_not_claim_authority(

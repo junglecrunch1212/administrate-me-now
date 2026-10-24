@@ -2646,14 +2646,27 @@ async def update_member_task(
 async def reminder_command(
     body: ReminderCommandRequest, request: Request, session: SessionDep
 ) -> dict[str, Any]:
-    """Validate, authorize, and enqueue one provider-shaped reminder mutation."""
+    """Confirm one provider-shaped reminder mutation through the shared domain path."""
+    return await confirm_reminder_command(body, _runtime(request), session)
+
+
+async def confirm_reminder_command(
+    body: ReminderCommandRequest,
+    runtime: Any,
+    session: Session,
+    *,
+    source_adapter: str = "member-reminders",
+    causation_id: str | None = None,
+    source_sensitivity: Sensitivity = "normal",
+    request_fingerprint: str | None = None,
+) -> dict[str, Any]:
+    """Shared portal/native validation; caller identity remains the real session."""
 
     require_principal(session)
     if session.auth_member_id != session.view_member_id:
         raise HTTPException(
             403, "reminder actions are unavailable while viewing another member"
         )
-    runtime = _runtime(request)
     if runtime.projections is None or runtime.events is None:
         raise HTTPException(503, "reminder state is unavailable")
     _reminder_account_for_command(runtime, session, body)
@@ -2703,20 +2716,27 @@ async def reminder_command(
             409 if decision.layer_failed == "governance" else 403,
             {"reason": decision.reason, "correlation_id": decision.correlation_id},
         )
-    fingerprint = hashlib.sha256(
-        json.dumps(
-            body.model_dump(mode="json"), sort_keys=True, separators=(",", ":")
-        ).encode()
-    ).hexdigest()
+    fingerprint = (
+        request_fingerprint
+        or hashlib.sha256(
+            json.dumps(
+                body.model_dump(mode="json"), sort_keys=True, separators=(",", ":")
+            ).encode()
+        ).hexdigest()
+    )
     event_id, duplicate = await _append_provider_action_confirmation(
         runtime,
         session,
         command_payload=command_payload,
         request_id=body.request_id,
         request_fingerprint=fingerprint,
-        source_adapter="member-reminders",
-        sensitivity=cast(Sensitivity, (target or {}).get("sensitivity") or "normal"),
-        causation_id=(target or {}).get("last_event_id"),
+        source_adapter=source_adapter,
+        sensitivity=max(
+            source_sensitivity,
+            cast(Sensitivity, (target or {}).get("sensitivity") or "normal"),
+            key={"normal": 0, "sensitive": 1, "privileged": 2}.__getitem__,
+        ),
+        causation_id=causation_id or (target or {}).get("last_event_id"),
     )
     return {
         "accepted": True,

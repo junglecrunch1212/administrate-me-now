@@ -25,7 +25,7 @@ from adminme.projections.parties.queries import (
 from adminme.service_identities import COS_PARTY_ID, COS_SERVICE_PRINCIPAL_ID
 
 
-CATALOG_VERSION = "1.3.0"
+CATALOG_VERSION = "1.4.0"
 CATALOG_CONTRACT = "administrateme-capability-catalog-v1"
 VERBS = ("read", "observe", "draft", "prepare", "hold", "execute")
 
@@ -62,6 +62,18 @@ _TOOL_PERMISSION_OPTIONS: dict[str, frozenset[str]] = {
     "administrateme_google_tasks_create_state": frozenset(
         {"execute_google_tasks_create_trial"}
     ),
+}
+
+
+_APPLE_REMINDER_TOOLS = {
+    "administrateme_confirm_apple_reminder": "domain_confirmation",
+    "administrateme_execute_pending_provider_action": "independent_execution_approval",
+    "administrateme_apple_reminder_status": "terminal_readback",
+}
+_APPLE_REMINDER_TOOL_PERMISSIONS = {
+    "administrateme_confirm_apple_reminder": frozenset({"prepare_external_actions"}),
+    "administrateme_execute_pending_provider_action": frozenset({"read_context"}),
+    "administrateme_apple_reminder_status": frozenset({"read_context"}),
 }
 
 
@@ -358,9 +370,10 @@ _ARTIFACT_OUTCOMES: dict[str, dict[str, Any]] = {
     "reminders-apple-eventkit-bridge": {
         "category": "planning",
         "label": "Apple Reminders bridge",
-        "outcome": "Observe Apple Reminders on the member's Mac after pairing and local permission verification.",
+        "outcome": "Observe authorized Apple Reminders and confirm an exact-time reminder from private member chat, then execute only with independent approval and verify its terminal receipt.",
         "sensitivity": ["normal", "sensitive"],
         "request_key": "apple_reminders",
+        "openclaw_tools": list(_APPLE_REMINDER_TOOLS),
     },
 }
 
@@ -884,6 +897,15 @@ def _apple_service_bridge_state(
         "source_settlement": "settled"
         if state == "settled" and observed
         else "unsettled",
+        # A signed wizard observation proves past acquisition, not a current
+        # bridge heartbeat. No bridge liveness lease is exposed by this seam.
+        "last_successful_observation": observed_at if observed else None,
+        "freshness": "unknown",
+        "freshness_basis": "historical_source_observation_only"
+        if observed
+        else "no_source_observation",
+        "current_transport_health": "unknown",
+        "readiness_basis": "current_enrollment_and_native_permission",
         "degraded": False,
         "paused": False,
         "revoked": False,
@@ -1083,7 +1105,9 @@ def compose_member_catalog(
                 "degraded" if bridge_state["degraded"] else bridge_state["observation"]
             )
             freshness = (
-                "current"
+                str(bridge_state["freshness"])
+                if "freshness" in bridge_state
+                else "current"
                 if bridge_state["source_settlement"] == "settled"
                 else "unknown"
             )
@@ -1130,7 +1154,9 @@ def compose_member_catalog(
         declared_tools = sorted(set(row.get("openclaw_tools") or []) & plugin_tools)
         required_permissions = set().union(
             *(
-                _TOOL_PERMISSION_OPTIONS.get(tool, frozenset())
+                _TOOL_PERMISSION_OPTIONS.get(
+                    tool, _APPLE_REMINDER_TOOL_PERMISSIONS.get(tool, frozenset())
+                )
                 for tool in declared_tools
             )
         )
@@ -1190,6 +1216,34 @@ def compose_member_catalog(
             if read_available
             and bool(_TOOL_PERMISSION_OPTIONS.get(tool, frozenset()) & permissions)
         ]
+        native_reminders = (
+            row["source_kind"] == "bridge_manifest"
+            and row.get("request_key") == "apple_reminders"
+        )
+        native_tool_authority: dict[str, dict[str, Any]] = {}
+        if native_reminders:
+            for tool in declared_tools:
+                permission = next(iter(_APPLE_REMINDER_TOOL_PERMISSIONS[tool]))
+                status_read = tool == "administrateme_apple_reminder_status"
+                available = bool(
+                    not viewing_as
+                    and openclaw_state == "healthy"
+                    and permission in permissions
+                    and (status_read or (apple_write_grant and execute_authorized))
+                )
+                native_tool_authority[tool] = {
+                    "stage": _APPLE_REMINDER_TOOLS[tool],
+                    "required_permission": permission,
+                    "member_current_input_required": tool
+                    != "administrateme_execute_pending_provider_action",
+                    "provider_write_grant_required": not status_read,
+                    "independent_openclaw_approval_required": tool
+                    == "administrateme_execute_pending_provider_action",
+                    "available": available,
+                }
+                if available:
+                    effective_tools.append(tool)
+            effective_tools.sort()
         member_consent_required = "member_consent" in set(row["prerequisites"])
         member_consent_complete = bool(
             not member_consent_required
@@ -1220,6 +1274,15 @@ def compose_member_catalog(
                     "runtime_state": openclaw_state,
                     "declared_tools": declared_tools,
                     "effective_tools": effective_tools,
+                    **(
+                        {
+                            "native_tool_authority": native_tool_authority,
+                            "tool_availability_basis": "plugin_contract_and_current_authority",
+                            "domain_confirmation_is_execution_approval": False,
+                        }
+                        if native_reminders
+                        else {}
+                    ),
                     "approval_required_for_side_effects": apple_write_grant
                     or any(
                         tool
@@ -1235,11 +1298,21 @@ def compose_member_catalog(
                 "runtime_health": runtime_state,
                 "freshness": freshness,
                 "trust_stage": trust_stages.get(capability_id, "not_established"),
+                "trust_stage_basis": "effective_operating_agreement",
                 "verification": {
                     "terminal_result_support": bool(row["terminal_result_support"]),
                     "later_observation_support": bool(row["later_observation_support"]),
                     "reconciliation_support": bool(row["reconciliation_support"]),
                     "last_verified_result": None,
+                    **(
+                        {
+                            "status_tool": "administrateme_apple_reminder_status",
+                            "success_requires": "scoped_unsuppressed_terminal_provider_receipt",
+                            "accepted_is_success": False,
+                        }
+                        if native_reminders
+                        else {}
+                    ),
                 },
                 "consent": {
                     "member_required": member_consent_required,
@@ -1264,6 +1337,7 @@ def compose_member_catalog(
                 "required_actions": {
                     "member": "complete_consent_or_request"
                     if row["source_kind"] in {"adapter_manifest", "bridge_manifest"}
+                    and not member_consent_complete
                     else "none",
                     "admin": "make_reviewed_option_available"
                     if row["source_kind"] in {"adapter_manifest", "bridge_manifest"}
@@ -1355,6 +1429,7 @@ def compose_member_catalog(
         ],
         "catalog_presence_grants_nothing": True,
         "provider_effect_count": 0,
+        "provider_effect_count_scope": "this_read_only_catalog_request",
     }
 
 

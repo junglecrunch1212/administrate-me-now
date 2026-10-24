@@ -375,11 +375,18 @@ UPDATER_REQUIRED_PATHS = (
     UPDATER_COMPONENT_PATHS | UPDATER_TEST_PATHS | {UPDATER_CHECK_SCRIPT}
 ) - (UPDATER_OPTIONAL_MODULE_TESTS.keys() | UPDATER_OPTIONAL_MODULE_TESTS.values())
 COS_SERVICE_WORK_APPLICATION = "adminme/runtime/application.py"
+COS_SERVICE_WORK_MEMBER = "adminme/products/member/main.py"
 COS_SERVICE_WORK_CHECK_SCRIPT = "scripts/acceptance/cos-service-work-release.sh"
 COS_SERVICE_WORK_NATIVE_INSTALL = "scripts/acceptance/openclaw-source-install.sh"
 COS_SERVICE_WORK_COMPONENT_PATHS = frozenset(
     {
         COS_SERVICE_WORK_APPLICATION,
+        COS_SERVICE_WORK_MEMBER,
+        "adminme/products/openclaw/apple_reminders.py",
+        "openclaw/administrateme/src/apple-reminders.ts",
+        "openclaw/administrateme/src/tools.ts",
+        "bootstrap/openclaw/programs/requested_workflows.md",
+        "openclaw/administrateme/workspace/AGENTS.md",
         "adminme/lib/principal.py",
         "adminme/lib/scope.py",
         "adminme/service_identities.py",
@@ -430,6 +437,13 @@ COS_SERVICE_WORK_TEST_PATHS = frozenset(
         "tests/acceptance/test_cos_identity_delegation_kernel.py",
         "tests/acceptance/test_cos_service_private_work.py",
         "tests/acceptance/test_cos_member_follow_up.py",
+        "tests/acceptance/test_native_apple_reminder.py",
+        "tests/acceptance/test_native_reminder_due_components.py",
+        "openclaw/administrateme/test/apple-reminders.test.ts",
+        "openclaw/administrateme/scripts/check-cos-imessage-text.mjs",
+        "tests/acceptance/test_apple_service_permissions.py",
+        "tests/acceptance/test_member_apple_approval.py",
+        "tests/acceptance/test_apple_service_notes.py",
         "openclaw/administrateme/test/member-work.test.ts",
         "openclaw/administrateme/test/self-replies.test.ts",
         "openclaw/administrateme/test/self-reminders.test.ts",
@@ -969,10 +983,24 @@ def _service_work_application(source: str) -> tuple[str, bool] | None:
         return None
     if counts == [1, 1] and body_shapes.index(shapes[0]) > body_shapes.index(shapes[1]):
         return None
+    reminder_shapes = [
+        ast.dump(node, include_attributes=False)
+        for node in ast.parse(
+            "from adminme.products.openclaw.apple_reminders import router as apple_reminder_router\n"
+            "app.include_router(apple_reminder_router)\n"
+        ).body
+    ]
+    reminder_counts = [body_shapes.count(shape) for shape in reminder_shapes]
+    if reminder_counts not in ([0, 0], [1, 1]):
+        return None
+    if reminder_counts == [1, 1] and body_shapes.index(
+        reminder_shapes[0]
+    ) > body_shapes.index(reminder_shapes[1]):
+        return None
     application.body = [
         node
         for node, shape in zip(application.body, body_shapes, strict=True)
-        if shape not in shapes
+        if shape not in shapes + reminder_shapes
     ]
     digest = hashlib.sha256(
         ast.dump(module, include_attributes=False).encode()
@@ -982,6 +1010,32 @@ def _service_work_application(source: str) -> tuple[str, bool] | None:
 
 def _service_work_mode(path: str) -> str:
     return "100755" if path == COS_SERVICE_WORK_NATIVE_INSTALL else "100644"
+
+
+def _service_work_member(source: str) -> str | None:
+    """Bind every member route except the shared reminder confirmation seam."""
+    try:
+        module = ast.parse(source)
+    except SyntaxError:
+        return None
+    names = {"reminder_command", "confirm_reminder_command"}
+    for name in names:
+        if (
+            sum(
+                isinstance(node, ast.AsyncFunctionDef) and node.name == name
+                for node in module.body
+            )
+            > 1
+        ):
+            return None
+    module.body = [
+        node
+        for node in module.body
+        if not (isinstance(node, ast.AsyncFunctionDef) and node.name in names)
+    ]
+    return hashlib.sha256(
+        ast.dump(module, include_attributes=False).encode()
+    ).hexdigest()
 
 
 def _service_work_dependency_fingerprint(
@@ -1000,6 +1054,18 @@ def _service_work_dependency_fingerprint(
     if normalized is None:
         return None
     identity, wired = normalized
+    member = next(
+        (entry for entry in entries if entry.path == COS_SERVICE_WORK_MEMBER), None
+    )
+    if member is not None and member.mode != "100644":
+        return None
+    member_identity = _service_work_member(
+        _git(repository, "show", f"{revision}:{COS_SERVICE_WORK_MEMBER}")
+        if member
+        else ""
+    )
+    if member_identity is None:
+        return None
     allowed = COS_SERVICE_WORK_REQUIRED_PATHS | POLICY_PATHS
     coordinates = sorted(
         (
@@ -1014,6 +1080,8 @@ def _service_work_dependency_fingerprint(
             and (entry.path in allowed or _prose(entry.path))
         )
     )
+    coordinates.append((COS_SERVICE_WORK_MEMBER, "100644", member_identity))
+    coordinates.sort()
     digest = hashlib.sha256(
         json.dumps(coordinates, separators=(",", ":")).encode()
     ).hexdigest()

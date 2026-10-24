@@ -13,6 +13,7 @@ import type { PluginRuntime } from "./runtime.js";
 import { rememberSelfReply, registerSelfReplies, bindReminderTool } from "./self-replies.js";
 import { TransportError } from "./transport.js";
 import { provenanceFromServiceTool, SERVICE_PRIVATE_TOOL_NAMES } from "./service-private.js";
+import { APPLE_REMINDER_INPUT_TOOLS } from "./apple-reminders.js";
 
 type BridgeMarker = {
   consent?: unknown;
@@ -47,7 +48,8 @@ export function registerHooks(api: OpenClawPluginApi, runtime: PluginRuntime): v
       if (event.toolName === "administrateme_service_follow_up" && !runtime.transport.config.serviceWorkEnabled) {
         return { block: true, blockReason: "CoS internal work is disabled." };
       }
-      if (event.toolName === "administrateme_self_reminder" || event.toolName === "administrateme_service_follow_up") {
+      if (event.toolName === "administrateme_self_reminder" || event.toolName === "administrateme_service_follow_up" ||
+          (APPLE_REMINDER_INPUT_TOOLS as readonly string[]).includes(event.toolName)) {
         if (!bindReminderTool(runtime, {
           runId: typeof context.runId === "string" ? context.runId : undefined,
           sessionKey: typeof context.sessionKey === "string" ? context.sessionKey : undefined,
