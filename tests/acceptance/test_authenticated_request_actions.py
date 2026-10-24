@@ -17,6 +17,7 @@ from fastapi.testclient import TestClient
 import httpx
 import pytest
 
+from adminme.apple_service_permissions import digest
 from adminme.lib.skill_runner.fixture import _response
 from adminme.lib.skill_runner.wrapper import run_skill
 from adminme.openclaw_approvals import sign_approval_receipt
@@ -219,6 +220,7 @@ def test_three_conversations_complete_exact_request_without_manual_allow_once(
             )
             replay = client.post(CONFIRM, headers=AUTH, json=body)
             assert replay.status_code == 200, replay.text
+            assert replay.json()["state"] == "awaiting_request_policy"
             assert (
                 replay.json()["request_authorization"]
                 == receipt["request_authorization"]
@@ -413,6 +415,18 @@ def test_schema_aware_revocation_stops_queued_policy_actions_but_preserves_legac
             supervisor, transport = _supervisor(
                 client, helper, transfer, tmp_path, store
             )
+            command = client.portal.call(
+                _events, runtime, "external_sync.write_requested"
+            )[0]
+            denied = client.post(
+                f"/api/bridge/commands/{command['payload']['command_id']}/apple-authorization",
+                headers=transport.headers,
+                json={
+                    "event_id": command["event_id"],
+                    "configuration_sha256": digest(supervisor._config.pack_config),
+                },
+            )
+            assert denied.status_code == 409, denied.text
             try:
                 _run_dispatch(supervisor)
             finally:

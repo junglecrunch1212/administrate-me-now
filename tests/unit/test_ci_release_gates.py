@@ -3281,6 +3281,44 @@ def test_bridge_request_mapping_keeps_every_other_admission_check_bound() -> Non
     assert _service_work_ingest(_BRIDGE_REQUEST_WIRED * 2) is None
 
 
+def test_bridge_request_mapping_binds_pending_denial_to_exact_policy_check() -> None:
+    base = (
+        "async def pending_commands(request):\n"
+        "    require_member()\n"
+        "    try:\n"
+        "        apple_grant = command_permission(runtime, member_id, payload)\n"
+        "    except (ValueError, KeyError):\n"
+        "        require_retained_grant()\n"
+        "        apple_authorization_denied = True\n"
+        "    return commands\n"
+    )
+    paired = (
+        "        from adminme.products.openclaw.request_authorization import require_current_bridge_request\n"
+        "        await require_current_bridge_request(runtime, event)\n"
+    )
+    wired = base.replace(
+        "    except (ValueError, KeyError):\n",
+        paired + "    except (ValueError, KeyError, HTTPException):\n",
+    )
+    assert _service_work_ingest(base) == _service_work_ingest(wired)
+    for old, new in (
+        (paired, ""),
+        (paired, paired * 2),
+        ("ValueError, KeyError, HTTPException", "ValueError, KeyError"),
+        ("ValueError, KeyError, HTTPException", "Exception"),
+        (
+            "require_current_bridge_request(runtime, event)",
+            "require_current_bridge_request(runtime, other_event)",
+        ),
+        ("require_retained_grant()", "ignore_retained_grant()"),
+        ("require_member()", "trust_claimed_member()"),
+    ):
+        assert _service_work_ingest(wired.replace(old, new)) != _service_work_ingest(
+            base
+        )
+    assert _service_work_ingest(wired * 2) is None
+
+
 @pytest.mark.parametrize(
     ("relative", "before", "after"),
     [

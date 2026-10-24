@@ -166,6 +166,8 @@ async def apple_reminder_status(
                 if datetime.fromisoformat(expires) <= datetime.now(timezone.utc)
                 else "current"
             )
+            if receipt["request_authorization_state"] == "current":
+                receipt["state"] = "awaiting_request_policy"
         elif receipt["due_status"] == "past_due":
             receipt["request_authorization_state"] = (
                 "legacy_overdue_requires_explicit_resume"

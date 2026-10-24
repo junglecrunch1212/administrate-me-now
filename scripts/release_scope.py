@@ -1188,7 +1188,7 @@ def _service_work_member(source: str) -> str | None:
 
 
 def _service_work_ingest(source: str) -> str | None:
-    """Terminal replay and one final-admission pair; all other bridge logic is bound."""
+    """Exact terminal/request integrations; all other bridge logic is bound."""
     try:
         module = ast.parse(source)
     except SyntaxError:
@@ -1223,6 +1223,51 @@ def _service_work_ingest(source: str) -> str | None:
             is None
         ):
             return None
+    pending = [
+        node
+        for node in module.body
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == "pending_commands"
+    ]
+    if len(pending) > 1:
+        return None
+    # Admit only this paired request-policy check and explicit denial handling.
+    # The existing retained-grant/edge-terminal logic stays in the fingerprint.
+    old_pending = ast.parse(
+        "try:\n    apple_grant = command_permission(runtime, member_id, payload)\n"
+        "except (ValueError, KeyError):\n    pass\n"
+    ).body[0]
+    new_pending = ast.parse(
+        "try:\n    apple_grant = command_permission(runtime, member_id, payload)\n"
+        "    from adminme.products.openclaw.request_authorization import require_current_bridge_request\n"
+        "    await require_current_bridge_request(runtime, event)\n"
+        "except (ValueError, KeyError, HTTPException):\n    pass\n"
+    ).body[0]
+    assert isinstance(old_pending, ast.Try) and isinstance(new_pending, ast.Try)
+    assert old_pending.handlers[0].type is not None
+    assert new_pending.handlers[0].type is not None
+    replaced_pending = 0
+    for function in pending:
+        for node in ast.walk(function):
+            if (
+                isinstance(node, ast.Try)
+                and not node.orelse
+                and not node.finalbody
+                and len(node.handlers) == 1
+                and node.handlers[0].name is None
+                and node.handlers[0].type is not None
+                and ast.dump(node.handlers[0].type, include_attributes=False)
+                == ast.dump(new_pending.handlers[0].type, include_attributes=False)
+                and [ast.dump(item, include_attributes=False) for item in node.body]
+                == [
+                    ast.dump(item, include_attributes=False)
+                    for item in new_pending.body
+                ]
+            ):
+                node.body = old_pending.body
+                node.handlers[0].type = old_pending.handlers[0].type
+                replaced_pending += 1
+    if replaced_pending > 1:
+        return None
     terminal = [
         node
         for node in module.body
