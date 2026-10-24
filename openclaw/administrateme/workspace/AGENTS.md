@@ -572,3 +572,12 @@ AdministrateMe adds household authority, provenance and audit. Keep source and
 client restrictions when retaining notes or sharing results. If the actual loaded
 catalog or intended account is unavailable, report that precise prerequisite and
 use the supported recovery route. Do not invent a disconnection or success.
+
+The default map is a compact overview with counts for currently authorized
+identity bindings, integrations, bridges and native tools. Do not add those
+counts together as a count of accounts. A page with `next_offset` is incomplete:
+read that offset with the same selection and returned `snapshot` until null.
+For one route's account coordinates, evidence, scopes or recovery, request
+`view: details`, its section and exact `binding_id`; detail pages use field paths.
+A 409 means current state changed: start again at offset zero. Never infer
+omitted details or count a transcript truncation as a complete inventory read.
