@@ -27,7 +27,7 @@ const REQUEST_FAILURES = {
 } as const;
 
 async function safeRequestFailure(response: Response, path: string): Promise<string | undefined> {
-  if (response.status !== 409 || !["/api/openclaw/v1/tools/confirm-apple-reminder", "/api/openclaw/v1/tools/cos-apple-reminders/confirm"].includes(path)) return undefined;
+  if (response.status !== 409 || !["/api/openclaw/v1/tools/confirm-apple-reminder", "/api/openclaw/v1/tools/cos-apple-reminders/confirm", "/api/openclaw/v1/tools/confirm-requested-email"].includes(path)) return undefined;
   try {
     const body: unknown = await response.json();
     if (!body || typeof body !== "object" || !("detail" in body)) return undefined;
