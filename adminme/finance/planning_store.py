@@ -33,6 +33,27 @@ def _anchored(conn: Any, p: dict[str, Any], *, current: bool) -> None:
     if row is None or row[0] != p["accounting_content_sha256"]:
         raise PublicationError("projection_accounting_anchor_invalid")
     accounting = json.loads(row[1])
+    from adminme.finance.publication_provenance import namespace_root
+
+    if namespace_root(accounting):
+        # Draft binding convention: the accepted snapshot must be explicit in
+        # existing protected evidence, never inferred from an engine input hash.
+        from adminme.finance.provenance_store import verify_archived
+
+        proof = verify_archived(conn, accounting)
+        assert proof is not None
+        expected = "hbsource1:" + proof.source_snapshot_sha256
+        witnesses = [e for e in p["evidence"] if e["evidence_id"] == expected]
+        sources = {s["source_id"]: s for s in p["sources"]}
+        if (
+            len(witnesses) != 1
+            or witnesses[0]["content_sha256"] != proof.source_snapshot_sha256
+            or witnesses[0]["artifact_ref"] != expected
+            or witnesses[0]["audience_member_ids"] != [p["owner_id"]]
+            or sources.get(witnesses[0]["source_id"], {}).get("content_sha256")
+            != proof.source_snapshot_sha256
+        ):
+            raise PublicationError("projection_accounting_source_snapshot_unverified")
     if not set(p["accounting_revision_ids"]) <= set(
         accounting["accepted_journal_revision_ids"]
     ):

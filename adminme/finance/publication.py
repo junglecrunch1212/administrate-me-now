@@ -195,6 +195,9 @@ def validate_publication(value: dict[str, Any]) -> dict[str, Any]:
             value["published_at"]
         ):
             raise PublicationError("publication_clock_order")
+        from adminme.finance.publication_provenance import namespace_root
+
+        namespace_root(value)
         return json.loads(raw)
     except PublicationError:
         raise
@@ -208,6 +211,20 @@ def validate_transition(
     """Publication acceptance has no authority to resume a paused recovery."""
     if previous is None:
         return
+    from adminme.finance.publication_provenance import namespace_root
+
+    prior_root, current_root = namespace_root(previous), namespace_root(current)
+    if prior_root or current_root:
+        if not prior_root or not current_root:
+            raise PublicationError("provenance_namespace_transition_requires_review")
+        if not set(previous["accepted_journal_revision_ids"]) <= set(
+            current["accepted_journal_revision_ids"]
+        ):
+            raise PublicationError("provenance_historical_unit_dropped")
+        if not set(previous["excluded_pending_revision_ids"]) <= set(
+            current["excluded_pending_revision_ids"]
+        ):
+            raise PublicationError("provenance_held_revision_dropped")
     held = set(previous["excluded_pending_revision_ids"])
     if previous["recovery_state"] == "paused" and (
         current["recovery_state"] != "paused"

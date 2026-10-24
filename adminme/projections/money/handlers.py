@@ -22,6 +22,7 @@ from typing import Any
 
 import sqlcipher3
 
+from adminme.finance.provenance_store import apply_provenance
 from adminme.finance.projection import apply_publication
 from adminme.finance.planning_store import apply_projection
 from adminme.finance.choices import apply_choice
@@ -48,6 +49,7 @@ def apply_event(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
         "finance.goal_completed": apply_finance_goal_completed,
         "finance.goal_reopened": apply_finance_goal_reopened,
         "finance.workbook_published": apply_finance_workbook_published,
+        "finance.provenance_archived": apply_provenance,
         "finance.publication_accepted": apply_publication,
         "finance.projection_verified": apply_projection,
         "finance.goal_recorded": apply_choice,

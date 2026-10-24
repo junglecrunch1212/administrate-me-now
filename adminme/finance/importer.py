@@ -19,6 +19,13 @@ from adminme.finance.publication import (
     validate_transition,
 )
 from adminme.lib.session import Session
+from adminme.finance.publication_provenance import (
+    ClosedPackage,
+    freeze_package,
+    namespace_root,
+    verify_package,
+)
+from adminme.finance.provenance_store import archive_package, verify_archived
 
 
 def _key(p: dict[str, Any]) -> str:
@@ -35,18 +42,30 @@ async def _settled(runtime: Any) -> None:
     raise PublicationError("publication_projection_pending")
 
 
-async def import_publication(
-    runtime: Any, session: Session, value: dict[str, Any]
-) -> dict[str, Any]:
-    """Explicit owner/file adapter seam; intentionally no public write endpoint."""
+def require_import_owner(runtime: Any, session: Session) -> None:
     if not runtime.settings.finance_publications_enabled:
         raise PublicationError("publication_ingress_disabled")
     if (
         session.auth_role != "principal"
         or session.is_view_as
         or session.service_context is not None
+        or runtime.settings.instance.tenant_id != session.tenant_id
+        or runtime.settings.member_roles.get(session.auth_member_id) != "principal"
     ):
         raise PublicationError("publication_owner_authority_required")
+
+
+async def import_publication(
+    runtime: Any,
+    session: Session,
+    value: dict[str, Any],
+    *,
+    provenance_package: ClosedPackage | None = None,
+) -> dict[str, Any]:
+    """Explicit owner/file seam; no network resolver or public write endpoint."""
+    require_import_owner(runtime, session)
+    if provenance_package is not None:
+        provenance_package = freeze_package(provenance_package)
     lock = getattr(runtime, "_finance_publication_lock", None)
     if lock is None:
         lock = asyncio.Lock()
@@ -77,6 +96,11 @@ async def import_publication(
             ):
                 raise PublicationError("publication_identity_or_prior_conflict")
             await _settled(runtime)
+            if namespace_root(p):
+                await runtime.projections.read(
+                    "money", lambda conn: verify_archived(conn, p)
+                )
+            require_import_owner(runtime, session)
             return {
                 "state": "accepted",
                 "event_id": existing["event_id"],
@@ -103,7 +127,25 @@ async def import_publication(
             "SELECT publication_json FROM finance_publications WHERE tenant_id=? AND owner_id=? AND book_id=? AND publication_id=?",
             (*coordinates, p["prior_publication_id"]),
         ).fetchone()
-        validate_transition(json.loads(previous[0]) if previous else None, p)
+        prior_publication = json.loads(previous[0]) if previous else None
+        validate_transition(prior_publication, p)
+        if namespace_root(p):
+            if provenance_package is None:
+                raise PublicationError("provenance_closed_package_required")
+            prior_proof = (
+                await runtime.projections.read(
+                    "money", lambda c: verify_archived(c, prior_publication)
+                )
+                if prior_publication
+                else None
+            )
+            await asyncio.to_thread(verify_package, p, provenance_package, prior_proof)
+            require_import_owner(runtime, session)
+            await archive_package(runtime, session, p, provenance_package)
+            await _settled(runtime)
+        elif provenance_package is not None:
+            raise PublicationError("provenance_unexpected_package")
+        require_import_owner(runtime, session)
         now = datetime.now(timezone.utc)
         scope = f"private:{session.auth_member_id}"
         envelope = EventEnvelope(
@@ -123,6 +165,7 @@ async def import_publication(
         )
         event_id = await runtime.events.write(envelope)
         await _settled(runtime)
+        require_import_owner(runtime, session)
         return {
             "state": "accepted",
             "event_id": event_id,

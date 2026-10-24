@@ -29,6 +29,9 @@ def apply_publication(envelope: dict[str, Any], conn: Any) -> None:
     if existing:
         if existing[0] != p["content_sha256"]:
             raise PublicationError("publication_identity_conflict")
+        from adminme.finance.provenance_store import verify_archived
+
+        verify_archived(conn, p)
         return
     head = conn.execute(
         "SELECT publication_id FROM finance_publication_heads WHERE tenant_id=? AND owner_id=? AND book_id=?",
@@ -42,7 +45,14 @@ def apply_publication(envelope: dict[str, Any], conn: Any) -> None:
     ).fetchone()
     import json
 
-    validate_transition(json.loads(previous[0]) if previous else None, p)
+    from adminme.finance.provenance_store import verify_archived
+
+    prior_publication = json.loads(previous[0]) if previous else None
+    validate_transition(prior_publication, p)
+    prior_proof = (
+        verify_archived(conn, prior_publication) if prior_publication else None
+    )
+    verify_archived(conn, p, prior_proof)
     metadata = {
         k: v
         for k, v in p.items()

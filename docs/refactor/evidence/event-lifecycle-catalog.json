@@ -3862,8 +3862,8 @@
     "missing_source_candidate_cells": [],
     "object_lifecycles": 28,
     "source_candidate_cells": 143,
-    "technical_event_schemas": 382,
-    "technical_event_types": 303,
+    "technical_event_schemas": 383,
+    "technical_event_types": 304,
     "uncataloged_event_types": [],
     "unproved_exact_lifecycle_transitions": [],
     "unproved_supported_source_candidate_cells": []
@@ -16991,6 +16991,68 @@
       },
       "required": [
         "projection"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "finance.provenance_archived",
+      "family": "finance",
+      "properties": {
+        "approved_evidence": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 128,
+          "title": "Approved Evidence",
+          "type": "array"
+        },
+        "book_id": {
+          "maxLength": 96,
+          "minLength": 1,
+          "title": "Book Id",
+          "type": "string"
+        },
+        "canonical_json": {
+          "maxLength": 1048576,
+          "minLength": 1,
+          "title": "Canonical Json",
+          "type": "string"
+        },
+        "content_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Content Sha256",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "index",
+            "chunk",
+            "evidence"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "owner_id": {
+          "maxLength": 96,
+          "minLength": 1,
+          "title": "Owner Id",
+          "type": "string"
+        },
+        "root_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Root Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "owner_id",
+        "book_id",
+        "root_sha256",
+        "content_sha256",
+        "kind",
+        "canonical_json",
+        "approved_evidence"
       ],
       "schema_version": 1
     },

@@ -315,3 +315,18 @@ CREATE TABLE IF NOT EXISTS finance_dated_event_bindings (
     FOREIGN KEY (tenant_id, owner_id, book_id, projection_id, record_id)
       REFERENCES finance_dated_shared_events(tenant_id, owner_id, book_id, projection_id, record_id)
 );
+
+
+-- Immutable closed proof blobs, rebuilt from privileged encrypted events.
+CREATE TABLE IF NOT EXISTS finance_provenance_blobs (
+    tenant_id TEXT NOT NULL,
+    owner_id TEXT NOT NULL,
+    book_id TEXT NOT NULL,
+    root_sha256 TEXT NOT NULL,
+    content_sha256 TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('index','chunk','evidence')),
+    canonical_json TEXT NOT NULL,
+    approved_evidence_json TEXT NOT NULL,
+    last_event_id TEXT NOT NULL,
+    PRIMARY KEY (tenant_id,owner_id,book_id,root_sha256,content_sha256)
+);

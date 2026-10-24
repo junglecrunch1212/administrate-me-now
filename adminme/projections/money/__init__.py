@@ -33,6 +33,7 @@ class MoneyProjection(Projection):
         "finance.goal_completed",
         "finance.goal_reopened",
         "finance.workbook_published",
+        "finance.provenance_archived",
         "finance.publication_accepted",
         "finance.projection_verified",
         "finance.goal_recorded",

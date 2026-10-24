@@ -930,7 +930,7 @@ class EventLog:
                 return result
             for header in headers:
                 root = "publication" if header["type"] == types[0] else "projection"
-                columns = []
+                columns: list[str] = []
                 for field in fields:
                     path = f"$.{root}.{field}"
                     # Bound even corrupted scalar data before crossing the worker.
