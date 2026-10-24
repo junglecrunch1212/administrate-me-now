@@ -26,6 +26,7 @@ from adminme.products.openclaw.reminder_choice_work import (
     finish_choice,
     finished_choice,
     resolve_task,
+    selected_task_answer,
     validate_original,
     update_choice_work,
 )
@@ -85,13 +86,25 @@ async def reminder_choice(
         else "read_context",
     )
     runtime = seam._runtime(request)
-    offered = await resolve_task(runtime, member, body.task_id)
+    offered = await resolve_task(
+        runtime,
+        member,
+        body.task_id,
+        answer=answer if body.action != "status" else None,
+    )
     if isinstance(offered, list):
+        visible = []
+        for event in offered:
+            try:
+                await validate_original(runtime, member, event)
+            except HTTPException:
+                continue
+            visible.append(choice_summary(event))
         return {
             "state": "task_choice_required"
             if offered
             else "no_pending_reminder_choice",
-            "tasks": [choice_summary(event) for event in offered],
+            "tasks": visible,
             "provider_effect_count": 0,
             "automatic_retry": False,
         }
@@ -137,8 +150,11 @@ async def reminder_choice(
                 raise HTTPException(
                     409, "Observation mode suppresses reminder task changes"
                 )
+            _, authored_answer = await selected_task_answer(
+                runtime, member, offered, answer
+            )
             if body.action == "cancel":
-                if answer["payload"]["text"].strip().casefold() not in {
+                if authored_answer.strip().casefold() not in {
                     "cancel",
                     "cancel it",
                     "cancel this reminder",
@@ -176,7 +192,7 @@ async def reminder_choice(
                 )
                 selected = selected_choice(
                     p,
-                    answer["payload"]["text"],
+                    authored_answer,
                     provider_account_id=permission["provider_account_id"],
                     current_choices=[
                         ReminderListChoice(

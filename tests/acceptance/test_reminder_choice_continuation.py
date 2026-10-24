@@ -79,12 +79,17 @@ def two_lists(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def instruction(
-    client: TestClient, channel: str, identity: str, text: str
+    client: TestClient,
+    channel: str,
+    identity: str,
+    text: str,
+    *,
+    thread_id: str = "fixture-real-email-thread",
 ) -> dict[str, Any]:
     if channel == "portal":
         return portal_instruction(client, identity, text=text)
     if channel == "gmail":
-        original = gmail_observation(client, identity, text=text)
+        original = gmail_observation(client, identity, text=text, thread_id=thread_id)
         rows = client.portal.call(
             _events, client.app.state.runtime, "cos.conversation.instruction"
         )
@@ -180,6 +185,7 @@ def offer(
     suffix: str = "original",
     *,
     title: str = "Call a relative",
+    thread_id: str = "fixture-real-email-thread",
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     due = (datetime.now(timezone.utc) + timedelta(days=2)).replace(
         hour=13, minute=30, second=0, microsecond=0
@@ -189,6 +195,7 @@ def offer(
         channel,
         suffix,
         f"Add a reminder to my Apple Reminders to {title.lower()} at {due.isoformat()}",
+        thread_id=thread_id,
     )
     body = {
         **source,
@@ -386,14 +393,21 @@ def test_ambiguous_pending_answer_cross_member_and_cancel_never_confirm(
             == 404
         )
         _, _, second = offer(client, "gmail", "second", title="Buy groceries")
-        multiple = client.post(CHOICE, headers=AUTH, json={**yes, "action": "answer"})
+        several = instruction(client, "portal", "multiple-pending-answer", "Personal")
+        multiple = client.post(
+            CHOICE,
+            headers=AUTH,
+            json={**several, "action": "answer", "task_id": first["task_id"]},
+        )
         assert multiple.status_code == 200, multiple.text
         assert multiple.json()["state"] == "task_choice_required"
         assert {row["task_id"] for row in multiple.json()["tasks"]} == {
             first["task_id"],
             second["task_id"],
         }
-        cancel = instruction(client, "gmail", "cancel-first", "Cancel this reminder")
+        cancel = instruction(
+            client, "gmail", "cancel-first", "Call a relative: Cancel this reminder"
+        )
         cancelled = client.post(
             CHOICE,
             headers=AUTH,
@@ -575,6 +589,151 @@ def test_choice_domain_cannot_fall_back_or_refresh_its_original_authority(
                     client.portal.call(_events, runtime, "cos.reminder.choice_grounded")
                 )
                 == 1
+            )
+        finally:
+            client.portal.call(model.aclose)
+
+
+@pytest.mark.parametrize(
+    "scenario",
+    [
+        "same_thread",
+        "same_thread_ambiguous",
+        "cross_channel",
+        "title",
+        "duplicate_title",
+        "exact_id",
+        "cancel_ambiguous",
+    ],
+)
+def test_actual_conversation_or_human_reference_selects_task_not_model_argument(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, scenario: str
+) -> None:
+    monkeypatch.setenv("ADMINME_TEST_MODE", "1")
+    two_lists(monkeypatch)
+    with TestClient(
+        create_application(configured(tmp_path)),
+        base_url="https://central-fixture.ts.net",
+    ) as client:
+        runtime = client.app.state.runtime
+        prepare_apple_sources(client, tmp_path)
+        _grant(client)
+        grant_services(client)
+        _normal_operation(client)
+        model, calls = model_boundary(client)
+        try:
+            _, _, first = offer(
+                client, "gmail", "thread-first", thread_id="first-email-thread"
+            )
+            duplicate = scenario in {"duplicate_title", "exact_id"}
+            _, _, second = offer(
+                client,
+                "gmail",
+                "thread-second",
+                title="Call a relative" if duplicate else "Buy groceries",
+                thread_id="first-email-thread"
+                if scenario == "same_thread_ambiguous"
+                else "second-email-thread",
+            )
+            label = next(
+                row["label"] for row in first["lists"] if row["list_id"] == LIST
+            )
+            text = label
+            if scenario in {"title", "duplicate_title"}:
+                text = "Call a relative: " + label
+            elif scenario == "exact_id":
+                text = first["task_id"] + ": " + label
+            elif scenario == "cancel_ambiguous":
+                text = "Cancel this reminder"
+            channel = "gmail" if scenario.startswith("same_thread") else "portal"
+            fresh = instruction(
+                client,
+                channel,
+                "current-thread-choice",
+                text,
+                thread_id="first-email-thread",
+            )
+            response = client.post(
+                CHOICE,
+                headers=AUTH,
+                json={
+                    **fresh,
+                    "action": "cancel" if scenario == "cancel_ambiguous" else "answer",
+                    "task_id": first["task_id"],
+                },
+            )
+            assert response.status_code == 200, response.text
+            if scenario in {
+                "same_thread_ambiguous",
+                "cross_channel",
+                "duplicate_title",
+                "cancel_ambiguous",
+            }:
+                assert response.json()["state"] == "task_choice_required"
+                assert {row["task_id"] for row in response.json()["tasks"]} == {
+                    first["task_id"],
+                    second["task_id"],
+                }
+                assert calls == []
+                assert (
+                    client.portal.call(
+                        _events, runtime, "member.provider_action.confirmed"
+                    )
+                    == []
+                )
+                assert (
+                    client.portal.call(_events, runtime, "cos.reminder.choice_finished")
+                    == []
+                )
+            else:
+                assert response.json()["task_id"] == first["task_id"]
+                assert response.json()["state"] == "awaiting_request_policy"
+                ticket = response.json()["request_authorization"]
+                selection = ticket["continuation"]["selection"]
+                assert len(selection["eligible_tasks"]) == 2
+                assert all(
+                    "title" not in candidate
+                    for candidate in selection["eligible_tasks"]
+                )
+                assert (
+                    selection["answer_source_event_id"]
+                    == fresh["source_message_event_id"]
+                )
+                assert len(calls) == 1
+                assert (
+                    len(
+                        client.portal.call(
+                            _events, runtime, "member.provider_action.confirmed"
+                        )
+                    )
+                    == 1
+                )
+                from adminme.products.openclaw.reminder_choice_authorization import (
+                    historical_choice_matches,
+                )
+
+                grounded = client.portal.call(
+                    _events, runtime, "cos.reminder.choice_grounded"
+                )[0]
+                assert client.portal.call(
+                    historical_choice_matches, runtime.event_log, grounded
+                )
+                # A model-provided candidate subset is not historical authority.
+                from copy import deepcopy
+
+                tampered = deepcopy(grounded)
+                tampered["payload"]["continuation"]["selection"]["eligible_tasks"].pop()
+                assert not client.portal.call(
+                    historical_choice_matches, runtime.event_log, tampered
+                )
+                # Future tasks cannot rewrite the original answer's selection.
+                offer(client, "portal", "later-task", title="Arrange a visit")
+                assert client.portal.call(
+                    historical_choice_matches, runtime.event_log, grounded
+                )
+            assert (
+                client.portal.call(_events, runtime, "external_sync.write_requested")
+                == []
             )
         finally:
             client.portal.call(model.aclose)

@@ -84,12 +84,55 @@ registry.register("cos.reminder.choice_offered", 1, ReminderChoiceOfferedV1)
 registry.register("cos.reminder.choice_finished", 1, ReminderChoiceFinishedV1)
 
 
+class ReminderChoiceConversationV1(BaseModel):
+    """Only a receiver-authenticated email thread disambiguates bare answers."""
+
+    model_config = {"extra": "forbid"}
+    channel_id: Literal["gmail"]
+    account_id: str = Field(min_length=1, max_length=500)
+    actor_id: str = Field(min_length=1, max_length=240)
+    thread_id: str = Field(min_length=1, max_length=240)
+
+
+class ReminderChoiceCandidateV1(BaseModel):
+    model_config = {"extra": "forbid"}
+    offered_event_id: str = Field(min_length=1, max_length=240)
+    task_id: str = Field(min_length=1, max_length=240)
+    title_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
+    pending_expires_at: AwareDatetime
+    conversation: ReminderChoiceConversationV1 | None
+
+
+class ReminderChoiceSelectionV1(BaseModel):
+    """Immutable eligible tasks at the fresh answer, never model-selected context."""
+
+    model_config = {"extra": "forbid"}
+    answer_source_event_id: str = Field(min_length=1, max_length=240)
+    answer_submitted_at: AwareDatetime
+    answer_conversation: ReminderChoiceConversationV1 | None
+    eligible_tasks: list[ReminderChoiceCandidateV1] = Field(max_length=1000)
+
+    @model_validator(mode="after")
+    def unique_live_tasks(self) -> ReminderChoiceSelectionV1:
+        ids = [candidate.task_id for candidate in self.eligible_tasks]
+        offers = [candidate.offered_event_id for candidate in self.eligible_tasks]
+        if len(ids) != len(set(ids)) or len(offers) != len(set(offers)):
+            raise ValueError("eligible tasks must have unique retained identities")
+        if offers != sorted(offers) or any(
+            candidate.pending_expires_at <= self.answer_submitted_at
+            for candidate in self.eligible_tasks
+        ):
+            raise ValueError("eligible tasks must preserve the original answer cutoff")
+        return self
+
+
 class ReminderChoiceContinuationV1(BaseModel):
     model_config = {"extra": "forbid"}
     offered_event_id: str = Field(min_length=1, max_length=240)
     offered: ReminderChoiceOfferedV1
     original_instruction: str = Field(min_length=1, max_length=32000)
     original_evidence: list[dict[str, object]] = Field(min_length=1, max_length=8)
+    selection: ReminderChoiceSelectionV1
 
 
 class ReminderChoiceGroundedV1(BaseModel):
@@ -119,6 +162,9 @@ class ReminderChoiceGroundedV1(BaseModel):
             offered.member_id != self.member_id
             or offered.action_id != self.action_id
             or self.source_event_id == offered.original_source_event_id
+            or self.continuation.selection.answer_source_event_id
+            != self.source_event_id
+            or self.continuation.selection.answer_submitted_at > self.issued_at
             or not offered.offered_at <= self.issued_at < self.expires_at
             or self.expires_at > offered.pending_expires_at
             or self.expires_at - self.issued_at > timedelta(minutes=10)

@@ -17,6 +17,8 @@ from fastapi import HTTPException
 from adminme.events.schemas.reminder_choices import (
     ReminderChoiceOfferedV1,
     ReminderListChoice,
+    ReminderChoiceSelectionV1,
+    ReminderChoiceCandidateV1,
 )
 
 OFFERED = "cos.reminder.choice_offered"
@@ -77,3 +79,48 @@ def execution_expiry(
     if issued_at >= offered.pending_expires_at:
         raise HTTPException(409, "This pending reminder choice has expired")
     return min(issued_at + timedelta(minutes=10), offered.pending_expires_at)
+
+
+def selected_task(
+    snapshot: ReminderChoiceSelectionV1, authored_answer: str
+) -> tuple[ReminderChoiceCandidateV1, str] | None:
+    """Select using authored words or a genuine thread, never a tool argument.
+
+    An exact ID/title prefix followed by a colon is explicit. Duplicate titles
+    remain ambiguous even across threads. Without a prefix, one pending offer
+    in the authenticated email thread wins; otherwise exactly one overall does.
+    The returned remainder is still literal member-authored text.
+    """
+    answer = authored_answer.strip()
+    references = []
+    for candidate in snapshot.eligible_tasks:
+        prefix = candidate.task_id + ":"
+        if answer.startswith(prefix):
+            references.append((candidate, answer[len(prefix) :].strip()))
+    if references:
+        return references[0] if len(references) == 1 else None
+    # The snapshot carries hashes instead of copying other tasks' private
+    # titles into a new source/session. Only a literal human prefix can match.
+    prefixes = [
+        (digest(answer[:index].strip().lower()), answer[index + 1 :].strip())
+        for index, character in enumerate(answer)
+        if character == ":"
+    ]
+    references = [
+        (candidate, remainder)
+        for candidate in snapshot.eligible_tasks
+        for fingerprint, remainder in prefixes
+        if fingerprint == candidate.title_fingerprint
+    ]
+    if references:
+        return references[0] if len(references) == 1 else None
+    candidates = snapshot.eligible_tasks
+    if snapshot.answer_conversation is not None:
+        same_thread = [
+            candidate
+            for candidate in candidates
+            if candidate.conversation == snapshot.answer_conversation
+        ]
+        if same_thread:
+            candidates = same_thread
+    return (candidates[0], answer) if len(candidates) == 1 else None

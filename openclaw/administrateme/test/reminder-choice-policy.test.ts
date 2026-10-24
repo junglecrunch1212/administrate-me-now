@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { canonical } from "../src/approval.js";
+import type { Provenance } from "../src/contract.js";
 import { REMINDER_CHOICE_RULE, validateReminderChoice } from "../src/reminder-choice-policy.js";
 
 const hash = (value: unknown) => createHash("sha256").update(canonical(value)).digest("hex");
@@ -20,15 +21,21 @@ function fixture() {
     offered_at: "2031-01-02T01:01:00Z", pending_expires_at: draft.due_at,
     expiry_reason: "requested_reminder_due_time", provider_effect_count: 0,
   };
+  const selection = {
+    answer_source_event_id: "fresh-answer", answer_submitted_at: new Date(now - 1000).toISOString(),
+    answer_conversation: null as Record<string, string> | null,
+    eligible_tasks: [{ offered_event_id: "offered", task_id: offered.task_id, title_fingerprint: hash(offered.title.toLowerCase()),
+      pending_expires_at: offered.pending_expires_at, conversation: null as Record<string, string> | null }],
+  };
   return {
     ticket: {
       member_id: "member-a", source_event_id: "fresh-answer", rule_id: REMINDER_CHOICE_RULE,
       issued_at: new Date(now).toISOString(), expires_at: new Date(now + 600_000).toISOString(),
       action: { provider: "apple_reminders", operation: "create_reminder", resource_owner: "requester", ...draft,
         list_id: "fixture-personal", selected_by_policy: false }, evidence: span(answer),
-      continuation: { offered_event_id: "offered", offered, original_instruction: source, original_evidence: span(source) },
+      continuation: { offered_event_id: "offered", offered, original_instruction: source, original_evidence: span(source), selection },
     },
-    input: { source_message_event_id: "fresh-answer", instruction_text: answer },
+    input: { source_message_event_id: "fresh-answer", instruction_text: answer, provenance: undefined as Provenance | undefined },
   };
 }
 afterEach(() => vi.restoreAllMocks());
@@ -62,5 +69,45 @@ describe("retained reminder list-choice host checks", () => {
   it("does not choose between duplicate displayed labels", () => {
     const f = fixture(); f.ticket.continuation.offered.choices[1]!.label = "Personal";
     expect(() => validateReminderChoice(f.ticket, f.input)).toThrow();
+  });
+});
+
+
+describe("independent task selection from authentic conversation or authored reference", () => {
+  const thread = (id: string) => ({ channel_id: "gmail", account_id: "fixture-service-account", actor_id: "member-thread:" + id, thread_id: id });
+  function several() {
+    const f = fixture(), selection = f.ticket.continuation.selection;
+    selection.eligible_tasks[0]!.conversation = thread("thread-a");
+    selection.eligible_tasks.push({ ...selection.eligible_tasks[0]!, offered_event_id: "second-offer", task_id: "task-b", title_fingerprint: hash("buy groceries"), conversation: thread("thread-b") });
+    return f;
+  }
+  it("refuses a model task ID when the actual cross-channel answer is ambiguous", () => {
+    const f = several();
+    expect(() => validateReminderChoice(f.ticket, f.input, "fixture-task")).toThrow();
+  });
+  it("uses the actual native Gmail thread and rejects a forged or mismatched thread", () => {
+    const f = several();
+    f.ticket.continuation.selection.answer_conversation = thread("thread-a");
+    expect(() => validateReminderChoice(f.ticket, f.input)).toThrow();
+    f.input.provenance = thread("thread-a") as unknown as Provenance;
+    expect(() => validateReminderChoice(f.ticket, f.input)).not.toThrow();
+    f.input.provenance = thread("thread-b") as unknown as Provenance;
+    expect(() => validateReminderChoice(f.ticket, f.input)).toThrow();
+    f.input.provenance = thread("thread-a") as unknown as Provenance;
+    f.ticket.continuation.selection.eligible_tasks[1]!.conversation = thread("thread-a");
+    expect(() => validateReminderChoice(f.ticket, f.input)).toThrow();
+  });
+  it("allows explicit unique human title or ID, with no draft change", () => {
+    for (const answer of ["Call a relative: Personal", "fixture-task: Personal"]) {
+      const f = several(); f.input.instruction_text = answer; f.ticket.evidence = span(answer);
+      expect(() => validateReminderChoice(f.ticket, f.input)).not.toThrow();
+    }
+  });
+  it("requires an exact ID when titles are duplicated", () => {
+    const f = several(); f.ticket.continuation.selection.eligible_tasks[1]!.title_fingerprint = hash("call a relative");
+    f.input.instruction_text = "Call a relative: Personal"; f.ticket.evidence = span(f.input.instruction_text);
+    expect(() => validateReminderChoice(f.ticket, f.input)).toThrow();
+    f.input.instruction_text = "fixture-task: Personal"; f.ticket.evidence = span(f.input.instruction_text);
+    expect(() => validateReminderChoice(f.ticket, f.input)).not.toThrow();
   });
 });

@@ -17,6 +17,8 @@ from adminme.events.schemas.reminder_choices import (
     ReminderChoiceFinishedV1,
     ReminderChoiceOfferedV1,
     ReminderListChoice,
+    ReminderChoiceConversationV1,
+    ReminderChoiceSelectionV1,
 )
 from adminme.lib.session import Session
 from adminme.products.openclaw import main as seam
@@ -27,7 +29,13 @@ from adminme.products.openclaw.service_work import (
     _internal_session,
     _key as work_key,
 )
-from adminme.reminder_choices import FINISHED, OFFERED, choice_task_id, digest
+from adminme.reminder_choices import (
+    FINISHED,
+    OFFERED,
+    choice_task_id,
+    digest,
+    selected_task,
+)
 from adminme.service_identities import (
     COS_AUTOMATION_OPERATOR_ID,
     COS_PARTY_ID,
@@ -243,10 +251,168 @@ async def finished_choice(
     return event
 
 
+def instruction_identity(event: dict[str, Any], tenant: str, member: str) -> bool:
+    return bool(
+        event.get("tenant_id") == tenant
+        and event.get("owner_scope")
+        == event.get("visibility_scope")
+        == f"private:{member}"
+        and event.get("actor_identity") == member
+        and event.get("payload", {}).get("member_id") == member
+        and (
+            (event.get("type"), event.get("schema_version"))
+            == ("cos.conversation.instruction", 1)
+            or (
+                (event.get("type"), event.get("schema_version"))
+                == ("triage.intent.submitted", 2)
+                and event["payload"].get("submission_kind") == "member_forwarded"
+                and event["payload"].get("intake_channel")
+                in {"imessage", "apple_imessage"}
+            )
+        )
+    )
+
+
+def instruction_conversation(
+    source: dict[str, Any],
+) -> ReminderChoiceConversationV1 | None:
+    p = source["payload"]
+    if (
+        (source["type"], source["schema_version"])
+        == ("cos.conversation.instruction", 1)
+        and p.get("channel_id") == "gmail"
+        and p.get("authentication_rule") == "enrolled_receiver_authenticated_sender"
+        and p.get("thread_id")
+    ):
+        return ReminderChoiceConversationV1.model_validate(
+            {
+                key: p[key]
+                for key in ("channel_id", "account_id", "actor_id", "thread_id")
+            }
+        )
+    return None
+
+
+async def selection_snapshot(
+    event_log: Any, tenant: str, member: str, answer: dict[str, Any]
+) -> ReminderChoiceSelectionV1:
+    """Rebuild the answer's immutable candidate set, independent of current grants.
+
+    Offers, confirmations or cancellations recorded after this answer cannot
+    change its meaning on replay. Current authority is separately rechecked for
+    the selected original source and destination before any new confirmation.
+    """
+    if not instruction_identity(answer, tenant, member):
+        raise HTTPException(403, "Reminder choice requires an authentic member answer")
+    cutoff = datetime.fromisoformat(answer["payload"]["submitted_at"])
+    candidates: list[dict[str, Any]] = []
+    async for event in event_log.read_since(
+        owner_scope=f"private:{member}", types=[OFFERED]
+    ):
+        if event["event_id"] >= answer["event_id"] or event["tenant_id"] != tenant:
+            continue
+        if (
+            event["schema_version"] != 1
+            or event["visibility_scope"] != f"private:{member}"
+            or event["source_adapter"] != "openclaw-plugin"
+            or event["source_account_id"] != member
+            or event["actor_identity"] != COS_SERVICE_PRINCIPAL_ID
+        ):
+            raise HTTPException(
+                409, "Retained reminder offer ownership is inconsistent"
+            )
+        p = ReminderChoiceOfferedV1.model_validate(event["payload"])
+        if p.pending_expires_at <= cutoff:
+            continue
+        original = await event_log.get(p.original_source_event_id)
+        if (
+            original is None
+            or not instruction_identity(original, tenant, member)
+            or p.member_id != member
+            or original["event_id"] >= event["event_id"]
+            or event["causation_id"] != original["event_id"]
+            or digest(original["payload"]["text"]) != p.original_source_fingerprint
+            or datetime.fromisoformat(original["payload"]["submitted_at"])
+            != p.original_submitted_at
+            or digest(draft_fields(title=p.title, due_at=p.due_at, notes=p.notes))
+            != p.draft_fingerprint
+            or p.task_id != choice_task_id(tenant, member, p.action_id)
+        ):
+            raise HTTPException(409, "Retained reminder task selection is inconsistent")
+        finished = await event_log.get_by_idempotency(
+            tenant, receipt_key(member, FINISHED, p.action_id)
+        )
+        domain = await event_log.get_by_idempotency(
+            tenant, f"provider-action:{member}:{p.action_id}"
+        )
+        if any(
+            row is not None and row["event_id"] < answer["event_id"]
+            for row in (finished, domain)
+        ):
+            continue
+        candidates.append(
+            {
+                "offered_event_id": event["event_id"],
+                "task_id": p.task_id,
+                "title_fingerprint": digest(p.title.strip().lower()),
+                "pending_expires_at": p.pending_expires_at,
+                "conversation": instruction_conversation(original),
+            }
+        )
+    return ReminderChoiceSelectionV1.model_validate(
+        {
+            "answer_source_event_id": answer["event_id"],
+            "answer_submitted_at": cutoff,
+            "answer_conversation": instruction_conversation(answer),
+            "eligible_tasks": sorted(
+                candidates, key=lambda row: row["offered_event_id"]
+            ),
+        }
+    )
+
+
+async def selected_task_answer(
+    runtime: Any, member: Session, offered: dict[str, Any], answer: dict[str, Any]
+) -> tuple[ReminderChoiceSelectionV1, str]:
+    snapshot = await selection_snapshot(
+        runtime.event_log, member.tenant_id, member.auth_member_id, answer
+    )
+    selected = selected_task(snapshot, answer["payload"]["text"])
+    if selected is None or selected[0].offered_event_id != offered["event_id"]:
+        raise HTTPException(
+            409, "The member's answer does not uniquely identify this pending reminder"
+        )
+    return snapshot, selected[1]
+
+
 async def resolve_task(
-    runtime: Any, member: Session, task_id: str | None
+    runtime: Any,
+    member: Session,
+    task_id: str | None,
+    *,
+    answer: dict[str, Any] | None = None,
 ) -> dict[str, Any] | list[dict[str, Any]]:
-    """Only an explicitly named task or the unique live pending choice resolves."""
+    """Effectful answers require authentic selection; task IDs only name reads."""
+    if answer is not None:
+        snapshot = await selection_snapshot(
+            runtime.event_log, member.tenant_id, member.auth_member_id, answer
+        )
+        selected = selected_task(snapshot, answer["payload"]["text"])
+        if selected is not None:
+            if task_id is not None and task_id != selected[0].task_id:
+                raise HTTPException(
+                    409, "Tool task identity differs from the member's answer"
+                )
+            event = await event_log_get(runtime, selected[0].offered_event_id)
+            await validate_original(runtime, member, event)
+            return event
+        if snapshot.eligible_tasks:
+            return [
+                await event_log_get(runtime, row.offered_event_id)
+                for row in snapshot.eligible_tasks
+            ]
+        # Named finished/expired tasks can still report status, but cannot gain
+        # a new authorization from a later unrelated message.
     choices = []
     now = datetime.now(timezone.utc)
     async for event in runtime.event_log.read_since(
@@ -272,6 +438,13 @@ async def resolve_task(
     if task_id is not None:
         raise HTTPException(404, "Private reminder task not found")
     return choices[0] if len(choices) == 1 else choices
+
+
+async def event_log_get(runtime: Any, event_id: str) -> dict[str, Any]:
+    event = await runtime.event_log.get(event_id)
+    if event is None:
+        raise HTTPException(409, "Retained reminder choice is unavailable")
+    return cast(dict[str, Any], event)
 
 
 async def validate_original(

@@ -12,8 +12,15 @@ from adminme.events.schemas.reminder_choices import (
     ReminderChoiceFinishedV1,
     ReminderChoiceOfferedV1,
     ReminderListChoice,
+    ReminderChoiceSelectionV1,
 )
-from adminme.reminder_choices import choice_task_id, execution_expiry, selected_choice
+from adminme.reminder_choices import (
+    choice_task_id,
+    digest,
+    execution_expiry,
+    selected_choice,
+    selected_task,
+)
 
 NOW = datetime(2026, 10, 24, 15, 0, tzinfo=timezone.utc)
 
@@ -177,3 +184,99 @@ def test_cancellation_cannot_claim_provider_reversal_or_confirmation():
         )
     with pytest.raises(ValidationError):
         ReminderChoiceFinishedV1.model_validate({**payload, "state": "confirmed"})
+
+
+def task_snapshot(
+    *,
+    second_title="Buy groceries",
+    first_thread="thread-a",
+    second_thread="thread-b",
+    answer_thread=None,
+):
+    def thread(value):
+        return (
+            {
+                "channel_id": "gmail",
+                "account_id": "fixture-service-account",
+                "actor_id": "trusted-member-thread:" + value,
+                "thread_id": value,
+            }
+            if value
+            else None
+        )
+
+    return ReminderChoiceSelectionV1.model_validate(
+        {
+            "answer_source_event_id": "fresh-answer",
+            "answer_submitted_at": NOW,
+            "answer_conversation": thread(answer_thread),
+            "eligible_tasks": [
+                {
+                    "offered_event_id": "offer-a",
+                    "task_id": "task-a",
+                    "title_fingerprint": digest("call a relative"),
+                    "pending_expires_at": NOW + timedelta(days=2),
+                    "conversation": thread(first_thread),
+                },
+                {
+                    "offered_event_id": "offer-b",
+                    "task_id": "task-b",
+                    "title_fingerprint": digest(second_title.strip().lower()),
+                    "pending_expires_at": NOW + timedelta(days=2),
+                    "conversation": thread(second_thread),
+                },
+            ],
+        }
+    )
+
+
+def test_bare_cross_channel_answer_cannot_choose_between_pending_tasks():
+    assert selected_task(task_snapshot(), "Personal") is None
+    assert (
+        selected_task(task_snapshot(answer_thread="different-thread"), "Personal")
+        is None
+    )
+    assert (
+        selected_task(
+            task_snapshot(
+                first_thread="thread-a",
+                second_thread="thread-a",
+                answer_thread="thread-a",
+            ),
+            "Personal",
+        )
+        is None
+    )
+
+
+def test_genuine_same_thread_selects_its_one_pending_offer():
+    selected = selected_task(task_snapshot(answer_thread="thread-b"), "Personal")
+    assert selected is not None and selected[0].task_id == "task-b"
+    assert selected[1] == "Personal"
+    snapshot = task_snapshot(answer_thread="thread-b")
+    snapshot.answer_conversation.account_id = "different-service-account"
+    assert selected_task(snapshot, "Personal") is None
+
+
+def test_exact_authored_reference_selects_task_and_retains_literal_choice():
+    for answer in ("Call a relative: Personal", "task-a: Personal"):
+        selected = selected_task(task_snapshot(), answer)
+        assert selected is not None and selected[0].task_id == "task-a"
+        assert selected[1] == "Personal"
+    assert selected_task(task_snapshot(), "Call a relative perhaps: Personal") is None
+    duplicate = task_snapshot(second_title="Call a relative", answer_thread="thread-a")
+    assert selected_task(duplicate, "Call a relative: Personal") is None
+    selected = selected_task(duplicate, "task-b: Cancel this reminder")
+    assert selected is not None and selected[0].task_id == "task-b"
+    assert selected[1] == "Cancel this reminder"
+
+
+def test_snapshot_cannot_omit_its_original_pending_expiry_or_duplicate_identity():
+    snapshot = task_snapshot().model_dump(mode="python")
+    snapshot["eligible_tasks"][1]["task_id"] = "task-a"
+    with pytest.raises(ValidationError):
+        ReminderChoiceSelectionV1.model_validate(snapshot)
+    snapshot = task_snapshot().model_dump(mode="python")
+    snapshot["eligible_tasks"][0]["pending_expires_at"] = NOW
+    with pytest.raises(ValidationError):
+        ReminderChoiceSelectionV1.model_validate(snapshot)

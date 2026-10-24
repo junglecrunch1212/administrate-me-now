@@ -32,8 +32,16 @@ from adminme.products.openclaw.reminder_choice_work import (
     receipt_key,
     source_and_work_authority,
     validate_original,
+    instruction_identity,
+    selected_task_answer,
+    selection_snapshot,
 )
-from adminme.reminder_choices import digest, execution_expiry, selected_choice
+from adminme.reminder_choices import (
+    digest,
+    execution_expiry,
+    selected_choice,
+    selected_task,
+)
 from adminme.request_actions_control import request_actions_allowed
 from adminme.service_identities import COS_SERVICE_PRINCIPAL_ID
 
@@ -84,9 +92,10 @@ async def current_choice(
             409, "Current Apple Reminders writing permission is unavailable"
         )
     options = permission_options(runtime, member.auth_member_id, "apple_reminders")
+    _, authored_answer = await selected_task_answer(runtime, member, offered, answer)
     selected = selected_choice(
         p,
-        answer["payload"]["text"],
+        authored_answer,
         provider_account_id=permission["provider_account_id"],
         current_choices=[
             ReminderListChoice(list_id=row["container_id"], label=row["label"])
@@ -223,6 +232,7 @@ async def ground_reminder_choice(
             },
         )
     await current_choice(runtime, member, offered, answer, action)
+    snapshot, _ = await selected_task_answer(runtime, member, offered, answer)
     now = datetime.now(timezone.utc)
     payload = ReminderChoiceGroundedV1.model_validate(
         {
@@ -243,6 +253,7 @@ async def ground_reminder_choice(
                 "offered": offered["payload"],
                 "original_instruction": original_text,
                 "original_evidence": original_evidence,
+                "selection": snapshot.model_dump(mode="json"),
             },
         }
     )
@@ -263,28 +274,6 @@ async def ground_reminder_choice(
     return event
 
 
-def _source_identity(event: dict[str, Any], tenant: str, member: str) -> bool:
-    return bool(
-        event.get("tenant_id") == tenant
-        and event.get("owner_scope")
-        == event.get("visibility_scope")
-        == f"private:{member}"
-        and event.get("actor_identity") == member
-        and event.get("payload", {}).get("member_id") == member
-        and (
-            (event.get("type"), event.get("schema_version"))
-            == ("cos.conversation.instruction", 1)
-            or (
-                (event.get("type"), event.get("schema_version"))
-                == ("triage.intent.submitted", 2)
-                and event["payload"].get("submission_kind") == "member_forwarded"
-                and event["payload"].get("intake_channel")
-                in {"imessage", "apple_imessage"}
-            )
-        )
-    )
-
-
 async def historical_choice_matches(event_log: Any, grounding: dict[str, Any]) -> bool:
     """Immutable attribution survives later policy revocation and pending expiry."""
     from adminme.products.openclaw.request_authorization import evidence_matches
@@ -298,9 +287,17 @@ async def historical_choice_matches(event_log: Any, grounding: dict[str, Any]) -
         if offer is None or original is None or answer is None:
             return False
         tenant = grounding["tenant_id"]
+        snapshot = await selection_snapshot(event_log, tenant, p.member_id, answer)
+        target = selected_task(snapshot, answer["payload"]["text"])
+        if (
+            snapshot != c.selection
+            or target is None
+            or target[0].offered_event_id != c.offered_event_id
+        ):
+            return False
         selection = selected_choice(
             c.offered,
-            answer["payload"]["text"],
+            target[1],
             provider_account_id=c.offered.provider_account_id,
             current_choices=c.offered.choices,
             now=p.issued_at,
@@ -330,8 +327,8 @@ async def historical_choice_matches(event_log: Any, grounding: dict[str, Any]) -
             < offer["event_id"]
             < answer["event_id"]
             < grounding["event_id"]
-            and _source_identity(original, tenant, p.member_id)
-            and _source_identity(answer, tenant, p.member_id)
+            and instruction_identity(original, tenant, p.member_id)
+            and instruction_identity(answer, tenant, p.member_id)
             and original["payload"]["text"] == c.original_instruction
             and datetime.fromisoformat(original["payload"]["submitted_at"])
             == c.offered.original_submitted_at

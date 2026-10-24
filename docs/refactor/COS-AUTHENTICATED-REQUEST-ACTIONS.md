@@ -98,3 +98,5 @@ while status and safe pre-confirmation cancellation retain their own checks.
 No migration, grant change, timer, automatic pending drain or provider enrollment
 is introduced. Focused proof is `test_reminder_choice_continuation.py`, the choice
 unit tests and native request-policy tests; candidate execution belongs in CI.
+
+Pending-task selection uses the retained offer set at the fresh answer, not a model-provided task ID. One pending offer in the actual authenticated Gmail account/member/thread can disambiguate; otherwise require one pending offer overall or an exact unique title/ID prefix in the human answer. Duplicate titles require the ID. The signed candidate snapshot contains title hashes instead of copying other tasks’ titles into the current conversation; both policy engines compare literal human references. Historical replay verifies the snapshot against the original log cutoff, so later tasks or cancellations cannot change that answer’s meaning. Displayed choices still require current source authority.
