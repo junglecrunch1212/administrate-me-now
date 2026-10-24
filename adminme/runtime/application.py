@@ -4047,6 +4047,11 @@ def create_application(settings: RuntimeSettings) -> FastAPI:
     )
 
     app.include_router(apple_reminder_router)
+    from adminme.products.openclaw.reminder_choice_tools import (
+        router as reminder_choice_router,
+    )
+
+    app.include_router(reminder_choice_router)
     from adminme.products.openclaw.cos_apple_reminders import router as cos_apple_router
 
     app.include_router(cos_apple_router)

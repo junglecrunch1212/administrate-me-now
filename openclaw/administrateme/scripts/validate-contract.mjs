@@ -38,6 +38,7 @@ const expectedTools = [
   "administrateme_service_follow_up",
   "administrateme_confirm_apple_reminder",
   "administrateme_apple_reminder_status",
+  "administrateme_apple_reminder_choice",
   "administrateme_confirm_cos_apple_reminder",
   "administrateme_cos_apple_reminder_status",
   "administrateme_self_reminder",

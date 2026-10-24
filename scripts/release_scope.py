@@ -402,6 +402,17 @@ COS_SERVICE_WORK_COMPONENT_PATHS = frozenset(
         "bootstrap/native/cos_reminders_launcher.m",
         "openclaw/administrateme/src/cos-reminders.ts",
         "adminme/products/openclaw/apple_reminders.py",
+        "adminme/reminder_choices.py",
+        "adminme/events/schemas/reminder_choices.py",
+        "adminme/products/openclaw/reminder_choice_work.py",
+        "adminme/products/openclaw/reminder_choice_tools.py",
+        "adminme/products/openclaw/reminder_choice_authorization.py",
+        "openclaw/administrateme/src/reminder-choice-policy.ts",
+        "packs/skills/ground_reminder_choice/SKILL.md",
+        "packs/skills/ground_reminder_choice/pack.yaml",
+        "packs/skills/ground_reminder_choice/prompt.jinja2",
+        "packs/skills/ground_reminder_choice/schemas/input.schema.json",
+        "packs/skills/ground_reminder_choice/schemas/output.schema.json",
         "adminme/apple_service_history.py",
         "adminme/conversation_instructions.py",
         "adminme/conversation_intake.py",
@@ -479,6 +490,9 @@ COS_SERVICE_WORK_COMPONENT_PATHS = frozenset(
 COS_SERVICE_WORK_TEST_PATHS = frozenset(
     {
         "tests/unit/test_service_work_principal.py",
+        "tests/unit/test_reminder_choices.py",
+        "tests/acceptance/test_reminder_choice_continuation.py",
+        "openclaw/administrateme/test/reminder-choice-policy.test.ts",
         "tests/acceptance/test_cos_owned_apple_reminder.py",
         "tests/unit/adapters/reminders/test_cos_reminders_write.py",
         "tests/unit/adapters/reminders/test_cos_reminders_write_policy.py",
@@ -1346,10 +1360,24 @@ def _service_work_application(source: str) -> tuple[str, bool] | None:
         workstation_shapes[0]
     ) > body_shapes.index(workstation_shapes[1]):
         return None
+    choice_shapes = [
+        ast.dump(node, include_attributes=False)
+        for node in ast.parse(
+            "from adminme.products.openclaw.reminder_choice_tools import router as reminder_choice_router\n"
+            "app.include_router(reminder_choice_router)\n"
+        ).body
+    ]
+    choice_counts = [body_shapes.count(shape) for shape in choice_shapes]
+    if choice_counts not in ([0, 0], [1, 1]):
+        return None
+    if choice_counts == [1, 1] and body_shapes.index(
+        choice_shapes[0]
+    ) > body_shapes.index(choice_shapes[1]):
+        return None
     application.body = [
         node
         for node, shape in zip(application.body, body_shapes, strict=True)
-        if shape not in shapes + reminder_shapes + workstation_shapes
+        if shape not in shapes + reminder_shapes + workstation_shapes + choice_shapes
     ]
     digest = hashlib.sha256(
         ast.dump(module, include_attributes=False).encode()

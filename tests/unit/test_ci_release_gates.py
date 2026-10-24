@@ -3348,7 +3348,13 @@ def test_conversation_integration_uses_immutable_focused_scope(
     )
 
 
-@pytest.mark.parametrize("module, name", [("workstation", "workstation_router")])
+@pytest.mark.parametrize(
+    "module, name",
+    [
+        ("workstation", "workstation_router"),
+        ("reminder_choice_tools", "reminder_choice_router"),
+    ],
+)
 def test_workstation_scope_requires_exact_complete_router_pair(
     module: str, name: str
 ) -> None:
@@ -3382,6 +3388,17 @@ def test_workstation_scope_requires_exact_complete_router_pair(
         "tests/acceptance/test_authenticated_conversation_channels.py",
         "tests/acceptance/test_authenticated_conversation_reply.py",
         "tests/acceptance/test_authenticated_request_actions.py",
+        "adminme/reminder_choices.py",
+        "adminme/products/openclaw/reminder_choice_tools.py",
+        "adminme/products/openclaw/reminder_choice_work.py",
+        "adminme/products/openclaw/reminder_choice_authorization.py",
+        "adminme/events/schemas/reminder_choices.py",
+        "openclaw/administrateme/src/reminder-choice-policy.ts",
+        "openclaw/administrateme/test/reminder-choice-policy.test.ts",
+        "packs/skills/ground_reminder_choice/schemas/input.schema.json",
+        "packs/skills/ground_reminder_choice/schemas/output.schema.json",
+        "tests/acceptance/test_reminder_choice_continuation.py",
+        "tests/unit/test_reminder_choices.py",
     ],
 )
 def test_authenticated_action_paths_use_the_affected_lane(repository, relative) -> None:

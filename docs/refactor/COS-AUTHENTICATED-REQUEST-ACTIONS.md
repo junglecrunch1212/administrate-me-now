@@ -51,3 +51,50 @@ It does not prove arbitrary model reasoning, live provider success, automatic
 completion of broader CoS work, or modify/cancel workflows for every provider.
 Other provider actions, recent-work discovery and durable multi-step execution
 remain subsequent usable slices.
+
+## Newly offered member reminder list choices
+
+MODERNIZE: when a current authenticated reminder request has multiple authorized
+lists, the native tool records one immutable `cos.reminder.choice_offered@1`
+receipt and an existing CoS-private `task.created@4`. The member-private receipt
+retains the original source, exact draft, account and offered choices. The work
+record holds a generic title, due time and source authority, not copied member
+message text. No domain confirmation, execution ticket or provider call is
+created at this stage. Existing manual confirmations keep their prior behavior.
+
+A fresh authenticated answer can select an exact offered label/ID through
+`administrateme_apple_reminder_choice` from iMessage, Gmail or dashboard chat.
+The task/action/request identity stays fixed. The dedicated pinned
+`ground_reminder_choice` skill compares separate original and answer messages,
+returns literal quotes from each, and resolves relative dates at the original
+submission time. The first successful answer receives a distinct
+`cos.reminder.choice_grounded@1` receipt; OpenClaw independently checks the signed
+original offer, unchanged draft, current answer and short ticket. The domain
+rechecks original and answer source authority, current account/list permission,
+observation mode and recovery revocation. A changed skill input never reuses the
+original invocation ID. No earlier failed request is automatically staged.
+
+The pending task expires at its immutable requested `due_at`. Past-due staging
+is refused. The first execution ticket expires at the earlier of ten minutes
+after successful answer grounding and that original due time; replay retains
+its exact issued/expiry values. A choice-created domain cannot fall back to
+legacy/manual approval if the ticket is missing or expired. The existing bridge
+ledger and final admission enforce one native effect and audited terminal state.
+Multiple pending offers or duplicate labels require a specific choice; yes only
+resolves exactly one actually offered destination.
+
+The same task ID supports status and cancellation across the three authenticated
+private conversations. Cancellation is allowed before domain confirmation only;
+status/cancel never grants fresh execution authority or claims provider reversal.
+The provider terminal remains authoritative. Explicit status reads reconcile a
+proven successful result into the existing internal work state; a saved task or
+domain confirmation is never described as a created reminder. Generic task
+modification, account choice and other provider continuations remain separate.
+
+Use the existing `bootstrap.request_actions disable` / `status` commands above
+for immediate recovery. Retain this schema-aware runtime after new choice
+history; revocation stops new answer authorization and final native dispatch,
+while status and safe pre-confirmation cancellation retain their own checks.
+No migration, grant change, timer, automatic pending drain or provider enrollment
+is introduced. Focused proof is `test_reminder_choice_continuation.py`, the choice
+unit tests and native request-policy tests; candidate execution belongs in CI.

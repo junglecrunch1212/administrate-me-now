@@ -21,6 +21,23 @@ when the date/time or choice between authorized lists is ambiguous; the tool
 can select a destination only when exactly one is eligible. The current member
 and provider account come from authenticated context, never a guessed account.
 
+When confirmation returns `list_choice_required`, retain its `task_id`, original
+request identifier, exact due time and offered labels. Present those actual
+choices. On the member's fresh answer, use `administrateme_apple_reminder_choice`
+with `action=answer` and that task ID; do not reconstruct the original create call
+against the new answer. An exact offered label or ID selects a list. "Yes" only
+selects a list if exactly one was actually offered, and never chooses among
+multiple lists or accounts. The original reminder draft and its due time remain
+unchanged; relative dates remain anchored to the original request time. The
+pending choice expires at that original due time. A separate short execution
+ticket is issued only after a valid fresh answer and is never renewed on replay.
+The same task supports `status` from another authenticated private conversation
+and `cancel` before confirmation; cancellation cannot reverse a provider write.
+If multiple pending tasks exist, identify the task instead of guessing. Retain
+its task/domain receipt through timeouts and inspect that same result. These
+receipts apply only to newly offered tasks; earlier failed requests or old
+pending confirmations are not automatically staged or released.
+
 Keep the returned `domain_approval_event_id`, selected list and normalized due
 time. State that exact local date/time and list when presenting the action.
 Call `administrateme_execute_pending_provider_action` with that domain receipt
