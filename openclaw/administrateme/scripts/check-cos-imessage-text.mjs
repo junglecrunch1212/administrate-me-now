@@ -245,7 +245,7 @@ print(json.dumps([enabled, entry["hooks"]]))
   // allow-once. Exercise the exact pinned native hook runner and its later-veto
   // semantics with synthetic signed domain grounding and no provider client.
   for (const ownCoS of [false, true]) {
-  const { registerCoSReminderTools } = await import(pathToFileURL(path.join(compiledPlugin, "cos-reminders.js")).href);
+  const { registerCoSReminderTools } = await import(pathToFileURL(path.join(appleDirectory, "cos-reminders.js")).href);
   const policyRule = ownCoS ? "current-human-request.cos-reminder-create.v1" : "current-human-request.apple-reminder-create.v1";
   const confirmTool = ownCoS ? "administrateme_confirm_cos_apple_reminder" : "administrateme_confirm_apple_reminder";
   const confirmEndpoint = ownCoS ? "/cos-apple-reminders/confirm" : "/confirm-apple-reminder";
