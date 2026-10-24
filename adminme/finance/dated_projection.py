@@ -56,9 +56,9 @@ def rows_hash(rows: Iterable[dict[str, Any]]) -> str:
 
 
 @lru_cache(maxsize=1)
-def _validator() -> Draft202012Validator:
+def _validator(schema_bytes: bytes) -> Draft202012Validator:
     return Draft202012Validator(
-        json.loads(SCHEMA_PATH.read_bytes()), format_checker=FormatChecker()
+        json.loads(schema_bytes), format_checker=FormatChecker()
     )
 
 
@@ -342,13 +342,16 @@ def validate_projection(value: dict[str, Any]) -> dict[str, Any]:
         if len(raw) > MAX_BYTES:
             raise PublicationError("projection_size_limit")
         result = json.loads(raw)
-        current_schema_hash = schema_hash()
+        # Compile and identify one exact schema snapshot. A receipt must never
+        # pair a freshly read schema hash with an older cached validator.
+        schema_bytes = SCHEMA_PATH.read_bytes()
+        current_schema_hash = hashlib.sha256(schema_bytes).hexdigest()
         receipt = (current_schema_hash, hashlib.sha256(raw).hexdigest())
         with _validation_receipt_lock:
             if receipt in _validation_receipts:
                 _validation_receipts.move_to_end(receipt)
                 return result
-        _validator().validate(result)
+        _validator(schema_bytes).validate(result)
         if result["schema_sha256"] != current_schema_hash:
             raise PublicationError("projection_schema_mismatch")
         if result["content_sha256"] != content_hash(result):

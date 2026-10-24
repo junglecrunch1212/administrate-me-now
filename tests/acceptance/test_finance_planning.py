@@ -36,6 +36,7 @@ from tests.fixtures.finance_planning import projection, seal, bounds
 
 
 def test_exact_projection_validation_receipts_are_bounded_and_reject_changed_bytes(
+    tmp_path,
     monkeypatch,
 ):
     from collections import OrderedDict
@@ -43,15 +44,18 @@ def test_exact_projection_validation_receipts_are_bounded_and_reject_changed_byt
 
     receipts = OrderedDict()
     monkeypatch.setattr(module, "_validation_receipts", receipts)
-    validator = module._validator()
+    compile_validator = module._validator
     calls = []
 
     class ObservedValidator:
+        def __init__(self, schema_bytes):
+            self.validator = compile_validator(schema_bytes)
+
         def validate(self, value):
             calls.append(value["projection_id"])
-            validator.validate(value)
+            self.validator.validate(value)
 
-    monkeypatch.setattr(module, "_validator", lambda: ObservedValidator())
+    monkeypatch.setattr(module, "_validator", ObservedValidator)
     original = projection(publication())
     first = validate_projection(original)
     second = validate_projection(deepcopy(original))
@@ -69,13 +73,25 @@ def test_exact_projection_validation_receipts_are_bounded_and_reject_changed_byt
     with pytest.raises(PublicationError, match="projection_range_reversed"):
         validate_projection(first)
     assert len(receipts) == 1
-    # Schema changes invalidate the receipt. Failure must never be remembered.
-    actual_schema = module.schema_hash
-    monkeypatch.setattr(module, "schema_hash", lambda: "0" * 64)
-    with pytest.raises(PublicationError, match="projection_schema_mismatch"):
-        validate_projection(original)
+    # Change actual schema bytes and the payload's declared schema hash. An
+    # old compiled validator paired with the new hash would wrongly accept OFF.
+    original_path = module.SCHEMA_PATH
+    changed_schema = json.loads(original_path.read_bytes())
+    changed_schema["properties"]["refresh_state"] = {"const": "ON"}
+    changed_path = tmp_path / "changed-dated-schema.json"
+    changed_path.write_text(json.dumps(changed_schema))
+    monkeypatch.setattr(module, "SCHEMA_PATH", changed_path)
+    changed = deepcopy(original)
+    changed["schema_sha256"] = module.schema_hash()
+    changed["content_sha256"] = content_hash(changed)
+    with pytest.raises(PublicationError, match="projection_invalid"):
+        validate_projection(changed)
     assert len(receipts) == 1
-    monkeypatch.setattr(module, "schema_hash", actual_schema)
+    changed["refresh_state"] = "ON"
+    changed["content_sha256"] = content_hash(changed)
+    assert validate_projection(changed) == changed
+    assert len(receipts) == 2
+    monkeypatch.setattr(module, "SCHEMA_PATH", original_path)
     for index in range(module._VALIDATION_RECEIPT_LIMIT):
         changed = deepcopy(original)
         changed["projection_id"] = f"synthetic-receipt-{index}"
