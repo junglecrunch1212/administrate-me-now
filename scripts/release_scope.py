@@ -515,6 +515,7 @@ COS_SERVICE_WORK_TEST_PATHS = frozenset(
         "tests/acceptance/test_cos_workstation_handoff.py",
         "openclaw/administrateme/test/workstation-work.test.ts",
         "openclaw/administrateme/scripts/check-workstation-work-gateway.mjs",
+        "openclaw/administrateme/scripts/check-workstation-codex-policy.mjs",
         "tests/fixtures/openclaw_workstation_work_probe.mjs",
         "tests/unit/test_workstation_inventory.py",
         "openclaw/administrateme/test/workstation.test.ts",
