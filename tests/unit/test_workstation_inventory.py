@@ -266,6 +266,8 @@ def test_realistic_map_and_detail_pages_fit_entire_native_result_without_data_lo
     source = realistic_inventory()
     assert len(json.dumps(source)) > 64000
     first = inventory_page(source)
+    assert first["tool_rows_scope"] == "openclaw_dynamic_only"
+    assert first["native_base_tools_scope"] == "shell_files_mcp_apps"
     assert first["counts"] == {
         "identities": 18,
         "providers": 0,

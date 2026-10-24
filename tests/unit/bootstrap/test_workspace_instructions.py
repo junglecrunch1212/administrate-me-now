@@ -69,7 +69,7 @@ def test_compiler_matches_the_packaged_node_compiler(tmp_path: Path) -> None:
     )
     compiled = compile_instructions(REPO)
     assert (tmp_path / "AGENTS.md").read_bytes() == compiled
-    assert len(compiled) < 12000
+    assert len(compiled) < 14000  # Reserve at least 6 KB for retained private layers.
     assert compiled.index(b"Current authority") < compiled.index(
         b"Complete requested workflows"
     )

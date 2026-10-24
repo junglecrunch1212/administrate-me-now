@@ -644,6 +644,7 @@ def inventory_page(
         "native_policy_state": inventory["workstation_tools"]["state"],
         "tool_rows_scope": "openclaw_dynamic_only",
         "native_base_tools_state": "separate_runtime_policy_or_invocation_required",
+        "native_base_tools_scope": "shell_files_mcp_apps",
         "observation_mode": inventory["observation_mode"],
         "inventory_grants_authority": False,
         "provider_effect_count": 0,
