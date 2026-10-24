@@ -108,7 +108,28 @@ try {
   await mkdir(state); await mkdir(path.join(plugin, "node_modules"), { recursive: true });
   const sourceDirectory = path.join(repository, "openclaw/administrateme/src");
   for (const name of (await readdir(sourceDirectory)).filter((entry) => entry.endsWith(".ts"))) {
-    const input = await readFile(path.join(sourceDirectory, name), "utf8");
+    let input = await readFile(path.join(sourceDirectory, name), "utf8");
+    if (browserProbe && name === "index.ts") {
+      // Capture the actual host boundary only inside this synthetic hosted
+      // fixture. Production logs never include native page/tool payloads.
+      const registration = "registerWorkstationBrowserHooks(api, runtime);";
+      assert(input.includes(registration));
+      input = input.replace(registration, `registerWorkstationBrowserHooks({ ...api,
+        on(name, callback, options) {
+          api.on(name, name === "before_tool_call" ? async (event, context) => {
+            const result = await callback(event, context);
+            if (event.toolName === "browser") console.error("SYNTHETIC_BROWSER_ADMISSION", JSON.stringify({ toolCallId: event.toolCallId, contextCallId: context.toolCallId, admitted: !!result?.params, blocked: result?.block === true }));
+            return result;
+          } : callback, options);
+        },
+        registerAgentToolResultMiddleware(callback, options) {
+          api.registerAgentToolResultMiddleware(async (event, context) => {
+            console.error("SYNTHETIC_BROWSER_NATIVE_RESULT", JSON.stringify({ toolCallId: event.toolCallId, isError: event.isError, result: event.result }).slice(0, 10000));
+            return callback(event, context);
+          }, options);
+        }
+      }, runtime);`);
+    }
     await writeFile(path.join(plugin, name.replace(/\.ts$/, ".js")), ts.transpileModule(input, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ESNext } }).outputText);
   }
   await symlink(source, path.join(plugin, "node_modules/openclaw"), "dir");
@@ -185,5 +206,6 @@ try {
   let redacted = logs.replaceAll(token, "[redacted]").replaceAll(secret, "[redacted]");
   for (const session of sessions) redacted = redacted.replaceAll(session, "[service-session]");
   console.error(redacted);
+  if (browser) console.error("SYNTHETIC_BROWSER_TRANSPORT", JSON.stringify({ errors: browser.errors, bodyReadCount: browser.bodyReads.length }));
   throw error;
 } finally { await stop(); await fixtures.close(); await browser?.close(); await rm(directory, { recursive: true, force: true }); }

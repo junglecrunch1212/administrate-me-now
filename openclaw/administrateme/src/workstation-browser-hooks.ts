@@ -54,20 +54,25 @@ export function registerWorkstationBrowserHooks(api: OpenClawPluginApi, runtime:
     }
   }, { priority: 100 });
   api.registerAgentToolResultMiddleware(async (event, context) => {
+    let stage = "call_binding";
     try {
       if (!service(context)) throw new Error("Unexpected native browser principal.");
       const id = key(context, event.toolCallId);
       const admitted = pending.get(id);
       pending.delete(id);
       if (!admitted || event.isError || Date.now() - admitted.started > 60000) throw new Error("Native browser result has no current binding.");
+      stage = "current_authority";
       const current = await policy(context);
       if (!current.bound || !current.resource) throw new Error("Browser source authority was revoked.");
+      stage = "native_identity_result";
       const observed = verifiedBrowserRead(native, admitted.prepared, current.resource, event.result);
+      stage = "retained_source";
       const captured = object(await runtime.transport.request(`${BASE}/capture`, {
         provenance: provenance(context), route_sha256: admitted.route, native_target_id: observed.targetId,
         url: observed.url, actual_identity: observed.identity, excerpt: observed.text, truncated: observed.truncated,
       }));
       if (captured.status !== "verified" || typeof captured.observation_event_id !== "string" || captured.excerpt !== observed.text) throw new Error("Native browser source was not retained.");
+      stage = "complete_result_budget";
       const result = toolResult(captured);
       if (Buffer.byteLength(JSON.stringify(result), "utf8") >= 9500) throw new Error("Native browser result exceeds its complete-read budget.");
       return { result };
@@ -75,7 +80,7 @@ export function registerWorkstationBrowserHooks(api: OpenClawPluginApi, runtime:
       // The original result is never returned after capture, policy or identity
       // failure. The host's middleware runner also withholds on thrown failures.
       await failed(context);
-      api.logger.warn("Native browser read was withheld because its source evidence could not be verified.");
+      api.logger.warn(`Native browser read was withheld because its source evidence could not be verified (stage=${stage}).`);
       return { result: toolResult({ status: "blocked", reason: "browser_source_not_verified", provider_effect_count: 0 }) };
     }
   }, { matcher: ["browser"], runtimes: ["openclaw", "codex"] });
