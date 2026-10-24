@@ -490,7 +490,32 @@ async def confirm_requested_email(
                 **result,
                 "request_authorization": ticket(runtime, session, prior, grounding),
             }
-        values = await selected_email(runtime, session, body)
+        try:
+            values = await selected_email(runtime, session, body)
+        except HTTPException as exc:
+            selection = exc.detail
+            if exc.status_code != 409 or not isinstance(selection, dict):
+                raise
+            code = selection.get("code")
+            if not isinstance(code, str):
+                raise
+            field = {
+                "email_sender_choice_required": "accounts",
+                "email_sender_unavailable": "accounts",
+                "email_recipient_choice_required": "recipients",
+                "email_recipient_unavailable": "recipients",
+            }.get(code)
+            if field is None:
+                raise
+            # These choices come only from this member's current authority.
+            # Return a typed tool result, not opaque transport error text. No
+            # grounding, approval, or execution is created until one is chosen.
+            return {
+                "status": code,
+                field: selection[field],
+                "provider_effect_count": 0,
+                "automatic_retry_allowed": False,
+            }
         policy = await responses._policy_check(
             runtime, session, values, require_current=False
         )

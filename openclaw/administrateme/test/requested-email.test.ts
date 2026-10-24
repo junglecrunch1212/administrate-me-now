@@ -129,6 +129,17 @@ describe("current member requested email", () => {
     expect(() => rememberRequestAuthorization(f.runtime, signed(ticket), input, requested, COS_EMAIL_RULE)).toThrow();
   });
 
+  it("returns a narrow destination choice without inventing an approval", async () => {
+    const f = fixture(); await f.start();
+    const choice = { status: "email_recipient_choice_required", recipients: [recipient, "second@example.invalid"], provider_effect_count: 0, automatic_retry_allowed: false };
+    f.request.mockResolvedValueOnce(choice);
+    const result = await f.tools.get(confirmName)!(f.context).execute("requested-email-confirm", command);
+    expect(result.details).toEqual(choice);
+    expect(result.details.approval_event_id).toBeUndefined();
+    expect(f.request.mock.calls).toHaveLength(2);
+    expect(f.send).not.toHaveBeenCalled();
+  });
+
   it("cannot borrow an email ticket for an Apple action or inject hidden policy parameters", async () => {
     const f = fixture(); await f.start();
     await f.tools.get(confirmName)!(f.context).execute("requested-email-confirm", command);

@@ -345,6 +345,61 @@ def test_three_origins_send_exact_requested_new_email_and_return_retained_receip
         assert len(service.calls) == 1
 
 
+@pytest.mark.parametrize("change", ["recipient_choice", "sender_disabled"])
+def test_confirmation_returns_only_current_permitted_choices_without_approval(
+    tmp_path: Path, change: str
+) -> None:
+    service = FakeGmailService()
+    with TestClient(
+        create_application(configured(tmp_path)),
+        base_url="https://central-fixture.ts.net",
+    ) as client:
+        prepare(client, service)
+        runtime = client.app.state.runtime
+        model, calls = model_boundary(client)
+        try:
+            source = source_for(client, "portal", "requested-email-choose")
+            if change == "recipient_choice":
+                response = client.put(
+                    "/api/member/v1/settings/cos-replies",
+                    headers=MEMBER_HEADERS,
+                    json={
+                        "request_id": "requested-email-choice-policy",
+                        "expected_revision": 1,
+                        "entries": [
+                            {
+                                "member_id": MEMBER_A,
+                                "channel": "email",
+                                "address": value,
+                            }
+                            for value in (RECIPIENT, "member-a-second@example.invalid")
+                        ],
+                    },
+                )
+                assert response.status_code == 202, response.text
+            else:
+                runtime.settings.adapter_config["adapters"][0]["config"][
+                    "enable_writes"
+                ] = False
+            result = client.post(CONFIRM, headers=AUTH, json=body_for(source))
+            assert result.status_code == 200, result.text
+            if change == "recipient_choice":
+                assert result.json()["status"] == "email_recipient_choice_required"
+                assert set(result.json()["recipients"]) == {
+                    RECIPIENT,
+                    "member-a-second@example.invalid",
+                }
+            else:
+                assert result.json()["status"] == "email_sender_unavailable"
+                assert result.json()["accounts"] == []
+            assert "approval_event_id" not in result.json()
+            assert result.json()["provider_effect_count"] == 0
+            assert calls == [] and service.calls == []
+            assert client.portal.call(_events, runtime, "cos.response.approved") == []
+        finally:
+            client.portal.call(model.aclose)
+
+
 def test_ambiguous_provider_timeout_is_retained_unknown_and_never_retried(
     tmp_path: Path,
 ) -> None:
