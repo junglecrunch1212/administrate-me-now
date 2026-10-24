@@ -112,6 +112,7 @@ def gmail_observation(
     *,
     text: str = TEXT,
     untrusted: bool = False,
+    group: bool = False,
     old: bool = False,
 ) -> str:
     spec = importlib.util.spec_from_file_location(
@@ -149,6 +150,8 @@ def gmail_observation(
         {"name": "To", "value": EMAIL_ACCOUNT},
         {"name": "Message-Id", "value": "<fixture-current@example.invalid>"},
     ]
+    if group:
+        headers.append({"name": "Cc", "value": "third-party@example.invalid"})
     if untrusted:
         headers = [row for row in headers if row["name"] != "Authentication-Results"]
     now_ms = 1 if old else int(datetime.now(timezone.utc).timestamp() * 1000)
@@ -277,6 +280,7 @@ def test_gmail_retains_only_authored_instruction_and_does_not_release_old_or_unt
         _normal_operation(client)
         gmail_observation(client, "old-pending", old=True)
         gmail_observation(client, "forged-from", untrusted=True)
+        gmail_observation(client, "group-input", group=True)
         assert (
             client.portal.call(
                 _events, client.app.state.runtime, "cos.conversation.instruction"

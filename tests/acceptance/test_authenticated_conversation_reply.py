@@ -53,7 +53,7 @@ def configured(path: Path) -> Any:
     return replace(value, adapter_config=config)
 
 
-def install_gmail(runtime: Any, service: Any) -> None:
+def install_gmail(runtime: Any, service: Any, *, disabled: bool = False) -> None:
     spec = importlib.util.spec_from_file_location(
         "conversation_send_fixture", ROOT / "packs/adapters/messaging/gmail/adapter.py"
     )
@@ -65,7 +65,13 @@ def install_gmail(runtime: Any, service: Any) -> None:
             "service_principal_id": COS_SERVICE_PRINCIPAL_ID,
             "provider_account_id": EMAIL_ACCOUNT,
             "user_email": EMAIL_ACCOUNT,
-            "enable_writes": True,
+            "enable_writes": not disabled,
+            "read_only": disabled,
+            "workspace": "service",
+            "permission_scope": [
+                "https://www.googleapis.com/auth/gmail.readonly",
+                "https://www.googleapis.com/auth/gmail.send",
+            ],
             "channel_id": "channel:chief-of-staff:gmail",
         },
         observation_session=runtime.adapters._ctx_factory().observation_session,
@@ -119,9 +125,11 @@ def reply_body(
     }
 
 
-@pytest.mark.parametrize("ambiguous", [False, True])
+@pytest.mark.parametrize(
+    "ambiguous,disabled", [(False, False), (True, False), (False, True)]
+)
 def test_actual_gmail_thread_reply_and_restart_never_duplicate(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, ambiguous: bool
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, ambiguous: bool, disabled: bool
 ) -> None:
     monkeypatch.setenv("ADMINME_TEST_MODE", "1")
 
@@ -159,7 +167,7 @@ def test_actual_gmail_thread_reply_and_restart_never_duplicate(
         )
         assert allowed.status_code == 202, allowed.text
         _normal_operation(client)
-        install_gmail(runtime, service)
+        install_gmail(runtime, service, disabled=disabled)
         original = gmail_observation(client, "direct-reply-input")
         source = next(
             row
@@ -174,20 +182,24 @@ def test_actual_gmail_thread_reply_and_restart_never_duplicate(
         assert client.post(REPLY, headers=AUTH, json=forged).status_code == 403
         assert service.calls == []
         first = client.post(REPLY, headers=AUTH, json=body)
-        assert first.status_code == (500 if ambiguous else 200), first.text
+        assert first.status_code == (500 if ambiguous or disabled else 200), first.text
         second = client.post(REPLY, headers=AUTH, json=body)
         assert second.status_code == 200, second.text
-        assert second.json()["status"] == ("unknown" if ambiguous else "sent")
-        assert second.json()["automatic_retry_allowed"] is False
-        assert len(service.calls) == 1
-        sent = service.calls[0]["body"]
-        assert sent["threadId"] == "fixture-real-email-thread"
-        mime = message_from_bytes(base64.urlsafe_b64decode(sent["raw"]))
-        assert (
-            mime["From"] == EMAIL_ACCOUNT and mime["To"] == "member-a@example.invalid"
+        assert second.json()["status"] == (
+            "unknown" if ambiguous or disabled else "sent"
         )
-        assert mime["In-Reply-To"] == "<fixture-current@example.invalid>"
-        assert mime["References"] == "<fixture-current@example.invalid>"
+        assert second.json()["automatic_retry_allowed"] is False
+        assert len(service.calls) == (0 if disabled else 1)
+        if not disabled:
+            sent = service.calls[0]["body"]
+            assert sent["threadId"] == "fixture-real-email-thread"
+            mime = message_from_bytes(base64.urlsafe_b64decode(sent["raw"]))
+            assert (
+                mime["From"] == EMAIL_ACCOUNT
+                and mime["To"] == "member-a@example.invalid"
+            )
+            assert mime["In-Reply-To"] == "<fixture-current@example.invalid>"
+            assert mime["References"] == "<fixture-current@example.invalid>"
         all_events = client.portal.call(history, runtime)
         counts = cos_provider_effect_counts(all_events)
         assert counts.get("malformed_request", 0) == 0, counts
@@ -198,8 +210,10 @@ def test_actual_gmail_thread_reply_and_restart_never_duplicate(
     ) as client:
         again = client.post(REPLY, headers=AUTH, json=body)
         assert again.status_code == 200, again.text
-        assert again.json()["status"] == ("unknown" if ambiguous else "sent")
-        assert len(service.calls) == 1
+        assert again.json()["status"] == (
+            "unknown" if ambiguous or disabled else "sent"
+        )
+        assert len(service.calls) == (0 if disabled else 1)
 
 
 async def history(runtime: Any) -> list[dict[str, Any]]:
