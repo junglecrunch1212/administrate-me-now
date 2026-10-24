@@ -21,14 +21,20 @@ including unchanged native code mode and reviewed dynamic tools. They make no
 account, model or provider calls and do not prove a household account's effective
 runtime catalog.
 
-After supported deployment, inspect a fresh ordinary CoS session's effective
-native tool exposure without calling a provider. Verify ambient account apps are
-absent or rejected, the intended native file route remains available, and the
-reviewed inventory/domain tools still work. Account access still requires the
-private current identity map and destination verification.
+After supported deployment, verify the installed setting and a fresh ordinary
+CoS native binding's `pluginAppsFingerprint`, `pluginAppsInputFingerprint`, and
+empty `pluginAppPolicyContext.apps` without calling a provider. Retain native
+thread IDs when verifying legacy binding rotation. Verify the intended native file route remains available and
+the reviewed inventory/domain tools still work. Current supported operator
+surfaces do not expose a complete per-thread native tool catalog: `tools.effective`
+projects only configured MCP servers and `/codex mcp` omits the thread binding.
+Do not substitute model narration for that missing evidence. Account access still
+requires the private current identity map and destination verification.
 
 Arbitrary inherited `mcp_servers` are a separate native configuration surface.
 This setting does not remove them, including servers generated for an individual
-thread. Inspect their effective runtime names and bindings separately; do not
-claim that disabling account apps proves all MCP access or general shell work is
-bounded. Do not change the user's ChatGPT/Codex settings on other devices.
+thread. Inspect configured Gateway and agent-home MCP inventories separately;
+those files do not prove the absence of generated per-thread servers. A complete
+effective native catalog remains unresolved through supported operator surfaces.
+Do not claim that disabling account apps proves all MCP access or general shell
+work is bounded. Do not change the user's ChatGPT/Codex settings on other devices.
