@@ -16,6 +16,7 @@ from fastapi import HTTPException, Request
 
 from adminme.events.log import EventLogError
 from adminme.request_actions_control import request_actions_allowed
+from adminme.reminder_choices import CHOICE_RULE
 from adminme.service_identities import COS_SERVICE_PRINCIPAL_ID
 from adminme.lib.session import Session
 from adminme.lib.skill_runner import (
@@ -252,18 +253,26 @@ async def ground_action(
 async def grounding_for_domain(
     runtime: Any, session: Session, domain: dict[str, Any]
 ) -> dict[str, Any] | None:
-    # _append's normal idempotency namespace keeps this event append-only.
-    return await runtime.event_log.get_by_idempotency(
+    # Original one-message receipts keep their namespace; continuation has its
+    # own immutable schema and may never silently replace one of those receipts.
+    primary = await runtime.event_log.get_by_idempotency(
         session.tenant_id,
         f"openclaw:{session.auth_member_id}:{GROUNDING_TYPE}:{domain['payload']['action_id']}",
     )
+    choice = await runtime.event_log.get_by_idempotency(
+        session.tenant_id,
+        f"openclaw:{session.auth_member_id}:cos.reminder.choice_grounded:{domain['payload']['action_id']}",
+    )
+    if primary is not None and choice is not None:
+        raise HTTPException(403, "Action has contradictory request authorities")
+    return choice if choice is not None else primary
 
 
 def ticket(
     runtime: Any, session: Session, domain: dict[str, Any], grounding: dict[str, Any]
 ) -> dict[str, Any]:
     p = grounding["payload"]
-    if p["rule_id"] not in REQUEST_RULES:
+    if p["rule_id"] not in REQUEST_RULES | {CHOICE_RULE}:
         raise HTTPException(403, "Unsupported request authorization rule")
     body = {
         "contract": CONTRACT,
@@ -278,6 +287,13 @@ def ticket(
         "evidence": p["evidence"],
         "action": p["action"],
     }
+    if p["rule_id"] == CHOICE_RULE:
+        if (
+            grounding.get("type") != "cos.reminder.choice_grounded"
+            or grounding.get("schema_version") != 1
+        ):
+            raise HTTPException(403, "Reminder choice grounding type is mismatched")
+        body["continuation"] = p["continuation"]
     secret = runtime.settings.openclaw_shared_secret
     if not secret:
         raise HTTPException(503, "request authorization credential is unavailable")
@@ -303,6 +319,14 @@ async def validate_request_authorization(
     if grounding is None or grounding["event_id"] != grounding_id:
         raise HTTPException(403, "original action has no current request authorization")
     p = grounding["payload"]
+    if grounding.get("type") == "cos.reminder.choice_grounded":
+        from adminme.products.openclaw.reminder_choice_authorization import (
+            validate_choice_authorization,
+        )
+
+        return await validate_choice_authorization(
+            request, session, provenance, domain, grounding
+        )
     _, source = await current_private_instruction(
         request,
         provenance,
@@ -422,3 +446,10 @@ async def require_current_bridge_request(runtime: Any, command: dict[str, Any]) 
         raise HTTPException(
             409, "Member action authority is no longer current"
         ) from exc
+
+    if grounded.get("type") == "cos.reminder.choice_grounded":
+        from adminme.products.openclaw.reminder_choice_authorization import (
+            require_current_choice_sources,
+        )
+
+        await require_current_choice_sources(runtime, grounded, context)

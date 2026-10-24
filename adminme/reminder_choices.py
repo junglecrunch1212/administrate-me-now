@@ -23,6 +23,7 @@ from adminme.events.schemas.reminder_choices import (
 
 OFFERED = "cos.reminder.choice_offered"
 FINISHED = "cos.reminder.choice_finished"
+CHOICE_RULE = "current-human-request.apple-reminder-list-choice.v1"
 
 
 def digest(value: Any) -> str:

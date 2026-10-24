@@ -37,6 +37,7 @@ from adminme.products.openclaw.reminder_choice_work import (
     selection_snapshot,
 )
 from adminme.reminder_choices import (
+    CHOICE_RULE,
     digest,
     execution_expiry,
     selected_choice,
@@ -45,7 +46,7 @@ from adminme.reminder_choices import (
 from adminme.request_actions_control import request_actions_allowed
 from adminme.service_identities import COS_SERVICE_PRINCIPAL_ID
 
-RULE = "current-human-request.apple-reminder-list-choice.v1"
+RULE = CHOICE_RULE
 GROUNDING_TYPE = "cos.reminder.choice_grounded"
 
 
@@ -218,6 +219,14 @@ async def ground_reminder_choice(
     answer_evidence = canonical_evidence(
         answer_text, result.output.get("answer_quotes")
     )
+    if result.output.get("match") in {"not_requested", "ambiguous"}:
+        raise HTTPException(
+            409,
+            {
+                "code": "request_clarification_required",
+                "reason": "The original request and fresh answer do not clearly request this unchanged reminder.",
+            },
+        )
     if (
         result.output.get("match") != "matched"
         or not original_evidence
@@ -227,8 +236,8 @@ async def ground_reminder_choice(
         raise HTTPException(
             409,
             {
-                "code": "request_clarification_required",
-                "reason": "The answer does not have clear evidence for the retained reminder request.",
+                "code": "request_authorization_unavailable",
+                "reason": "The retained request evidence could not be verified; no action was confirmed.",
             },
         )
     await current_choice(runtime, member, offered, answer, action)
@@ -353,6 +362,47 @@ async def historical_choice_matches(event_log: Any, grounding: dict[str, Any]) -
         return False
 
 
+async def historical_choice_domain_matches(
+    event_log: Any, domain: dict[str, Any], grounding: dict[str, Any]
+) -> bool:
+    """Static exact command lineage, without reinterpreting later live policy."""
+    from adminme.products.openclaw.apple_reminders import due_components
+
+    if not await historical_choice_matches(event_log, grounding):
+        return False
+    try:
+        p = ReminderChoiceGroundedV1.model_validate(grounding["payload"])
+        pending = p.continuation.offered
+        decision = domain["payload"]
+        command = decision["command_payload"]
+        return bool(
+            domain["tenant_id"] == grounding["tenant_id"]
+            and domain["type"] == "member.provider_action.confirmed"
+            and domain["schema_version"] == 1
+            and domain["owner_scope"]
+            == domain["visibility_scope"]
+            == f"private:{p.member_id}"
+            and domain["actor_identity"] == domain["source_account_id"] == p.member_id
+            and domain["source_adapter"] == "openclaw-apple-reminder"
+            and domain["causation_id"] == p.source_event_id
+            and grounding["event_id"] < domain["event_id"]
+            and decision["member_id"] == p.member_id
+            and decision["action_id"] == p.action_id
+            and decision["request_fingerprint"] == p.request_fingerprint
+            and decision["provider"] == "apple_reminders"
+            and decision["operation"] == "create_reminder"
+            and decision["provider_account_id"] == pending.provider_account_id
+            and decision.get("target_external_id") is None
+            and decision.get("expected_provider_revision") is None
+            and command["title"] == pending.title
+            and command.get("notes") == pending.notes
+            and command["due"] == due_components(pending.due_at)
+            and command["list_external_id"] == p.action["list_id"]
+        )
+    except (KeyError, TypeError, ValueError):
+        return False
+
+
 async def validate_choice_authorization(
     request: Any,
     member: Session,
@@ -371,7 +421,7 @@ async def validate_choice_authorization(
         p.source_event_id,
         required_permission="prepare_external_actions",
     )
-    if not await historical_choice_matches(runtime.event_log, grounding):
+    if not await historical_choice_domain_matches(runtime.event_log, domain, grounding):
         raise HTTPException(403, "Original reminder choice authority is mismatched")
     offer = await runtime.event_log.get(p.continuation.offered_event_id)
     assert offer is not None
@@ -444,3 +494,24 @@ async def require_current_choice_sources(
             raise HTTPException(
                 409, "Reminder instruction source authority was revoked"
             )
+
+
+async def require_choice_ticket_for_domain(
+    runtime: Any,
+    member: Session,
+    domain: dict[str, Any],
+    authorization: dict[str, str] | None,
+) -> None:
+    """A choice-created domain can never fall back to a later manual approval."""
+    from adminme.products.openclaw.reminder_choice_work import offered_by_action
+
+    if domain.get("source_adapter") != "openclaw-apple-reminder":
+        return
+    offered = await offered_by_action(runtime, member, domain["payload"]["action_id"])
+    if offered is not None and (
+        authorization is None or authorization.get("rule_id") != RULE
+    ):
+        raise HTTPException(
+            403,
+            "Reminder choices require their exact unexpired current-answer authorization",
+        )

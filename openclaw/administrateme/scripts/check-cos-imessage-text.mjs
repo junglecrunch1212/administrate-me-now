@@ -400,6 +400,9 @@ print(json.dumps([enabled, entry["hooks"]]))
   await checkRequestedEmailPolicy({ compiledPlugin: appleDirectory, nativeRegistration,
     preparedPolicy: preparedPolicies[0], api, hookSdk, createHookRunner, versions });
 
+  const { proveReminderChoice } = await import(pathToFileURL(path.join(repository, "tests/fixtures/openclaw_reminder_choice_probe.mjs")).href);
+  await proveReminderChoice({ pluginDirectory: appleDirectory, nativeRegistration, policy: preparedPolicies[0], api, hookSdk, createHookRunner, versions });
+
   const literalCases = [...corpus.cases.map((row) => row.text.replace(/\s+/gu, " ").trim()),
     "**bold** _italic_ ~~strike~~ `code` <u>underline</u> [link](https://example.invalid/?x=1&y=2)",
     "[[reply_to_current]] [[audio_as_voice]] MEDIA:https://example.invalid/a.jpg",
@@ -414,7 +417,7 @@ print(json.dumps([enabled, entry["hooks"]]))
     assert.equal(actual.text, text, "Standing reply text changed in pinned sender");
     assert.deepEqual(actual.ranges, [], "Standing reply acquired native formatting");
   }
-  console.log(`Verified native reply-hook admission/revocation, Apple Reminder current-input confirmation/status, signed request authorization with expiry/source checks and later native veto, legacy independent execution gate, and ${cases.length} exact and ${literalCases.length} standing reply cases against pinned OpenClaw. Apple domain receipts are synthetic; no provider effects.`);
+  console.log(`Verified native reply-hook admission/revocation, Apple Reminder current-input confirmation/status, signed request authorization and durable list choices across all three channels with expiry/source checks and later native veto, legacy independent execution gate, and ${cases.length} exact and ${literalCases.length} standing reply cases against pinned OpenClaw. Apple domain receipts are synthetic; no provider effects.`);
 } finally {
   await rm(directory, { recursive: true, force: true });
 }

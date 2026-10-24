@@ -353,6 +353,38 @@ def test_one_task_continues_across_real_channels_with_one_terminal_effect(
             )
             assert _provider_effect_integrity_healthy(counts)
             assert counts["provider_called_true"] == 1
+            # Historical attribution is immutable after current write revocation
+            # and pending/ticket expiry; future admission is separately closed.
+            from tests.acceptance.test_native_apple_reminder import MEMBER_HEADERS
+            from tests.acceptance.test_apple_service_permissions import PATH
+            import adminme.products.openclaw.reminder_choice_authorization as authorization
+
+            revoke = client.post(
+                f"{PATH}/apple_reminders",
+                headers=MEMBER_HEADERS,
+                json={
+                    "request_id": "revoke-after-choice-completed",
+                    "expected_revision": 1,
+                    "enabled": False,
+                    "scope_ids": [],
+                },
+            )
+            assert revoke.status_code == 202, revoke.text
+
+            class AfterDue(datetime):
+                @classmethod
+                def now(cls, tz=None):
+                    return datetime.fromisoformat(offered["due_at"]).astimezone(tz)
+
+            monkeypatch.setattr(authorization, "datetime", AfterDue)
+            assert client.portal.call(
+                partial(
+                    apple_command_owner_matches,
+                    runtime.event_log,
+                    command,
+                    through=terminal["event_id"],
+                )
+            )
         finally:
             client.portal.call(model.aclose)
 
