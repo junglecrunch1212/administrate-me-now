@@ -34,7 +34,12 @@ def _transport(
         selected = selected.model_copy(
             update={
                 "native_helper": selected.native_helper.model_copy(
-                    update={"app_path": str(app)}
+                    update={
+                        "app_path": str(app),
+                        "bundle_identifier": package.WRITE_BUNDLE_IDENTIFIER
+                        if helper_contract == package.HELPER_WRITE_APP_CONTRACT
+                        else package.BUNDLE_IDENTIFIER,
+                    }
                 )
             }
         )

@@ -26,6 +26,7 @@ from bootstrap import contracts, source_identity
 from bootstrap.contracts import repository_root
 
 BUNDLE_IDENTIFIER = "com.administrateme.cos-reminders-helper"
+WRITE_BUNDLE_IDENTIFIER = "com.administrateme.cos-reminders-writer"
 HELPER_APP_CONTRACT = "cos-reminders-native-app-v1"
 HELPER_WRITE_APP_CONTRACT = "cos-reminders-native-app-v2"
 EXECUTABLE = "CoSRemindersHelper"
@@ -109,7 +110,9 @@ def _component_manifest(
 ) -> dict[str, object]:
     return {
         "contract": HELPER_WRITE_APP_CONTRACT if write_enabled else HELPER_APP_CONTRACT,
-        "bundle_identifier": BUNDLE_IDENTIFIER,
+        "bundle_identifier": WRITE_BUNDLE_IDENTIFIER
+        if write_enabled
+        else BUNDLE_IDENTIFIER,
         "python_abi": "cpython-3.14",
         "native_in_process": True,
         "sources": {
@@ -121,9 +124,15 @@ def _component_manifest(
 
 def _info(*, write_enabled: bool = False) -> dict[str, object]:
     return {
-        "CFBundleIdentifier": BUNDLE_IDENTIFIER,
-        "CFBundleName": "CoS Reminders Helper",
-        "CFBundleDisplayName": "CoS Reminders Helper",
+        "CFBundleIdentifier": WRITE_BUNDLE_IDENTIFIER
+        if write_enabled
+        else BUNDLE_IDENTIFIER,
+        "CFBundleName": "CoS Reminders Writer"
+        if write_enabled
+        else "CoS Reminders Helper",
+        "CFBundleDisplayName": "CoS Reminders Writer"
+        if write_enabled
+        else "CoS Reminders Helper",
         "CFBundleExecutable": EXECUTABLE,
         "CFBundlePackageType": "APPL",
         "CFBundleVersion": "2" if write_enabled else "1",
@@ -197,7 +206,7 @@ def _verify_app(app: Path, manifest: dict[str, object]) -> dict[str, str]:
     return {
         "app_path": str(app),
         "artifact_sha256": digest,
-        "bundle_identifier": BUNDLE_IDENTIFIER,
+        "bundle_identifier": str(manifest["bundle_identifier"]),
     }
 
 
@@ -215,7 +224,9 @@ def verify_helper_app(app: Path) -> dict[str, str]:
             raise ValueError("unsupported helper contract")
         expected = {
             "contract": contract,
-            "bundle_identifier": BUNDLE_IDENTIFIER,
+            "bundle_identifier": WRITE_BUNDLE_IDENTIFIER
+            if contract == HELPER_WRITE_APP_CONTRACT
+            else BUNDLE_IDENTIFIER,
             "python_abi": "cpython-3.14",
             "native_in_process": True,
             "sources": sources,
@@ -302,6 +313,7 @@ def _build_app(
                 "-Wextra",
                 "-Werror",
                 "-Wno-deprecated-declarations",
+                *(["-DADMINME_COS_REMINDERS_WRITE=1"] if write_enabled else []),
                 "-mmacosx-version-min=14.0",
                 "-I",
                 str(include_dir),

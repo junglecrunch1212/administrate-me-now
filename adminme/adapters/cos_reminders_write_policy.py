@@ -41,6 +41,10 @@ def policy_from_config(value: dict[str, Any]) -> CoSRemindersWritePolicy | None:
     selection = read_policy.selection if read_policy else None
     if (
         selection is None
+        or policy.native_helper.bundle_identifier
+        != "com.administrateme.cos-reminders-writer"
+        or selection.native_helper.bundle_identifier
+        != "com.administrateme.cos-reminders-helper"
         or selection.adapter_id not in entries
         or selected_source_sha256(selection) != policy.selection_sha256
         or policy.native_helper.app_path == selection.native_helper.app_path

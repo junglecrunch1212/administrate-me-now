@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any
 
 BUNDLE_ID = "com.administrateme.cos-reminders-helper"
+WRITE_BUNDLE_ID = "com.administrateme.cos-reminders-writer"
 REQUEST_KEYS = frozenset(
     {
         "contract",
@@ -196,6 +197,18 @@ def native_identity(request: dict[str, Any]) -> dict[str, Any]:
 
     bundle = NSBundle.mainBundle()
     app = Path(str(bundle.bundlePath()))
+    manifest = json.loads(
+        (app / "Contents/Resources/helper-manifest.json").read_bytes()
+    )
+    expected_bundle_id = {
+        "cos-reminders-native-app-v1": BUNDLE_ID,
+        "cos-reminders-native-app-v2": WRITE_BUNDLE_ID,
+    }.get(manifest.get("contract"))
+    if (
+        expected_bundle_id is None
+        or manifest.get("bundle_identifier") != expected_bundle_id
+    ):
+        raise PermissionError("Native component contract and bundle identity differ")
     executable = str(bundle.executablePath())
     buffer = ctypes.create_string_buffer(4096)
     library = ctypes.CDLL("/usr/lib/libproc.dylib")
@@ -204,7 +217,7 @@ def native_identity(request: dict[str, Any]) -> dict[str, Any]:
     if library.proc_pidpath(os.getpid(), buffer, len(buffer)) <= 0:
         raise PermissionError("native executable unavailable")
     if (
-        str(bundle.bundleIdentifier()) != BUNDLE_ID
+        str(bundle.bundleIdentifier()) != expected_bundle_id
         or executable != os.fsdecode(buffer.value)
         or not executable.startswith(str(app / "Contents/MacOS") + "/")
         or not bundle.objectForInfoDictionaryKey_(
@@ -243,7 +256,7 @@ def native_identity(request: dict[str, Any]) -> dict[str, Any]:
     return {
         "app_path": str(app),
         "artifact_sha256": artifact_sha256(app),
-        "bundle_identifier": BUNDLE_ID,
+        "bundle_identifier": expected_bundle_id,
         "native_executable": executable,
         "native_pid": os.getpid(),
         **{
@@ -326,7 +339,10 @@ def perform(request: dict[str, Any], identity: dict[str, Any]) -> dict[str, Any]
                     / "Contents/Resources/helper-manifest.json"
                 ).read_bytes()
             )
-            if manifest.get("contract") != "cos-reminders-native-app-v2":
+            if (
+                manifest.get("contract") != "cos-reminders-native-app-v2"
+                or identity["bundle_identifier"] != WRITE_BUNDLE_ID
+            ):
                 raise PermissionError("This installed helper only supports reads")
             from adminme.adapters import cos_reminders_write as writes
 

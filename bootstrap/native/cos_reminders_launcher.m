@@ -13,7 +13,11 @@
 #error The helper requires the reviewed release CPython 3.14 ABI.
 #endif
 
+#ifdef ADMINME_COS_REMINDERS_WRITE
+static NSString *const BundleID = @"com.administrateme.cos-reminders-writer";
+#else
 static NSString *const BundleID = @"com.administrateme.cos-reminders-helper";
+#endif
 static const off_t RequestLimit = 1024 * 1024;
 
 static BOOL hexString(id value, NSUInteger length) {

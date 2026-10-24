@@ -75,6 +75,9 @@ def test_real_sealed_worker_proves_native_permission_identity_without_prompt(
     identity_status = result["result"]["authorization_status"]
     identity = result["identity"]
     assert {key: identity[key] for key in receipt} == receipt
+    assert identity["bundle_identifier"] == (
+        helper.WRITE_BUNDLE_IDENTIFIER if write_enabled else helper.BUNDLE_IDENTIFIER
+    )
     assert identity["native_executable"] == str(
         app / "Contents/MacOS" / helper.EXECUTABLE
     )

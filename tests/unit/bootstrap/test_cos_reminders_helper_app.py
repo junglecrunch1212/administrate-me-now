@@ -33,11 +33,25 @@ def test_write_component_is_explicit_without_reidentifying_the_read_component():
     writable = helper._component_manifest(sources, write_enabled=True)
     assert readonly["contract"] == "cos-reminders-native-app-v1"
     assert writable["contract"] == "cos-reminders-native-app-v2"
-    assert {k: v for k, v in readonly.items() if k != "contract"} == {
-        k: v for k, v in writable.items() if k != "contract"
+    assert readonly["bundle_identifier"] == helper.BUNDLE_IDENTIFIER
+    assert writable["bundle_identifier"] == helper.WRITE_BUNDLE_IDENTIFIER
+    assert readonly["bundle_identifier"] != writable["bundle_identifier"]
+    assert {
+        k: v for k, v in readonly.items() if k not in {"contract", "bundle_identifier"}
+    } == {
+        k: v for k, v in writable.items() if k not in {"contract", "bundle_identifier"}
     }
     assert helper._info()["CFBundleVersion"] == "1"
     assert helper._info(write_enabled=True)["CFBundleVersion"] == "2"
+    assert helper._info()["CFBundleIdentifier"] == helper.BUNDLE_IDENTIFIER
+    assert (
+        helper._info(write_enabled=True)["CFBundleIdentifier"]
+        == helper.WRITE_BUNDLE_IDENTIFIER
+    )
+    assert (
+        helper._info(write_enabled=True)["CFBundleDisplayName"]
+        == "CoS Reminders Writer"
+    )
     assert helper._info(write_enabled=True)[
         "NSRemindersFullAccessUsageDescription"
     ] == (helper.WRITE_USAGE_DESCRIPTION)

@@ -24,6 +24,7 @@ def _configuration_pair(tmp_path):
             **selected.native_helper.model_dump(),
             "app_path": "/fixture/CoSRemindersWrite.app",
             "artifact_sha256": "e" * 64,
+            "bundle_identifier": "com.administrateme.cos-reminders-writer",
         },
         "selection_sha256": selected_source_sha256(selected),
         "owner_authorization_sha256": "f" * 64,
