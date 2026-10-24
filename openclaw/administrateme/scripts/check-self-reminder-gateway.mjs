@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
-import { copyFile, mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { copyFile, mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import net from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -86,9 +86,12 @@ async function start() {
 async function saved() { try { return JSON.parse(await readFile(marker, "utf8")); } catch (error) { if (error.code === "ENOENT") return null; throw error; } }
 try {
   await mkdir(state); await mkdir(path.join(plugin, "node_modules"), { recursive: true });
-  for (const name of ["self-reminders", "self-replies", "result"]) {
-    const input = await readFile(path.join(repository, `openclaw/administrateme/src/${name}.ts`), "utf8");
-    await writeFile(path.join(plugin, `${name}.js`), ts.transpileModule(input, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ESNext } }).outputText);
+  // Retain the production modules' transitive imports as they evolve; the
+  // fixture entrypoint below still registers only the fixed reminder probe.
+  const sourceDirectory = path.join(repository, "openclaw/administrateme/src");
+  for (const name of (await readdir(sourceDirectory)).filter((entry) => entry.endsWith(".ts"))) {
+    const input = await readFile(path.join(sourceDirectory, name), "utf8");
+    await writeFile(path.join(plugin, name.replace(/\.ts$/, ".js")), ts.transpileModule(input, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ESNext } }).outputText);
   }
   await copyFile(path.join(repository, "tests/fixtures/openclaw_self_reminder_probe.mjs"), path.join(plugin, "index.mjs"));
   await symlink(source, path.join(plugin, "node_modules/openclaw"), "dir");
