@@ -437,6 +437,70 @@ def test_selector_binds_test_merge_to_exact_base_and_head(
         select_scope(path, _event(head, base), checkout_sha=merged)
 
 
+@pytest.mark.parametrize(
+    "defect",
+    [
+        "none",
+        "unintegrated-base",
+        "tree",
+        "mode",
+        "wrong-head",
+        "extra-parent",
+        "unrelated-event-base",
+    ],
+)
+def test_advanced_base_requires_integrated_exact_head_tree(repository, defect):
+    path, base = repository
+    advanced = _commit(path, "adminme/runtime.py", "PROTECTED_MAIN_ADVANCED = True\n")
+    if defect == "unintegrated-base":
+        _git(path, "checkout", "--detach", base)
+    head = _commit(path, HELPER, "#!/bin/bash\nexit 1\n")
+    if defect == "tree":
+        (path / "adminme/runtime.py").write_text("UNREVIEWED_MERGE_ONLY = True\n")
+    if defect == "mode":
+        (path / HELPER).chmod(0o644)
+    _git(path, "add", "-A")
+    parents = ["-p", advanced, "-p", base if defect == "wrong-head" else head]
+    if defect == "extra-parent":
+        parents += ["-p", base]
+    merge = _git(
+        path,
+        "commit-tree",
+        _git(path, "write-tree"),
+        *parents,
+        "-m",
+        "Synthetic regenerated test merge",
+    )
+    event_base = base
+    if defect == "unrelated-event-base":
+        event_base = _git(
+            path,
+            "commit-tree",
+            _git(path, "rev-parse", f"{base}^{{tree}}"),
+            "-m",
+            "Unrelated root",
+        )
+    _git(path, "checkout", "--detach", merge)
+    if defect != "none":
+        with pytest.raises(ValueError, match="exact event"):
+            select_scope(path, _event(event_base, head), checkout_sha=merge)
+        return
+    proof = select_scope(path, _event(base, head), checkout_sha=merge)
+    assert proof["checkout_binding"] == "head-equivalent-merge"
+    assert proof["test_merge_base_sha"] == advanced
+    assert proof["base_sha"] == base and proof["head_sha"] == head
+    assert proof["checkout_sha"] == merge
+    # The integrated main change stays in scope: no changed file is exempted.
+    assert proof["scope"] == "system-wide"
+    assert {row["path"] for row in proof["changes"]} == {HELPER, "adminme/runtime.py"}
+    for platform in ("linux", "macos"):
+        verify_gate(proof, _needs(proof, platform), platform=platform)
+        stale = _needs(proof, platform)
+        stale["release-scope"]["outputs"]["validated_sha"] = head
+        with pytest.raises(ValueError, match="revision"):
+            verify_gate(proof, stale, platform=platform)
+
+
 def test_selector_uses_prose_modes_from_both_git_endpoints(
     repository: tuple[Path, str],
 ) -> None:

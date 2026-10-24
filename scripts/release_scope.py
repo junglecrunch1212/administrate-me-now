@@ -1331,8 +1331,28 @@ def select_scope(
     base = _commit(repository, pull.get("base", {}).get("sha"))
     head = _commit(repository, pull.get("head", {}).get("sha"))
     parents = _git(repository, "rev-list", "--parents", "-n", "1", checkout).split()[1:]
+    checkout_binding = "event-head" if checkout == head else "exact-event-merge"
     if checkout != head and parents != [base, head]:
-        raise ValueError("test merge does not bind the exact event base and head")
+        # GitHub can retain an older event base while regenerating its test
+        # merge against advanced main. Accept only the already-supported event
+        # head's EXACT source tree, with that newer base explicitly integrated
+        # in the head. Never accept merge-only resolution/code or drop changes
+        # between the original event base and head from scope classification.
+        equivalent = False
+        if len(parents) == 2 and parents[1] == head:
+            try:
+                equivalent = (
+                    _git(repository, "merge-base", base, parents[0]).strip() == base
+                    and _git(repository, "merge-base", parents[0], head).strip()
+                    == parents[0]
+                    and _git(repository, "rev-parse", f"{checkout}^{{tree}}").strip()
+                    == _git(repository, "rev-parse", f"{head}^{{tree}}").strip()
+                )
+            except subprocess.CalledProcessError:
+                equivalent = False
+        if not equivalent:
+            raise ValueError("test merge does not bind the exact event base and head")
+        checkout_binding = "head-equivalent-merge"
     raw = _git(repository, "diff", "--no-renames", "--name-status", "-z", base, head)
     fields = raw.rstrip("\0").split("\0") if raw else []
     if len(fields) % 2:
@@ -1519,6 +1539,8 @@ def select_scope(
         "base_sha": base,
         "head_sha": head,
         "checkout_sha": checkout,
+        "checkout_binding": checkout_binding,
+        "test_merge_base_sha": parents[0] if checkout != head else None,
         "interface_sha256": checkout_fingerprint,
         "enrollment_interface_sha256": enrollment_fingerprints[checkout],
         "cos_recovery_dependency_sha256": recovery_fingerprints[checkout],
