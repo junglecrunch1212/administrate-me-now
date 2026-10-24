@@ -24,7 +24,7 @@ export async function proveReminderChoice({ pluginDirectory, nativeRegistration,
     process.env[secretName] = secret;
     try {
       const member = "member-choice-native-fixture", agent = `adminme-${textHash(member).slice(0, 16)}`;
-      const actor = channel === "imessage" ? "fixture-member-sender" : "fixture-trusted-thread-actor";
+      const actor = channel === "imessage" ? "+15555550119" : "fixture-trusted-thread-actor";
       const account = channel === "administrateme-portal" ? "member-portal" : "fixture-service-account";
       const thread = channel === "gmail" ? "fixture-member-thread" : "";
       const session = channel === "imessage" ? `agent:${agent}:imessage:${account}:direct:${actor}` :
