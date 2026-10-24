@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "max_composed_bytes": 20000,
+  "priority": [
+    "workstation_inventory.md",
+    "requested_workflows.md",
+    "workstation_work.md"
+  ],
+  "background": [
+    "crm_surface.md",
+    "custody_brief.md",
+    "morning_digest.md",
+    "paralysis_detection.md",
+    "reminder_dispatch.md",
+    "reward_dispatch.md"
+  ]
+}

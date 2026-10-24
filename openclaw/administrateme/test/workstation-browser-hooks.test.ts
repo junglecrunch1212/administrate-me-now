@@ -84,7 +84,9 @@ describe("installed browser source boundary", () => {
     for (const params of [{ action: "navigate", url: "https://other.invalid/" }, { action: "snapshot", profile: "user" }, { action: "snapshot", targetId: "other" }, { action: "act", request: { kind: "evaluate", fn: "() => secret" } }]) {
       expect(await f.before(params)).toMatchObject({ block: true });
     }
-    expect(await f.before({}, "exec")).toMatchObject({ block: true });
+    for (const tool of ["exec", "bash", "apply_patch", "codex_apps.google_calendar.get_profile", "mcp__fixture__read"]) {
+      expect(await f.before({}, tool)).toMatchObject({ block: true });
+    }
     expect(await f.before({}, "administrateme_service_context")).toMatchObject({ block: true });
     f.config.browser.allowSystemProfileImport = true;
     expect(await f.before()).toMatchObject({ block: true });

@@ -140,7 +140,11 @@ def test_native_observation_requires_terminal_capture_and_preserves_source_histo
         assert completed["audience"] == [A]
         assert completed["return_to"] == "current_authenticated_conversation"
         assert completed["provider_effect_count"] == 0
-        current = _body(client, text="What did that browser read find?")
+        current = _body(
+            client,
+            text="What did that browser read find?",
+            native_id="browser-status-request",
+        )
         retained = _post(
             client,
             BASE + "/retained",

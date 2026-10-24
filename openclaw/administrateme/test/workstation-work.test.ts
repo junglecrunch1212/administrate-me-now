@@ -89,7 +89,7 @@ describe("native private workstation handoff", () => {
   it("checks durable policy for every service tool and rejects other effects or notes", async () => {
     const f = fixture();
     const worker = { agentId: serviceAgentId(), sessionKey: serviceSessionKey(secret, undefined, "worker"), runId: "worker" };
-    for (const toolName of ["exec", "browser", "administrateme_execute_pending_provider_action", "administrateme_service_context"]) {
+    for (const toolName of ["exec", "bash", "apply_patch", "codex_apps.google_calendar.get_profile", "mcp__fixture__read", "browser", "administrateme_execute_pending_provider_action", "administrateme_service_context"]) {
       expect(await f.invoke("before_tool_call", { toolName, params: {} }, worker)).toMatchObject({ block: true });
     }
     expect(await f.invoke("before_tool_call", { toolName: "administrateme_service_private_state", params: { task_id: "another-note" } }, worker)).toMatchObject({ block: true });

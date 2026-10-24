@@ -92,3 +92,14 @@ new reads and disclosure, even when canonical evidence is stale. Preserve the
 schema-aware runtime once browser events have been appended; revoke this feature
 instead of rolling history back into an older reader lacking these event schemas.
 Record the release, expected/observed behavior, redacted error and restored health.
+
+
+Current member instructions are compiled in authority/account/work priority order.
+The six background programs remain byte-for-byte in the installed household skill's
+`programs/` references and are loaded only for their matching trigger. The supported
+updater measures the entire composed AGENTS file, including retained private layers,
+against a conservative 20,000-byte ceiling before maintenance; it never truncates
+or deletes private overlays. A release-local layout marker keeps legacy compilation
+and exact byte recovery compatible. Dynamic-tool policy describes neither Codex's
+native shell/files nor ambient MCP/apps connectors; those require separate runtime
+and operation evidence and actual account verification before private operations.
