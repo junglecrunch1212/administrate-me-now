@@ -124,9 +124,10 @@ def native_service_tools(
         if (
             plugins.get("enabled") is False
             or entry.get("enabled") is not True
+            or plugins.get("entries", {}).get("browser", {}).get("enabled") is False
             or (
                 isinstance(plugins.get("allow"), list)
-                and "administrateme" not in plugins["allow"]
+                and not {"administrateme", "browser"}.issubset(plugins["allow"])
             )
         ):
             return []
@@ -185,7 +186,12 @@ def prepare_native_patch(
         patch: dict[str, Any] = {"browser": {"enabled": False}}
     else:
         prepared = prepare_browser_gateway(original)
-        patch = {"browser": prepared["browser"]}
+        patch = {
+            "browser": prepared["browser"],
+            "plugins": {"entries": {"browser": {"enabled": True}}},
+        }
+        if "allow" in prepared["plugins"]:
+            patch["plugins"]["allow"] = prepared["plugins"]["allow"]
         tools = native_service_tools(prepared, paths, release)
         if tools:
             agents = original.get("agents", {}).get("list", [])

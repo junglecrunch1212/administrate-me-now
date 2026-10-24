@@ -142,6 +142,7 @@ def test_native_patch_uses_hash_guard_and_only_browser_and_existing_cos_agent(tm
     ]
     assert "synthetic-secret" not in json.dumps(params)
     assert patch["browser"]["allowSystemProfileImport"] is False
+    assert patch["plugins"] == {"entries": {"browser": {"enabled": True}}}
     assert "browser" not in original
     assert json.loads(
         prepare_native_patch(snapshot, paths, release, disable=True)["raw"]

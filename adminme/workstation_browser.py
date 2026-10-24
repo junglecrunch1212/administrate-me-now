@@ -238,5 +238,26 @@ def prepare_browser_gateway(gateway: dict[str, Any]) -> dict[str, Any]:
             "evaluateEnabled": True,
         }
     )
+    plugins = prepared.setdefault("plugins", {})
+    if not isinstance(plugins, dict) or plugins.get("enabled") is False:
+        raise ValueError("native plugins must already be enabled")
+    if "browser" in plugins.get("deny", []):
+        raise ValueError(
+            "an explicit native browser plugin denial must be resolved first"
+        )
+    allowed = plugins.get("allow")
+    if allowed is not None:
+        if not isinstance(allowed, list) or any(
+            not isinstance(item, str) for item in allowed
+        ):
+            raise ValueError("native plugin allowlist is malformed")
+        plugins["allow"] = list(dict.fromkeys([*allowed, "browser"]))
+    entries = plugins.setdefault("entries", {})
+    if not isinstance(entries, dict):
+        raise ValueError("native plugin entries are malformed")
+    entry = entries.setdefault("browser", {})
+    if not isinstance(entry, dict):
+        raise ValueError("native browser plugin entry is malformed")
+    entry["enabled"] = True
     assert_single_extension_profile(prepared)
     return prepared

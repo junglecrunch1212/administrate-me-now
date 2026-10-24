@@ -3349,6 +3349,8 @@ def test_conversation_integration_uses_immutable_focused_scope(
     [
         ("workstation", "workstation_router"),
         ("workstation_work", "workstation_work_router"),
+        ("workstation_browser", "workstation_browser_router"),
+        ("workstation_source_policy", "workstation_source_policy_router"),
     ],
 )
 def test_workstation_scope_requires_exact_complete_router_pair(

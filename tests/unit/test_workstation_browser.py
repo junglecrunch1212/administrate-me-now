@@ -10,6 +10,7 @@ from adminme.workstation_browser import (
     assert_single_extension_profile,
     browser_resource,
     prepare_browser_gateway,
+    url_in_scope,
 )
 from adminme.workstation_inventory import IdentityInventory
 from tests.unit.test_workstation_inventory import document
@@ -92,3 +93,17 @@ def test_browser_resource_reuses_canonical_identity_and_requires_all_site_checks
             "own-page",
             now=datetime.now(timezone.utc) + timedelta(days=30),
         )
+
+
+def test_browser_source_prefix_keeps_account_origin_and_path_boundaries():
+    scope = "https://work.example.invalid/planning"
+    assert url_in_scope(scope, scope)
+    assert url_in_scope(scope, scope + "/weekly")
+    assert not url_in_scope(scope, "https://work.example.invalid/planning-other")
+    assert not url_in_scope(scope, "https://other.example.invalid/planning")
+    assert not url_in_scope(scope, "http://work.example.invalid/planning")
+    with pytest.raises(ValueError, match="denial"):
+        prepare_browser_gateway({"plugins": {"deny": ["browser"]}})
+    prepared = prepare_browser_gateway({"plugins": {"allow": ["administrateme"]}})
+    assert prepared["plugins"]["allow"] == ["administrateme", "browser"]
+    assert prepared["plugins"]["entries"]["browser"]["enabled"] is True

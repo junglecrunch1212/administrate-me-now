@@ -374,7 +374,11 @@ GENERAL_TOOLS = {
 
 
 def workstation_tools(runtime: Any, agent_id: str) -> dict[str, Any]:
-    """Report native policy without approximating OpenClaw's policy engine."""
+    """Report OpenClaw dynamic tools, separately from harness-owned base tools.
+
+    Codex owns shell/files natively. Its per-run toolsAllow, sandbox and native
+    hooks control that surface; an agent dynamic allowlist cannot prove absence.
+    """
     path = runtime.settings.openclaw_runtime_config_path
     try:
         config = read_private_document(path) if path else {}
@@ -430,11 +434,12 @@ def workstation_tools(runtime: Any, agent_id: str) -> dict[str, Any]:
             observations.append(
                 {
                     "tool": name,
+                    "runtime_surface": "openclaw_dynamic",
                     "states": states(
                         configured=state(bool(agent), "native_agent_configuration"),
                         tool_accessible=state(
                             False if absent else None,
-                            "explicit_native_tool_policy"
+                            "explicit_openclaw_dynamic_tool_policy"
                             if absent
                             else "native_effective_toolset_or_invocation_required",
                         ),
@@ -509,7 +514,7 @@ def _inventory_records(inventory: dict[str, Any]) -> dict[str, list[dict[str, An
             **tool,
             "binding_id": tool["tool"],
             "capability": group["capability"],
-            "route": "native_tool_policy",
+            "route": "openclaw_dynamic_tool_policy",
         }
         for group in inventory["workstation_tools"]["capabilities"]
         for tool in group["tools"]
@@ -637,6 +642,8 @@ def inventory_page(
         "identity_inventory_state": inventory["identity_inventory"]["state"],
         "identity_inventory_revision": inventory["identity_inventory"].get("revision"),
         "native_policy_state": inventory["workstation_tools"]["state"],
+        "tool_rows_scope": "openclaw_dynamic_only",
+        "native_base_tools_state": "separate_runtime_policy_or_invocation_required",
         "observation_mode": inventory["observation_mode"],
         "inventory_grants_authority": False,
         "provider_effect_count": 0,

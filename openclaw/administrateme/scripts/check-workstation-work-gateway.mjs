@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
+import { startBrowserTransport } from "../../../tests/fixtures/openclaw_browser_transport.mjs";
 import { startWorkstationWorkFixtures } from "../../../tests/fixtures/openclaw_workstation_work_probe.mjs";
 
 assert.equal(process.env.GITHUB_ACTIONS, "true", "Use isolated hosted CI for candidate execution");
@@ -34,11 +35,14 @@ function validSession(candidate) {
   const expected = createHmac("sha256", secret).update(`service-session|${principal}|${digest}`).digest("hex").slice(0, 32);
   return signature === expected;
 }
+const browserProbe = process.argv[3] === "--browser";
+const relayPort = browserProbe ? await freePort() : undefined;
+const browser = browserProbe ? await startBrowserTransport({ directory, state, relayPort }) : undefined;
 const sessions = new Set();
 const conversations = new Map();
 const member = "member-conversation-fixture";
 const memberAgent = `adminme-${createHash("sha256").update(member).digest("hex").slice(0, 16)}`;
-const fixtures = await startWorkstationWorkFixtures({ secret, agent, sessions, validSession, conversations });
+const fixtures = await startWorkstationWorkFixtures({ secret, agent, sessions, validSession, conversations, browser });
 let gateway, socket, logs = "";
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 async function until(check, label, timeout = 150_000) {
@@ -67,6 +71,7 @@ const env = Object.fromEntries(["PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "USE
 Object.assign(env, { OPENCLAW_STATE_DIR: state, OPENCLAW_CONFIG_PATH: configPath, OPENCLAW_GATEWAY_PORT: String(port), OPENCLAW_GATEWAY_TOKEN: token,
   OPENCLAW_NO_RESPAWN: "1", OPENCLAW_DISABLE_BONJOUR: "1", NODE_DISABLE_COMPILE_CACHE: "1",
   OPENCLAW_SKIP_GMAIL_WATCHER: "1", OPENCLAW_SKIP_CANVAS_HOST: "1", OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1", ADMINME_OPENCLAW_SHARED_SECRET: secret });
+if (browserProbe) delete env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER;
 async function start() {
   gateway = spawn(process.execPath, [path.join(source, "openclaw.mjs"), "gateway", "run"], { cwd: directory, env, stdio: ["ignore", "pipe", "pipe"] });
   for (const stream of [gateway.stdout, gateway.stderr]) stream.on("data", (chunk) => { logs = (logs + chunk).slice(-50_000); });
@@ -119,17 +124,24 @@ try {
   await mkdir(memberWorkspace);
   await copyFile(path.join(repository, "openclaw/administrateme/workspace/AGENTS.md"), path.join(memberWorkspace, "AGENTS.md"));
   const model = "fixture/service-work";
-  const tools = ["administrateme_service_private_work", "administrateme_service_private_work_state", "administrateme_service_private_state", "administrateme_service_context"];
+  const tools = [...(browserProbe ? ["browser"] : []), "administrateme_service_private_work", "administrateme_service_private_work_state", "administrateme_service_private_state", "administrateme_service_context"];
   const config = {
     gateway: { mode: "local", bind: "loopback", port, auth: { mode: "token", token }, controlUi: { enabled: false }, reload: { mode: "off" } },
     agents: { defaults: { workspace, maxConcurrent: 1, subagents: { maxConcurrent: 1 }, heartbeat: { every: "0m" }, model: { primary: model }, models: { [model]: { params: { transport: "sse", openaiWsWarmup: false } } } }, list: [{ id: agent, workspace, tools: { allow: tools } }, { id: memberAgent, workspace: memberWorkspace, tools: { allow: ["administrateme_workstation_work"] } }] },
     models: { mode: "replace", providers: { fixture: { baseUrl: `${fixtures.baseUrl}/v1`, apiKey: "synthetic-fixture-only", api: "openai-responses", models: [{ id: "service-work", name: "service-work", api: "openai-responses", reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 128000, maxTokens: 4096 }] } } },
     tools: { codeMode: false },
-    plugins: { allow: ["administrateme"], load: { paths: [plugin] }, slots: { memory: "none" }, entries: { administrateme: { enabled: true, config: { baseUrl: fixtures.baseUrl, memberAgentIds: [memberAgent] }, hooks: { allowConversationAccess: true, allowPromptInjection: false } } } },
-    channels: {}, cron: { enabled: false }, browser: { enabled: false }, discovery: { mdns: { mode: "off" } }, update: { checkOnStart: false, auto: { enabled: false } }, logging: { file: path.join(state, "gateway.log") },
+    plugins: { allow: ["administrateme", ...(browserProbe ? ["browser"] : [])], load: { paths: [plugin] }, slots: { memory: "none" }, entries: { administrateme: { enabled: true, config: { baseUrl: fixtures.baseUrl, memberAgentIds: [memberAgent] }, hooks: { allowConversationAccess: true, allowPromptInjection: false } } } },
+    channels: {}, cron: { enabled: false }, browser: browserProbe ? { enabled: true, evaluateEnabled: true, allowSystemProfileImport: false, defaultProfile: "chrome", profiles: { chrome: { driver: "extension", cdpPort: relayPort, color: "#00AA44" } } } : { enabled: false }, discovery: { mdns: { mode: "off" } }, update: { checkOnStart: false, auto: { enabled: false } }, logging: { file: path.join(state, "gateway.log") },
   };
   await writeFile(configPath, JSON.stringify(config), { mode: 0o600 });
   const request = await start();
+  if (browser) {
+    // Starting the native browser profile creates its host-local relay; the
+    // synthetic extension joins with disposable state, never a user profile.
+    const starting = request("browser.request", { method: "POST", path: "/start", query: { profile: "chrome" } }).catch((error) => error);
+    await browser.connectRelay();
+    if (await starting instanceof Error) await request("browser.request", { method: "POST", path: "/start", query: { profile: "chrome" } });
+  }
   // Run both real chat.send routes through the actual pinned host. Signed input
   // metadata travels in a separate plugin RPC, never as a privileged prompt.
   for (const channel of ["administrateme-portal", "gmail"]) {
@@ -165,10 +177,13 @@ try {
   assert.deepEqual(fixtures.conversationReceipts.map((row) => row.channel), ["administrateme-portal", "gmail"]);
   assert.deepEqual(fixtures.conversationReplies.map((row) => row.channel), ["gmail"]);
   assert.deepEqual(fixtures.errors, []);
-  console.log("Pinned native conversation -> CoS subagent scratchpad -> actual read-back -> source-bound result verified for portal/Gmail; synthetic loopback fixtures only. No live provider effect.");
+  if (browser) {
+    assert.deepEqual(browser.errors, []);
+    console.log("Pinned native member -> CoS browser -> actual disposable Chrome DOM identity -> retained source -> same-origin return verified; synthetic extension/account only.");
+  } else console.log("Pinned native conversation -> CoS subagent scratchpad -> actual read-back -> source-bound result verified for portal/Gmail; synthetic loopback fixtures only. No live provider effect.");
 } catch (error) {
   let redacted = logs.replaceAll(token, "[redacted]").replaceAll(secret, "[redacted]");
   for (const session of sessions) redacted = redacted.replaceAll(session, "[service-session]");
   console.error(redacted);
   throw error;
-} finally { await stop(); await fixtures.close(); await rm(directory, { recursive: true, force: true }); }
+} finally { await stop(); await fixtures.close(); await browser?.close(); await rm(directory, { recursive: true, force: true }); }

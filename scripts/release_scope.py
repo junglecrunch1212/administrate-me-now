@@ -410,6 +410,17 @@ COS_SERVICE_WORK_COMPONENT_PATHS = frozenset(
         "packs/skills/ground_requested_action/prompt.jinja2",
         "packs/skills/ground_requested_action/schemas/input.schema.json",
         "packs/skills/ground_requested_action/schemas/output.schema.json",
+        "adminme/events/schemas/workstation.py",
+        "adminme/products/openclaw/workstation_browser.py",
+        "adminme/products/openclaw/workstation_source_policy.py",
+        "adminme/workstation_browser.py",
+        "adminme/workstation_source_policy.py",
+        "adminme/workstation_sources.py",
+        "bootstrap/workstation_browser.py",
+        "openclaw/administrateme/src/workstation-browser.ts",
+        "openclaw/administrateme/src/workstation-browser-hooks.ts",
+        "openclaw/administrateme/skills/administrateme-household/SKILL.md",
+        "openclaw/administrateme/test/fixtures/openclaw-2026.7.2/plugin-entry.d.ts",
         "adminme/workstation_inventory.py",
         "adminme/products/openclaw/workstation.py",
         "adminme/products/openclaw/workstation_work.py",
@@ -484,6 +495,12 @@ COS_SERVICE_WORK_TEST_PATHS = frozenset(
         "openclaw/administrateme/test/request-policy.test.ts",
         "openclaw/administrateme/test/conversation-input.test.ts",
         "tests/acceptance/test_workstation_inventory.py",
+        "tests/acceptance/test_cos_browser_workstation.py",
+        "tests/unit/bootstrap/test_workstation_browser.py",
+        "tests/unit/test_workstation_browser.py",
+        "tests/fixtures/openclaw_browser_transport.mjs",
+        "openclaw/administrateme/test/workstation-browser.test.ts",
+        "openclaw/administrateme/test/workstation-browser-hooks.test.ts",
         "tests/acceptance/test_cos_workstation_handoff.py",
         "openclaw/administrateme/test/workstation-work.test.ts",
         "openclaw/administrateme/scripts/check-workstation-work-gateway.mjs",
@@ -1156,11 +1173,32 @@ def _service_work_application(source: str) -> tuple[str, bool] | None:
         workstation_work_shapes[0]
     ) > body_shapes.index(workstation_work_shapes[1]):
         return None
+    browser_shapes = []
+    for module_name in ("workstation_browser", "workstation_source_policy"):
+        pair = [
+            ast.dump(node, include_attributes=False)
+            for node in ast.parse(
+                f"from adminme.products.openclaw.{module_name} import router as {module_name}_router\n"
+                f"app.include_router({module_name}_router)\n"
+            ).body
+        ]
+        pair_counts = [body_shapes.count(shape) for shape in pair]
+        if pair_counts not in ([0, 0], [1, 1]):
+            return None
+        if pair_counts == [1, 1] and body_shapes.index(pair[0]) > body_shapes.index(
+            pair[1]
+        ):
+            return None
+        browser_shapes.extend(pair)
     application.body = [
         node
         for node, shape in zip(application.body, body_shapes, strict=True)
         if shape
-        not in shapes + reminder_shapes + workstation_shapes + workstation_work_shapes
+        not in shapes
+        + reminder_shapes
+        + workstation_shapes
+        + workstation_work_shapes
+        + browser_shapes
     ]
     digest = hashlib.sha256(
         ast.dump(module, include_attributes=False).encode()

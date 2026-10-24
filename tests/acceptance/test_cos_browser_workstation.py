@@ -140,6 +140,25 @@ def test_native_observation_requires_terminal_capture_and_preserves_source_histo
         assert completed["audience"] == [A]
         assert completed["return_to"] == "current_authenticated_conversation"
         assert completed["provider_effect_count"] == 0
+        current = _body(client, text="What did that browser read find?")
+        retained = _post(
+            client,
+            BASE + "/retained",
+            {
+                **current,
+                "browser_request_event_id": completed["browser_request_event_id"],
+            },
+        )
+        assert retained == completed
+        _post(
+            client,
+            BASE + "/retained",
+            {
+                **current,
+                "browser_request_event_id": "missing-browser-request",
+            },
+            404,
+        )
         client.portal.call(runtime.projections.rebuild, "tasks")
         assert _post(client, BASE + "/result", result) == completed
         # Changing only the verified tab route preserves historical source facts;
