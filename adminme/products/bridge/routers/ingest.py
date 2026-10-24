@@ -2251,7 +2251,12 @@ async def pending_commands(
                 continue
             try:
                 apple_grant = command_permission(runtime, member_id, payload)
-            except (ValueError, KeyError):
+                from adminme.products.openclaw.request_authorization import (
+                    require_current_bridge_request,
+                )
+
+                await require_current_bridge_request(runtime, event)
+            except (ValueError, KeyError, HTTPException):
                 # Keep an attempted command reachable for its cached terminal
                 # receipt. An unattempted stale command is explicitly denied at
                 # the edge, never released by a later grant.
@@ -2536,6 +2541,11 @@ async def authorize_apple_command(
         observation = getattr(runtime, "observation", None)
         if observation is None or await observation.is_active():
             raise HTTPException(409, "Observation mode suppresses Apple writes")
+        from adminme.products.openclaw.request_authorization import (
+            require_current_bridge_request,
+        )
+
+        await require_current_bridge_request(runtime, event)
         try:
             proof = command_proof(runtime, member_id, command)
         except (ValueError, KeyError) as exc:
