@@ -207,13 +207,14 @@ def _events(
         if row["earliest_date"] is None:
             if row["latest_date"] is not None or not row.get("date_unknown_reason"):
                 raise PublicationError("projection_undated_reason_required")
-        elif (
-            not start
-            <= date.fromisoformat(row["earliest_date"])
-            <= date.fromisoformat(row["latest_date"])
-            < end
-        ):
-            raise PublicationError("projection_detail_date_invalid")
+        else:
+            earliest = date.fromisoformat(row["earliest_date"])
+            latest = date.fromisoformat(row["latest_date"])
+            # Original possible-date bounds are inclusive. The context horizon
+            # is [start, end): overlap admits a source row, not certainty that
+            # it occurs inside the horizon. Never clip the source window.
+            if earliest > latest or earliest >= end or latest < start:
+                raise PublicationError("projection_detail_date_invalid")
         if not set(row["evidence_ids"]) <= evidence:
             raise PublicationError("projection_detail_evidence_invalid")
         _range(row["amount"], nonnegative=True)

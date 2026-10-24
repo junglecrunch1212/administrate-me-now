@@ -29,6 +29,7 @@ from tests.acceptance.test_openclaw_native_seam import PRINCIPAL
 from adminme.finance.planning_store import import_projection
 from tests.fixtures.finance_planning import (
     projection,
+    with_boundary_windows,
     with_unavailable_openings,
     with_conservative_minima,
     with_grouped_issues,
@@ -59,7 +60,9 @@ def _serve_choices(root, listener, ready):
                 build_internal_session(PRINCIPAL, "principal", value["tenant_id"]),
                 with_grouped_issues(
                     with_conservative_minima(
-                        with_unavailable_openings(projection(value, 24))
+                        with_unavailable_openings(
+                            with_boundary_windows(projection(value, 24))
+                        )
                     )
                 ),
             )
@@ -312,6 +315,29 @@ async def test_owner_saves_goal_and_preference_then_reloads(tmp_path):
             )
             await wait_for(
                 "document.querySelector('.finance-planning').textContent.includes('Full context manifest: 2 events')"
+            )
+            await wait_for(
+                "document.querySelector('.finance-planning').textContent.includes('2026-03-06 – 2026-03-08') && document.querySelector('.finance-planning').textContent.includes('do not prove occurrence')"
+            )
+            await evaluate("""(() => {
+              const s=document.querySelector('[aria-label="Projection horizon"]');
+              s.value='365';s.dispatchEvent(new Event('change'));
+            })()""")
+            await wait_for(
+                "document.querySelector('.finance-planning').textContent.includes('2027-03-08 exclusive')"
+            )
+            await evaluate(
+                "Array.from(document.querySelectorAll('.finance-planning button')).find(b=>b.textContent==='Show dated events').click()"
+            )
+            await wait_for(
+                "document.querySelector('.finance-planning').textContent.includes('2027-03-07 – 2027-03-10')"
+            )
+            await evaluate(
+                "Array.from(document.querySelectorAll('.finance-planning h3')).find(h=>h.textContent==='Dated events').scrollIntoView({block:'start'})"
+            )
+            overlap_shot = await call("Page.captureScreenshot", {"format": "png"})
+            (planning_output / "finance-overlap-synthetic.png").write_bytes(
+                base64.b64decode(overlap_shot["data"])
             )
             await wait_for(
                 "Array.from(document.querySelectorAll('.finance-choices button')).some(b => b.textContent === 'Add a goal' && !b.disabled)"

@@ -488,3 +488,21 @@ def with_grouped_issues(value):
             }
             horizon["conditions"].extend(sorted(needed))
     return seal(value)
+
+
+def with_boundary_windows(value):
+    """Two original uncertain windows per context straddle its outer bounds."""
+    for context in value["contexts"]:
+        start = date.fromisoformat(context["as_of_date"]) + timedelta(days=1)
+        end = start + timedelta(days=365)
+        rows = [
+            row
+            for row in value["detail_events"]
+            if row["context_id"] == context["context_id"]
+        ]
+        assert len(rows) == 2
+        rows[0]["earliest_date"] = (start - timedelta(days=2)).isoformat()
+        rows[0]["latest_date"] = start.isoformat()
+        rows[1]["earliest_date"] = (end - timedelta(days=1)).isoformat()
+        rows[1]["latest_date"] = (end + timedelta(days=2)).isoformat()
+    return seal(value)

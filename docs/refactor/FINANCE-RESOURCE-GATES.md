@@ -119,6 +119,7 @@ evidence, not passing acceptance.
 | `7d120a86` | 793 Python, 96 native and synthetic desktop checks passed | 2.725 → 3.059 ms (1.122426); after baseline 1.932 ms | Fail |
 | `63691cc7` | 814 Python passed; one summary-size failure. 100 native/static passed; browser label failed | 4.595 → 5.620 ms (1.223142); after baseline 4.480 ms | Fail |
 | `cc159d8a` | 816 Python, 100 native/static and synthetic desktop checks passed | 3.857 → 4.838 ms (1.254260); after baseline 3.695 ms | Fail |
+| `34d2bfe8` | 847 Python, 100 native/static and synthetic desktop checks passed | Before 1.885, after 2.767 → mixed 3.007 ms (1.086922) | Bounded pass; baseline drift limits generalization |
 
 The [de8 hosted run](https://github.com/junglecrunch1212/administrate-me-now/actions/runs/40042497072)
 retains 251 admitted finance calls, 18.381/19.970 ms warm status/calculation
@@ -142,7 +143,7 @@ dispatch. These values do not replace acceptance timing.
 
 Source inspection found that each Parties read reset SQLite's authorizer twice.
 [SQLite expires prepared statements on each authorizer change](https://raw.githubusercontent.com/sqlite/sqlite/master/src/auth.c).
-The next candidate uses one additional, worker-owned, encrypted `mode=ro` Parties
+Candidate `34d2bfe8` uses one additional, worker-owned, encrypted `mode=ro` Parties
 handle with a permanent query-only authorizer, 64 prepared statements and a
 256 KiB page-cache target. It caches SQL plans, never grant values. Every grant,
 quorum, expiry and final revocation check still queries current committed WAL
@@ -155,8 +156,17 @@ The focused hosted checks exercise fresh revocation after plan reuse, extra
 approvals, write/ATTACH/transaction rejection after writer-side preparation,
 failed and successful rebuilds, handle ownership and close. Existing full
 projection rebuild tests and Parties behavior checks are included because this
-changes that database's reader lifecycle. Its performance effect and total
-memory impact are unproved until measured; the cache target is not an RSS claim.
+changes that database's reader lifecycle. These checks passed in the
+[34d2bfe8 hosted run](https://github.com/junglecrunch1212/administrate-me-now/actions/runs/40048286538).
+With 251 admitted finance calls, warm status/calculation p95 was 12.418/17.238 ms;
+raw core p95 was 1.885 ms before, 2.767 ms after and 3.007 ms mixed. The unchanged
+gate uses the larger bracketing baseline and passed at 8.69%. Before/after drift
+prevents claiming stable performance or attributing the whole change to one fix.
+The separate diagnostic final-authority p95 fell from 0.710 to 0.326 ms and
+HTTP-loop projection dispatch from 0.565 to 0.235 ms; worker session resolution
+was 0.356 ms and event application 0.475 ms. Profiles support the compilation-cost
+diagnosis but never replace raw acceptance. Total memory remains unmeasured;
+the cache target is not an RSS claim. No threshold or offered load changed.
 
 Budget funding outlook, bank cash, debt payoff and noncash offsets remain
 distinct. The separate dated-projection transport is a declared summary subset;

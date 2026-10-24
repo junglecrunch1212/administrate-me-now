@@ -22,7 +22,7 @@ required privacy invariant or product function.
   the four-tool private facade, 18 deterministic hypothetical calculators,
   accepted accounting import/replay, receipt-bound deterministic answers,
   owner goals/preferences and the declared planning summary subset. At
-  `cc159d8a`, 816 Python checks, 100 native checks and synthetic desktop acceptance
+  `34d2bfe8`, 847 Python checks, 100 native checks and synthetic desktop acceptance
   passed, including revocation during a finance-delivery yield and route-specific
   member/delegated CoS authority. Routing/preparation for F01–F31 is not implementation of every model.
 - **Unsupported functions still required by the original ambition:** durable
@@ -48,7 +48,9 @@ required privacy invariant or product function.
 - **Final-head validation and performance remain gates:** the current candidate
   needs its hosted required checks, native/browser results and the unchanged
   raw core p95 regression limit of at most 10%. One earlier bounded latency pass
-  did not establish stability; later runs failed. Large-ledger, reminder-delivery,
+  did not establish stability; later runs failed. The authority-reader fix at
+  `34d2bfe8` passed this bounded gate at 8.69%, with material bracketing-baseline
+  drift; broader resource isolation is still unproved. Large-ledger, reminder-delivery,
   heavy-worker termination/memory and deployment-hardware evidence remain absent.
 - **Activation remains separate:** source approval/merge, private processing and
   import authority, supported immutable activation, compatible encrypted recovery,
@@ -267,7 +269,20 @@ The `cc159d8a` hosted repair passed all 816 Python cases, 100 native checks,
 static checks and the synthetic browser flow. All five native summary views
 fit their byte budget and reconstruct the complete summary. Both synthetic
 PNGs were opened; this is desktop synthetic review, not private/mobile proof.
-The resource gate still failed at 25.43%, so release remains blocked. A later
-candidate improves exact currency formatting and targets repeated authority
-SQL recompilation while preserving fresh database checks. Its results remain
-pending until its own hosted run completes.
+The resource gate still failed at 25.43% on that revision.
+
+At `34d2bfe8`, 847 Python cases, 100 native checks, static checks and synthetic
+browser acceptance passed. Both screenshots were opened; exact currency display
+and the private choice flow were verified in hosted desktop Chromium. A separate
+permanent-policy Parties reader reuses SQL plans while freshly reading authority;
+revocation, quorum, write rejection, rebuild and ownership tests passed. The raw
+p95 gate passed at 8.69%: before 1.885 ms, after 2.767 ms, mixed 3.007 ms, with
+251 admitted finance calls. This bounded pass and the reduced diagnostic
+final-authority cost do not prove heavy-work or deployment performance.
+
+The next producer-fit repair preserves uncertain event windows overlapping a
+horizon even when their original bounds extend outside it. Inline and shared
+layouts use the same inclusive-window/half-open-horizon overlap rule, retain
+source IDs, routes, recognition, flags and totals, and explain uncertainty in
+member/native output. Exact-boundary, pagination, scope, replay/restart and
+browser cases await their own hosted result. No schema/hash change is required.

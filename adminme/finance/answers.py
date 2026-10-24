@@ -80,6 +80,12 @@ def render_result(result: dict[str, Any]) -> str:
             lines.append(
                 "The conservative minimum is a source scalar, not a lower/upper range."
             )
+        if result["result_kind"] == "planning_events":
+            lines.append(
+                "Date windows overlap the selected horizon; original bounds are "
+                "not clipped. Overlap and the source included flag do not prove "
+                "occurrence within that horizon. Producer totals are unchanged."
+            )
         if any(row.get("earliest_date") is None for row in result.get("events", [])):
             lines.append(
                 "Undated items remain unplaced; no date or horizon inclusion is inferred."

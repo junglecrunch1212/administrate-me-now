@@ -4030,7 +4030,7 @@ function financePlanningCard(books) {
   async function events(offset, generation) {
     const answer = await request("planning_events", { context_id: contextSelect.value, horizon_days: horizonSelect.value, offset: String(offset) });
     if (generation !== requestNumber || !section.isConnected) return;
-    detail.replaceChildren(text("h3", "Dated events"), text("p", `Full context manifest: ${answer.manifest.row_count} events. This page lists dated events starting within ${answer.horizon_days} days, plus undated items that are not placed in this horizon.`, "state-note"));
+    detail.replaceChildren(text("h3", "Dated events"), text("p", `Full context manifest: ${answer.manifest.row_count} events. This page lists original date windows overlapping the ${answer.horizon_days}-day horizon, plus undated items that remain unplaced. Bounds are not clipped. Overlap and the source included flag do not prove occurrence within this horizon; producer totals are unchanged.`, "state-note"));
     const table = document.createElement("table"); table.className = "finance-table";
     const head = document.createElement("tr"); for (const label of ["Dates / route", "Type", "Amount range", "Source included"]) head.append(text("th", label)); table.append(head);
     for (const item of answer.events || []) {

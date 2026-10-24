@@ -63,7 +63,18 @@ surplus field is inferred from positive closing values. Horizon cash-in/out
 ranges and minimum, first negative, reserve-breach and zero-crossing dates retain
 their source values or independent null reasons. Known dates must lie within
 the selected horizon, and context as-of dates cannot exceed verification in
-the context timezone.
+the context timezone. These summary dates differ from original detail-event
+windows. A detail window's inclusive earliest/latest bounds need only overlap
+the largest context horizon: `earliest < end_exclusive` and
+`latest >= start_inclusive`, with `earliest <= latest`. The same overlap rule
+selects each shorter horizon's page. Preserve both original bounds even when
+they extend before the start or beyond the end; never clip or drop an overlapping
+window. Overlap and the producer's `included` flag do not establish occurrence
+inside the selected horizon, and consumers never recompute producer totals from
+these pages. Wholly disjoint or reversed windows reject. Undated items remain
+unplaced. This corrects the semantic validator and selection behavior without a
+schema shape/hash change; the current pin remains
+`951a59286ca22396f2084484490aa1d54b47c0ee10c0bc727580134a31c4b925`.
 
 Provider-as-of, retrieval and observation clocks each carry an independent
 value or null reason. An unknown provider clock is not filled with a retrieval
