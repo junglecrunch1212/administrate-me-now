@@ -22,8 +22,8 @@ required privacy invariant or product function.
   the four-tool private facade, 18 deterministic hypothetical calculators,
   accepted accounting import/replay, receipt-bound deterministic answers,
   owner goals/preferences and the declared planning summary subset. At
-  `b9466312`, 779 Python checks, 96 native checks and synthetic desktop acceptance
-  passed. Routing/preparation for F01–F31 is not implementation of every model.
+  `de8a6fe1`, 782 Python checks, 96 native checks and synthetic desktop acceptance
+  passed, including revocation during a finance-delivery yield. Routing/preparation for F01–F31 is not implementation of every model.
 - **Unsupported functions still required by the original ambition:** durable
   heavy analysis and resource reservation; remaining strategic/tax/retirement
   variants with independent oracles; production joint decisions, outcomes and

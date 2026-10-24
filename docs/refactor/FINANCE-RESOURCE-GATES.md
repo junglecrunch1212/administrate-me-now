@@ -103,76 +103,38 @@ targets. This preliminary harness does not prove a large accepted ledger,
 heavy-worker memory/termination, reminder delivery or deployment hardware.
 Its default skip is explicit; a skipped benchmark is not a passed gate.
 
-The first hosted measurement **failed** the unchanged 10% raw client latency
-gate: baseline p95 1.380 ms, mixed core p95 2.418 ms, ratio 1.752. Warm finance
-status/calculation p95 were 8.759/9.181 ms. The failure is retained; neither
-those small absolute times nor an admission configuration proves isolation.
-The next harness also reports a diagnostic matched-thread control with an
-existing lightweight system HTTP request, plus server-only core timing, to
-separate shared TestClient/portal contention from application work. Those
-diagnostics do not replace the original baseline, relax its assertion or
-establish live hardware performance. New admission behavior requires a fresh
-hosted result before any passing claim.
+The v3 harness uses independent server, core-client and finance-client
+processes, explicit TCP_NODELAY, 500 samples per phase, bracketing baselines,
+20 core requests/second and 10 finance calls/second. Server timings are
+diagnostic and never replace the raw client assertion. Earlier shared-client
+and delayed-ACK measurements are retained in Git history as failed or rejected
+evidence, not passing acceptance.
 
-The second v1 measurement at `684f12f1` also failed: core p95 1.907 ms
-baseline versus 2.895 ms mixed (ratio 1.518). Its empty HTTP control alone
-regressed 29.7%, exposing shared TestClient/portal overhead. The v2 harness
-therefore runs the real application in an isolated spawned HTTP server and
-uses independent asynchronous HTTP clients. It retains the raw 10% p95 gate,
-100/500 ms finance targets, bracketing baseline and alternating concurrent
-launch order. Five hundred requests per phase improve sampling. The earlier
-failures remain evidence, not passing results; v2 still needs hosted results.
+| Candidate | Hosted functional evidence | Raw core baseline → mixed p95 | Result |
+|---|---|---|---|
+| `42dafaa2` | One invalid role-removal fixture failed; corrected later | 5.913 → 5.476 ms (0.926090); after baseline 4.490 ms | One bounded pass, not stability proof |
+| `e8c57926` | Two planning defects failed; corrected later | 4.735 → 5.615 ms (1.185864) | Fail |
+| `b9466312` | 779 Python, 96 native and synthetic desktop checks passed | 3.524 → 4.305 ms (1.221600) | Fail |
+| `de8a6fe1` | 782 Python, 96 native and synthetic desktop checks passed | 4.389 → 5.440 ms (1.239571) | Fail |
 
-Budget funding outlook, dated bank-cash projections, debt payoff and noncash
-offsets are different contracts. Neither the resource layer nor the reader
-converts an offset into liquidity or debt principal into expense. The validated
-Books funding-outlook publication and any required semantic schema extension
-remain an integration-review dependency; the v1 interchange stays unchanged.
+The [de8 hosted run](https://github.com/junglecrunch1212/administrate-me-now/actions/runs/40042497072)
+retains 251 admitted finance calls, 18.381/19.970 ms warm status/calculation
+p95 and 1.881 → 2.247 ms diagnostic server p95. Its correctness tests prove
+that a grant revoked while delivery yields is checked again before release;
+they do not prove the required performance isolation.
 
-Latest hosted evidence at `2b292cdc`: 718 Python tests, 96 native tests and the
-Chrome 155 desktop choice/reload flow passed. The generated event catalog
-matched the merged source exactly. The light mixed-load gate **failed**: raw
-core client p95 4.066 ms baseline versus 4.839 ms loaded (1.190208). Server
-p95 was 1.762 versus 1.824 ms; finance status/calculation p95 were
-16.180/16.252 ms across 251 calls. See the [hosted run](https://github.com/junglecrunch1212/administrate-me-now/actions/runs/40035805432).
+Profiles show shared projection dispatch cost. Initial finance reads and
+identity resolution already use whole-query worker callbacks with detached
+results. Exact grant/quorum resolution uses one SQL snapshot; final private
+checks remain fresh and synchronous. The next candidate also moves the two
+ordinary What Now/active-commitment reads onto that same existing projection
+worker as complete callbacks, so their statement dispatch does not block HTTP
+I/O. Member identity is rechecked after the await. A synthetic blocked-read
+liveness test and changed-role/login tests accompany it. No extra runtime,
+authority cache, lower offered load or relaxed acceptance threshold is added.
 
-The v3 harness uses independent server, core client and finance client
-processes, explicit TCP_NODELAY, 500 samples per phase, bracketed baselines,
-20 core requests/second and 10 finance calls/second. Server timings diagnose
-queueing but do not replace the raw client assertion. Earlier v1/v2 failures
-and the rejected delayed-ACK baseline remain in this file's Git history.
-
-Asynchronous whole-query reads reduced measured server contention. The next
-candidate also runs initial/post-audit identity resolution and initial receipt
-authority resolution on the existing projection worker using detached values.
-Final authority, publication, choice and audience checks remain synchronous
-immediately before disclosure; no grant is cached across requests. Tests revoke
-authority, transport and portal bindings during awaited reads/writes. The
-10% gate remains unchanged and unmet until a genuine passing run.
-
-
-The retained diagnostic at `ab3bcfb4` again failed the raw gate: 3.737 ms
-baseline versus 4.744 ms loaded (1.269451), with 251 admitted calls. The 720
-functional checks, 96 native checks and synthetic desktop flow passed. The
-separate CPU profile is diagnostic only. Across 50 finance calls it attributed
-132 ms cumulative time to 201 delegation resolutions; projection statement
-work was the largest measured domain cost. The next candidate resolves each
-current grant and its entire approval quorum in one SQL snapshot, preserving
-extra-approval rejection, tenant/scope predicates, ambiguity and expiry checks.
-Final authority remains freshly queried; no grant or approval is cached. Shared
-identity-kernel acceptance and targeted crossed-approval regressions accompany
-this change. See the [diagnostic run](https://github.com/junglecrunch1212/administrate-me-now/actions/runs/40038039931).
-
-
-Subsequent hosted measurements remain inconsistent. At `7c731710`, 740 Python
-checks, 96 native checks and the synthetic browser passed, but raw p95 was
-2.564 → 3.074 ms (ratio 1.198774). At `42dafaa2`, the raw gate passed once:
-5.913/4.490 ms bracketing baselines, 5.476 ms mixed (ratio 0.926090 against the
-maximum baseline); a separate invalid role-removal fixture failed and was fixed.
-At `e8c57926`, raw p95 failed again: 4.735 → 5.615 ms (ratio 1.185864). Its two
-functional failures were a test portal keyword call and GET horizon parsing;
-the new planning browser hit the same parsing defect. Those source fixes need
-their next hosted result. The 42d pass is one bounded measurement, not stable
-performance proof. The e8 diagnostic reduced delegation resolution to 151
-calls/88.39 ms for 50 finance calls, without caching final authority. No limit
-was relaxed. See the [latest measured run](https://github.com/junglecrunch1212/administrate-me-now/actions/runs/40040387392).
+Budget funding outlook, bank cash, debt payoff and noncash offsets remain
+distinct. The separate dated-projection transport is a declared summary subset;
+its exact Books producer mapping and private parity remain integration gates.
+Accounting accepted-publication v1 is unchanged. Heavy-work memory, termination,
+reminder delivery, large-ledger and deployment-hardware gates remain unproved.
