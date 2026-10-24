@@ -6,6 +6,7 @@ grant sources. It never grants access, loads a credential or asserts execution.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import stat
@@ -18,7 +19,7 @@ from pydantic import AwareDatetime, BaseModel, Field, model_validator
 from adminme.service_identities import COS_SERVICE_PRINCIPAL_ID
 
 INVENTORY_FILE = "workstation-identities.json"
-INVENTORY_CONTRACT = "administrateme-workstation-inventory-v1"
+INVENTORY_CONTRACT = "administrateme-workstation-inventory-v2"
 MAX_BYTES = 256 * 1024
 Text = Annotated[
     str, Field(min_length=1, max_length=300, pattern=r"^[^\x00-\x1f\x7f]+$")
@@ -475,3 +476,212 @@ def compose_inventory(
         "provider_effect_count_scope": "this_inventory_read",
         "refresh": "Read again after account, permission, deployment or capability changes; recheck destination identity before external effects.",
     }
+
+
+# The pinned native harness projects tool output at 10,000 characters. Budget
+# the *whole ToolResult* (both text and details), not just the domain document.
+MAX_INVENTORY_RESPONSE_BYTES = 3800
+STATE_FIELDS = (
+    "configured",
+    "connected",
+    "authenticated",
+    "authorized",
+    "tool_accessible",
+    "executable",
+    "outcome_verified",
+)
+SECTIONS = ("identities", "providers", "bridges", "tools")
+
+
+def _inventory_records(inventory: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+    bridges = []
+    for row in inventory["member_bridges"]:
+        coordinate = f"{row['provider']}|{row['resource_owner_principal_id']}|{row['enrollment_id']}"
+        bridges.append(
+            {
+                **row,
+                "binding_id": "bridge:"
+                + hashlib.sha256(coordinate.encode()).hexdigest()[:20],
+            }
+        )
+    tools = [
+        {
+            **tool,
+            "binding_id": tool["tool"],
+            "capability": group["capability"],
+            "route": "native_tool_policy",
+        }
+        for group in inventory["workstation_tools"]["capabilities"]
+        for tool in group["tools"]
+    ]
+    return {
+        "identities": inventory["identity_inventory"]["bindings"],
+        "providers": inventory["provider_bindings"],
+        "bridges": bridges,
+        "tools": tools,
+    }
+
+
+def _overview_row(section: str, row: dict[str, Any]) -> list[Any]:
+    route = row.get("route", "unknown")
+    if isinstance(route, dict):
+        route = route["kind"]
+
+    def principal(value: str | None) -> str | None:
+        return "CoS" if value == COS_SERVICE_PRINCIPAL_ID else value
+
+    values = row["states"]
+    vector = "".join(
+        "?" if values[key]["value"] is None else "1" if values[key]["value"] else "0"
+        for key in STATE_FIELDS
+    )
+    return [
+        section,
+        row["binding_id"],
+        route,
+        principal(row.get("resource_owner_principal_id")),
+        principal(row.get("operating_principal_id")),
+        row.get("identity_state"),
+        vector,
+    ]
+
+
+def _detail_leaves(
+    value: Any, path: list[str | int] | None = None
+) -> list[dict[str, Any]]:
+    path = path or []
+    if isinstance(value, dict) and value:
+        return [
+            leaf
+            for key, child in value.items()
+            for leaf in _detail_leaves(child, [*path, key])
+        ]
+    if isinstance(value, list) and value:
+        return [
+            leaf
+            for index, child in enumerate(value)
+            for leaf in _detail_leaves(child, [*path, index])
+        ]
+    if isinstance(value, str) and len(value) > 240:
+        return [
+            {
+                "path": path,
+                "value": value[index : index + 240],
+                "text_offset": index,
+                "text_length": len(value),
+            }
+            for index in range(0, len(value), 240)
+        ]
+    return [{"path": path, "value": value}]
+
+
+class InventoryChanged(ValueError):
+    """Page continuation must not silently mix different current inventories."""
+
+
+def inventory_page(
+    inventory: dict[str, Any],
+    *,
+    view: str = "overview",
+    section: str | None = None,
+    binding_id: str | None = None,
+    offset: int = 0,
+    limit: int = 40,
+    snapshot: str | None = None,
+) -> dict[str, Any]:
+    """Complete filtered counts plus bounded, explicitly paged record content.
+
+    Filtering happens before this function. Counts never reveal other owners;
+    detail pagination exposes exactly the same authorized records as overview.
+    No character truncation is used: every page remains complete valid JSON.
+    """
+    records = _inventory_records(inventory)
+    current_snapshot = hashlib.sha256(
+        json.dumps(
+            records, sort_keys=True, ensure_ascii=False, separators=(",", ":")
+        ).encode()
+    ).hexdigest()
+    if snapshot is not None and snapshot != current_snapshot:
+        raise InventoryChanged(
+            "inventory changed; restart this selection at offset zero"
+        )
+    selected = {
+        key: rows for key, rows in records.items() if section is None or key == section
+    }
+    if binding_id is not None:
+        selected = {
+            key: [row for row in rows if row["binding_id"] == binding_id]
+            for key, rows in selected.items()
+        }
+        if not any(selected.values()):
+            raise ValueError("authorized inventory binding not found")
+    entries: list[Any]
+    if view == "details":
+        entries = [
+            {"binding_id": row["binding_id"], **leaf}
+            for rows in selected.values()
+            for row in rows
+            for leaf in _detail_leaves(row)
+        ]
+    else:
+        entries = [
+            _overview_row(key, row) for key, rows in selected.items() for row in rows
+        ]
+    result: dict[str, Any] = {
+        "snapshot": current_snapshot,
+        "contract": inventory["contract"],
+        "view": view,
+        "as_of": inventory["as_of"],
+        "counts": {key: len(rows) for key, rows in records.items()},
+        "counts_scope": "currently_authorized_records_only",
+        "identity_inventory_state": inventory["identity_inventory"]["state"],
+        "identity_inventory_revision": inventory["identity_inventory"].get("revision"),
+        "native_policy_state": inventory["workstation_tools"]["state"],
+        "observation_mode": inventory["observation_mode"],
+        "inventory_grants_authority": False,
+        "provider_effect_count": 0,
+        "selection": {"section": section, "binding_id": binding_id},
+        "page": {
+            "offset": offset,
+            "total_items": len(entries),
+            "returned": 0,
+            "next_offset": None,
+        },
+        "items": [],
+    }
+    if view == "overview":
+        result["columns"] = [
+            "section",
+            "binding_id",
+            "route",
+            "owner",
+            "operator",
+            "identity_record",
+            "states",
+        ]
+        result["state_fields"] = list(STATE_FIELDS)
+        result["state_values"] = {"1": True, "0": False, "?": None}
+        result["interpretation"] = (
+            "CoS=service-principal:chief-of-staff; ?=unknown. Saved identity and declared tools do not prove current authentication/access. Details provide each state's evidence and time."
+        )
+    else:
+        result["detail_format"] = (
+            "path identifies each field; text_offset/text_length join long strings without loss."
+        )
+    result["page"]["next_offset"] = offset if offset < len(entries) else None
+    for entry in entries[offset : offset + limit]:
+        result["items"].append(entry)
+        result["page"]["returned"] = len(result["items"])
+        following = offset + len(result["items"])
+        result["page"]["next_offset"] = following if following < len(entries) else None
+        if (
+            len(json.dumps(result, ensure_ascii=False, separators=(",", ":")).encode())
+            > MAX_INVENTORY_RESPONSE_BYTES
+        ):
+            result["items"].pop()
+            result["page"]["returned"] = len(result["items"])
+            result["page"]["next_offset"] = offset + len(result["items"])
+            break
+    if entries[offset:] and not result["items"]:
+        raise ValueError("inventory field exceeds the bounded page contract")
+    return result
