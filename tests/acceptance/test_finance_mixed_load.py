@@ -131,6 +131,8 @@ class _SyntheticCpuProfile:
         instrument(disclosure, "validate_current_authority", "final_authority")
         instrument(native, "_session", "resolve_session")
         instrument(ProjectionRunner, "_execute_sync", "projection_dispatch")
+        instrument(ProjectionRunner, "_execute_statement", "projection_statement")
+        instrument(ProjectionRunner, "_apply_one_for", "projection_event_apply")
 
     async def __call__(self, scope, receive, send):
         finance = scope["type"] == "http" and scope.get("path", "").startswith(

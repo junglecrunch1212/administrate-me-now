@@ -160,6 +160,22 @@ function moneyMinor(value, { compact = false } = {}) {
   }).format(amount);
 }
 
+
+function publishedMoneyMinor(value, currency) {
+  if (value == null) return "Unknown";
+  if (!Number.isSafeInteger(value)) return "Unavailable";
+  if (typeof Intl.supportedValuesOf !== "function" || !Intl.supportedValuesOf("currency").includes(currency)) return `${value} ${currency} minor units`;
+  const formatter = new Intl.NumberFormat(undefined, { style: "currency", currency, currencyDisplay: "code", numberingSystem: "latn" });
+  const digits = formatter.resolvedOptions().maximumFractionDigits;
+  const minor = BigInt(value); const scale = 10n ** BigInt(digits);
+  const major = minor / scale; const remainder = minor < 0n ? -(minor % scale) : minor % scale;
+  // Keep every producer-rounded digit, including near the safe integer bound.
+  // Floating-point division can lose a cent at that magnitude.
+  const fraction = remainder.toString().padStart(digits, "0");
+  const signedMajor = minor < 0n && major === 0n ? -0 : major;
+  return formatter.formatToParts(signedMajor).map(part => part.type === "fraction" ? fraction : part.value).join("");
+}
+
 function triageReviewView(item) {
   const attentionView = { needs_you: "ready", possibilities: "low_signal", alerts: "alerts", history: "recent" }[item?.attention_view];
   if (state.surface?.human_triage_management?.active && attentionView) return attentionView;
@@ -3878,7 +3894,7 @@ function financeAcceptedBooks(cockpit) {
       head.append(heading); table.append(head); const body = document.createElement("tbody");
       for (const metric of report.metrics) {
         const row = document.createElement("tr");
-        const value = metric.value_minor == null ? "Unavailable" : `${new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 }).format(metric.value_minor)} ${metric.currency} minor units`;
+        const value = metric.value_minor == null ? "Unavailable" : publishedMoneyMinor(metric.value_minor, metric.currency);
         row.append(text("th", metric.metric_id), text("td", value), text("td", `${metric.scenario_id || "No scenario"} · ${(metric.evidence_ids || []).join(", ") || "No evidence reference"}`));
         body.append(row);
       }
@@ -4007,8 +4023,8 @@ function financePlanningCard(books) {
   section.append(controls, content, detail); controls.hidden = true;
   let projectionId = null; let requestNumber = 0;
   const request = (report, extra = {}) => api(`/api/member/v1/finance/planning?${new URLSearchParams({ book_id: books.book_id, report_id: report, ...(projectionId ? { projection_id: projectionId } : {}), ...extra })}`);
-  const exact = (value, currency) => value == null ? "Unknown" : `${new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 }).format(value)} ${currency} minor units`;
-  const range = (values, currency) => values ? `${exact(values[0], currency)} to ${exact(values[1], currency)}` : "Unknown";
+  const exact = publishedMoneyMinor;
+  const range = (values, currency) => !values ? "Unknown" : values[0] === values[1] ? exact(values[0], currency) : `${exact(values[0], currency)} to ${exact(values[1], currency)}`;
   const incomeLabel = (basis) => basis === "OBSERVED_BASE_ONLY" ? "Observed income only" : "Modeled net funding (not payroll)";
   const openingLabel = (basis) => basis === "verified_unrestricted" ? "Verified unrestricted opening" : "Hypothetical observed opening";
   async function events(offset, generation) {

@@ -224,8 +224,19 @@ async def test_owner_saves_goal_and_preference_then_reloads(tmp_path):
             assert identity["member"]["authenticated_id"] == PRINCIPAL
             assert not identity["member"]["viewing_as"]
             assert identity["trust"]["reads_as"] == identity["trust"]["actions_as"]
+            assert await evaluate("""(() => {
+              const formatted = (value, currency) => publishedMoneyMinor(value, currency).replaceAll('\u00a0', ' ');
+              return [formatted(8999999999999999, 'USD'), formatted(-1, 'USD'), formatted(1, 'JPY'), formatted(1, 'BHD'), formatted(null, 'USD'), formatted(123, 'ZZZ')];
+            })()""") == [
+                "USD 89,999,999,999,999.99",
+                "-USD 0.01",
+                "JPY 1",
+                "BHD 0.001",
+                "Unknown",
+                "123 ZZZ minor units",
+            ]
             await wait_for(
-                "document.querySelector('.finance-planning')?.textContent.includes('500 USD minor units to 501 USD minor units')"
+                "document.querySelector('.finance-planning')?.textContent.replaceAll('\u00a0', ' ').includes('USD 5.00 to USD 5.01')"
             )
             await evaluate("""(() => {
               const select=document.querySelector('[aria-label="Projection context"]');
@@ -233,7 +244,7 @@ async def test_owner_saves_goal_and_preference_then_reloads(tmp_path):
               select.value='funding-chosen-plan';select.dispatchEvent(new Event('change'));
             })()""")
             await wait_for(
-                "document.querySelector('.finance-planning').textContent.includes('800 USD minor units to 801 USD minor units') && document.querySelector('.finance-planning').textContent.includes('not bank cash')"
+                "document.querySelector('.finance-planning').textContent.replaceAll('\u00a0', ' ').includes('USD 8.00 to USD 8.01') && document.querySelector('.finance-planning').textContent.includes('not bank cash')"
             )
             assert await evaluate(
                 "document.querySelector('.finance-planning').textContent.includes('INCOMPLETE') && document.querySelector('.finance-planning').textContent.includes('Source refresh: OFF') && document.querySelector('.finance-planning').textContent.includes('Provider Clock Unknown')"
@@ -250,7 +261,7 @@ async def test_owner_saves_goal_and_preference_then_reloads(tmp_path):
               select.value='funding-chosen-plan';select.dispatchEvent(new Event('change'));
             })()""")
             await wait_for(
-                "document.querySelector('.finance-planning').textContent.includes('800 USD minor units to 801 USD minor units') && document.querySelector('.finance-planning').textContent.includes('Minimum date: 2026-03-08')"
+                "document.querySelector('.finance-planning').textContent.replaceAll('\u00a0', ' ').includes('USD 8.00 to USD 8.01') && document.querySelector('.finance-planning').textContent.includes('Minimum date: 2026-03-08')"
             )
             await evaluate(
                 "document.querySelector('.finance-gap-details details').open=true"

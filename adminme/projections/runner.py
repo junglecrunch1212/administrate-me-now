@@ -3,8 +3,9 @@ ProjectionRunner — discovers, dispatches, rebuilds projections.
 
 Per SYSTEM_INVARIANTS.md §2 and ADMINISTRATEME_BUILD.md §L3.
 
-The runner owns one SQLCipher connection per registered projection, one
-serialized native owner worker for every persistent projection handle, and one
+The runner owns one SQLCipher writer per registered projection and one bounded
+query-only Parties handle for current authority reads. One serialized native
+owner worker owns every persistent projection handle, with one
 bus subscription per projection (``subscriber_id = f"projection:{name}"``).
 On each delivered event, the bound callback opens a transaction on the
 projection's DB, calls ``projection.apply(envelope, conn)``, commits, and
@@ -340,6 +341,7 @@ class ProjectionRunner:
         self._key_pragma = _format_key(encryption_key)
         self._projections: dict[str, Projection] = {}
         self._conns: dict[str, sqlcipher3.Connection] = {}
+        self._parties_read_conn: sqlcipher3.Connection | None = None
         self._staged_conns: dict[str, sqlcipher3.Connection] = {}
         self._staged_paths: dict[str, Path] = {}
         self._facades: dict[str, _ProjectionConnectionFacade] = {}
@@ -1079,9 +1081,15 @@ class ProjectionRunner:
         many: bool,
         read_only: bool,
     ) -> _DetachedCursor:
-        conn = self._require_connection(name)
-        if read_only:
+        stable_authorizer = read_only and name == "parties"
+        conn = (
+            self._parties_reader()
+            if stable_authorizer
+            else self._require_connection(name)
+        )
+        if read_only and not stable_authorizer:
             conn.set_authorizer(self._query_only_authorizer)
+        cursor = None
         try:
             cursor = (
                 conn.executemany(sql, parameters)
@@ -1102,8 +1110,46 @@ class ProjectionRunner:
                 description=description,
             )
         finally:
-            if read_only:
+            if cursor is not None:
+                cursor.close()
+            if read_only and not stable_authorizer:
                 conn.set_authorizer(None)
+
+    def _parties_reader(self) -> sqlcipher3.Connection:
+        """One worker-owned current reader with a fixed SQL policy, not a cache.
+
+        Resetting sqlite3_set_authorizer invalidates compiled statements. This
+        separate handle keeps its read-only policy for its entire lifetime;
+        every execute still reads the current committed WAL state. Its statement
+        cache can never contain a statement prepared with writer permissions.
+        """
+        self._require_connection("parties")
+        if self._parties_read_conn is not None:
+            return self._parties_read_conn
+        path = self._config.projection_db_path("parties")
+        conn = sqlcipher3.connect(
+            path.resolve().as_uri() + "?mode=ro",
+            uri=True,
+            isolation_level=None,
+            cached_statements=64,
+        )
+        try:
+            conn.row_factory = sqlcipher3.Row
+            conn.execute(f'PRAGMA key = "{self._key_pragma}"')
+            conn.execute("PRAGMA query_only=ON")
+            conn.execute("PRAGMA cache_size=-256")
+            conn.execute("SELECT count(*) FROM sqlite_master").fetchone()
+            conn.set_authorizer(self._query_only_authorizer)
+        except BaseException:
+            conn.close()
+            raise
+        self._parties_read_conn = conn
+        return conn
+
+    def _close_parties_reader(self) -> None:
+        conn, self._parties_read_conn = self._parties_read_conn, None
+        if conn is not None:
+            conn.close()
 
     @staticmethod
     def _query_only_authorizer(
@@ -1293,6 +1339,8 @@ class ProjectionRunner:
         target = self._config.projection_db_path(name)
         backup = Path(f"{target}.pre-rebuild-{uuid.uuid4().hex}")
         old = self._require_connection(name)
+        if name == "parties":
+            self._close_parties_reader()
         stage.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         stage.close()
         old.execute("PRAGMA wal_checkpoint(TRUNCATE)")
@@ -1331,6 +1379,10 @@ class ProjectionRunner:
         self._remove_if_exists(tracked)
 
     def _close_all_connections(self) -> None:
+        try:
+            self._close_parties_reader()
+        except Exception:
+            _log.exception("error closing Parties query-only connection")
         for name, conn in list(self._staged_conns.items()):
             try:
                 conn.close()

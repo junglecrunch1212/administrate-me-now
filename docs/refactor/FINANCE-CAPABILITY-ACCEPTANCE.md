@@ -22,7 +22,7 @@ required privacy invariant or product function.
   the four-tool private facade, 18 deterministic hypothetical calculators,
   accepted accounting import/replay, receipt-bound deterministic answers,
   owner goals/preferences and the declared planning summary subset. At
-  `7d120a86`, 793 Python checks, 96 native checks and synthetic desktop acceptance
+  `cc159d8a`, 816 Python checks, 100 native checks and synthetic desktop acceptance
   passed, including revocation during a finance-delivery yield and route-specific
   member/delegated CoS authority. Routing/preparation for F01–F31 is not implementation of every model.
 - **Unsupported functions still required by the original ambition:** durable
@@ -262,3 +262,12 @@ budget, and the browser expected a human-readable issue label that still used
 hyphens. The next source repair separates date/clock views and formats the label;
 all source fields and conditions must still round-trip. Mixed-load core p95 was
 4.595 → 5.620 ms (22.31% regression), so the resource gate still failed.
+
+The `cc159d8a` hosted repair passed all 816 Python cases, 100 native checks,
+static checks and the synthetic browser flow. All five native summary views
+fit their byte budget and reconstruct the complete summary. Both synthetic
+PNGs were opened; this is desktop synthetic review, not private/mobile proof.
+The resource gate still failed at 25.43%, so release remains blocked. A later
+candidate improves exact currency formatting and targets repeated authority
+SQL recompilation while preserving fresh database checks. Its results remain
+pending until its own hosted run completes.

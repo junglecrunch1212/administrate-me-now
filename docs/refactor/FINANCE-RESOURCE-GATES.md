@@ -118,6 +118,7 @@ evidence, not passing acceptance.
 | `de8a6fe1` | 782 Python, 96 native and synthetic desktop checks passed | 4.389 → 5.440 ms (1.239571) | Fail |
 | `7d120a86` | 793 Python, 96 native and synthetic desktop checks passed | 2.725 → 3.059 ms (1.122426); after baseline 1.932 ms | Fail |
 | `63691cc7` | 814 Python passed; one summary-size failure. 100 native/static passed; browser label failed | 4.595 → 5.620 ms (1.223142); after baseline 4.480 ms | Fail |
+| `cc159d8a` | 816 Python, 100 native/static and synthetic desktop checks passed | 3.857 → 4.838 ms (1.254260); after baseline 3.695 ms | Fail |
 
 The [de8 hosted run](https://github.com/junglecrunch1212/administrate-me-now/actions/runs/40042497072)
 retains 251 admitted finance calls, 18.381/19.970 ms warm status/calculation
@@ -133,12 +134,29 @@ reads now run on that same existing projection worker as complete callbacks,
 so their statement dispatch does not block HTTP I/O. Member identity is
 rechecked after the await; delegated CoS state retains its own authenticated
 domain boundary. Hosted blocked-read liveness and changed-role/login cases
-passed at `7d120a86`. The next narrow candidate selects only consumed grant
-columns and copies the immutable Session/context fields without recursive
-copying. It retains the exact current SQL snapshot, quorum, expiry and final
-revocation check. Its performance effect is unproved until hosted measurement.
-No extra runtime, authority cache, lower offered load or relaxed acceptance
-threshold is added.
+passed at `7d120a86`. Selecting only consumed grant columns and copying immutable
+Session/context fields without recursive copying did not clear the gate at
+`cc159d8a`: 250 admitted calls retained a 25.43% raw p95 regression. The separate
+profile measured final authority p95 0.710 ms, including 0.565 ms projection
+dispatch. These values do not replace acceptance timing.
+
+Source inspection found that each Parties read reset SQLite's authorizer twice.
+[SQLite expires prepared statements on each authorizer change](https://raw.githubusercontent.com/sqlite/sqlite/master/src/auth.c).
+The next candidate uses one additional, worker-owned, encrypted `mode=ro` Parties
+handle with a permanent query-only authorizer, 64 prepared statements and a
+256 KiB page-cache target. It caches SQL plans, never grant values. Every grant,
+quorum, expiry and final revocation check still queries current committed WAL
+state. Cursors close after detached rows are copied; rebuild publication closes
+the reader before replacing the database, and shutdown closes it on its owner
+worker. Other projections retain their existing query boundary. There is no new
+executor, runtime, background task or changed response/load threshold.
+
+The focused hosted checks exercise fresh revocation after plan reuse, extra
+approvals, write/ATTACH/transaction rejection after writer-side preparation,
+failed and successful rebuilds, handle ownership and close. Existing full
+projection rebuild tests and Parties behavior checks are included because this
+changes that database's reader lifecycle. Its performance effect and total
+memory impact are unproved until measured; the cache target is not an RSS claim.
 
 Budget funding outlook, bank cash, debt payoff and noncash offsets remain
 distinct. The separate dated-projection transport is a declared summary subset;
