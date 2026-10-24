@@ -104,7 +104,8 @@ it.each([403, 422, undefined])("logs only safe reply transport classification (%
   const f = fixture();
   f.request.mockRejectedValue(new TransportError("private-body member@example.invalid secret-value", "degraded", status));
   await f.prepare(); f.begin(); await f.finish();
-  expect(f.logger.error).toHaveBeenCalledExactlyOnceWith(`CoS email reply failed or has an unknown result (kind=transport, status=${status ?? "unknown"}); inspect its retained receipt, do not resend.`);
+  expect(f.logger.error).toHaveBeenCalledOnce();
+  expect(f.logger.error).toHaveBeenCalledWith(`CoS email reply failed or has an unknown result (kind=transport, status=${status ?? "unknown"}); inspect its retained receipt, do not resend.`);
   await f.finish();
   expect(f.request).toHaveBeenCalledOnce();
 });
