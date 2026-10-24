@@ -449,9 +449,11 @@ def test_cos_owned_reminder_catalog_is_distinct_from_member_permission(
     )
     monkeypatch.setattr(catalog_module, "load_catalog", lambda _: catalog)
     _, runtime.settings.adapter_config = _configuration_pair(tmp_path)
-    item = catalog_module.compose_member_catalog(runtime, session, settings_state={})[
-        "items"
-    ][0]
+    composed = catalog_module.compose_member_catalog(
+        runtime, session, settings_state={}
+    )
+    assert composed["summary"]["execute_available"] == 0
+    item = composed["items"][0]
     assert item["native_source"]["resource_owner"] == "service-principal:chief-of-staff"
     assert (
         item["native_source"]["current_native_permission"] == "not_inspected_by_catalog"
