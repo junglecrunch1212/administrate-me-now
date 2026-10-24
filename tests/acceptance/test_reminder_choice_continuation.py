@@ -737,3 +737,52 @@ def test_actual_conversation_or_human_reference_selects_task_not_model_argument(
             )
         finally:
             client.portal.call(model.aclose)
+
+
+def test_fresh_answer_does_not_stage_a_historical_failed_or_legacy_request(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ADMINME_TEST_MODE", "1")
+    two_lists(monkeypatch)
+    with TestClient(
+        create_application(configured(tmp_path)),
+        base_url="https://central-fixture.ts.net",
+    ) as client:
+        runtime = client.app.state.runtime
+        prepare_apple_sources(client, tmp_path)
+        _grant(client)
+        grant_services(client)
+        _normal_operation(client)
+        due = (datetime.now(timezone.utc) + timedelta(days=2)).replace(microsecond=0)
+        old = instruction(
+            client,
+            "portal",
+            "legacy-list-request",
+            "Add a reminder to call a relative at " + due.isoformat(),
+        )
+        legacy = client.post(
+            CONFIRM,
+            headers=AUTH,
+            json={
+                **old,
+                "request_id": "fixture-legacy-list-request",
+                "title": "Call a relative",
+                "due_at": due.isoformat(),
+                "request_authorization": False,
+            },
+        )
+        assert legacy.status_code == 200, legacy.text
+        assert legacy.json()["state"] == "list_choice_required"
+        assert "task_id" not in legacy.json()
+        fresh = instruction(client, "imessage", "legacy-new-answer", "Yes")
+        answer = client.post(CHOICE, headers=AUTH, json={**fresh, "action": "answer"})
+        assert answer.status_code == 200, answer.text
+        assert answer.json()["state"] == "no_pending_reminder_choice"
+        assert client.portal.call(_events, runtime, "cos.reminder.choice_offered") == []
+        assert (
+            client.portal.call(_events, runtime, "member.provider_action.confirmed")
+            == []
+        )
+        assert (
+            client.portal.call(_events, runtime, "external_sync.write_requested") == []
+        )
