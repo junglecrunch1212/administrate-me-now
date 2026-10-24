@@ -512,7 +512,7 @@ async def confirm_requested_email(
             # grounding, approval, or execution is created until one is chosen.
             return {
                 "status": code,
-                field: selection[field],
+                field: cast(dict[str, Any], selection)[field],
                 "provider_effect_count": 0,
                 "automatic_retry_allowed": False,
             }
