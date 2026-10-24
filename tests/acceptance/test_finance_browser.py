@@ -262,6 +262,41 @@ async def test_owner_saves_goal_and_preference_then_reloads(tmp_path):
             await wait_for(
                 "document.querySelector('.finance-planning')?.textContent.replaceAll('\u00a0', ' ').includes('USD 5.00 to USD 5.01')"
             )
+            dashboard_output = Path(
+                os.environ.get("FINANCE_BROWSER_ARTIFACT_DIR", str(tmp_path))
+            )
+            dashboard_output.mkdir(parents=True, exist_ok=True)
+            for width, height, name in (
+                (1280, 1000, "desktop"),
+                (390, 850, "narrow-viewport"),
+            ):
+                await call(
+                    "Emulation.setDeviceMetricsOverride",
+                    {
+                        "width": width,
+                        "height": height,
+                        "deviceScaleFactor": 1,
+                        "mobile": False,
+                    },
+                )
+                await evaluate("scrollTo(0, 0)")
+                await asyncio.sleep(0.1)
+                assert await evaluate(
+                    "document.documentElement.scrollWidth <= innerWidth"
+                ), name
+                shot = await call("Page.captureScreenshot", {"format": "png"})
+                (dashboard_output / f"finance-books-{name}.png").write_bytes(
+                    base64.b64decode(shot["data"])
+                )
+            await call(
+                "Emulation.setDeviceMetricsOverride",
+                {
+                    "width": 1280,
+                    "height": 1000,
+                    "deviceScaleFactor": 1,
+                    "mobile": False,
+                },
+            )
             await evaluate("""(() => {
               const select=document.querySelector('[aria-label="Projection context"]');
               if(select.options.length!==24) throw Error('context coverage lost');
