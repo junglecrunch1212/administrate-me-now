@@ -40,6 +40,7 @@ class BrowserResource(StrictRecord):
     identity_probes: dict[Literal["account", "workspace", "role"], IdentityProbe]
     audience_member_ids: list[Text] = Field(min_length=1, max_length=20)
     restrictions: list[Text] = Field(default_factory=list, max_length=20)
+    sensitivity: Literal["normal", "sensitive", "privileged"] = "sensitive"
 
     @model_validator(mode="after")
     def bounded_read(self) -> BrowserResource:
@@ -84,6 +85,7 @@ def browser_resource(
     resource_id: str,
     *,
     now: datetime | None = None,
+    require_fresh_verification: bool = True,
 ) -> dict[str, Any]:
     """Resolve expectations only; a native destination probe proves identity."""
     matches = [row for row in policy.resources if row.resource_id == resource_id]
@@ -108,12 +110,14 @@ def browser_resource(
         )
     now = now or datetime.now(timezone.utc)
     verification = binding.verification
-    if (
-        resource.inventory_binding_revision != binding.revision
-        or binding.observed_identity != binding.expected_identity
-        or verification is None
-        or verification.binding_revision != binding.revision
-        or not verification.observed_at <= now < verification.valid_until
+    if resource.inventory_binding_revision != binding.revision or (
+        require_fresh_verification
+        and (
+            binding.observed_identity != binding.expected_identity
+            or verification is None
+            or verification.binding_revision != binding.revision
+            or not verification.observed_at <= now < verification.valid_until
+        )
     ):
         raise ValueError("the native target needs a current verified canonical binding")
     expected = binding.expected_identity.model_dump(exclude_none=True)
@@ -139,6 +143,7 @@ def browser_resource(
         },
         "audience_member_ids": list(resource.audience_member_ids),
         "restrictions": list(resource.restrictions),
+        "sensitivity": resource.sensitivity,
     }
 
 
@@ -165,11 +170,9 @@ def assert_single_extension_profile(gateway: dict[str, Any]) -> None:
         browser.get("defaultProfile") != BROWSER_PROFILE
         or browser.get("allowSystemProfileImport") is not False
         or browser.get("enabled") is not True
-        or gateway.get("gateway", {}).get("nodes", {}).get("browser", {}).get("mode")
-        != "off"
     ):
         raise ValueError(
-            "browser routes must be host-only with system-profile import disabled"
+            "the explicit browser profile must have system-profile import disabled"
         )
     row = profiles[BROWSER_PROFILE]
     if set(row) - {"driver", "color", "cdpPort"}:
@@ -212,8 +215,5 @@ def prepare_browser_gateway(gateway: dict[str, Any]) -> dict[str, Any]:
             "evaluateEnabled": True,
         }
     )
-    prepared.setdefault("gateway", {}).setdefault("nodes", {}).setdefault(
-        "browser", {}
-    )["mode"] = "off"
     assert_single_extension_profile(prepared)
     return prepared

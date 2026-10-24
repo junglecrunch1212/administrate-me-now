@@ -59,6 +59,6 @@ it("withholds content after routing, target, identity or source authority change
   expect(() => verifiedBrowserRead(native, prepared, { ...policy, policy_revision: 2 }, result)).toThrow("authority changed");
   expect(() => verifiedBrowserRead(native, prepared, policy, { details: { ...result.details, targetId: "new-session-tab" } })).toThrow();
   expect(() => verifiedBrowserRead(native, prepared, policy, { details: { targetId: "real-native-tab", result: page("member@example.invalid").result } })).toThrow();
-  current = { ...current, gateway: { nodes: { browser: { mode: "auto" } } } };
-  expect(() => verifiedBrowserRead(native, prepared, policy, result)).toThrow("host-only");
+  current = { ...current, browser: { ...current.browser, allowSystemProfileImport: true } };
+  expect(() => verifiedBrowserRead(native, prepared, policy, result)).toThrow("session import disabled");
 });

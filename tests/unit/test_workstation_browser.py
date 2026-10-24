@@ -16,12 +16,17 @@ from tests.unit.test_workstation_inventory import document
 
 
 def test_native_pairing_preparation_preserves_tools_and_rejects_ambiguous_profile():
-    original = {"agents": {"list": [{"id": "service", "tools": {"allow": ["read"]}}]}}
+    original = {
+        "agents": {"list": [{"id": "service", "tools": {"allow": ["read"]}}]},
+        "gateway": {
+            "nodes": {"browser": {"mode": "manual", "node": "another-workstation"}}
+        },
+    }
     prepared = prepare_browser_gateway(original)
     assert original.get("browser") is None
     assert prepared["agents"] == original["agents"]
     assert prepared["browser"]["allowSystemProfileImport"] is False
-    assert prepared["gateway"]["nodes"]["browser"]["mode"] == "off"
+    assert prepared["gateway"] == original["gateway"]
     assert_single_extension_profile(prepared)
     for alternate in ({"driver": "extension"}, {"driver": "existing-session"}):
         ambiguous = deepcopy(prepared)

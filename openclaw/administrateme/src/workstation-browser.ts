@@ -33,12 +33,11 @@ export function assertNativeBrowserRoute(config: Record<string, unknown>): void 
   const browser = object(config.browser);
   const profiles = object(browser.profiles);
   const extensions = Object.entries(profiles).filter(([, row]) => object(row).driver === "extension").map(([name]) => name);
-  const route = object(object(object(config.gateway).nodes).browser);
   if (browser.enabled !== true || browser.defaultProfile !== "chrome" ||
       browser.allowSystemProfileImport !== false || browser.evaluateEnabled !== true ||
-      route.mode !== "off" || extensions.length !== 1 || extensions[0] !== "chrome" ||
+      extensions.length !== 1 || extensions[0] !== "chrome" ||
       Object.keys(object(profiles.chrome)).some((key) => !["driver", "color", "cdpPort"].includes(key))) {
-    throw new Error("One host-only CoS extension profile with session import disabled is required.");
+    throw new Error("One explicit CoS extension profile with session import disabled is required.");
   }
 }
 
@@ -74,7 +73,14 @@ export function identityBoundReadExpression(policy: BrowserReadPolicy): string {
     const body = document.body;
     const text = body ? body.innerText : "";
     if (typeof text !== "string" || !text.trim()) return {kind:"read_unavailable",reason:"no_visible_text",url};
-    return {kind:"identity_bound_read",url,identity,text:text.slice(0,2000),truncated:text.length>2000};
+    let excerpt = "", bytes = 0;
+    for (const character of text) {
+      const point = character.codePointAt(0);
+      const width = point <= 0x7f ? 1 : point <= 0x7ff ? 2 : point <= 0xffff ? 3 : 4;
+      if (bytes + width > 2000) break;
+      excerpt += character; bytes += width;
+    }
+    return {kind:"identity_bound_read",url,identity,text:excerpt,truncated:excerpt.length<text.length};
   }`;
 }
 
@@ -111,7 +117,7 @@ export function verifiedBrowserRead(
   const result = object(details.result);
   if (details.targetId !== prepared.targetId || result.kind !== "identity_bound_read" ||
       result.url !== current.url || typeof result.text !== "string" || !result.text.trim() ||
-      result.text.length > 2000 || typeof result.truncated !== "boolean") {
+      Buffer.byteLength(result.text, "utf8") > 2000 || typeof result.truncated !== "boolean") {
     throw new Error("The native browser did not verify the requested account and page read.");
   }
   const identity = object(result.identity);

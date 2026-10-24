@@ -177,6 +177,7 @@ export type OpenClawPluginApi = {
   pluginConfig?: Record<string, unknown>;
   config: Record<string, unknown>;
   runtime: {
+    config: { current: () => Record<string, unknown> };
     subagent?: {
       run: (params: { sessionKey: string; message: string; deliver?: boolean; lane?: string; idempotencyKey?: string }) => Promise<{ runId: string }>;
       waitForRun: (params: { runId: string; timeoutMs?: number }) => Promise<{ status: "ok" | "error" | "timeout"; error?: string }>;
@@ -205,6 +206,10 @@ export type OpenClawPluginApi = {
     opts?: { name?: string; names?: string[]; optional?: boolean },
   ) => void;
   registerCommand: (command: OpenClawPluginCommandDefinition) => void;
+  registerAgentToolResultMiddleware: (
+    handler: (event: { toolCallId: string; toolName: string; args: Record<string, unknown>; isError?: boolean; result: ToolResult }, context: PluginHookAgentContext & { runtime: "openclaw" | "codex" }) => Promise<{ result: ToolResult } | void> | { result: ToolResult } | void,
+    options?: { matcher?: string[]; runtimes?: Array<"openclaw" | "codex"> },
+  ) => void;
   registerGatewayMethod: (
     method: string,
     handler: (opts: GatewayHandlerOptions) => void | Promise<void>,
