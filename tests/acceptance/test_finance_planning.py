@@ -35,6 +35,59 @@ from tests.acceptance.test_openclaw_native_seam import (
 from tests.fixtures.finance_planning import projection, seal, bounds
 
 
+def test_exact_projection_validation_receipts_are_bounded_and_reject_changed_bytes(
+    monkeypatch,
+):
+    from collections import OrderedDict
+    from adminme.finance import dated_projection as module
+
+    receipts = OrderedDict()
+    monkeypatch.setattr(module, "_validation_receipts", receipts)
+    validator = module._validator()
+    calls = []
+
+    class ObservedValidator:
+        def validate(self, value):
+            calls.append(value["projection_id"])
+            validator.validate(value)
+
+    monkeypatch.setattr(module, "_validator", lambda: ObservedValidator())
+    original = projection(publication())
+    first = validate_projection(original)
+    second = validate_projection(deepcopy(original))
+    assert len(calls) == 1 and first == second == original
+    assert first is not second and first["contexts"] is not second["contexts"]
+    first["contexts"][0]["opening"]["lower_minor"] = -1
+    assert validate_projection(original) == second
+    # Reusing a valid declared content hash cannot approve changed actual bytes.
+    with pytest.raises(PublicationError, match="projection_content_mismatch"):
+        validate_projection(first)
+    assert len(calls) == 2 and len(receipts) == 1
+    # Even a recomputed content hash cannot bypass semantic validation.
+    first["contexts"][0]["opening"]["lower_minor"] = 2000
+    first["content_sha256"] = content_hash(first)
+    with pytest.raises(PublicationError, match="projection_range_reversed"):
+        validate_projection(first)
+    assert len(receipts) == 1
+    # Schema changes invalidate the receipt. Failure must never be remembered.
+    actual_schema = module.schema_hash
+    monkeypatch.setattr(module, "schema_hash", lambda: "0" * 64)
+    with pytest.raises(PublicationError, match="projection_schema_mismatch"):
+        validate_projection(original)
+    assert len(receipts) == 1
+    monkeypatch.setattr(module, "schema_hash", actual_schema)
+    for index in range(module._VALIDATION_RECEIPT_LIMIT):
+        changed = deepcopy(original)
+        changed["projection_id"] = f"synthetic-receipt-{index}"
+        changed["content_sha256"] = content_hash(changed)
+        validate_projection(changed)
+    assert len(receipts) == module._VALIDATION_RECEIPT_LIMIT
+    assert all(value is None for value in receipts.values())
+    previous = len(calls)
+    validate_projection(original)
+    assert len(calls) == previous + 1
+
+
 def test_contract_and_twelve_declared_contexts_preserve_both_measures_and_horizons():
     value = projection(publication(), 3215)
     assert validate_projection(value) == value

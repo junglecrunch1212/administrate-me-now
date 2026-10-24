@@ -151,6 +151,14 @@ import with a single concurrent core request does not qualify sustained query
 load, the household Mini, maximum permitted sizes, real-data conversion or
 private transport. The existing native qualification scope remains separate.
 
+Dated structural validation retains at most 32 successful receipts containing
+only the pinned-schema and complete canonical-payload hashes. Every reuse hashes
+all supplied bytes and returns a newly detached value; changed bytes or schema
+require all validation again. No payload or authority is retained in this cache.
+This avoids repeating the same expensive pure validation during event admission
+and projection application. Source-proof verification, accounting anchors,
+private scope, current control and final disclosure checks remain independent.
+
 Recovery for these new control/import events uses the schema-aware runtime:
 disable both Books and CoS analysis with the current control revision and verify
 denied disclosure. Keep accepted history, shared workbooks and existing generic

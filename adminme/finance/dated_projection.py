@@ -9,7 +9,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections import defaultdict
+import threading
+from collections import OrderedDict, defaultdict
 from collections.abc import Iterable
 from datetime import date, datetime, timedelta
 from functools import lru_cache
@@ -27,6 +28,15 @@ MAX_BYTES = 8 * 1024 * 1024
 BANK = "BANK_CASH_SUBSET"
 FUNDING = "CASH_EQUIVALENT_FUNDING_NOT_BANK"
 HORIZONS = {7, 30, 90, 180, 365}
+
+# Successful pure validation receipts only: never retain a payload or authority.
+# Import, schema admission and projection application validate the same immutable
+# bytes. Repeating their multi-megabyte structural walk can block ordinary reads.
+# Every call still canonicalizes and hashes all bytes, returns a detached object,
+# and callers independently enforce current owner, proof and accounting anchors.
+_VALIDATION_RECEIPT_LIMIT = 32
+_validation_receipts: OrderedDict[tuple[str, str], None] = OrderedDict()
+_validation_receipt_lock = threading.Lock()
 
 
 def schema_hash() -> str:
@@ -332,8 +342,14 @@ def validate_projection(value: dict[str, Any]) -> dict[str, Any]:
         if len(raw) > MAX_BYTES:
             raise PublicationError("projection_size_limit")
         result = json.loads(raw)
+        current_schema_hash = schema_hash()
+        receipt = (current_schema_hash, hashlib.sha256(raw).hexdigest())
+        with _validation_receipt_lock:
+            if receipt in _validation_receipts:
+                _validation_receipts.move_to_end(receipt)
+                return result
         _validator().validate(result)
-        if result["schema_sha256"] != schema_hash():
+        if result["schema_sha256"] != current_schema_hash:
             raise PublicationError("projection_schema_mismatch")
         if result["content_sha256"] != content_hash(result):
             raise PublicationError("projection_content_mismatch")
@@ -561,6 +577,11 @@ def validate_projection(value: dict[str, Any]) -> dict[str, Any]:
             bank_paths[coordinate] = path
         if inventory is not None and referenced != set(inventory):
             raise PublicationError("projection_shared_inventory_unreferenced")
+        with _validation_receipt_lock:
+            _validation_receipts[receipt] = None
+            _validation_receipts.move_to_end(receipt)
+            while len(_validation_receipts) > _VALIDATION_RECEIPT_LIMIT:
+                _validation_receipts.popitem(last=False)
         return result
     except PublicationError:
         raise
