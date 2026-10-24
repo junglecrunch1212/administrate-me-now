@@ -377,11 +377,14 @@ async def test_cancelled_authority_callback_settles_without_blocking_loop_or_clo
             "cancelled callback escaped before native work settled"
         )
         closing = asyncio.create_task(runner.stop())
-        for _ in range(100):
-            if runner._closing:
-                break
-            await asyncio.sleep(0.001)
-        assert runner._closing
+        # stop() first settles the EventBus before closing reader admission.
+        # Synchronize with that state; scheduler timing is not a 100-ms contract.
+        async with asyncio.timeout(5):
+            while not runner._closing:
+                if closing.done():
+                    await closing
+                    pytest.fail("runner stopped without entering closing state")
+                await asyncio.sleep(0.001)
         assert not closing.done()
         with pytest.raises(RuntimeError, match="closing"):
             await runner.read_authority(lambda conn: None)

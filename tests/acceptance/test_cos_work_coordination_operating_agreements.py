@@ -1154,11 +1154,12 @@ def test_parties_version_replays_late_old_constitution_without_rewriting_history
         conn = runtime.projections.connection("parties")
         # Reproduce the historical v4 derived cache, retaining actual late-v1
         # source history. Startup must repair it by replay, not by rewriting facts.
-        conn.execute(
+        writer = runtime.projections._unsafe_maintenance_connection("parties")
+        writer.execute(
             "UPDATE operating_agreements SET state='active' WHERE layer='constitutional'"
         )
-        conn.execute("UPDATE _projection_meta SET value='4' WHERE key='version'")
-        conn.commit()
+        writer.execute("UPDATE _projection_meta SET value='4' WHERE key='version'")
+        writer.commit()
         assert (
             conn.execute(
                 "SELECT COUNT(*) FROM operating_agreements WHERE layer='constitutional' AND state='active'"
