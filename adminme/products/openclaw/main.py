@@ -4324,10 +4324,20 @@ async def _finance_delivery(
     from adminme.finance.disclosure import FinanceDisclosureError, record_disclosure
 
     runtime = _runtime(request)
-    await _record_tool_call(request, session, body.provenance, operation=operation)
-    # The audit append yields. Ordinary requests may have arrived meanwhile;
-    # give them priority before resolving the current effective grant again.
-    if not await runtime.finance_admission.yield_to_foreground():
+    try:
+        # A query may have yielded while ordinary work arrived. Wait before
+        # starting its audit traffic, outside every EventWriter/projection lock.
+        foreground_ready = await runtime.finance_admission.yield_to_foreground()
+    finally:
+        # Timeout or cancellation of this new wait must still attempt the same
+        # tool-call audit. The durable bus and its ordering remain unchanged.
+        await _record_tool_call(request, session, body.provenance, operation=operation)
+    # The audit append also yields; freshly resolve authority only after any
+    # newly arrived ordinary request has finished.
+    if (
+        not foreground_ready
+        or not await runtime.finance_admission.yield_to_foreground()
+    ):
         from adminme.finance.admission import admission_busy_result
 
         return admission_busy_result()

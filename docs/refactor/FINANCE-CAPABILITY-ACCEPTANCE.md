@@ -22,7 +22,7 @@ required privacy invariant or product function.
   the four-tool private facade, 18 deterministic hypothetical calculators,
   accepted accounting import/replay, receipt-bound deterministic answers,
   owner goals/preferences and the declared planning summary subset. At
-  `d616844e`, 922 Python checks, 100 native checks and synthetic desktop acceptance
+  `7318f4d0`, 922 Python checks, 100 native checks and synthetic desktop acceptance
   passed, including revocation during a finance-delivery yield and route-specific
   member/delegated CoS authority. Routing/preparation for F01–F31 is not implementation of every model.
 - **Unsupported functions still required by the original ambition:** durable
@@ -74,8 +74,13 @@ required privacy invariant or product function.
   checks passed, but raw light/planning p95 still failed at 25.35%/29.23%.
   The occupancy diagnostic at `d616844e` failed an incorrect JSONResponse
   rendering assertion; raw light/planning gates also failed at 21.42%/22.69%.
-  Its correction measures FastAPI's actual Pydantic JSON-byte path and retains
-  traces before validity assertions. Loop/worker CPU attribution remains open.
+  At `7318f4d0`, the repaired diagnostics passed; raw light/planning gates
+  still failed at 25.05%/20.88%. Planning metadata decoding consumes material
+  worker CPU, while audit drain work overlaps core reads in both workloads.
+  The selected bounded candidate waits for foreground work before submitting
+  finance audits, preserving durable history and all post-write authority checks.
+  Its focused correctness cases and both unchanged raw gates must pass; otherwise
+  remove this candidate and retain the unresolved resource tradeoff.
   Production authority checks and both raw gates remain unchanged.
   Broader resource isolation remains
   unproved. Large-ledger, reminder-delivery,

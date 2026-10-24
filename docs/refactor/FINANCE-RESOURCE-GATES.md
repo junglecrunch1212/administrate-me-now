@@ -152,6 +152,7 @@ evidence, not passing acceptance.
 | `9814dbac` | 877 Python, 100 native/static/browser, query-work, reader-memory and diagnostic validity checks passed | Before 4.249, after 3.495 → mixed 5.423 ms (1.276111) | Fail; planning also fails at 10.19% |
 | `d2115dd9` | 922 Python, 100 native/static/browser, query-work, reader-memory and diagnostic validity checks passed | Before 4.267, after 4.250 → mixed 5.349 ms (1.253548) | Fail; planning also fails at 29.23% |
 | `d616844e` | 922 Python, 100 native/static/browser, query-work and reader-memory checks passed; all four diagnostics failed on an incorrect response-render assertion | Before 3.630, after 3.539 → mixed 4.407 ms (1.214193) | Fail; planning also fails at 22.69% |
+| `7318f4d0` | 922 Python, 100 native/static/browser, query-work, reader-memory and all four repaired diagnostics passed | Before 3.308, after 3.052 → mixed 4.137 ms (1.250530) | Fail; planning also fails at 20.88% |
 
 The [de8 hosted run](https://github.com/junglecrunch1212/administrate-me-now/actions/runs/40042497072)
 retains 251 admitted finance calls, 18.381/19.970 ms warm status/calculation
@@ -416,3 +417,38 @@ status/calculation p95. The three reader trials were again flat after
 7,483,392–7,487,488 after rebuild and retained 7,462,912–7,467,008 after
 shutdown with zero reader threads. None of these observations clears either
 raw gate, and the failed occupancy profiles supply no qualified timing result.
+
+
+At `7318f4d0`, planning raw before/after/mixed core p95 was
+3.603/3.576/4.355 ms, with 251 finance calls and 16.739/17.884 ms
+summary/detail p95. Light had 250 calls and 14.068/14.893 ms
+status/calculation p95. Reader RSS grew 7,008,256–7,020,544 bytes initially,
+remained flat over 1,000 further reads, grew to 7,471,104–7,483,392 on rebuild
+and retained 7,450,624–7,462,912 at shutdown; all three reader threads exited.
+
+The valid profiles cover all four offsets. At the 12.5 ms overlap, planning
+query worker wall/CPU totals were 104.244/104.248 ms over 50 calls; nested JSON
+decode totals were 76.547/76.562 ms. Loop envelope decoding p95 was 0.039 ms,
+Pydantic JSON encoding 0.026 ms and response serialization 0.043 ms. These small
+loop operations do not justify moving them individually. Core worker wall/CPU
+p95 was 1.328/1.006 ms (planning) and 1.073/0.871 ms (light), with audit drain
+callbacks overlapping execution. At offset zero, extra pre-query HTTP work also
+remains visible; offsets 25/37.5 mostly avoid the overlap, with occasional long
+background outliers retained in the traces. These are instrumented observations,
+not proof of GIL causality or replacement acceptance. The 600 steady-state lag
+counts come from `_drain_once`; snapshot waiters account only for a few startup
+counts in light profiles, not the measured hot path.
+
+The selected bounded candidate reuses the existing finance admission wait before
+submitting tool-call audits and run receipts, outside EventWriter/projection
+locks. It leaves bus delivery, checkpointing, lag status and authority changes
+untouched. A tool audit is still attempted if the new wait is cancelled or
+expires. A timed-out receipt is durably recorded but no private answer is
+released; session markers remain eager. The existing post-write authority and
+transport checks still gate successful delivery. No cache, worker or credential
+surface is added. New production-endpoint cases cover both wait boundaries,
+durable receipt checks, revocation with projection catch-up during the wait,
+timeout history and cancellation. Evaluate this one candidate with those cases
+and both unchanged raw mixed-load gates. If either gate still fails or a
+correctness regression appears, remove the candidate and record the unresolved
+resource tradeoff instead of continuing to tune delays.
