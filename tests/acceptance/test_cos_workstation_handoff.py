@@ -318,7 +318,7 @@ def test_real_gmail_and_dashboard_chat_private_draft_and_cross_channel_readback(
         assert revoke.status_code == 200, revoke.text
         denied = client.post(
             BASE + "/read-back",
-            headers=CHANNEL_AUTH,
+            headers={"Authorization": f"Bearer {SECRET}"},
             json={
                 "provenance": service,
                 "task_id": note["task_id"],
