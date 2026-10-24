@@ -144,11 +144,18 @@ try {
   await assert.rejects(readFile(path.join(workspace, "BOOTSTRAP.md")), { code: "ENOENT" });
   assert.deepEqual(fixtures.receipts.map((entry) => entry.path), [
     "/api/openclaw/v1/tools/workstation-inventory",
+    "/api/openclaw/v1/tools/workstation-inventory",
+    "/api/openclaw/v1/tools/workstation-inventory",
     "/api/openclaw/v1/tools/service-context",
     "/api/openclaw/v1/tools/service-private-work",
     "/api/openclaw/v1/tools/service-private-work/cos-task%3Afixture/state",
     "/api/openclaw/v1/tools/service-private-state",
   ]);
+  assert.equal(fixtures.inventoryObserved.length, 3);
+  assert.equal(fixtures.inventoryObserved[0].counts.identities, 18);
+  assert.equal(fixtures.inventoryObserved[0].items.length, 18);
+  assert.equal(fixtures.inventoryObserved[0].items.at(-1)[1], "fixture-route-17");
+  assert.equal(fixtures.inventoryObserved[0].page.next_offset, null);
   // Run both real chat.send routes through the actual pinned host. Signed input
   // metadata travels in a separate plugin RPC, never as a privileged prompt.
   for (const channel of ["administrateme-portal", "gmail"]) {

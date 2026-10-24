@@ -48,3 +48,13 @@ migration. Acceptance covers real application composition, current owner/grant
 filtering, wrong account and stale evidence, native tool routing and private-file
 validation. A live inventory read proves diagnosis availability; an actual action
 still needs its own terminal result and later observation where supported.
+
+The native tool returns a bounded overview by default. Counts are computed after
+authority filtering and remain separate for identity bindings, integrations,
+bridges and native tools. Compact rows carry seven explicit true/false/unknown
+states; detail pages retain every evidence reference, scope, account coordinate
+and recovery field. Each domain page is at most 3,800 UTF-8 bytes and its complete
+native ToolResult must stay below 9,500 bytes, covering both model and transcript
+budgets. Continue with `next_offset` and the returned snapshot; concurrent state
+changes produce 409 instead of silently mixing pages. Long detail text is split
+into lossless offset fragments, never character-truncated JSON.
