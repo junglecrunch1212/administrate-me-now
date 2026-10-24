@@ -11,6 +11,10 @@ on:
       - '.github/workflows/finance-development.yml'
   workflow_dispatch:
     inputs:
+      import_allocations:
+        description: 'Separate bounded allocation diagnostic; excludes normal resource/latency qualification'
+        type: boolean
+        default: false
       legacy_relative_gates:
         description: 'Explicitly reproduce the superseded v1 10-percent gate (historical only)'
         type: boolean
@@ -30,6 +34,7 @@ concurrency:
   cancel-in-progress: true
 jobs:
   synthetic-finance:
+    if: ${{ !inputs.import_allocations }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -281,6 +286,7 @@ jobs:
           retention-days: 7
 
   native-resource-smoke:
+    if: ${{ !inputs.import_allocations }}
     name: Native macOS self-report correctness
     runs-on: macos-15
     timeout-minutes: 20
@@ -333,5 +339,40 @@ jobs:
             ${{ runner.temp }}/native-finance/**/*.json
             ${{ runner.temp }}/native-finance/**/*.jsonl
             ${{ runner.temp }}/native-finance/results.xml
+          if-no-files-found: error
+          retention-days: 7
+
+  import-allocation-diagnostic:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.import_allocations }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      ADMINME_TEST_MODE: '1'
+      PYTHONPATH: bridge
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.14.7'
+      - name: Install locked diagnostic environment
+        run: |
+          python -m pip install poetry==2.4.1
+          poetry sync --with dev --no-interaction
+      - name: Attribute live Python allocations after import and subscriber drain
+        timeout-minutes: 5
+        env:
+          ADMINME_FINANCE_IMPORT_ALLOCATIONS: '1'
+          FINANCE_IMPORT_ARTIFACT_DIR: ${{ runner.temp }}/finance-import-allocations
+          FINANCE_CANDIDATE_SHA: ${{ github.sha }}
+        run: poetry run pytest -q -s tests/acceptance/test_finance_import_resources.py::test_closed_import_allocation_diagnostic
+      - name: Retain bounded allocation evidence including failures
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: finance-import-allocations-synthetic
+          path: ${{ runner.temp }}/finance-import-allocations
           if-no-files-found: error
           retention-days: 7

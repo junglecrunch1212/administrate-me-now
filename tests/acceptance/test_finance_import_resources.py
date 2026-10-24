@@ -20,6 +20,7 @@ import shutil
 import socket
 import threading
 import time
+import tracemalloc
 from uuid import uuid4
 
 import httpx
@@ -50,7 +51,7 @@ SERVER_RSS_BYTES = 512 * 1024 * 1024
 SERVER_WALL_SECONDS = 180
 
 
-def _server(root, listener, channel, telemetry):
+def _server(root, listener, channel, telemetry, allocation_profile=False):
     resource.setrlimit(resource.RLIMIT_CPU, (SERVER_CPU_SECONDS, SERVER_CPU_SECONDS))
     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
     from adminme.finance import importer, planning_store, provenance_store
@@ -60,6 +61,7 @@ def _server(root, listener, channel, telemetry):
     write_lock = threading.Lock()
     stop = threading.Event()
     violations = []
+    allocation_baseline = None
 
     def sample(event="sample", stage="runtime", **extra):
         usage = resource.getrusage(resource.RUSAGE_SELF)
@@ -70,6 +72,15 @@ def _server(root, listener, channel, telemetry):
             "cpu_seconds": usage.ru_utime + usage.ru_stime,
             "peak_rss_bytes": usage.ru_maxrss * 1024,
             **_memory_snapshot(),
+            **(
+                {
+                    "traced_python_bytes": tracemalloc.get_traced_memory()[0],
+                    "traced_python_peak_bytes": tracemalloc.get_traced_memory()[1],
+                    "tracer_metadata_bytes": tracemalloc.get_tracemalloc_memory(),
+                }
+                if tracemalloc.is_tracing()
+                else {}
+            ),
             **extra,
         }
         with write_lock, telemetry.open("a") as stream:
@@ -140,19 +151,95 @@ def _server(root, listener, channel, telemetry):
             runtime = application.state.runtime
 
             async def commands():
+                nonlocal allocation_baseline
                 while True:
                     if channel.poll():
                         command = channel.recv()
                         if command == "stop":
                             server.should_exit = True
                             return
+                        if command == "begin_allocation_profile":
+                            assert allocation_profile and allocation_baseline is None
+                            tracemalloc.start(1)
+                            allocation_baseline = tracemalloc.take_snapshot()
+                            channel.send({"allocation_profile_started": True})
                         if command == "snapshot":
                             before = sample("snapshot", "retained_before_gc")
                             gc.collect()
                             after = sample("snapshot", "retained_after_gc")
-                            channel.send(
-                                {"snapshot": {"before_gc": before, "after_gc": after}}
+
+                            # Keep the original post-GC reading, then separately
+                            # observe bounded subscriber settlement and collect again.
+                            # No checkpoint, history or consumer is changed here.
+                            async def subscriber_state():
+                                return {
+                                    name: await runtime.bus.subscriber_status(name)
+                                    for name in tuple(runtime.bus._subscribers)
+                                }
+
+                            drain_started = time.monotonic()
+                            initial = await subscriber_state()
+                            latest = initial
+                            while (
+                                any(v["lag_count"] for v in latest.values())
+                                and time.monotonic() - drain_started < 5
+                            ):
+                                await asyncio.sleep(0.05)
+                                latest = await subscriber_state()
+                            await asyncio.sleep(0.05)
+                            gc.collect()
+                            drained = sample(
+                                "snapshot", "retained_after_subscriber_drain_gc"
                             )
+                            retained = {
+                                "before_gc": before,
+                                "after_gc": after,
+                                "subscriber_initial": initial,
+                                "subscriber_final": latest,
+                                "subscriber_observation_seconds": time.monotonic()
+                                - drain_started,
+                                "after_subscriber_drain_gc": drained,
+                            }
+                            if allocation_baseline is not None:
+                                allocation_now = tracemalloc.take_snapshot()
+
+                                def detail(stat):
+                                    return {
+                                        "location": str(stat.traceback[0]),
+                                        "bytes": stat.size,
+                                        "count": stat.count,
+                                        "bytes_diff": getattr(stat, "size_diff", None),
+                                        "count_diff": getattr(stat, "count_diff", None),
+                                    }
+
+                                retained["allocation_profile"] = {
+                                    "diagnostic_only": True,
+                                    "tracing_depth": 1,
+                                    "python_tracked_bytes": sum(
+                                        x.size
+                                        for x in allocation_now.statistics("lineno")
+                                    ),
+                                    "baseline_python_tracked_bytes": sum(
+                                        x.size
+                                        for x in allocation_baseline.statistics(
+                                            "lineno"
+                                        )
+                                    ),
+                                    "largest_live_allocations": [
+                                        detail(x)
+                                        for x in allocation_now.statistics("lineno")[
+                                            :40
+                                        ]
+                                    ],
+                                    "largest_retained_differences": [
+                                        detail(x)
+                                        for x in allocation_now.compare_to(
+                                            allocation_baseline, "lineno"
+                                        )[:40]
+                                    ],
+                                    "native_allocations_and_allocator_free_pages": "not attributed by tracemalloc",
+                                }
+                            channel.send({"snapshot": retained})
                     await asyncio.sleep(0.02)
 
             command_task = asyncio.create_task(commands())
@@ -293,6 +380,19 @@ async def _stage(path, name, timeout=30):
     reason="Explicit hosted Linux synthetic import-size measurement only",
 )
 async def test_actual_size_closed_import_core_responsiveness_and_revocation(tmp_path):
+    await _measure_import(tmp_path, allocation_profile=False)
+
+
+@pytest.mark.skipif(
+    os.getenv("ADMINME_FINANCE_IMPORT_ALLOCATIONS") != "1"
+    or platform.system() != "Linux",
+    reason="Explicit separate hosted import allocation diagnostic only",
+)
+async def test_closed_import_allocation_diagnostic(tmp_path):
+    await _measure_import(tmp_path, allocation_profile=True)
+
+
+async def _measure_import(tmp_path, *, allocation_profile):
     output = Path(os.environ["FINANCE_IMPORT_ARTIFACT_DIR"])
     output.mkdir(parents=True, exist_ok=True)
     telemetry = output / "import-runtime-samples.jsonl"
@@ -304,6 +404,8 @@ async def test_actual_size_closed_import_core_responsiveness_and_revocation(tmp_
         "checkout": os.environ["GITHUB_SHA"],
         "environment": "hosted-linux",
         "native_qualification": False,
+        "allocation_profile": allocation_profile,
+        "allocation_overhead_excluded_from_acceptance": allocation_profile,
         "diagnostic_containment_not_acceptance_policy": True,
         "sustained_load_qualification": False,
         "core_cadence": "one in-flight request, 4 Hz target; raw gaps retained; no retry",
@@ -328,7 +430,9 @@ async def test_actual_size_closed_import_core_responsiveness_and_revocation(tmp_
     listener.bind(("127.0.0.1", 0))
     listener.listen(128)
     url = f"http://127.0.0.1:{listener.getsockname()[1]}"
-    process = context.Process(target=_server, args=(root, listener, child, telemetry))
+    process = context.Process(
+        target=_server, args=(root, listener, child, telemetry, allocation_profile)
+    )
     process.start()
     child.close()
     listener.close()
@@ -435,6 +539,9 @@ async def test_actual_size_closed_import_core_responsiveness_and_revocation(tmp_
                     await asyncio.sleep(0)
 
             began = time.monotonic()
+            if allocation_profile:
+                parent.send("begin_allocation_profile")
+                assert (await _receive(parent))["allocation_profile_started"]
             importing = asyncio.create_task(
                 client.post(
                     target,
@@ -541,9 +648,15 @@ async def test_actual_size_closed_import_core_responsiveness_and_revocation(tmp_
             }
             parent.send("snapshot")
             report["retained"] = (await _receive(parent))["snapshot"]
-            assert all(r.get("status") == 200 for r in report["core"]), report["core"]
+            if not allocation_profile:
+                assert all(r.get("status") == 200 for r in report["core"]), report[
+                    "core"
+                ]
+            # Traced timing remains raw diagnostic evidence, never a resource pass.
             assert len([r for r in report["core"] if r["phase"] == "import"]) >= 4
-            report["state"] = "completed"
+            report["state"] = (
+                "diagnostic_completed" if allocation_profile else "completed"
+            )
     except BaseException as exc:
         report["errors"].append(type(exc).__name__ + ": " + str(exc)[:500])
         raise
@@ -691,4 +804,5 @@ async def test_actual_size_closed_import_core_responsiveness_and_revocation(tmp_
             ),
             flush=True,
         )
-    assert report["state"] == "completed", report["errors"]
+    expected_state = "diagnostic_completed" if allocation_profile else "completed"
+    assert report["state"] == expected_state, report["errors"]

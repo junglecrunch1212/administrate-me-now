@@ -151,6 +151,14 @@ import with a single concurrent core request does not qualify sustained query
 load, the household Mini, maximum permitted sizes, real-data conversion or
 private transport. The existing native qualification scope remains separate.
 
+An explicit `import_allocations` dispatch runs only a separate allocation
+profile with the same synthetic package and runtime caps. It traces one Python
+allocation frame from immediately before upload, retains raw core outcomes,
+compares live allocations after GC and bounded subscriber settlement, and reports
+remaining lag/degradation. Its instrumentation overhead cannot establish latency
+or resource acceptance. Python-tracked bytes do not attribute SQLCipher native
+allocations or allocator free pages; unexplained RSS is reported as such.
+
 Dated structural validation retains at most 32 successful receipts containing
 only the pinned-schema and complete canonical-payload hashes. Every reuse hashes
 all supplied bytes and returns a newly detached value; changed bytes or schema
