@@ -3123,3 +3123,43 @@ def test_native_terminal_ingest_scope_preserves_unrelated_authorization() -> Non
     )
     assert _service_work_ingest("async def [") is None
     assert _service_work_ingest(new + new) is None
+
+
+@pytest.mark.parametrize("module, name", [("workstation", "workstation_router")])
+def test_workstation_scope_requires_exact_complete_router_pair(
+    module: str, name: str
+) -> None:
+    pair = f"    from adminme.products.openclaw.{module} import router as {name}\n    app.include_router({name})\n"
+    before = _SERVICE_WIRED_RUNTIME
+    after = before.replace("    return app\n", pair + "    return app\n")
+    assert _service_work_application(before) == _service_work_application(after)
+    assert (
+        _service_work_application(
+            after.replace(f"    app.include_router({name})\n", "")
+        )
+        is None
+    )
+    assert _service_work_application(
+        after.replace("    return app\n", "    unsafe()\n    return app\n")
+    ) != _service_work_application(before)
+
+
+@pytest.mark.parametrize(
+    "relative",
+    [
+        "adminme/workstation_inventory.py",
+        "adminme/products/openclaw/workstation.py",
+        "bootstrap/workstation_inventory.py",
+        "openclaw/administrateme/src/workstation.ts",
+    ],
+)
+def test_workstation_changes_use_affected_service_lane(
+    repository: tuple[Path, str], relative: str
+) -> None:
+    path, _ = repository
+    _, base = _service_work_candidate(path)
+    head = _commit(path, relative, "# Current scoped workstation inventory\n")
+    assert (
+        select_scope(path, _event(base, head), checkout_sha=head)["scope"]
+        == "cos-service-work"
+    )
