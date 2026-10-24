@@ -22,6 +22,7 @@ from adminme.lib.skill_runner import (
     OpenClawResponseMalformed,
     OpenClawTimeout,
     OpenClawUnreachable,
+    SkillInputInvalid,
     SkillOutputInvalid,
     SkillScopeInsufficient,
     SkillSensitivityRefused,
@@ -152,10 +153,13 @@ async def ground_action(
         OpenClawResponseMalformed,
         OpenClawTimeout,
         OpenClawUnreachable,
+        SkillInputInvalid,
         SkillOutputInvalid,
         SkillScopeInsufficient,
         SkillSensitivityRefused,
     ) as exc:
+        # An existing invocation cannot be rebound to new message text or input.
+        # Preserve its receipt/failure and expose a closed failure, never HTTP 500.
         raise HTTPException(
             409,
             {

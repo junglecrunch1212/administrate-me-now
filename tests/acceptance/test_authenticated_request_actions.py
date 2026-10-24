@@ -537,6 +537,72 @@ def test_malformed_grounding_keeps_original_failure_without_provider_or_retry(
             client.portal.call(model.aclose)
 
 
+@pytest.mark.parametrize("malformed", [False, True])
+def test_followup_cannot_rebind_failed_invocation_or_escape_as_server_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, malformed: bool
+) -> None:
+    """A genuine new 'Yes' cannot reuse a failed original action identity."""
+    monkeypatch.setenv("ADMINME_TEST_MODE", "1")
+    with TestClient(
+        create_application(configured(tmp_path)),
+        base_url="https://central-fixture.ts.net",
+    ) as client:
+        runtime = client.app.state.runtime
+        prepare_apple_sources(client, tmp_path)
+        _grant(client)
+        grant_services(client)
+        _normal_operation(client)
+        model, calls = model_boundary(client, malformed=malformed, wrong_span=True)
+        try:
+            source = _instruction(client, "original-failed-request")
+            original = {**_body(source), "notes": None, "request_authorization": True}
+            result = client.post(CONFIRM, headers=AUTH, json=original)
+            assert result.status_code == 409, result.text
+            assert (
+                result.json()["detail"]["code"] == "request_authorization_unavailable"
+            )
+
+            def grounding_receipts(kind: str) -> list[dict[str, Any]]:
+                return [
+                    event
+                    for event in client.portal.call(_events, runtime, kind)
+                    if event["payload"]["skill_name"] == "skill:ground_requested_action"
+                ]
+
+            before = {
+                kind: grounding_receipts(kind)
+                for kind in ("skill.call.recorded", "skill.call.failed")
+            }
+            assert len(before["skill.call.recorded"]) == 1
+            assert len(before["skill.call.failed"]) == int(malformed)
+            followup = _instruction(client, "new-authenticated-followup", text="Yes")
+            assert (
+                followup["source_message_event_id"] != source["source_message_event_id"]
+            )
+            for current in (followup, followup, source):
+                response = client.post(
+                    CONFIRM, headers=AUTH, json={**original, **current}
+                )
+                assert response.status_code == 409, response.text
+                assert (
+                    response.json()["detail"]["code"]
+                    == "request_authorization_unavailable"
+                )
+            assert len(calls) == 1
+            for kind, retained in before.items():
+                assert grounding_receipts(kind) == retained
+            for kind in (
+                "cos.action.request_grounded",
+                "member.provider_action.confirmed",
+                "external_sync.write_requested",
+                "external_sync.write_completed",
+                "external.sent",
+            ):
+                assert client.portal.call(_events, runtime, kind) == []
+        finally:
+            client.portal.call(model.aclose)
+
+
 _QUOTE_INSTRUCTION = (
     'Add a reminder to my Apple reminders titled "COS imessage retry" '
     "for tomorrow at 9:30 AM Eastern"

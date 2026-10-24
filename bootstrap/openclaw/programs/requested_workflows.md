@@ -40,8 +40,9 @@ For `request_authorization_unavailable`, report that request verification failed
 and no action was confirmed or executed. It is not evidence of account ambiguity,
 missing consent or an unclear request. Do not invent a destination choice, ask for
 permission again, or blindly repeat an explicit verification failure; retain the
-request identifier for diagnosis. An unavailable verification is not a transport
-timeout.
+request identifier for diagnosis. Do not reuse it against a new message or bind
+new text to an old attempt. A short follow-up such as "Yes" does not repair failed
+request verification. An unavailable verification is not a transport timeout.
 Then use `administrateme_apple_reminder_status` with the same domain receipt.
 Only terminal `succeeded` proves creation; `accepted`, waiting for approval,
 pending, failed and unknown must be described accurately. Do not claim success
