@@ -111,8 +111,10 @@ book binding and separate Books-dashboard / CoS-analysis permissions at
 `/api/member/v1/settings/finance`. Both default off. CoS additionally requires
 the existing private-context read grant; the Finance control never creates or
 widens generic delegations. Current owner/book authority is re-read after tool
-retrieval and audit, before disclosure. Revocation closes delivery immediately;
-an unavailable or malformed owner control makes that owner's Finance dashboard
+retrieval and audit, before disclosure. A pending owner-control change waits for
+an admitted import's validation/archive critical section; once revocation is
+committed, subsequent disclosure is denied. An unavailable or malformed owner
+control makes that owner's Finance dashboard
 explicitly unavailable rather than substituting legacy totals, without preventing
 other owners' Finance or unrelated household services from starting. A verified
 empty or intentionally disabled control preserves the existing legacy view.
