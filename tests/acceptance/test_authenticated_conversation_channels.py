@@ -310,7 +310,10 @@ def test_gmail_retains_only_authored_instruction_and_does_not_release_old_or_unt
         deliveries = client.portal.call(
             _events, client.app.state.runtime, "cos.conversation.delivery"
         )
-        assert [row["payload"]["state"] for row in deliveries] == ["awaiting_live"]
+        assert [row["payload"]["state"] for row in deliveries] == [
+            "running",
+            "answered",
+        ]
 
 
 @pytest.mark.parametrize(
@@ -334,7 +337,7 @@ def test_observation_startup_and_portal_chat_write_no_new_feature_history(
     value = settings(tmp_path / "observation-startup")
     with TestClient(create_application(value)) as client:
         runtime = client.app.state.runtime
-        assert client.portal.call(runtime.observation.is_active()) is True
+        assert client.portal.call(runtime.observation.is_active) is True
         _grant(client)
         response = client.post(
             "/api/member/v1/chat/stream",

@@ -33,7 +33,8 @@ class GmailConversationIntake:
     def __init__(self, runtime: Any) -> None:
         self.runtime = runtime
         self.activated_at: datetime | None = None
-        self.started_at = datetime.now(timezone.utc)
+        # Envelope occurred_at has second precision; compare at that same precision.
+        self.started_at = datetime.now(timezone.utc).replace(microsecond=0)
 
     async def initialize(self, activation_at: str | None = None) -> None:
         runtime = self.runtime

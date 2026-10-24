@@ -60,6 +60,7 @@ def configured(tmp_path: Path) -> Any:
         settings,
         member_chat_enabled_members=frozenset({MEMBER_A, MEMBER_B}),
         deterministic_member_chat_fixture=True,
+        openclaw_model_configured=True,
         instance=replace(settings.instance, timezone="America/New_York"),
     )
 

@@ -4,15 +4,22 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, model_validator
 from adminme.events.registry import registry
 from adminme.events.schemas.cos_reminders import CoSResponseApprovedV3
+from adminme.events.schemas.cos_responses import CoSResponseApprovedV1
 
 
-class CoSResponseApprovedV4(CoSResponseApprovedV3):
+class CoSResponseApprovedV4(CoSResponseApprovedV1):
     authorization_method: Literal[
         "exact",
         "standing_self_reply",
         "requested_self_reminder",
         "authenticated_conversation",
-    ] = "exact"  # type: ignore[assignment]
+    ] = "exact"
+    standing_authorization_event_id: str | None = None
+    source_message_event_id: str | None = None
+    self_reply_binding: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    reply_index: int = Field(default=0, ge=0, le=15)
+    reminder_event_id: str | None = None
+    reminder_binding_event_id: str | None = None
     conversation_source_event_id: str | None = None
     thread_id: str | None = None
     in_reply_to: str | None = None

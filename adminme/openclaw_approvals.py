@@ -216,7 +216,7 @@ class OpenClawApprovalStore:
         )
         if not hmac.compare_digest(signature, expected):
             raise ApprovalReceiptError("approval receipt signature is invalid")
-        values = (
+        values: tuple[str | int, ...] = (
             receipt_id,
             tool_name,
             request_fingerprint,
