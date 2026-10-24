@@ -135,7 +135,6 @@ async def events(runtime, types):
     return [event async for event in runtime.event_log.read_since(types=types)]
 
 
-
 @pytest.mark.parametrize("witness_factory", ["activation", "resource"])
 def test_composed_browser_projection_imports_without_shared_evidence_lists(
     tmp_path, witness_factory
@@ -568,7 +567,9 @@ def test_one_owner_control_failure_does_not_abort_runtime(
         assert finance.json() == {"detail": "finance_control_unavailable"}
         assert client.get(SURFACE, headers=OTHER_HEADERS).status_code == 200
         assert (
-            client.get("/api/member/v1/finance/choices", headers=DEMO_HEADERS).status_code
+            client.get(
+                "/api/member/v1/finance/choices", headers=DEMO_HEADERS
+            ).status_code
             == 403
         )
         _grant_cos(client, "activation-unavailable-control")

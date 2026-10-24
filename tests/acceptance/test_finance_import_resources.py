@@ -1,0 +1,675 @@
+"""One bounded hosted Linux import with synthetic actual-size content.
+
+Measures real HTTP upload, validators, encrypted archival and both projections.
+This is not native-device qualification or a replacement for query-load gates.
+"""
+
+from __future__ import annotations
+
+import asyncio
+from contextlib import asynccontextmanager
+import gc
+import json
+import math
+import multiprocessing
+import os
+from pathlib import Path
+import platform
+import resource
+import shutil
+import socket
+import threading
+import time
+from uuid import uuid4
+
+import httpx
+import pytest
+import uvicorn
+
+from adminme.runtime.application import create_application
+from adminme.openclaw_topology import member_agent_id
+from tests.acceptance.test_finance_activation import (
+    APPROVALS,
+    CONTROL,
+    IMPORTS,
+    configured,
+    packet_for,
+)
+from tests.acceptance.test_finance_authority_memory import _memory_snapshot
+from tests.acceptance.test_openclaw_native_seam import (
+    DEMO_HEADERS,
+    PRINCIPAL,
+    OPENCLAW_HEADERS,
+    _provenance,
+)
+from tests.fixtures.finance_import_load import sized_package
+
+
+SERVER_CPU_SECONDS = 90
+SERVER_RSS_BYTES = 512 * 1024 * 1024
+SERVER_WALL_SECONDS = 180
+
+
+def _server(root, listener, channel, telemetry):
+    resource.setrlimit(resource.RLIMIT_CPU, (SERVER_CPU_SECONDS, SERVER_CPU_SECONDS))
+    resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+    from adminme.finance import importer, planning_store
+    from adminme.products.member import finance_import
+
+    started = time.monotonic()
+    write_lock = threading.Lock()
+    stop = threading.Event()
+    violations = []
+
+    def sample(event="sample", stage="runtime", **extra):
+        usage = resource.getrusage(resource.RUSAGE_SELF)
+        row = {
+            "at": time.monotonic(),
+            "event": event,
+            "stage": stage,
+            "cpu_seconds": usage.ru_utime + usage.ru_stime,
+            "peak_rss_bytes": usage.ru_maxrss * 1024,
+            **_memory_snapshot(),
+            **extra,
+        }
+        with write_lock, telemetry.open("a") as stream:
+            stream.write(json.dumps(row, sort_keys=True) + "\n")
+        return row
+
+    def sync_stage(original, name):
+        def wrapped(*args, **kwargs):
+            sample("start", name)
+            try:
+                return original(*args, **kwargs)
+            finally:
+                sample("end", name)
+
+        return wrapped
+
+    def async_stage(original, name):
+        async def wrapped(*args, **kwargs):
+            sample("start", name)
+            try:
+                return await original(*args, **kwargs)
+            finally:
+                sample("end", name)
+
+        return wrapped
+
+    # Observation only: same arguments, return values, validators and exceptions.
+    finance_import.decode_package = sync_stage(finance_import.decode_package, "decode")
+    importer.verify_package = sync_stage(importer.verify_package, "verify_provenance")
+    importer.archive_package = async_stage(
+        importer.archive_package, "encrypted_archive"
+    )
+    planning_store.validate_projection = sync_stage(
+        planning_store.validate_projection, "dated_validation"
+    )
+    original_lock = finance_import.control_lock
+
+    @asynccontextmanager
+    async def measured_lock(runtime, session):
+        lock = runtime.settings_command_locks.get("finance-closed-package-import")
+        importing = lock is not None and lock.locked()
+        async with original_lock(runtime, session):
+            if importing:
+                sample("start", "owner_control_critical_section")
+            try:
+                yield
+            finally:
+                if importing:
+                    sample("end", "owner_control_critical_section")
+
+    finance_import.control_lock = measured_lock
+    app = create_application(configured(root))
+    lifespan = app.router.lifespan_context
+
+    @asynccontextmanager
+    async def measured_lifespan(application):
+        async with lifespan(application):
+            runtime = application.state.runtime
+
+            async def commands():
+                while True:
+                    if channel.poll():
+                        command = channel.recv()
+                        if command == "stop":
+                            server.should_exit = True
+                            return
+                        if command == "snapshot":
+                            before = sample("snapshot", "retained_before_gc")
+                            gc.collect()
+                            after = sample("snapshot", "retained_after_gc")
+                            channel.send(
+                                {"snapshot": {"before_gc": before, "after_gc": after}}
+                            )
+                    await asyncio.sleep(0.02)
+
+            command_task = asyncio.create_task(commands())
+            actor, session_key = runtime.member_chat_binding(PRINCIPAL)
+            channel.send(
+                {
+                    "ready": True,
+                    "tenant": runtime.settings.instance.tenant_id,
+                    "actor": actor,
+                    "session_key": session_key,
+                }
+            )
+            sample("ready")
+            try:
+                yield
+            finally:
+                command_task.cancel()
+                try:
+                    await command_task
+                except asyncio.CancelledError:
+                    pass
+                receipts = [
+                    row
+                    async for row in runtime.event_log.read_since(
+                        types=["finance.import_result"]
+                    )
+                ]
+
+                def durable_counts(conn):
+                    return {
+                        name: conn.execute("SELECT COUNT(*) FROM " + name).fetchone()[0]
+                        for name in (
+                            "finance_provenance_blobs",
+                            "finance_publications",
+                            "finance_dated_projections",
+                        )
+                    }
+
+                counts = await runtime.projections.read("money", durable_counts)
+                channel.send(
+                    {
+                        "terminal": {
+                            "receipts": [
+                                {"event_id": r["event_id"], "payload": r["payload"]}
+                                for r in receipts
+                            ],
+                            "counts": counts,
+                            "violations": violations,
+                        }
+                    }
+                )
+
+    app.router.lifespan_context = measured_lifespan
+
+    class UploadObservation:
+        async def __call__(self, scope, receive, send):
+            upload = scope.get("path", "").startswith(IMPORTS)
+            first = True
+
+            async def observed_receive():
+                nonlocal first
+                message = await receive()
+                if upload and first and message["type"] == "http.request":
+                    first = False
+                    sample("start", "upload")
+                if (
+                    upload
+                    and message["type"] == "http.request"
+                    and not message.get("more_body")
+                ):
+                    sample("end", "upload")
+                return message
+
+            await app(scope, observed_receive, send)
+
+    server = uvicorn.Server(
+        uvicorn.Config(UploadObservation(), log_level="error", access_log=False)
+    )
+
+    def monitor():
+        while not stop.wait(0.05):
+            current = sample()
+            if (
+                current["VmRSS_bytes"] > SERVER_RSS_BYTES
+                or time.monotonic() - started > SERVER_WALL_SECONDS
+            ):
+                violations.append("cooperative_runtime_resource_limit")
+                sample("limit", reason=violations[-1])
+                server.should_exit = True
+                return
+
+    thread = threading.Thread(target=monitor, name="synthetic-import-sampler")
+    thread.start()
+    try:
+        server.run(sockets=[listener])
+    finally:
+        stop.set()
+        thread.join(2)
+        sample("stopped", sampler_stopped=not thread.is_alive())
+        channel.close()
+        listener.close()
+
+
+def _records(path):
+    if not path.exists():
+        return []
+    # A sampler may be appending the last line. Read only complete records.
+    return [
+        json.loads(line)
+        for line in path.read_text().splitlines(keepends=True)
+        if line.endswith("\n")
+    ]
+
+
+async def _receive(channel, timeout=30):
+    assert await asyncio.to_thread(channel.poll, timeout), (
+        "owned runtime result missing"
+    )
+    return channel.recv()
+
+
+async def _stage(path, name, timeout=30):
+    async with asyncio.timeout(timeout):
+        while True:
+            found = [
+                r
+                for r in _records(path)
+                if r["event"] == "start" and r["stage"] == name
+            ]
+            if found:
+                return found[-1]
+            await asyncio.sleep(0.02)
+
+
+@pytest.mark.skipif(
+    os.getenv("ADMINME_FINANCE_IMPORT_RESOURCES") != "1"
+    or platform.system() != "Linux",
+    reason="Explicit hosted Linux synthetic import-size measurement only",
+)
+async def test_actual_size_closed_import_core_responsiveness_and_revocation(tmp_path):
+    output = Path(os.environ["FINANCE_IMPORT_ARTIFACT_DIR"])
+    output.mkdir(parents=True, exist_ok=True)
+    telemetry = output / "import-runtime-samples.jsonl"
+    assert not telemetry.exists(), "one cohort per fresh evidence directory"
+    root = tmp_path / "owned-synthetic-import"
+    report = {
+        "state": "incomplete",
+        "candidate": os.environ["FINANCE_CANDIDATE_SHA"],
+        "checkout": os.environ["GITHUB_SHA"],
+        "environment": "hosted-linux",
+        "native_qualification": False,
+        "diagnostic_containment_not_acceptance_policy": True,
+        "sustained_load_qualification": False,
+        "core_cadence": "one in-flight request, 4 Hz target; raw gaps retained; no retry",
+        "whole_os_tree_accounting": False,
+        "limits": {
+            "server_cpu_seconds": SERVER_CPU_SECONDS,
+            "server_rss_cooperative_bytes": SERVER_RSS_BYTES,
+            "server_wall_cooperative_seconds": SERVER_WALL_SECONDS,
+            "import_http_seconds": 120,
+            "core_request_timeout_seconds": 2,
+            "concurrent_imports": 1,
+            "core_inflight": 1,
+        },
+        "errors": [],
+        "core": [],
+        "cleanup": {},
+    }
+    context = multiprocessing.get_context("spawn")
+    parent, child = context.Pipe()
+    listener = socket.socket()
+    listener.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(128)
+    url = f"http://127.0.0.1:{listener.getsockname()[1]}"
+    process = context.Process(target=_server, args=(root, listener, child, telemetry))
+    process.start()
+    child.close()
+    listener.close()
+    core_task = None
+    network_tasks = []
+    release_upload = asyncio.Event()
+    finished = asyncio.Event()
+    try:
+        ready = await _receive(parent)
+        assert ready["ready"]
+        # Fixture generation belongs to the caller, never the runtime's RSS/CPU.
+        p, d, package = await asyncio.to_thread(
+            sized_package, ready["tenant"], PRINCIPAL
+        )
+        manifest, packet = packet_for(p, d, package)
+        wire = json.dumps(packet, separators=(",", ":")).encode()
+        report["sizes"] = {
+            "provenance_blob_count": len(package.blobs),
+            "provenance_blobs_bytes": sum(map(len, package.blobs.values())),
+            "provenance_index_bytes": len(package.index),
+            "accounting_envelope_bytes": manifest["publication"]["bytes"],
+            "dated_payload_bytes": manifest["projection"]["bytes"],
+            "encoded_request_bytes": len(wire),
+            "accepted_units": len(p["accepted_journal_revision_ids"]),
+            "dated_events": len(d["detail_events"]),
+        }
+        publication_id, projection_id = p["publication_id"], d["projection_id"]
+        del p, d, package, packet
+        gc.collect()
+        async with httpx.AsyncClient(
+            base_url=url,
+            trust_env=False,
+            timeout=120,
+            limits=httpx.Limits(max_connections=5),
+        ) as client:
+            control_body = {
+                "request_id": str(uuid4()),
+                "expected_revision": 0,
+                "binding": manifest["binding"],
+                "books_enabled": True,
+                "cos_analysis_enabled": True,
+            }
+            enabled = await client.put(CONTROL, headers=DEMO_HEADERS, json=control_body)
+            assert enabled.status_code == 200, enabled.text
+            approval = await client.post(
+                APPROVALS,
+                headers=DEMO_HEADERS,
+                json={
+                    "request_id": str(uuid4()),
+                    "expected_policy_revision": enabled.json()["revision"],
+                    "manifest": manifest,
+                },
+            )
+            assert approval.status_code == 200, approval.text
+            target = IMPORTS + approval.json()["approval_event_id"]
+            grant = await client.post(
+                "/api/member/v1/cos/delegations",
+                headers=DEMO_HEADERS,
+                json={
+                    "request_id": str(uuid4()),
+                    "context_scope": "member_private",
+                    "permissions": ["read_context"],
+                },
+            )
+            assert grant.status_code in {200, 201}, grant.text
+            before_grants = (
+                await client.get("/api/member/v1/cos/delegations", headers=DEMO_HEADERS)
+            ).json()
+            phase = "before"
+
+            async def core():
+                while not finished.is_set():
+                    began = time.monotonic()
+                    row = {"at": began, "phase": phase}
+                    try:
+                        response = await client.get(
+                            "/api/member/v1/surfaces/reminders",
+                            headers=DEMO_HEADERS,
+                            timeout=2,
+                        )
+                        row["status"] = response.status_code
+                    except Exception as exc:
+                        row["error"] = type(exc).__name__
+                    row["milliseconds"] = (time.monotonic() - began) * 1000
+                    report["core"].append(row)
+                    await asyncio.sleep(max(0, 0.25 - (time.monotonic() - began)))
+
+            core_task = asyncio.create_task(core())
+            await asyncio.sleep(2)
+            phase = "import"
+
+            async def body():
+                yield wire[:65536]
+                await release_upload.wait()
+                for offset in range(65536, len(wire), 65536):
+                    yield wire[offset : offset + 65536]
+                    await asyncio.sleep(0)
+
+            began = time.monotonic()
+            importing = asyncio.create_task(
+                client.post(
+                    target,
+                    headers={**DEMO_HEADERS, "Content-Type": "application/json"},
+                    content=body(),
+                )
+            )
+            network_tasks.append(importing)
+            await _stage(telemetry, "upload", 5)
+            busy = await client.post(
+                target,
+                headers={**DEMO_HEADERS, "Content-Type": "application/json"},
+                content=b"{}",
+                timeout=2,
+            )
+            report["concurrent_admission"] = {
+                "status": busy.status_code,
+                "response": busy.json(),
+            }
+            assert (
+                busy.status_code == 409
+                and busy.json()["detail"] == "finance_import_busy"
+            )
+            report["upload_admission_probe_hold_seconds"] = time.monotonic() - began
+            release_upload.set()
+            await _stage(telemetry, "verify_provenance", 45)
+
+            async def revoke():
+                started_at = time.monotonic()
+                report["owner_revocation_started_at"] = started_at
+                try:
+                    return await client.put(
+                        CONTROL,
+                        headers=DEMO_HEADERS,
+                        json={
+                            **control_body,
+                            "request_id": str(uuid4()),
+                            "expected_revision": 1,
+                            "books_enabled": False,
+                            "cos_analysis_enabled": False,
+                        },
+                    )
+                finally:
+                    report["owner_revocation_completed_at"] = time.monotonic()
+                    report["owner_revocation_wait_seconds"] = (
+                        report["owner_revocation_completed_at"] - started_at
+                    )
+
+            revoking = asyncio.create_task(revoke())
+            network_tasks.append(revoking)
+            accepted = await asyncio.wait_for(importing, 120)
+            report["import_seconds"] = time.monotonic() - began
+            report["import_status"] = accepted.status_code
+            report["import_result"] = accepted.json()
+            revoked = await asyncio.wait_for(revoking, 120)
+            assert accepted.status_code == 200, accepted.text
+            assert accepted.json()["accounting"]["publication_id"] == publication_id
+            assert accepted.json()["dated"]["projection_id"] == projection_id
+            assert accepted.json()["provider_effect_count"] == 0
+            assert revoked.status_code == 200, revoked.text
+            control = (await client.get(CONTROL, headers=DEMO_HEADERS)).json()
+            assert not control["books_enabled"] and not control["cos_analysis_enabled"]
+            denied = await client.get(
+                "/api/member/v1/finance/choices", headers=DEMO_HEADERS
+            )
+            assert denied.status_code == 403
+            provenance = _provenance("sized-import-revoked")
+            provenance.update(
+                actor_id=ready["actor"],
+                session_key=ready["session_key"],
+                agent_id=member_agent_id(PRINCIPAL),
+                channel_id="administrateme-portal",
+                account_id="member-portal",
+                message_id="finance-run:sized-import-revoked",
+                thread_id=None,
+            )
+            cos = await client.post(
+                "/api/openclaw/v1/tools/finance-status",
+                headers=OPENCLAW_HEADERS,
+                json={"provenance": provenance},
+            )
+            assert cos.status_code == 200, cos.text
+            assert (
+                cos.json()["state"] == "permission_required"
+                and "publication" not in cos.json()
+            )
+            assert (
+                await client.get("/api/member/v1/cos/delegations", headers=DEMO_HEADERS)
+            ).json() == before_grants
+            report["revocation_readback"] = {
+                "revision": control["revision"],
+                "books_enabled": False,
+                "cos_analysis_enabled": False,
+                "choices_status": denied.status_code,
+                "cos_state": cos.json()["state"],
+                "independent_grant_preserved": True,
+            }
+            phase = "after"
+            await asyncio.sleep(2)
+            finished.set()
+            await core_task
+            core_task = None
+            parent.send("snapshot")
+            report["retained"] = (await _receive(parent))["snapshot"]
+            assert all(r.get("status") == 200 for r in report["core"]), report["core"]
+            assert len([r for r in report["core"] if r["phase"] == "import"]) >= 4
+            report["state"] = "completed"
+    except BaseException as exc:
+        report["errors"].append(type(exc).__name__ + ": " + str(exc)[:500])
+        raise
+    finally:
+        finished.set()
+        release_upload.set()
+        for task in network_tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*network_tasks, return_exceptions=True)
+        if core_task is not None:
+            core_task.cancel()
+            await asyncio.gather(core_task, return_exceptions=True)
+        forced = False
+        if process.is_alive():
+            try:
+                parent.send("stop")
+                if await asyncio.to_thread(parent.poll, 15):
+                    report["terminal"] = parent.recv()
+            except (EOFError, BrokenPipeError, OSError) as exc:
+                report["errors"].append("terminal_channel:" + type(exc).__name__)
+        await asyncio.to_thread(process.join, 15)
+        if process.is_alive():
+            forced = True
+            process.terminate()
+            await asyncio.to_thread(process.join, 5)
+        if process.is_alive():
+            process.kill()
+            await asyncio.to_thread(process.join, 5)
+        parent.close()
+        report["cleanup"] = {
+            "child_exitcode": process.exitcode,
+            "forced": forced,
+            "child_stopped": not process.is_alive(),
+        }
+        if not process.is_alive():
+            shutil.rmtree(root, ignore_errors=True)
+        report["cleanup"]["instance_removed"] = not root.exists()
+        rows = _records(telemetry)
+        report["stage_samples"] = [
+            r for r in rows if r["event"] in {"start", "end", "limit", "stopped"}
+        ]
+        report["stages"] = {}
+        for row in report["stage_samples"]:
+            name = row["stage"]
+            if row["event"] == "start":
+                report["stages"][name] = {"start": row}
+            elif row["event"] == "end" and name in report["stages"]:
+                start = report["stages"][name]["start"]
+                report["stages"][name].update(
+                    end=row,
+                    wall_seconds=row["at"] - start["at"],
+                    process_cpu_seconds=row["cpu_seconds"] - start["cpu_seconds"],
+                    sampled_peak_rss_bytes=max(
+                        r["VmRSS_bytes"]
+                        for r in rows
+                        if start["at"] <= r["at"] <= row["at"]
+                    ),
+                )
+        report["core_summary"] = {}
+        for phase_name in ("before", "import", "after"):
+            group = [r for r in report["core"] if r["phase"] == phase_name]
+            values = sorted(r["milliseconds"] for r in group)
+            report["core_summary"][phase_name] = {
+                "count": len(group),
+                "successful": sum(r.get("status") == 200 for r in group),
+                "p95_ms": values[math.ceil(len(values) * 0.95) - 1] if values else None,
+                "max_ms": max(values, default=None),
+                "largest_start_gap_seconds": max(
+                    (b["at"] - a["at"] for a, b in zip(group, group[1:])), default=None
+                ),
+            }
+        if "sizes" in report:
+            report["sizes"]["provenance_total_bytes"] = (
+                report["sizes"]["provenance_blobs_bytes"]
+                + report["sizes"]["provenance_index_bytes"]
+            )
+        report["server_peak_rss_bytes"] = max(
+            (r["peak_rss_bytes"] for r in rows), default=0
+        )
+        report["server_cpu_seconds"] = max((r["cpu_seconds"] for r in rows), default=0)
+        usage = resource.getrusage(resource.RUSAGE_SELF)
+        report["caller"] = {
+            "peak_rss_bytes": usage.ru_maxrss * 1024,
+            "cpu_seconds": usage.ru_utime + usage.ru_stime,
+            "includes_fixture_generation": True,
+        }
+        terminal = report.get("terminal", {}).get("terminal", {})
+        try:
+            assert (
+                not forced
+                and process.exitcode == 0
+                and terminal
+                and not terminal.get("violations")
+            )
+            assert terminal["counts"] == {
+                "finance_provenance_blobs": 99,
+                "finance_publications": 1,
+                "finance_dated_projections": 1,
+            }
+            assert len(terminal["receipts"]) == 1
+            receipt = terminal["receipts"][0]
+            assert receipt["event_id"] == report["import_result"]["audit_event_id"]
+            assert receipt["payload"]["outcome"] == "accepted"
+            assert (
+                receipt["payload"]["publication_event_id"]
+                == report["import_result"]["accounting"]["event_id"]
+            )
+            assert (
+                receipt["payload"]["projection_event_id"]
+                == report["import_result"]["dated"]["event_id"]
+            )
+            critical = report["stages"]["owner_control_critical_section"]
+            assert (
+                critical["start"]["at"]
+                <= report["owner_revocation_started_at"]
+                < critical["end"]["at"]
+            ), "revocation observation missed the import critical section"
+            assert report["cleanup"]["instance_removed"]
+            assert report["server_peak_rss_bytes"] <= SERVER_RSS_BYTES
+            assert report["server_cpu_seconds"] <= SERVER_CPU_SECONDS
+            assert all(
+                "end" in report["stages"].get(name, {})
+                for name in (
+                    "upload",
+                    "decode",
+                    "verify_provenance",
+                    "encrypted_archive",
+                    "dated_validation",
+                    "owner_control_critical_section",
+                )
+            )
+            assert any(r["event"] == "stopped" and r["sampler_stopped"] for r in rows)
+        except (AssertionError, KeyError) as exc:
+            report["errors"].append(
+                "terminal_receipt_or_resource_check:" + type(exc).__name__
+            )
+        if report["errors"]:
+            report["state"] = "incomplete"
+        (output / "import-summary.json").write_text(json.dumps(report, indent=2) + "\n")
+        print(
+            "SYNTHETIC_ACTUAL_SIZE_IMPORT "
+            + json.dumps(
+                {k: v for k, v in report.items() if k not in {"core", "stage_samples"}}
+            ),
+            flush=True,
+        )
+    assert report["state"] == "completed", report["errors"]

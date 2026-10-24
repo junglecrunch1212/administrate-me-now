@@ -135,6 +135,18 @@ choices and chosen baselines. Terminal receipts contain identifiers and outcomes
 not financial values. Synthetic production-composition coverage lives in
 `tests/acceptance/test_finance_activation.py`.
 
+The separate hosted Linux import diagnostic uses valid synthetic 98-blob proof
+of at least 18 MiB plus a dated payload of at least 6,020,614 bytes. It records
+provenance, envelope, dated and encoded request sizes independently; measures
+upload, decoding, validation, archival, current/peak/retained runtime RSS, CPU,
+core request cadence and the owner-control critical section/revocation wait;
+and checks exact terminal receipts, unchanged independent grants and cleanup.
+Its 90-second CPU, cooperative 512 MiB RSS and 180-second wall watchdog are
+hosted diagnostic containment, not a replacement acceptance policy. One short
+import with a single concurrent core request does not qualify sustained query
+load, the household Mini, maximum permitted sizes, real-data conversion or
+private transport. The existing native qualification scope remains separate.
+
 Recovery for these new control/import events uses the schema-aware runtime:
 disable both Books and CoS analysis with the current control revision and verify
 denied disclosure. Keep accepted history, shared workbooks and existing generic

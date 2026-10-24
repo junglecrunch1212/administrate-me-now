@@ -6,8 +6,7 @@ on:
       - 'adminme/events/schemas/finance*'
       - 'adminme/projections/money/**'
       - 'tests/**/test_finance*'
-      - 'tests/fixtures/finance_resource_diagnostic.py'
-      - 'tests/fixtures/finance_native_resources.py'
+      - 'tests/fixtures/finance*'
       - 'scripts/finance_resource_acceptance.py'
       - '.github/workflows/finance-development.yml'
   workflow_dispatch:
@@ -169,6 +168,22 @@ jobs:
           name: finance-browser-synthetic
           path: ${{ runner.temp }}/finance-browser
           if-no-files-found: warn
+          retention-days: 7
+      - name: Measure actual-size approved closed import in isolated Linux runtime
+        if: '!cancelled()'
+        timeout-minutes: 5
+        env:
+          ADMINME_FINANCE_IMPORT_RESOURCES: '1'
+          FINANCE_IMPORT_ARTIFACT_DIR: ${{ runner.temp }}/finance-import-resources
+          FINANCE_CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: poetry run pytest -q -s tests/acceptance/test_finance_import_resources.py
+      - name: Retain synthetic import resource and terminal evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: finance-import-resources-synthetic
+          path: ${{ runner.temp }}/finance-import-resources
+          if-no-files-found: error
           retention-days: 7
       - name: Synthetic light mixed-load measurement
         if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && inputs.legacy_relative_gates }}
