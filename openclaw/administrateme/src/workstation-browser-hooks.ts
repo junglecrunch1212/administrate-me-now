@@ -1,5 +1,6 @@
 /** Installed native hook + fail-closed result middleware for one admitted read. */
-import { createHash } from "node:crypto";
+import { createHmac } from "node:crypto";
+import { resolveGlobalMap } from "openclaw/plugin-sdk/global-singleton";
 import type { OpenClawPluginApi, OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "./runtime.js";
 import { provenanceFromServiceTool, serviceAgentId } from "./service-private.js";
@@ -8,10 +9,15 @@ import { prepareBrowserRead, verifiedBrowserRead, type BrowserReadPolicy, type P
 
 type WorkerPolicy = { bound: boolean; mode?: "read" | "complete"; resource?: BrowserReadPolicy & { route_sha256: string } };
 const BASE = "/api/openclaw/v1/tools/workstation-browser";
+const PENDING_READS = Symbol.for("administrateme.workstation-browser.pending.v1");
+type PendingRead = { prepared: PreparedBrowserRead; route: string; started: number };
 const object = (value: unknown): Record<string, unknown> => value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 
 export function registerWorkstationBrowserHooks(api: OpenClawPluginApi, runtime: PluginRuntime): void {
-  const pending = new Map<string, { prepared: PreparedBrowserRead; route: string; started: number }>();
+  // Pinned native result middleware may load a separate plugin registration.
+  // Keep only bounded, process-local admission receipts; no browser text or
+  // credential is retained here. Restart deliberately loses pending authority.
+  const pending = resolveGlobalMap<string, PendingRead>(PENDING_READS);
   const service = (context: Record<string, unknown>) => context.agentId === serviceAgentId();
   const provenance = (context: Record<string, unknown>) => provenanceFromServiceTool(context as OpenClawPluginToolContext,
     runtime.transport.config.sharedSecretEnv, runtime.transport.config.serviceWorkEnabled);
@@ -24,7 +30,11 @@ export function registerWorkstationBrowserHooks(api: OpenClawPluginApi, runtime:
   const native = { currentConfig: () => api.runtime.config.current() };
   const key = (context: Record<string, unknown>, call: unknown) => {
     if (typeof context.sessionKey !== "string" || typeof call !== "string" || !call) throw new Error("Native tool call binding is unavailable.");
-    return createHash("sha256").update(JSON.stringify([context.sessionKey, call])).digest("hex");
+    const secret = process.env[runtime.transport.config.sharedSecretEnv];
+    if (!secret || secret.length < 24) throw new Error("Native tool call credential is unavailable.");
+    return createHmac("sha256", secret).update(JSON.stringify([
+      "administrateme-browser-read-v1", runtime.transport.config.baseUrl, context.sessionKey, call,
+    ])).digest("hex");
   };
   api.on("before_prompt_build", async (_event, context) => {
     if (!service(context)) return;

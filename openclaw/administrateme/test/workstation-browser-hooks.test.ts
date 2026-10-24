@@ -1,5 +1,6 @@
 import vm from "node:vm";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { resolveGlobalMap } from "openclaw/plugin-sdk/global-singleton";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { registerWorkstationBrowserHooks } from "../src/workstation-browser-hooks.js";
 import { serviceAgentId, serviceSessionKey } from "../src/service-private.js";
@@ -14,8 +15,13 @@ const resource = {
   identity_probes: { account: { selector: "#account", attribute: "textContent", extraction: "exact" } },
   route_sha256: "f".repeat(64),
 };
-function fixture() {
-  vi.stubEnv("ADMINME_OPENCLAW_SHARED_SECRET", secret);
+function fixture(options: {
+  baseUrl?: string; secretEnv?: string; secretValue?: string; sessionKey?: string;
+  register?: typeof registerWorkstationBrowserHooks;
+} = {}) {
+  const secretEnv = options.secretEnv ?? "ADMINME_OPENCLAW_SHARED_SECRET";
+  const secretValue = options.secretValue ?? secret;
+  vi.stubEnv(secretEnv, secretValue);
   const hooks = new Map<string, any>();
   let middleware: any;
   const config = { browser: { enabled: true, defaultProfile: "chrome", allowSystemProfileImport: false, evaluateEnabled: true, profiles: { chrome: { driver: "extension" } } } };
@@ -29,25 +35,97 @@ function fixture() {
     registerAgentToolResultMiddleware: (callback: any, options: any) => { middleware = callback; expect(options).toEqual({ matcher: ["browser"], runtimes: ["openclaw", "codex"] }); },
     logger: { warn: vi.fn() }, runtime: { config: { current: () => config } },
   } as unknown as OpenClawPluginApi;
-  const runtime = { transport: { request, config: readPluginConfig({ serviceWorkEnabled: true }) }, trackedSessions: new Map() } as unknown as PluginRuntime;
-  registerWorkstationBrowserHooks(api, runtime);
-  const context = { agentId: serviceAgentId(), sessionKey: serviceSessionKey(secret, undefined, "browser-worker"), toolCallId: "call-browser", runId: "worker" };
+  const runtime = { transport: { request, config: readPluginConfig({ serviceWorkEnabled: true, sharedSecretEnv: secretEnv, ...(options.baseUrl ? { baseUrl: options.baseUrl } : {}) }) }, trackedSessions: new Map() } as unknown as PluginRuntime;
+  (options.register ?? registerWorkstationBrowserHooks)(api, runtime);
+  const context = { agentId: serviceAgentId(), sessionKey: options.sessionKey ?? serviceSessionKey(secretValue, undefined, "browser-worker"), toolCallId: "call-browser", runId: "worker" };
   const before = (params: any = { action: "snapshot" }, toolName = "browser") => hooks.get("before_tool_call")({ toolName, params, toolCallId: context.toolCallId }, context);
-  const run = async (account: string, text: string) => {
-    const prepared = await before();
+  const observe = (prepared: any, account = "cos@fixture.invalid", text = "private excerpt") => {
     let bodyRead = false;
     const evaluated = vm.runInNewContext(`(${prepared.params.request.fn})()`, {
       window: { location: { href: resource.url } },
       document: { querySelectorAll: () => [{ textContent: account }], get body() { bodyRead = true; return { innerText: text }; } },
     });
-    const result = await middleware({ toolName: "browser", toolCallId: context.toolCallId, result: { details: { targetId: resource.native_target_id, result: evaluated } } }, context);
-    return { bodyRead, result };
+    return { bodyRead, event: { toolName: "browser", toolCallId: context.toolCallId, result: { details: { targetId: resource.native_target_id, result: evaluated } } } };
   };
-  return { before, request, run, middleware, context, config, hooks };
+  const run = async (account: string, text: string) => {
+    const { bodyRead, event } = observe(await before(), account, text);
+    return { bodyRead, result: await middleware(event, context) };
+  };
+  return { before, request, run, observe, middleware, context, config, hooks };
 }
 
-afterEach(() => vi.unstubAllEnvs());
+afterEach(() => {
+  resolveGlobalMap(Symbol.for("administrateme.workstation-browser.pending.v1")).clear();
+  vi.unstubAllEnvs();
+});
 describe("installed browser source boundary", () => {
+  it("shares exact admission across separately loaded registrations and consumes it once", async () => {
+    const admission = fixture();
+    const { event } = admission.observe(await admission.before());
+    vi.resetModules();
+    const separate = await import("../src/workstation-browser-hooks.js");
+    const resultGuard = fixture({ register: separate.registerWorkstationBrowserHooks });
+    expect((await resultGuard.middleware(event, resultGuard.context)).result.details.status).toBe("verified");
+    expect(admission.request.mock.calls.some(([path]) => path.endsWith("/capture"))).toBe(false);
+    expect(resultGuard.request.mock.calls.filter(([path]) => path.endsWith("/capture"))).toHaveLength(1);
+    const replay = await admission.middleware(event, admission.context);
+    expect(replay.result.details.status).toBe("blocked");
+    expect(JSON.stringify(replay)).not.toContain("private excerpt");
+    expect(admission.request.mock.calls.some(([path]) => path.endsWith("/capture"))).toBe(false);
+  });
+  it.each(["backend", "secret", "session", "call"])("does not share or consume an admission in another %s scope", async (scope) => {
+    const admission = fixture();
+    const { event } = admission.observe(await admission.before());
+    const unrelated = fixture({
+      ...(scope === "backend" ? { baseUrl: "http://127.0.0.1:3331" } : {}),
+      ...(scope === "secret" ? { secretEnv: "BROWSER_OTHER_TEST_SECRET", secretValue: "synthetic-other-browser-secret-not-production", sessionKey: admission.context.sessionKey } : {}),
+      ...(scope === "session" ? { sessionKey: serviceSessionKey(secret, undefined, "other-browser-worker") } : {}),
+    });
+    const result = await unrelated.middleware({ ...event, ...(scope === "call" ? { toolCallId: "other-call" } : {}) }, unrelated.context);
+    expect(result.result.details.status).toBe("blocked");
+    expect(JSON.stringify(result)).not.toContain("private excerpt");
+    expect(unrelated.request.mock.calls.some(([path]) => path.endsWith("/capture"))).toBe(false);
+    expect((await admission.middleware(event, admission.context)).result.details.status).toBe("verified");
+  });
+  it("expires shared receipts after sixty seconds and never restores consumed authority", async () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(1000);
+    const admission = fixture();
+    const { event } = admission.observe(await admission.before());
+    const resultGuard = fixture();
+    now.mockReturnValue(61001);
+    expect((await resultGuard.middleware(event, resultGuard.context)).result.details.status).toBe("blocked");
+    now.mockReturnValue(1000);
+    expect((await admission.middleware(event, admission.context)).result.details.status).toBe("blocked");
+    expect(resultGuard.request.mock.calls.some(([path]) => path.endsWith("/capture"))).toBe(false);
+    expect(admission.request.mock.calls.some(([path]) => path.endsWith("/capture"))).toBe(false);
+  });
+  it("bounds process-wide admissions to one hundred receipts", async () => {
+    const admission = fixture();
+    const first = admission.observe(await admission.before()).event;
+    for (let index = 1; index <= 100; index++) {
+      admission.context.toolCallId = `call-browser-${index}`;
+      expect(await admission.before()).toHaveProperty("params");
+    }
+    const last = admission.observe(await admission.before()).event;
+    const resultGuard = fixture();
+    expect((await resultGuard.middleware(first, resultGuard.context)).result.details.status).toBe("blocked");
+    expect((await resultGuard.middleware(last, resultGuard.context)).result.details.status).toBe("verified");
+  });
+  it.each(["revoked", "capture", "identity"])("still withholds a cross-registration result after %s failure", async (failure) => {
+    const admission = fixture();
+    const { event } = admission.observe(await admission.before(), failure === "identity" ? "another@fixture.invalid" : "cos@fixture.invalid");
+    const resultGuard = fixture();
+    resultGuard.request.mockImplementation(async (path: string): Promise<any> => {
+      if (path.endsWith("/policy")) return failure === "revoked" ? { bound: false } : { bound: true, mode: "read", resource };
+      if (path.endsWith("/capture")) throw new Error("source store unavailable");
+      return { status: "blocked" };
+    });
+    const result = await resultGuard.middleware(event, resultGuard.context);
+    expect(result.result.details.status).toBe("blocked");
+    expect(JSON.stringify(result)).not.toContain("private excerpt");
+    expect(resultGuard.request.mock.calls.filter(([path]) => path.endsWith("/capture"))).toHaveLength(failure === "capture" ? 1 : 0);
+    expect((await admission.middleware(event, admission.context)).result.details.status).toBe("blocked");
+  });
   it("retains verified native result before exposing it, with a complete bounded envelope", async () => {
     const f = fixture();
     const { result, bodyRead } = await f.run("cos@fixture.invalid", "🙂".repeat(3000));
