@@ -1057,7 +1057,7 @@ async def inspect_state(body: ContextRequest, request: Request) -> dict[str, Any
     result = {
         "what_now": core._what_now(runtime, session),
         "triage": await core.triage(request, session),
-        "commitments": await core.active_commitments(request, session),
+        "commitments": core._active_commitments(runtime, session),
         "cos_work": service_work_for_context(
             runtime.projections.connection("tasks"),
             session,

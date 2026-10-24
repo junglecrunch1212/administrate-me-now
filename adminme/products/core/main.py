@@ -244,20 +244,30 @@ async def activity(
     }
 
 
+def _active_commitments(runtime: Any, session: Session) -> dict[str, Any]:
+    """Domain read shared by independently authenticated HTTP/tool boundaries."""
+    if runtime.projections is None:
+        raise HTTPException(503, "commitments projection unavailable")
+    return {
+        "items": active_for_member(
+            runtime.projections.connection("commitments"),
+            session,
+            member_party_id=session.view_member_id,
+        )
+    }
+
+
 @router.get("/v1/commitments/active")
 async def active_commitments(request: Request, session: SessionDep) -> dict[str, Any]:
     runtime = request.app.state.runtime
     if runtime.projections is None:
         raise HTTPException(503, "commitments projection unavailable")
-    items = await runtime.projections.read(
-        "commitments",
-        lambda conn: active_for_member(
-            conn, session, member_party_id=session.view_member_id
-        ),
+    result = await runtime.projections.read(
+        "commitments", lambda _conn: _active_commitments(runtime, session)
     )
     if session_from_request(request) != session:
         raise HTTPException(403, "member_identity_changed")
-    return {"items": items}
+    return result
 
 
 @router.get("/v1/commitments/{commitment_id}")

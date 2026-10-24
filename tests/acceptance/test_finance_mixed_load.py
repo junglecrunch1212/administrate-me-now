@@ -96,12 +96,50 @@ class _SyntheticCpuProfile:
         self.profile = cProfile.Profile()
         self.count = 0
         self.started = False
+        self.completed = False
+        self.loop_thread_id = None
+        self.wall_calls = {}
+        # Diagnostic-only instrumentation distinguishes main-loop blocking
+        # from work already dispatched to the native projection worker. It is
+        # installed only in this separate profile server, never the p95 gate.
+        import threading
+        from adminme.finance import disclosure
+        from adminme.products.openclaw import main as native
+        from adminme.projections.runner import ProjectionRunner
+
+        def instrument(owner, name, label):
+            original = getattr(owner, name)
+
+            def timed(*args, **kwargs):
+                active = self.started and not self.completed
+                started = time.perf_counter()
+                try:
+                    return original(*args, **kwargs)
+                finally:
+                    if active:
+                        thread = (
+                            "http_loop"
+                            if threading.get_ident() == self.loop_thread_id
+                            else "worker"
+                        )
+                        self.wall_calls.setdefault(f"{label}:{thread}", []).append(
+                            time.perf_counter() - started
+                        )
+
+            setattr(owner, name, timed)
+
+        instrument(disclosure, "validate_current_authority", "final_authority")
+        instrument(native, "_session", "resolve_session")
+        instrument(ProjectionRunner, "_execute_sync", "projection_dispatch")
 
     async def __call__(self, scope, receive, send):
         finance = scope["type"] == "http" and scope.get("path", "").startswith(
             "/api/openclaw/v1/tools/finance-"
         )
         if finance and not self.started:
+            import threading
+
+            self.loop_thread_id = threading.get_ident()
             self.started = True
             self.profile.enable()
         await self.app(scope, receive, send)
@@ -111,6 +149,7 @@ class _SyntheticCpuProfile:
                 import pstats
 
                 self.profile.disable()
+                self.completed = True
                 stats = pstats.Stats(self.profile)
 
                 def row(item):
@@ -132,6 +171,15 @@ class _SyntheticCpuProfile:
                         {
                             "diagnostic_only": True,
                             "profiled_finance_calls": self.count,
+                            "wall_calls_instrumented_ms": {
+                                key: {
+                                    "calls": len(values),
+                                    "total": round(sum(values) * 1000, 3),
+                                    "p95": round(_p95(values) * 1000, 3),
+                                    "max": round(max(values) * 1000, 3),
+                                }
+                                for key, values in self.wall_calls.items()
+                            },
                             "top_self": [
                                 row(item)
                                 for item in sorted(
