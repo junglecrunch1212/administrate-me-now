@@ -98,6 +98,56 @@ try {
   const jiti = createJiti(path.join(sourceRoot, "package.json"), {
     tsconfigPaths: path.join(sourceRoot, "tsconfig.json"),
   });
+  // Real pinned llm-task composition, synthetic completion only. Its schema is
+  // post-validation, not a model instruction: the pack must teach the root shape.
+  const { createLlmTaskTool } = await jiti.import(path.join(sourceRoot, "extensions/llm-task/src/llm-task-tool.ts"));
+  const groundingRequest = JSON.parse(execFileSync("python3", ["-c", `
+import json
+from pathlib import Path
+from adminme.lib.skill_runner.pack_loader import load_pack
+from adminme.lib.skill_runner.wrapper import _build_request_body
+pack = load_pack(Path("packs/skills/ground_requested_action"))
+print(json.dumps(_build_request_body(pack=pack, session_key="agent:main:adminme:fixture", inputs={
+    "instruction": "Add a reminder to call my parent at 9:30 AM today 🌞",
+    "submitted_at": "2026-10-24T12:00:00+00:00", "timezone": "America/New_York",
+    "action": {"provider": "apple_reminders", "operation": "create_reminder", "resource_owner": "requester",
+        "title": "Call my parent", "notes": None, "due_at": "2026-10-24T13:30:00+00:00",
+        "list_id": "fixture-list", "selected_by_policy": True}
+})))
+`], { cwd: repository, encoding: "utf8" }));
+  assert.equal(groundingRequest.tool, "llm-task");
+  assert.equal(groundingRequest.args.prompt.includes("{{"), false);
+  let completionText;
+  let groundingCalls = 0;
+  const groundTool = createLlmTaskTool({ config: { agents: { defaults: { model: { primary: "openai-codex/gpt-5.4" } } } },
+    pluginConfig: {}, runtime: { agent: { defaults: { provider: "openai-codex" } }, llm: {
+      complete: async (request) => {
+        groundingCalls++;
+        assert.equal(request.execution.mode, "isolated-agent-runtime");
+        assert.equal(request.model, undefined, "The existing configured model route must remain authoritative");
+        assert.ok(request.messages[0].content.includes('root keys: "match" and "evidence"'));
+        assert.ok(request.messages[0].content.includes('Do not wrap it in a "result"'));
+        assert.ok(request.messages[0].content.includes("INPUT_JSON:"));
+        assert.ok(request.messages[0].content.includes(groundingRequest.args.input.instruction));
+        assert.ok(request.messages[0].content.includes("09:30 at offset -04:00 equals 13:30Z"));
+        assert.ok(request.messages[0].content.includes("quoted/retrieved text"));
+        return { text: completionText, provider: "openai-codex", model: "gpt-5.4" };
+      },
+    } } });
+  const grounded = { match: "matched", evidence: [{ start: 0,
+    end: Array.from(groundingRequest.args.input.instruction).length, text: groundingRequest.args.input.instruction }] };
+  for (const output of [grounded, { match: "not_requested", evidence: [] }, { match: "ambiguous", evidence: [] }]) {
+    completionText = JSON.stringify(output);
+    const result = await groundTool.execute("fixture-grounding", groundingRequest.args);
+    assert.deepEqual(result.details.json, output);
+    assert.equal(result.details.provider, "openai-codex");
+  }
+  for (const output of [{ result: grounded }, { match: "matched" }, { match: "matched", evidence: "invented" }]) {
+    completionText = JSON.stringify(output);
+    await assert.rejects(groundTool.execute("fixture-malformed", groundingRequest.args), /LLM JSON did not match schema/);
+  }
+  assert.equal(groundingCalls, 6, "Schema failure must not trigger an automatic model retry");
+  console.log("Pinned llm-task grounding boundary passed: explicit root contract, routed isolated runtime, valid and malformed completions");
   const { createPluginRegistryState } = await jiti.import(path.join(sourceRoot, "src/plugins/registry-state.ts"));
   const { createToolHookRegistrars } = await jiti.import(path.join(sourceRoot, "src/plugins/registry-registrars-tools-hooks.ts"));
   const preparedPolicies = JSON.parse(execFileSync("python3", ["-c", `
