@@ -1,5 +1,6 @@
 """Synthetic production owner-control and exact-package API setup for test labs."""
 
+from copy import deepcopy
 from uuid import uuid4
 import httpx
 
@@ -8,7 +9,7 @@ from tests.acceptance.test_finance_activation import packet_for
 
 
 def witness_projection(value):
-    witness = dict(value["evidence"][0])
+    witness = deepcopy(value["evidence"][0])
     witness.update(
         evidence_id="hbsource1:" + "a" * 64, artifact_ref="hbsource1:" + "a" * 64
     )

@@ -58,7 +58,7 @@ def fixture(tenant, *, dated=True, witnessed=True, owner=PRINCIPAL, total_events
     publication, package = package_fixture(tenant, owner)
     planned = projection(publication, total_events) if dated else None
     if planned is not None and witnessed:
-        witness = dict(planned["evidence"][0])
+        witness = deepcopy(planned["evidence"][0])
         witness.update(
             evidence_id="hbsource1:" + "a" * 64, artifact_ref="hbsource1:" + "a" * 64
         )
@@ -133,6 +133,41 @@ def upload(client, approval, packet, *, headers=DEMO_HEADERS):
 
 async def events(runtime, types):
     return [event async for event in runtime.event_log.read_since(types=types)]
+
+
+
+@pytest.mark.parametrize("witness_factory", ["activation", "resource"])
+def test_composed_browser_projection_imports_without_shared_evidence_lists(
+    tmp_path, witness_factory
+):
+    from tests.fixtures.finance_activation import witness_projection
+    from tests.fixtures.finance_planning import (
+        with_boundary_windows,
+        with_conservative_minima,
+        with_grouped_issues,
+        with_unavailable_openings,
+    )
+
+    settings = configured(tmp_path)
+    p, d, package = fixture(
+        settings.instance.tenant_id,
+        total_events=24,
+        witnessed=witness_factory == "activation",
+    )
+    if witness_factory == "resource":
+        d = witness_projection(d)
+    assert d["evidence"][0]["context_ids"] is not d["evidence"][1]["context_ids"]
+    d = with_grouped_issues(
+        with_conservative_minima(with_unavailable_openings(with_boundary_windows(d)))
+    )
+    for evidence in d["evidence"]:
+        assert len(evidence["context_ids"]) == len(set(evidence["context_ids"]))
+    manifest, packet = packet_for(p, d, package)
+    with TestClient(create_application(settings)) as client:
+        control(client, manifest["binding"])
+        result = upload(client, approve(client, manifest), packet)
+        assert result.status_code == 200, result.text
+        assert result.json()["dated"]["state"] == "verified"
 
 
 def test_persisted_activation_import_disclosure_restart_and_disable(tmp_path):
