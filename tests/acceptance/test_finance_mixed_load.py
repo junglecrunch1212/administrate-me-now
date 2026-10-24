@@ -103,8 +103,10 @@ class _SyntheticCpuProfile:
         self.loop_thread_id = None
         self.wall_calls = {}
         self.phase_wall_calls = {}
+        self.phase_cpu_calls = {}
         self.phase = "warmup"
         self.executor_spans = []
+        self.loop_spans = []
         self.http_spans = []
         self.profile_started_at = 0.0
         # Diagnostic-only instrumentation distinguishes main-loop blocking
@@ -112,16 +114,23 @@ class _SyntheticCpuProfile:
         # installed only in this separate profile server, never the p95 gate.
         import threading
         import concurrent.futures
+        from adminme.events import log as event_log
         from adminme.finance import disclosure, planning_store
+        from starlette.responses import JSONResponse
+        from fastapi import routing as response_routing
         from adminme.products.openclaw import main as native
         from adminme.projections.runner import ProjectionRunner
 
         self.wall_lock = threading.Lock()
 
-        def record(label, elapsed, phase):
+        def record(label, elapsed, phase, cpu_elapsed=None):
             with self.wall_lock:
                 self.wall_calls.setdefault(label, []).append(elapsed)
                 self.phase_wall_calls.setdefault(f"{phase}:{label}", []).append(elapsed)
+                if cpu_elapsed is not None:
+                    self.phase_cpu_calls.setdefault(f"{phase}:{label}", []).append(
+                        cpu_elapsed
+                    )
 
         original_submit = concurrent.futures.ThreadPoolExecutor.submit
 
@@ -158,6 +167,7 @@ class _SyntheticCpuProfile:
 
             def begin():
                 began_at = time.perf_counter()
+                cpu_started = time.thread_time()
                 if active:
                     record(
                         f"executor_wait:{lane}:{operation}", began_at - queued_at, phase
@@ -167,11 +177,13 @@ class _SyntheticCpuProfile:
                 finally:
                     if active:
                         finished_at = time.perf_counter()
+                        cpu_elapsed = time.thread_time() - cpu_started
                         with self.wall_lock:
                             self.executor_spans.append(
                                 {
                                     "operation": f"{lane}:{operation}",
                                     "phase": phase,
+                                    "thread_cpu_ms": round(cpu_elapsed * 1000, 3),
                                     "queued_ms": round(
                                         (queued_at - self.profile_started_at) * 1000, 3
                                     ),
@@ -189,6 +201,50 @@ class _SyntheticCpuProfile:
 
         concurrent.futures.ThreadPoolExecutor.submit = observed_submit
 
+        # Callback occupancy excludes selector sleep and suspended coroutines.
+        # Thread CPU excludes descheduling/native waits, but the remainder of
+        # wall time cannot distinguish SQL I/O, scheduling and GIL contention.
+        # This instrumentation exists only in the separate diagnostic server.
+        original_handle_run = asyncio.Handle._run  # type: ignore[attr-defined]
+
+        def observed_handle_run(handle):
+            if not self.started or self.completed:
+                return original_handle_run(handle)
+            phase = self.phase
+            began_at = time.perf_counter()
+            cpu_started = time.thread_time()
+            callback = handle._callback
+            owner = getattr(callback, "__self__", None)
+            if isinstance(owner, asyncio.Task):
+                coroutine = owner.get_coro()
+                label = getattr(coroutine, "__qualname__", type(coroutine).__name__)
+            else:
+                label = getattr(callback, "__qualname__", type(callback).__name__)
+            try:
+                return original_handle_run(handle)
+            finally:
+                # The stop callback serializes after all measured responses;
+                # exclude it from both occupancy and the on-disk measurements.
+                if not self.completed:
+                    self.loop_spans.append(
+                        {
+                            "callback": label,
+                            "phase": phase,
+                            "thread_cpu_ms": round(
+                                (time.thread_time() - cpu_started) * 1000, 3
+                            ),
+                            "started_ms": round(
+                                (began_at - self.profile_started_at) * 1000, 3
+                            ),
+                            "finished_ms": round(
+                                (time.perf_counter() - self.profile_started_at) * 1000,
+                                3,
+                            ),
+                        }
+                    )
+
+        asyncio.Handle._run = observed_handle_run  # type: ignore[attr-defined]
+
         def instrument(owner, name, label):
             original = getattr(owner, name)
 
@@ -197,6 +253,7 @@ class _SyntheticCpuProfile:
                 active = self.started and not self.completed
                 phase = self.phase
                 started = time.perf_counter()
+                cpu_started = time.thread_time()
                 try:
                     return original(*args, **kwargs)
                 finally:
@@ -211,11 +268,75 @@ class _SyntheticCpuProfile:
                             else "worker"
                         )
                         record(
-                            f"{label}:{thread}", time.perf_counter() - started, phase
+                            f"{label}:{thread}",
+                            time.perf_counter() - started,
+                            phase,
+                            time.thread_time() - cpu_started,
                         )
 
             setattr(owner, name, timed)
 
+        original_count_since = event_log.EventLog.count_since
+
+        @wraps(original_count_since)
+        async def observed_count_since(*args, **kwargs):
+            if not self.started or self.completed:
+                return await original_count_since(*args, **kwargs)
+            import sys
+
+            phase = self.phase
+            started = time.perf_counter()
+            # Code locations only; never retain frames, subscriber identities,
+            # event contents or private arguments in the synthetic artifact.
+            frame = sys._getframe(1)
+            locations = []
+            try:
+                for _ in range(3):
+                    if frame is None:
+                        break
+                    locations.append(
+                        frame.f_code.co_filename.rsplit("/", 1)[-1]
+                        + ":"
+                        + frame.f_code.co_name
+                    )
+                    frame = frame.f_back
+            finally:
+                del frame
+            try:
+                return await original_count_since(*args, **kwargs)
+            finally:
+                record(
+                    "lag_count:" + ">".join(locations),
+                    time.perf_counter() - started,
+                    phase,
+                )
+
+        event_log.EventLog.count_since = observed_count_since
+
+        original_serialize = response_routing.serialize_response
+
+        @wraps(original_serialize)
+        async def observed_serialize(*args, **kwargs):
+            active = self.started and not self.completed
+            phase = self.phase
+            started = time.perf_counter()
+            try:
+                return await original_serialize(*args, **kwargs)
+            finally:
+                if active:
+                    # This wrapper may suspend for synchronous endpoint
+                    # validation; thread CPU across that await would be false
+                    # attribution. Actual loop occupancy is recorded separately.
+                    record("response_serialize", time.perf_counter() - started, phase)
+
+        response_routing.serialize_response = observed_serialize
+
+        # These nested timings attribute JSON work by executing thread. They
+        # overlap envelope/response timings and must not be summed as disjoint.
+        instrument(json, "loads", "json_decode")
+        instrument(json, "dumps", "json_encode")
+        instrument(event_log, "_row_to_event", "event_envelope_decode")
+        instrument(JSONResponse, "render", "response_json_render")
         instrument(disclosure, "validate_current_authority", "final_authority")
         instrument(planning_store, "query_projection", "planning_query")
         instrument(native, "_session", "resolve_session")
@@ -311,6 +432,9 @@ class _SyntheticCpuProfile:
             phase_wall_calls = {
                 key: list(values) for key, values in self.phase_wall_calls.items()
             }
+            phase_cpu_calls = {
+                key: list(values) for key, values in self.phase_cpu_calls.items()
+            }
         self.output_path.write_text(
             json.dumps(
                 {
@@ -321,7 +445,21 @@ class _SyntheticCpuProfile:
                     "final_authority_sql_stubbed": self.authority_control,
                     "acceptance_eligible": False,
                     "executor_spans": executor_spans,
+                    "loop_callback_spans": list(self.loop_spans),
+                    "cpu_time_semantics": (
+                        "thread CPU excludes waits; wall minus CPU includes SQL I/O, "
+                        "scheduling and possible GIL contention, not GIL time alone"
+                    ),
                     "http_spans": list(self.http_spans),
+                    "phase_thread_cpu_instrumented_ms": {
+                        key: {
+                            "calls": len(values),
+                            "total": round(sum(values) * 1000, 3),
+                            "p95": round(_p95(values) * 1000, 3),
+                            "max": round(max(values) * 1000, 3),
+                        }
+                        for key, values in phase_cpu_calls.items()
+                    },
                     "phase_wall_calls_instrumented_ms": {
                         key: {
                             "calls": len(values),
@@ -1016,8 +1154,32 @@ async def _profile_workload(tmp_path, *, planning_workload, authority_control=Fa
                 and report["independent_load_processes"]
                 and (not report["cpu_profile_enabled"] or report["top_self"])
             )
+            if planning is not None:
+                report["planning_inventory"] = {
+                    "bodies": planning["inventory_bodies"],
+                    "references": planning["context_references"],
+                    "queried_context_rows": len(planning["expected_events"]),
+                }
+                assert report["planning_inventory"] == {
+                    "bodies": 3307,
+                    "references": 38382,
+                    "queried_context_rows": 2818,
+                }
             assert report["final_authority_sql_stubbed"] == authority_control
             assert report["acceptance_eligible"] is False
+            assert report["loop_callback_spans"]
+            assert all(
+                span["thread_cpu_ms"] >= 0 and span["finished_ms"] >= span["started_ms"]
+                for span in report["loop_callback_spans"] + report["executor_spans"]
+            )
+            assert any(
+                "event_envelope_decode:http_loop" == label
+                for label in report["wall_calls_instrumented_ms"]
+            )
+            assert any(
+                "response_json_render:http_loop" == label
+                for label in report["wall_calls_instrumented_ms"]
+            )
             label = (
                 "SYNTHETIC_PLANNING_REQUEST_PROFILE"
                 if planning_workload
@@ -1032,7 +1194,8 @@ async def _profile_workload(tmp_path, *, planning_workload, authority_control=Fa
                     {
                         k: v
                         for k, v in report.items()
-                        if k not in {"executor_spans", "http_spans"}
+                        if k
+                        not in {"executor_spans", "http_spans", "loop_callback_spans"}
                     }
                 ),
                 flush=True,

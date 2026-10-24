@@ -150,6 +150,7 @@ evidence, not passing acceptance.
 | `fce14a57` | 872 Python, 100 native/static/browser and deep-query work checks passed | Before 4.414, after 4.388 → mixed 5.433 ms (1.231012) | Fail; planning also fails at 20.74% |
 | `b32c4252` | 877 Python, 100 native/static/browser, query-work and reader-memory checks passed | Before 4.323, after 4.164 → mixed 5.431 ms (1.256279) | Fail; planning also fails at 21.49% |
 | `9814dbac` | 877 Python, 100 native/static/browser, query-work, reader-memory and diagnostic validity checks passed | Before 4.249, after 3.495 → mixed 5.423 ms (1.276111) | Fail; planning also fails at 10.19% |
+| `d2115dd9` | 922 Python, 100 native/static/browser, query-work, reader-memory and diagnostic validity checks passed | Before 4.267, after 4.250 → mixed 5.349 ms (1.253548) | Fail; planning also fails at 29.23% |
 
 The [de8 hosted run](https://github.com/junglecrunch1212/administrate-me-now/actions/runs/40042497072)
 retains 251 admitted finance calls, 18.381/19.970 ms warm status/calculation
@@ -360,10 +361,38 @@ event-log cursor validation, page reads and lag counts, followed by audit
 projection application. These overlaps identify work to investigate, not causal
 proof or an alternate acceptance threshold.
 
-The next bounded candidate combines event-log cursor validation and the first
+The `d2115dd9` candidate combines event-log cursor validation and the first
 page query into one native-worker turn. It preserves existence checks even for
 empty filtered results, exclusive cursors, type/owner filters, watermark and
 paging semantics; it changes neither bus delivery nor authority. The affected
 EventLog suite joins hosted finance checks, including a multi-page filtered read
 that proves one worker turn per page. The same raw gates and independent-client
 profiles determine whether this reduction helps; no latency success is assumed.
+At this head, both independent-client profiles confirm event-log submissions
+fell from 2,600 to 2,000 for 200 finance calls: 600 checked page reads replace
+600 cursor and 600 page jobs; the 600 lag counts remain. Correctness passed
+(922 Python cases), but raw light/planning p95 still failed at 25.35%/29.23%.
+Light had 251 calls and 17.610/17.997 ms status/calculation p95. Planning had
+250 calls, before/after/mixed core p95 4.335/4.330/5.602 ms and
+20.598/20.987 ms summary/detail p95. There is no demonstrated end-to-end win.
+Three reader-memory trials measured 7,020,544–7,045,120 bytes initial growth,
+flat after 1,000 further reads, 7,483,392–7,507,968 after rebuild/reopen and
+7,462,912–7,487,488 retained after shutdown; all reader threads exited.
+
+
+The prior independent-client planning profile submitted 2,600 event-log jobs
+across 200 finance calls, including 600 cursor checks (23.08% of log submissions).
+The cursor checks consumed 73.626 ms worker wall time and 65.263 ms queue time
+in aggregate. Batching removes their separate dispatches, not their SQL work;
+these totals cannot establish the core tail improvement.
+
+The follow-up diagnostic records bounded loop-callback spans (excluding selector
+sleep and suspended coroutines) and per-worker thread CPU alongside wall time.
+It separately times JSON decoding/encoding, event-envelope decoding, response
+serialization and JSON rendering on the executing thread, attributes lag counts
+to code locations (without arguments or retained frames), and pins planning
+cardinalities in each artifact. Nested function timings overlap and are not
+additive. Thread CPU excludes waits; wall minus CPU includes SQL I/O,
+descheduling and possible GIL contention and must not be described as GIL time
+alone. The extra instrumentation is confined to separate synthetic profile
+servers, never either raw gate, and does not qualify release or private access.
