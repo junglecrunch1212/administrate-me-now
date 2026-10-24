@@ -24,6 +24,7 @@ from scripts.release_scope import (
     COS_SERVICE_WORK_REQUIRED_PATHS,
     _service_work_application,
     _service_work_member,
+    _service_work_ingest,
     UPDATER_COMPONENT_PATHS,
     UPDATER_TEST_PATHS,
     UPDATER_REQUIRED_PATHS,
@@ -3093,3 +3094,28 @@ def test_native_reminder_shared_member_route_cannot_hide_other_changes(
         select_scope(path, _event(base, head), checkout_sha=head)["scope"]
         == "system-wide"
     )
+
+
+def test_native_terminal_ingest_scope_preserves_unrelated_authorization() -> None:
+    old = "async def _enforce_terminal_result(request, envelope, authorization):\n    return check(envelope)\n\nasync def _enforce_active_bridge_contract(request, envelope, authorization):\n    require_owner()\n    if terminal:\n        await _enforce_terminal_result(request, envelope, authorization)\n        return envelope\n    require_acquisition()\n"
+    new = old.replace(
+        "return check(envelope)", "return exact_replay(envelope)"
+    ).replace(
+        "await _enforce_terminal_result(request, envelope, authorization)\n        return envelope",
+        "return await _enforce_terminal_result(request, envelope, authorization)",
+    )
+    assert _service_work_ingest(old) == _service_work_ingest(new)
+    assert _service_work_ingest(
+        new.replace("require_owner()", "skip_owner()")
+    ) != _service_work_ingest(old)
+    assert (
+        _service_work_ingest(
+            new.replace(
+                "return await _enforce_terminal_result(request, envelope, authorization)",
+                "return envelope",
+            )
+        )
+        is None
+    )
+    assert _service_work_ingest("async def [") is None
+    assert _service_work_ingest(new + new) is None

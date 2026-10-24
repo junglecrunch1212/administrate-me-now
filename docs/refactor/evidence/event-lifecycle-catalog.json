@@ -3862,8 +3862,8 @@
     "missing_source_candidate_cells": [],
     "object_lifecycles": 28,
     "source_candidate_cells": 143,
-    "technical_event_schemas": 373,
-    "technical_event_types": 294,
+    "technical_event_schemas": 374,
+    "technical_event_types": 295,
     "uncataloged_event_types": [],
     "unproved_exact_lifecycle_transitions": [],
     "unproved_supported_source_candidate_cells": []
@@ -4574,6 +4574,103 @@
         "error_kind",
         "error_message",
         "quarantined_at"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "adapter.source_ownership_reconciled",
+      "family": "adapter_runtime",
+      "properties": {
+        "activation_id": {
+          "pattern": "^[0-9a-f]{32}$",
+          "title": "Activation Id",
+          "type": "string"
+        },
+        "activation_journal_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Activation Journal Sha256",
+          "type": "string"
+        },
+        "activation_request_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Activation Request Sha256",
+          "type": "string"
+        },
+        "authentication_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Authentication Event Id",
+          "type": "string"
+        },
+        "authentication_fingerprint": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Authentication Fingerprint",
+          "type": "string"
+        },
+        "authority": {
+          "const": "historical_attribution_only",
+          "title": "Authority",
+          "type": "string"
+        },
+        "operator_principal_id": {
+          "maxLength": 240,
+          "pattern": "^operator:.+",
+          "title": "Operator Principal Id",
+          "type": "string"
+        },
+        "owner_member_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Owner Member Id",
+          "type": "string"
+        },
+        "prepared_adapter_configuration_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Prepared Adapter Configuration Sha256",
+          "type": "string"
+        },
+        "reconciled_at": {
+          "maxLength": 80,
+          "minLength": 1,
+          "title": "Reconciled At",
+          "type": "string"
+        },
+        "recovery_authorization_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Recovery Authorization Sha256",
+          "type": "string"
+        },
+        "selection": {
+          "$ref": "#/$defs/CoSRemindersSelection"
+        },
+        "source_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Source Event Id",
+          "type": "string"
+        },
+        "source_fingerprint": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Fingerprint",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_event_id",
+        "source_fingerprint",
+        "authentication_event_id",
+        "authentication_fingerprint",
+        "selection",
+        "activation_id",
+        "activation_journal_sha256",
+        "activation_request_sha256",
+        "prepared_adapter_configuration_sha256",
+        "owner_member_id",
+        "operator_principal_id",
+        "recovery_authorization_sha256",
+        "reconciled_at",
+        "authority"
       ],
       "schema_version": 1
     },

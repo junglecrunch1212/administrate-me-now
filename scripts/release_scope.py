@@ -376,12 +376,14 @@ UPDATER_REQUIRED_PATHS = (
 ) - (UPDATER_OPTIONAL_MODULE_TESTS.keys() | UPDATER_OPTIONAL_MODULE_TESTS.values())
 COS_SERVICE_WORK_APPLICATION = "adminme/runtime/application.py"
 COS_SERVICE_WORK_MEMBER = "adminme/products/member/main.py"
+COS_SERVICE_WORK_INGEST = "adminme/products/bridge/routers/ingest.py"
 COS_SERVICE_WORK_CHECK_SCRIPT = "scripts/acceptance/cos-service-work-release.sh"
 COS_SERVICE_WORK_NATIVE_INSTALL = "scripts/acceptance/openclaw-source-install.sh"
 COS_SERVICE_WORK_COMPONENT_PATHS = frozenset(
     {
         COS_SERVICE_WORK_APPLICATION,
         COS_SERVICE_WORK_MEMBER,
+        COS_SERVICE_WORK_INGEST,
         "adminme/products/openclaw/apple_reminders.py",
         "openclaw/administrateme/src/apple-reminders.ts",
         "openclaw/administrateme/src/tools.ts",
@@ -1038,6 +1040,57 @@ def _service_work_member(source: str) -> str | None:
     ).hexdigest()
 
 
+def _service_work_ingest(source: str) -> str | None:
+    """Only terminal replay validation and its exact returned-envelope plumbing."""
+    try:
+        module = ast.parse(source)
+    except SyntaxError:
+        return None
+    terminal = [
+        node
+        for node in module.body
+        if isinstance(node, ast.AsyncFunctionDef)
+        and node.name == "_enforce_terminal_result"
+    ]
+    active = [
+        node
+        for node in module.body
+        if isinstance(node, ast.AsyncFunctionDef)
+        and node.name == "_enforce_active_bridge_contract"
+    ]
+    if len(terminal) > 1 or len(active) > 1:
+        return None
+    module.body = [node for node in module.body if node not in terminal]
+    old = ast.parse(
+        "async def f():\n    await _enforce_terminal_result(request, envelope, authorization)\n    return envelope\n"
+    ).body[0]
+    new = ast.parse(
+        "async def f():\n    return await _enforce_terminal_result(request, envelope, authorization)\n"
+    ).body[0]
+    assert isinstance(old, ast.AsyncFunctionDef) and isinstance(
+        new, ast.AsyncFunctionDef
+    )
+    variants = [
+        [ast.dump(node, include_attributes=False) for node in fn.body]
+        for fn in (old, new)
+    ]
+    replaced = 0
+    for function in active:
+        for node in ast.walk(function):
+            if (
+                isinstance(node, ast.If)
+                and [ast.dump(item, include_attributes=False) for item in node.body]
+                in variants
+            ):
+                node.body = [ast.Pass()]
+                replaced += 1
+    if active and replaced != 1:
+        return None
+    return hashlib.sha256(
+        ast.dump(module, include_attributes=False).encode()
+    ).hexdigest()
+
+
 def _service_work_dependency_fingerprint(
     repository: Path, revision: str, entries: tuple[GitTreeEntry, ...]
 ) -> tuple[str, bool] | None:
@@ -1054,18 +1107,20 @@ def _service_work_dependency_fingerprint(
     if normalized is None:
         return None
     identity, wired = normalized
-    member = next(
-        (entry for entry in entries if entry.path == COS_SERVICE_WORK_MEMBER), None
-    )
-    if member is not None and member.mode != "100644":
-        return None
-    member_identity = _service_work_member(
-        _git(repository, "show", f"{revision}:{COS_SERVICE_WORK_MEMBER}")
-        if member
-        else ""
-    )
-    if member_identity is None:
-        return None
+    shared_identities: list[tuple[str, str, str]] = []
+    for path, normalize in (
+        (COS_SERVICE_WORK_MEMBER, _service_work_member),
+        (COS_SERVICE_WORK_INGEST, _service_work_ingest),
+    ):
+        entry = next((entry for entry in entries if entry.path == path), None)
+        if entry is not None and entry.mode != "100644":
+            return None
+        shared_identity = normalize(
+            _git(repository, "show", f"{revision}:{path}") if entry else ""
+        )
+        if shared_identity is None:
+            return None
+        shared_identities.append((path, "100644", shared_identity))
     allowed = COS_SERVICE_WORK_REQUIRED_PATHS | POLICY_PATHS
     coordinates = sorted(
         (
@@ -1080,7 +1135,7 @@ def _service_work_dependency_fingerprint(
             and (entry.path in allowed or _prose(entry.path))
         )
     )
-    coordinates.append((COS_SERVICE_WORK_MEMBER, "100644", member_identity))
+    coordinates.extend(shared_identities)
     coordinates.sort()
     digest = hashlib.sha256(
         json.dumps(coordinates, separators=(",", ":")).encode()

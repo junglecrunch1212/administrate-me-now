@@ -385,6 +385,29 @@ def test_native_reminder_exact_due_two_approvals_bridge_receipt_and_restart(
             retained["payload"]["openclaw_approval_event_id"]
             == command["openclaw_approval_event_id"]
         )
+        repeated_terminal = client.post(
+            "/api/bridge/ingest", headers=headers, json=transport.submitted[0]
+        )
+        assert repeated_terminal.status_code == 202, repeated_terminal.text
+        assert repeated_terminal.json()["event_id"] == terminal["result_event_id"]
+        for path, value in (
+            (["payload", "result", "applied"], 1),
+            (["sensitivity"], "privileged"),
+            (["raw_ref"], "fixture:untrusted-terminal-reference"),
+            (["payload", "request_fingerprint"], "0" * 64),
+        ):
+            forged = copy.deepcopy(transport.submitted[0])
+            target = forged
+            for part in path[:-1]:
+                target = target[part]
+            target[path[-1]] = value
+            refused = client.post("/api/bridge/ingest", headers=headers, json=forged)
+            assert refused.status_code == 403, (path, refused.text)
+        assert len(store.effects) == 1
+        assert (
+            len(client.portal.call(_events, runtime, "external_sync.write_completed"))
+            == 1
+        )
         original_lookup = runtime.event_log.get_by_idempotency
         for path, value in (
             (["source_adapter"], "untrusted-result-source"),
@@ -423,7 +446,6 @@ def test_native_reminder_exact_due_two_approvals_bridge_receipt_and_restart(
             title=body["title"],
             notes=body["notes"],
             due=COMPONENTS,
-            due_at=UTC_DUE,
         )
         ingested = client.post("/api/bridge/ingest", headers=headers, json=mirror)
         assert ingested.status_code == 202, ingested.text
@@ -759,6 +781,13 @@ def test_native_reminder_provider_called_timeout_stays_unknown_without_reexecuti
             assert len(store.effects) == len(transport.submitted) == 1
             assert transport.submitted[0]["type"] == "external_sync.write_failed"
             assert transport.submitted[0]["payload"]["provider_called"] is True
+            cached = supervisor._command_ledger.get(
+                command["command_id"], command["request_fingerprint"]
+            )
+            assert cached == transport.submitted[0]
+            # The durable ledger canonicalizes JSON keys. The real ingress must
+            # accept this semantically identical cached result on restart.
+            assert list(cached["payload"]) != list(transport.submitted[0]["payload"])
         finally:
             supervisor._command_ledger.close()
         status = _status(client, source, approval_id)

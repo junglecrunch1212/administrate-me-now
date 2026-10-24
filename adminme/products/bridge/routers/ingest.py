@@ -435,7 +435,7 @@ async def _enforce_terminal_result(
     request: Request,
     envelope: EventEnvelope,
     authorization: BridgeAuthorization,
-) -> None:
+) -> EventEnvelope:
     if envelope.schema_version != 2:
         raise HTTPException(403, detail="bridge_command_result_requires_v2")
     payload = envelope.payload
@@ -592,9 +592,14 @@ async def _enforce_terminal_result(
             "owner_scope": envelope.owner_scope,
             "visibility_scope": envelope.visibility_scope,
             "causation_id": envelope.causation_id,
-            "payload": envelope.payload,
+            "sensitivity": envelope.sensitivity,
+            "raw_ref": envelope.raw_ref,
         }
-        if any(existing.get(key) != value for key, value in comparable.items()):
+        if any(
+            existing.get(key) != value for key, value in comparable.items()
+        ) or json.dumps(
+            existing["payload"], sort_keys=True, separators=(",", ":")
+        ) != json.dumps(envelope.payload, sort_keys=True, separators=(",", ":")):
             violations.append("terminal_idempotency_conflict")
     if violations:
         raise HTTPException(
@@ -604,6 +609,14 @@ async def _enforce_terminal_result(
                 "violations": sorted(set(violations)),
             },
         )
+
+    if existing is not None:
+        # The bridge ledger sorts object keys when caching a terminal. Only after
+        # exact identity and canonical JSON equality have passed, reuse the stored
+        # order so append-only EventLog identity accepts that same cached receipt.
+        # Values, primitive types and array order remain material; history is untouched.
+        return envelope.model_copy(update={"payload": existing["payload"]})
+    return envelope
 
 
 def _container_from_payload(payload: dict[str, Any], policy: Any) -> str | None:
@@ -737,8 +750,7 @@ async def _enforce_active_bridge_contract(
         "external_sync.write_completed",
         "external_sync.write_failed",
     }:
-        await _enforce_terminal_result(request, envelope, authorization)
-        return envelope
+        return await _enforce_terminal_result(request, envelope, authorization)
     policy = authorization.policy_for_source(envelope.source_adapter)
     bridge_record = _bridge_record(request, tailscale_identity)
     violations: list[str] = []
