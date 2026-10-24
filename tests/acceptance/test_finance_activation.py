@@ -760,3 +760,37 @@ def test_import_approval_expiry_and_revision_are_not_reusable(
         assert not client.portal.call(
             events, client.app.state.runtime, ["finance.publication_accepted"]
         )
+
+
+def test_closed_decoder_releases_owned_wire_before_dated_validation(
+    tmp_path, monkeypatch
+):
+    import json
+    from adminme.finance import closed_import
+    from adminme.events.schemas.finance_import import FinanceImportManifest
+
+    config = configured(tmp_path)
+    p, d, package = fixture(config.instance.tenant_id)
+    manifest, packet = packet_for(p, d, package)
+    wire = json.dumps(packet).encode()
+    owned = bytearray(wire)
+    validate = closed_import.validate_projection
+
+    def observed(value):
+        assert not owned
+        return validate(value)
+
+    monkeypatch.setattr(closed_import, "validate_projection", observed)
+    decoded, dated, proof = closed_import.decode_package(
+        owned, FinanceImportManifest.model_validate(manifest)
+    )
+    assert decoded == p and dated == d and proof == package
+    assert not owned
+    # Immutable byte callers retain their original input.
+    assert (
+        closed_import.decode_package(
+            wire, FinanceImportManifest.model_validate(manifest)
+        )[0]
+        == p
+    )
+    assert wire == json.dumps(packet).encode()

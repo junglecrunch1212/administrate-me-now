@@ -12,7 +12,9 @@ from datetime import datetime
 import hashlib
 import json
 import math
+from collections import OrderedDict
 from collections.abc import Mapping
+import threading
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Literal
@@ -31,9 +33,11 @@ from adminme.finance.publication import PublicationError, canonical_bytes
 
 CONTRACT_PATH = Path(__file__).parent / "contracts/books-journal-unit.v1.proposal.json"
 CONTRACT_SHA256 = "ce2fdc0d7c291486b71921a4353e4fc53ff16074869a6f07560d35c4a53f3f31"
-CONTRACT = json.loads(CONTRACT_PATH.read_bytes())
-if hashlib.sha256(CONTRACT_PATH.read_bytes()).hexdigest() != CONTRACT_SHA256:
+_contract_bytes = CONTRACT_PATH.read_bytes()
+if hashlib.sha256(_contract_bytes).hexdigest() != CONTRACT_SHA256:
     raise RuntimeError("journal unit contract bytes changed")
+CONTRACT = json.loads(_contract_bytes)
+del _contract_bytes
 FIELDS = frozenset(CONTRACT["native_field_names"])
 LIMITS = CONTRACT["size_limits"]
 REPORT_ORDER = [
@@ -239,6 +243,145 @@ def namespace_root(publication: dict[str, Any]) -> str | None:
     return str(root["evidence_id"])
 
 
+# Pure proof receipts are process-local and bounded by encoded bytes as well as
+# count. They contain derived lineage identifiers, never source rows or grants.
+_PROOF_RECEIPT_BYTES = 4 * 1024 * 1024
+_PROOF_RECEIPT_ENTRY_BYTES = 2 * 1024 * 1024
+_PROOF_RECEIPT_COUNT = 8
+_proof_receipts: OrderedDict[str, bytes] = OrderedDict()
+_proof_receipt_lock = threading.Lock()
+_PROOF_SCHEMA_SHA256 = hashlib.sha256(
+    canonical_bytes(
+        {
+            "index": ProvenanceIndex.model_json_schema(),
+            "chunk": ProvenanceChunk.model_json_schema(),
+        }
+    )
+).hexdigest()
+
+
+def _proof_bytes(proof: VerifiedProvenance | None) -> bytes:
+    return canonical_bytes(
+        None
+        if proof is None
+        else {
+            "root": proof.root,
+            "source_snapshot_sha256": proof.source_snapshot_sha256,
+            "line_units": proof.line_units,
+            "unit_ids": sorted(proof.unit_ids),
+            "held_events_by_revision": proof.held_events_by_revision,
+        }
+    )
+
+
+def _proof_from_bytes(raw: bytes) -> VerifiedProvenance | None:
+    value = json.loads(raw)
+    if value is None:
+        return None
+    value["unit_ids"] = frozenset(value["unit_ids"])
+    return VerifiedProvenance(**value)
+
+
+class _PinnedProofBlobs(Mapping[str, bytes]):
+    """Hash each actual stored blob and reject mutations during full validation.
+
+    Retain only hashes and sizes. SQL-backed archives remain lazy, with one raw
+    blob materialized at a time; a receipt never trusts a stored digest alone.
+    """
+
+    def __init__(self, source: Mapping[str, bytes], index_bytes: int):
+        if len(source) > LIMITS["chunk_count"]:
+            raise PublicationError("provenance_size_limit")
+        self.source = source
+        self.pins: dict[str, tuple[int, str]] = {}
+        total = index_bytes
+        for key in sorted(source):
+            raw = source[key]
+            if not isinstance(key, str) or len(key) != 64 or not isinstance(raw, bytes):
+                raise PublicationError("provenance_invalid")
+            total += len(raw)
+            if (
+                len(raw) > LIMITS["chunk_bytes"]
+                or total > LIMITS["aggregate_uncompressed_provenance_bytes"]
+            ):
+                raise PublicationError("provenance_size_limit")
+            self.pins[key] = (len(raw), hashlib.sha256(raw).hexdigest())
+        self.require_same_keys()
+
+    def __len__(self):
+        return len(self.pins)
+
+    def __iter__(self):
+        return iter(self.pins)
+
+    def __getitem__(self, key):
+        raw = self.source[key]
+        if (len(raw), hashlib.sha256(raw).hexdigest()) != self.pins[key]:
+            raise PublicationError("provenance_input_changed")
+        return raw
+
+    def require_same_keys(self):
+        if set(self.source) != set(self.pins):
+            raise PublicationError("provenance_input_changed")
+
+
+def _verified_with_receipt(publication, package, previous):
+    publication_raw = canonical_bytes(publication)
+    if len(publication_raw) > LIMITS["accounting_envelope_bytes"]:
+        raise PublicationError("provenance_size_limit")
+    publication = json.loads(publication_raw)
+    index = package.index
+    if not isinstance(index, bytes) or len(index) > LIMITS["provenance_index_bytes"]:
+        raise PublicationError("provenance_size_limit")
+    approved = frozenset(package.approved_evidence)
+    if len(approved) > 128:
+        raise PublicationError("provenance_size_limit")
+    if any(not isinstance(pin, str) or len(pin) != 64 for pin in approved):
+        raise PublicationError("provenance_independent_evidence_required")
+    previous_raw = _proof_bytes(previous)
+    previous = _proof_from_bytes(previous_raw)
+    blobs = _PinnedProofBlobs(package.blobs, len(index))
+    fingerprint = hashlib.sha256(
+        canonical_bytes(
+            {
+                "contract": CONTRACT_SHA256,
+                "compiled_schema": _PROOF_SCHEMA_SHA256,
+                "limits": LIMITS,
+                "fields": sorted(FIELDS),
+                "report_order": REPORT_ORDER,
+                "publication": hashlib.sha256(publication_raw).hexdigest(),
+                "index": hashlib.sha256(index).hexdigest(),
+                "actual_blobs": blobs.pins,
+                "independent_evidence_pins": sorted(approved),
+                "previous": hashlib.sha256(previous_raw).hexdigest(),
+            }
+        )
+    ).hexdigest()
+    with _proof_receipt_lock:
+        cached = _proof_receipts.get(fingerprint)
+        if cached is not None:
+            _proof_receipts.move_to_end(fingerprint)
+    if cached is not None:
+        result = _proof_from_bytes(cached)
+        assert result is not None
+        return result
+    result = _verify_package(
+        publication, ClosedPackage(index, blobs, approved), previous
+    )
+    blobs.require_same_keys()
+    encoded = _proof_bytes(result)
+    if len(encoded) <= _PROOF_RECEIPT_ENTRY_BYTES:
+        with _proof_receipt_lock:
+            _proof_receipts[fingerprint] = encoded
+            _proof_receipts.move_to_end(fingerprint)
+            while (
+                len(_proof_receipts) > _PROOF_RECEIPT_COUNT
+                or sum(map(len, _proof_receipts.values())) > _PROOF_RECEIPT_BYTES
+            ):
+                _proof_receipts.popitem(last=False)
+    return result
+
+
 def verify_package(
     publication: dict[str, Any],
     package: ClosedPackage,
@@ -246,7 +389,7 @@ def verify_package(
 ) -> VerifiedProvenance:
     """Verify one bounded chunk at a time; no implicit acquisition or trust."""
     try:
-        return _verify_package(publication, package, previous)
+        return _verified_with_receipt(publication, package, previous)
     except PublicationError:
         raise
     except (ValueError, KeyError, TypeError, OverflowError):

@@ -335,13 +335,31 @@ def _validate_issues(
                 raise PublicationError("projection_issue_condition_scope_invalid")
 
 
+def _json_snapshot(value: Any) -> Any:
+    """Detach JSON containers while sharing only immutable scalar objects.
+
+    Copy before hashing, so a caller mutation cannot change validated bytes.
+    Non-JSON Python representations keep the canonical encoder/decoder path.
+    """
+    if type(value) is dict and all(type(key) is str for key in value):
+        return {key: _json_snapshot(item) for key, item in value.items()}
+    if type(value) is list:
+        return [_json_snapshot(item) for item in value]
+    if type(value) in (str, int, float, bool, type(None)):
+        return value
+    raise TypeError("non-JSON representation")
+
+
 def validate_projection(value: dict[str, Any]) -> dict[str, Any]:
     """Validate the complete producer export without recalculating its forecast."""
     try:
-        raw = canonical_bytes(value)
+        try:
+            result = _json_snapshot(value)
+        except TypeError:
+            result = json.loads(canonical_bytes(value))
+        raw = canonical_bytes(result)
         if len(raw) > MAX_BYTES:
             raise PublicationError("projection_size_limit")
-        result = json.loads(raw)
         # Compile and identify one exact schema snapshot. A receipt must never
         # pair a freshly read schema hash with an older cached validator.
         schema_bytes = SCHEMA_PATH.read_bytes()

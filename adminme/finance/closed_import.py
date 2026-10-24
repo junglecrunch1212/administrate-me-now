@@ -55,10 +55,17 @@ def _canonical_json(raw: bytes) -> dict[str, Any]:
 def decode_package(
     body: bytes | bytearray, manifest: FinanceImportManifest
 ) -> tuple[dict[str, Any], dict[str, Any] | None, ClosedPackage]:
+    """Consume an owned bytearray; immutable bytes remain caller-owned.
+
+    Each component still passes its exact pin and canonical-byte checks. Drop
+    already-decoded wire copies before validating the next large component.
+    """
     if len(body) > manifest.encoded_body_limit():
         raise PublicationError("finance_import_body_limit")
     try:
         packet = json.loads(body, object_pairs_hook=_object)
+        if isinstance(body, bytearray):
+            body.clear()
         if not isinstance(packet, dict) or set(packet) != {
             "publication",
             "projection",
@@ -66,14 +73,14 @@ def decode_package(
             "blobs",
         }:
             raise ValueError("invalid closed packet")
-        encoded_blobs = packet["blobs"]
+        encoded_blobs = packet.pop("blobs")
         if (
             not isinstance(encoded_blobs, dict)
             or encoded_blobs.keys() != manifest.blobs.keys()
         ):
             raise ValueError("invalid closed blob set")
         publication = validate_publication(
-            _canonical_json(_decode(packet["publication"], manifest.publication))
+            _canonical_json(_decode(packet.pop("publication"), manifest.publication))
         )
         if namespace_root(publication) != "hbprov1:" + manifest.index.sha256:
             raise PublicationError("finance_import_provenance_root_mismatch")
@@ -81,7 +88,7 @@ def decode_package(
             publication.get(k) != v for k, v in manifest.binding.model_dump().items()
         ):
             raise PublicationError("finance_import_binding_mismatch")
-        index_bytes = _decode(packet["index"], manifest.index)
+        index_bytes = _decode(packet.pop("index"), manifest.index)
         index = _canonical_json(index_bytes)
         if index.get("source_snapshot_sha256") != manifest.source_snapshot_sha256:
             raise PublicationError("finance_import_source_snapshot_mismatch")
@@ -91,7 +98,7 @@ def decode_package(
             raise PublicationError("finance_import_reviewed_evidence_mismatch")
         blobs = {
             digest: _decode(
-                encoded_blobs[digest], ImportBlobPin(sha256=digest, bytes=size)
+                encoded_blobs.pop(digest), ImportBlobPin(sha256=digest, bytes=size)
             )
             for digest, size in manifest.blobs.items()
         }
@@ -105,9 +112,10 @@ def decode_package(
             if packet["projection"] is not None:
                 raise ValueError("unexpected projection")
         else:
-            projection = validate_projection(
-                _canonical_json(_decode(packet["projection"], manifest.projection))
-            )
+            projection_raw = _decode(packet.pop("projection"), manifest.projection)
+            projection_value = _canonical_json(projection_raw)
+            del projection_raw
+            projection = validate_projection(projection_value)
             if any(
                 projection.get(k) != publication[k]
                 for k in ("tenant_id", "owner_id", "book_id")

@@ -167,6 +167,23 @@ This avoids repeating the same expensive pure validation during event admission
 and projection application. Source-proof verification, accounting anchors,
 private scope, current control and final disclosure checks remain independent.
 
+Closed-proof verification similarly reuses only exact deterministic inputs:
+actual bytes of every stored blob and the index, complete publication bytes,
+independent evidence pins, predecessor lineage and the compiled schema/contract.
+Every reuse rereads and hashes the full closure; missing/corrupt stored proof or
+changed approvals/predecessors miss the receipt and must validate normally.
+Validation rejects bytes that change between fingerprinting and verification.
+At most eight serialized lineage summaries, 2 MiB each and 4 MiB total, remain
+in process memory; returned values are detached. This cache retains no raw rows,
+grants, current policy or permission decision. Current anchors, owner authority,
+transition/replay checks and final disclosure remain independently enforced.
+
+The decoder releases its owned upload bytearray after parsing, and releases
+encoded components as their exact hashes and canonical bytes are checked. Dated
+validation snapshots containers before hashing while sharing immutable scalars,
+avoiding another full set of decoded strings. These changes reduce transient
+copies; retained RSS and core latency still require measured qualification.
+
 Recovery for these new control/import events uses the schema-aware runtime:
 disable both Books and CoS analysis with the current control revision and verify
 denied disclosure. Keep accepted history, shared workbooks and existing generic

@@ -255,3 +255,101 @@ def test_archive_schema_errors_do_not_render_private_blob_content():
             }
         )
     assert marker not in str(caught.value)
+
+
+def test_proof_receipt_rehashes_closed_bytes_and_binds_approvals_and_predecessor(
+    monkeypatch,
+):
+    from collections import OrderedDict
+    from adminme.finance import publication_provenance as module
+
+    monkeypatch.setattr(module, "_proof_receipts", OrderedDict())
+    original = module._verify_package
+    calls = []
+
+    def counted(*args):
+        calls.append(1)
+        return original(*args)
+
+    monkeypatch.setattr(module, "_verify_package", counted)
+    p, package = package_fixture()
+    expected = verify_package(p, package)
+    independent = deepcopy(expected)
+    expected.line_units.clear()
+    reads = []
+
+    class Observed(dict):
+        def __getitem__(self, key):
+            reads.append(key)
+            return super().__getitem__(key)
+
+    assert (
+        verify_package(p, replace(package, blobs=Observed(package.blobs)))
+        == independent
+    )
+    assert len(calls) == 1
+    assert sorted(reads) == sorted(package.blobs)
+    for mutant in (
+        replace(package, approved_evidence=frozenset()),
+        replace(package, blobs={}),
+        replace(package, index=package.index + b" "),
+        replace(package, blobs={k: v + b" " for k, v in package.blobs.items()}),
+    ):
+        with pytest.raises(PublicationError):
+            verify_package(p, mutant)
+    other_owner = deepcopy(p)
+    other_owner["owner_id"] = "other-synthetic-owner"
+    seal_publication(other_owner)
+    with pytest.raises(PublicationError, match="owner_binding"):
+        verify_package(other_owner, package)
+    assert verify_package(p, package, independent) == independent
+    forged_predecessor = replace(
+        independent, unit_ids=independent.unit_ids | {"missing-unit"}
+    )
+    with pytest.raises(PublicationError, match="historical"):
+        verify_package(p, package, forged_predecessor)
+
+
+def test_proof_receipt_rejects_input_change_during_full_verification(monkeypatch):
+    from collections import OrderedDict
+    from adminme.finance import publication_provenance as module
+
+    monkeypatch.setattr(module, "_proof_receipts", OrderedDict())
+    p, package = package_fixture()
+
+    class Changed(dict):
+        def __init__(self, values):
+            super().__init__(values)
+            self.reads = {}
+
+        def __getitem__(self, key):
+            self.reads[key] = self.reads.get(key, 0) + 1
+            raw = super().__getitem__(key)
+            return raw if self.reads[key] == 1 else raw + b" "
+
+    with pytest.raises(PublicationError, match="input_changed"):
+        verify_package(p, replace(package, blobs=Changed(package.blobs)))
+    assert not module._proof_receipts
+
+
+def test_proof_receipts_are_bounded_by_count_and_bytes(monkeypatch):
+    from collections import OrderedDict
+    from adminme.finance import publication_provenance as module
+
+    monkeypatch.setattr(module, "_proof_receipts", OrderedDict())
+    monkeypatch.setattr(module, "_PROOF_RECEIPT_COUNT", 2)
+    p, package = package_fixture()
+    proof = verify_package(p, package)
+    size = len(module._proof_bytes(proof))
+    monkeypatch.setattr(module, "_PROOF_RECEIPT_BYTES", size * 2)
+    for index in range(4):
+        rows = native_rows()
+        rows[0][0]["description"] = f"synthetic-proof-{index}"
+        changed, closure = package_fixture(rows=rows)
+        verify_package(changed, closure)
+        assert len(module._proof_receipts) <= 2
+        assert sum(map(len, module._proof_receipts.values())) <= size * 2
+    monkeypatch.setattr(module, "_proof_receipts", OrderedDict())
+    monkeypatch.setattr(module, "_PROOF_RECEIPT_ENTRY_BYTES", 1)
+    assert verify_package(p, package) == proof
+    assert not module._proof_receipts

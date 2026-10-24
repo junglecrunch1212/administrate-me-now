@@ -104,6 +104,31 @@ def test_exact_projection_validation_receipts_are_bounded_and_reject_changed_byt
     assert len(calls) == previous + 1
 
 
+@pytest.mark.parametrize("reuse", [False, True])
+def test_dated_snapshot_is_detached_before_receipt_hashing(monkeypatch, reuse):
+    from collections import OrderedDict
+    from adminme.finance import dated_projection as module
+
+    monkeypatch.setattr(module, "_validation_receipts", OrderedDict())
+    original = projection(publication())
+    expected = deepcopy(original)
+    if reuse:
+        assert validate_projection(original) == expected
+    encode = module.canonical_bytes
+
+    def mutate_caller_after_encoding(value):
+        raw = encode(value)
+        original["contexts"][0]["opening"]["lower_minor"] = -1
+        return raw
+
+    monkeypatch.setattr(module, "canonical_bytes", mutate_caller_after_encoding)
+    assert validate_projection(original) == expected
+    # Non-JSON Python containers preserve the existing canonical normalization.
+    normalized = deepcopy(expected)
+    normalized["contexts"] = tuple(normalized["contexts"])
+    assert validate_projection(normalized) == expected
+
+
 def test_contract_and_twelve_declared_contexts_preserve_both_measures_and_horizons():
     value = projection(publication(), 3215)
     assert validate_projection(value) == value

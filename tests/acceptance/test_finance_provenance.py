@@ -136,6 +136,33 @@ def test_proof_archive_is_rebuildable_and_missing_proof_is_hold(tmp_path):
         p["accepted_journal_revision_ids"]
     )
     assert events[-1]["event_id"] == accepted["event_id"]
+    # A warm receipt cannot hide current archive loss, corruption, or changed
+    # independent evidence pins, including on replay of the accepted event.
+    for sql, params in (
+        (
+            "DELETE FROM finance_provenance_blobs WHERE content_sha256=?",
+            (next(iter(package.blobs)),),
+        ),
+        (
+            "UPDATE finance_provenance_blobs SET canonical_json='{}' WHERE content_sha256=?",
+            (next(iter(package.blobs)),),
+        ),
+        (
+            "UPDATE finance_provenance_blobs SET approved_evidence_json='[]' WHERE kind='index'",
+            (),
+        ),
+    ):
+        conn.execute("SAVEPOINT synthetic_corruption")
+        conn.execute(sql, params)
+        with pytest.raises(PublicationError):
+            verify_archived(conn, p)
+        with pytest.raises(PublicationError):
+            apply_publication(events[-1], conn)
+        conn.execute("ROLLBACK TO synthetic_corruption")
+        conn.execute("RELEASE synthetic_corruption")
+        assert verify_archived(conn, p).unit_ids == frozenset(
+            p["accepted_journal_revision_ids"]
+        )
     conn.close()
 
 
