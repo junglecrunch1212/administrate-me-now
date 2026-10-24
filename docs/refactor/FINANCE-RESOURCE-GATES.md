@@ -594,8 +594,8 @@ stops only the lab; retain synthetic reports, stop its processes, then remove
 only the approved VM/scratch path. No installed release, private state, Keychain,
 TCC or provider connection is needed by the synthetic fixtures. Direct candidate
 execution alongside the household service remains prohibited; shared resource
-contention is an operational effect even without a file mutation. No local VM,
-probe, new qualification or policy change has been run or approved here.
+contention is an operational effect even without a file mutation. No local VM, hardware probe or acceptance-policy change has been run or
+approved here.
 
 ## Diagnostic sustained/resource harness (not acceptance)
 
@@ -614,7 +614,8 @@ workloads, assertions and execution; this diagnostic cannot clear them.
 Every scheduled request receives a terminal JSONL record. Fixed arrival times
 continue during slow responses; bounded client queues retain overflow as a
 rejection. Raw records retain operation, scheduled/start/terminal times, queue
-wait, HTTP status, server timing, latency, errors, drain cancellation and
+wait, HTTP status, server timing, client-operation latency (including response
+validation), errors, drain cancellation and
 undispatched requests. No retry, successful-only phase selection or removal of
 cold requests is permitted. Reports give nearest-rank p95/p99, sample counts,
 all-attempt and successful-only distributions separately, and flag fewer than

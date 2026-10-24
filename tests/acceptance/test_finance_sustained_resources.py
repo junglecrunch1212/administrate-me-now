@@ -62,6 +62,7 @@ async def _diagnostic(tmp_path: Path, workload: str, *, smoke: bool) -> dict:
         "architecture": platform.machine(),
         "deployment_hardware_validated": False,
         "runtime_fixture": "credential_free_synthetic",
+        "latency_method": "client operation including response validation; raw server header timing retained separately",
         "phases": [
             {
                 "name": name,

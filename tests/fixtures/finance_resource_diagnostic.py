@@ -112,7 +112,6 @@ async def run_phase(
     expected = math.ceil(duration * rate)
     queue: asyncio.Queue = asyncio.Queue(maxsize=queue_limit)
     records: dict[int, dict] = {}
-    pending: dict[int, dict] = {}
 
     def finish(row, outcome, **extra):
         if row["index"] in records:
@@ -125,8 +124,8 @@ async def run_phase(
             "terminal_at": now,
             "terminal_ms": (now - row["scheduled_at"]) * 1000,
         }
-        records[row["index"]] = row
         append_record(output, row)
+        records[row["index"]] = row
 
     async def worker():
         while True:
@@ -137,7 +136,6 @@ async def run_phase(
                 "started_at": dispatched,
                 "queue_ms": (dispatched - row["scheduled_at"]) * 1000,
             }
-            pending[row["index"]] = trace
             token = TRACE.set(trace)
             try:
                 await call(client, row["index"])
@@ -160,7 +158,6 @@ async def run_phase(
                     error=str(exc)[:500],
                 )
             finally:
-                pending.pop(row["index"], None)
                 TRACE.reset(token)
                 queue.task_done()
 

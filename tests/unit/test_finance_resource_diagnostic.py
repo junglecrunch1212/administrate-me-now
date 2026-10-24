@@ -6,6 +6,8 @@ import time
 
 import pytest
 
+from tests.fixtures import finance_resource_diagnostic as diagnostic
+
 from tests.fixtures.finance_resource_diagnostic import (
     FULL_PHASES,
     compare_phases,
@@ -173,3 +175,25 @@ def test_phase_comparison_uses_both_baselines_and_never_adopts_budget():
     assert result["added_cpu_logical_core_equivalents"] == pytest.approx(0.2)
     assert result["added_peak_rss_bytes"] == 5
     assert result["acceptance_eligible"] is False
+
+
+async def test_raw_retention_failure_cannot_produce_success(tmp_path, monkeypatch):
+    def fail_write(*args):
+        raise OSError("synthetic artifact storage failure")
+
+    monkeypatch.setattr(diagnostic, "append_record", fail_write)
+
+    async def call(client, index):
+        return None
+
+    with pytest.raises(AssertionError, match="evidence is incomplete"):
+        await run_phase(
+            None,
+            call,
+            phase="cold",
+            start=time.monotonic(),
+            duration=0.01,
+            rate=100,
+            operation=lambda index: "fixture",
+            output=tmp_path / "absent.jsonl",
+        )
