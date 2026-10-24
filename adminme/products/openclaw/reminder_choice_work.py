@@ -100,6 +100,16 @@ async def offer_choice(
     choices: list[ReminderListChoice],
 ) -> dict[str, Any]:
     """Persist one new offered draft; a replay cannot reset its identity or expiry."""
+    from adminme.request_actions_control import request_actions_allowed
+
+    if not choices:
+        raise HTTPException(409, "No current authorized reminder list can be offered")
+    if not request_actions_allowed(
+        runtime, issued_at=source["payload"]["submitted_at"]
+    ):
+        raise HTTPException(
+            409, "Authenticated-request actions are revoked for recovery"
+        )
     draft = draft_fields(title=title, due_at=due_at, notes=notes)
     draft_fingerprint = digest(draft)
     lock = f"reminder-choice-offer:{member.auth_member_id}:{source['event_id']}"
