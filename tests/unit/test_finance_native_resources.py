@@ -389,3 +389,31 @@ def test_parent_stop_channel_closure_stops_the_owned_child():
     assert child.is_set()
     assert child.is_set()
     wire.recv.assert_called_once()
+
+
+async def test_loopback_client_ignores_ambient_proxy_and_certificate_settings(
+    tmp_path, monkeypatch
+):
+    certificate = tmp_path / "not-a-certificate.pem"
+    certificate.write_text("synthetic invalid certificate")
+    monkeypatch.setenv("SSL_CERT_FILE", str(certificate))
+    monkeypatch.setenv("HTTP_PROXY", "http://proxy.invalid:8888")
+    import mimetypes
+
+    for name in (
+        "knownfiles",
+        "inited",
+        "_db",
+        "suffix_map",
+        "types_map",
+        "encodings_map",
+        "common_types",
+    ):
+        monkeypatch.setattr(mimetypes, name, getattr(mimetypes, name))
+    native.prepare_synthetic_mime_database()
+    from tests.acceptance.test_finance_mixed_load import _client
+
+    # Construction would fail loading the invalid ambient certificate if the
+    # transport trusted environment settings. No network request is made.
+    async with _client("http://127.0.0.1:49152") as client:
+        assert client.base_url.host == "127.0.0.1"

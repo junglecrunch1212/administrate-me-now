@@ -14,7 +14,11 @@ from typing import Any
 
 import pytest
 
-from tests.fixtures.finance_native_resources import EvidenceError, Registry
+from tests.fixtures.finance_native_resources import (
+    EvidenceError,
+    Registry,
+    prepare_synthetic_mime_database,
+)
 from scripts.finance_resource_acceptance import (
     POLICY,
     QUALIFICATION_PHASES,
@@ -48,6 +52,7 @@ async def receive(member, timeout=30):
 
 async def native_run(tmp_path, workload="light", *, qualification=False):
     phases = QUALIFICATION_PHASES if qualification else SMOKE_PHASES
+    prepare_synthetic_mime_database()
     # The entire fixture instance and telemetry are fresh; only selected evidence
     # is copied to the artifact directory. No ambient service address is used.
     root = tmp_path / "native-fixture"

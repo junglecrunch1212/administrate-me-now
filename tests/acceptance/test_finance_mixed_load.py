@@ -775,7 +775,9 @@ def _client(url: str) -> httpx.AsyncClient:
     return httpx.AsyncClient(
         base_url=url,
         timeout=10,
+        trust_env=False,
         transport=httpx.AsyncHTTPTransport(
+            trust_env=False,
             socket_options=[(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)]
         ),
     )
