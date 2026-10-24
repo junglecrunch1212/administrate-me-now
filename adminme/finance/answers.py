@@ -49,7 +49,13 @@ def _value(value: Any) -> str:
 def render_result(result: dict[str, Any]) -> str:
     """No optional removal of required qualifications or source semantics."""
     lines: list[str] = []
-    if "values" in result and "calculator_id" in result:
+    if result.get("result_kind") == "binding_metadata":
+        lines.append("Books app bindings: " + str(result["state"]) + ".")
+        lines.append(result["qualification"])
+        for key in ("completeness", "bindings", "book_ids", "reason"):
+            if key in result:
+                lines.append(f"{key}: {_value(result[key])}.")
+    elif "values" in result and "calculator_id" in result:
         lines.append(
             "Qualified hypothetical calculation: "
             + result["calculator_id"].replace("_", " ")

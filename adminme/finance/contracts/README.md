@@ -135,3 +135,26 @@ inclusion semantics without counting a flow twice in one measure. These counts
 are integration requirements, not permission to copy private source rows.
 Exact native field mappings and the 12 context tuples still need a reviewed
 source mapping; this adapter must not invent their Cartesian product.
+
+
+## Bounded app-binding discovery
+
+**MODERNIZE:** the existing authenticated finance-status tool accepts
+`include_bindings=true` as an exclusive question, optionally selecting `book_id`.
+It preserves existing finance processing, model-member, private direct-audience,
+current delegation, admission, disclosure-receipt and final revocation controls.
+No grants or credentials are created. Access unavailable is not verified absence.
+
+The already-open EventLog connection selects only exact tenant/owner accounting
+and dated-publication metadata in one read transaction. No raw payload, metrics,
+provider source or journal lines cross the worker. The receipt fixes the scoped
+last event, checked history digest and completeness. Unsupported schemas,
+broken predecessor/anchor chains, unavailable reads and bounded-out scans cannot
+produce empty or populated success. Limits are 256 events, 32 MiB of source
+payload examined, 100,000 SQLite VM steps and 100 ms of worker execution; exceeding
+any limit returns incomplete history. A receipt describes retained app history
+at that watermark, not current source coverage or Books acceptance. Discovery
+is not an initializer and cannot prove absence outside the selected history.
+
+This enabling change does not supply the narrower finance-only CoS permission,
+live bindings, private transport/import operation or deployment authorization.

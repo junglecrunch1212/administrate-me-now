@@ -4095,6 +4095,7 @@ __all__ = ["router"]
 
 
 class FinanceStatusRequest(ContextRequest):
+    include_bindings: bool = False
     capability_id: str | None = Field(
         default=None, pattern=r"^F(0[1-9]|[12][0-9]|3[01])$"
     )
@@ -4109,6 +4110,14 @@ class FinanceStatusRequest(ContextRequest):
 
     @model_validator(mode="after")
     def one_finance_question(self) -> "FinanceStatusRequest":
+        if self.include_bindings and (
+            self.capability_id
+            or self.compound_id
+            or self.calculator_id
+            or self.include_bundle
+            or self.schema_path
+        ):
+            raise ValueError("choose_one_finance_question")
         if self.compound_id and (self.capability_id or self.include_bundle):
             raise ValueError("choose_one_finance_question")
         if self.calculator_id and (
@@ -4456,6 +4465,28 @@ async def finance_status(
         try:
             receipt = _finance_admit(runtime, session, body.provenance)
             blocked = _finance_blocked(runtime, session, body.provenance)
+            if body.include_bindings:
+                from adminme.finance.metadata import binding_metadata
+
+                result = (
+                    {
+                        "state": "access_unavailable",
+                        "reason": blocked["state"],
+                        "completeness": {"complete": False},
+                        "bindings": [],
+                    }
+                    if blocked
+                    else await binding_metadata(runtime, session, body.book_id)
+                )
+                return await _finance_delivery(
+                    request,
+                    body,
+                    session,
+                    result,
+                    operation="finance.bindings",
+                    receipt=receipt,
+                    private_result=permitted and enabled,
+                )
             if blocked:
                 result.update(blocked)
             else:

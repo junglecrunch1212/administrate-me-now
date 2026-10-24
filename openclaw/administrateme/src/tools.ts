@@ -184,11 +184,12 @@ export function registerTools(api: OpenClawPluginApi, runtime: PluginRuntime): v
   const definitions = [
     {
       name: "administrateme_finance_status",
-      description: "Check one private finance capability or accepted-publication status. Missing evidence is not zero; this grants no action authority.",
+      description: "Check one private finance capability or accepted-publication status; include_bindings requests only bounded app bindings and a fixed-watermark completeness receipt. Missing evidence is not zero; this grants no action authority.",
       parameters: Type.Object({
         capability_id: Type.Optional(Type.String({ minLength: 3, maxLength: 3 })),
         book_id: Type.Optional(Type.String({ minLength: 1, maxLength: 120 })),
         include_bundle: Type.Optional(Type.Boolean()),
+        include_bindings: Type.Optional(Type.Boolean()),
         compound_id: Type.Optional(Type.String({ minLength: 1, maxLength: 80 })),
         calculator_id: Type.Optional(Type.String({ minLength: 1, maxLength: 80 })),
         schema_path: Type.Optional(Type.String({ maxLength: 170 })),
