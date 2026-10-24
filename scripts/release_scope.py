@@ -410,6 +410,11 @@ COS_SERVICE_WORK_COMPONENT_PATHS = frozenset(
         "packs/skills/ground_requested_action/prompt.jinja2",
         "packs/skills/ground_requested_action/schemas/input.schema.json",
         "packs/skills/ground_requested_action/schemas/output.schema.json",
+        "adminme/workstation_inventory.py",
+        "adminme/products/openclaw/workstation.py",
+        "bootstrap/workstation_inventory.py",
+        "bootstrap/openclaw/programs/workstation_inventory.md",
+        "openclaw/administrateme/src/workstation.ts",
         "openclaw/administrateme/src/apple-reminders.ts",
         "openclaw/administrateme/src/tools.ts",
         "bootstrap/openclaw/programs/requested_workflows.md",
@@ -475,6 +480,9 @@ COS_SERVICE_WORK_TEST_PATHS = frozenset(
         "tests/unit/test_request_actions_control.py",
         "openclaw/administrateme/test/request-policy.test.ts",
         "openclaw/administrateme/test/conversation-input.test.ts",
+        "tests/acceptance/test_workstation_inventory.py",
+        "tests/unit/test_workstation_inventory.py",
+        "openclaw/administrateme/test/workstation.test.ts",
         "tests/acceptance/test_native_reminder_due_components.py",
         "openclaw/administrateme/test/apple-reminders.test.ts",
         "openclaw/administrateme/scripts/check-cos-imessage-text.mjs",
@@ -1113,10 +1121,24 @@ def _service_work_application(source: str) -> tuple[str, bool] | None:
         reminder_shapes[0]
     ) > body_shapes.index(reminder_shapes[1]):
         return None
+    workstation_shapes = [
+        ast.dump(node, include_attributes=False)
+        for node in ast.parse(
+            "from adminme.products.openclaw.workstation import router as workstation_router\n"
+            "app.include_router(workstation_router)\n"
+        ).body
+    ]
+    workstation_counts = [body_shapes.count(shape) for shape in workstation_shapes]
+    if workstation_counts not in ([0, 0], [1, 1]):
+        return None
+    if workstation_counts == [1, 1] and body_shapes.index(
+        workstation_shapes[0]
+    ) > body_shapes.index(workstation_shapes[1]):
+        return None
     application.body = [
         node
         for node, shape in zip(application.body, body_shapes, strict=True)
-        if shape not in shapes + reminder_shapes
+        if shape not in shapes + reminder_shapes + workstation_shapes
     ]
     digest = hashlib.sha256(
         ast.dump(module, include_attributes=False).encode()

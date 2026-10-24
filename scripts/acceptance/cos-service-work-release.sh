@@ -13,6 +13,8 @@ tests=(
   tests/unit/test_member_chat_protocol.py
   tests/unit/test_openclaw_approvals.py
   tests/unit/test_request_actions_control.py
+  tests/unit/test_workstation_inventory.py
+  tests/acceptance/test_workstation_inventory.py
   tests/acceptance/test_native_apple_reminder.py
   tests/acceptance/test_apple_service_permissions.py
   tests/acceptance/test_member_apple_approval.py

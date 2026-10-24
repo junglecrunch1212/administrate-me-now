@@ -119,7 +119,7 @@ try {
   await mkdir(memberWorkspace);
   await copyFile(path.join(repository, "openclaw/administrateme/workspace/AGENTS.md"), path.join(memberWorkspace, "AGENTS.md"));
   const model = "fixture/service-work";
-  const tools = ["administrateme_service_private_work", "administrateme_service_private_work_state", "administrateme_service_private_state", "administrateme_service_context"];
+  const tools = ["administrateme_service_private_work", "administrateme_service_private_work_state", "administrateme_service_private_state", "administrateme_service_context", "administrateme_workstation_inventory"];
   const config = {
     gateway: { mode: "local", bind: "loopback", port, auth: { mode: "token", token }, controlUi: { enabled: false }, reload: { mode: "off" } },
     agents: { defaults: { workspace, heartbeat: { every: "0m" }, model: { primary: model }, models: { [model]: { params: { transport: "sse", openaiWsWarmup: false } } } }, list: [{ id: agent, workspace, tools: { allow: tools } }, { id: memberAgent, workspace: memberWorkspace, tools: { allow: ["administrateme_apple_reminder_status"] } }] },
@@ -143,6 +143,7 @@ try {
   }, "native service lifecycle");
   await assert.rejects(readFile(path.join(workspace, "BOOTSTRAP.md")), { code: "ENOENT" });
   assert.deepEqual(fixtures.receipts.map((entry) => entry.path), [
+    "/api/openclaw/v1/tools/workstation-inventory",
     "/api/openclaw/v1/tools/service-context",
     "/api/openclaw/v1/tools/service-private-work",
     "/api/openclaw/v1/tools/service-private-work/cos-task%3Afixture/state",

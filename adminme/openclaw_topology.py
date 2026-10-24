@@ -14,6 +14,7 @@ SERVICE_PRIVATE_TOOLS = (
     "administrateme_service_private_work_state",
     "administrateme_service_private_state",
     "administrateme_service_context",
+    "administrateme_workstation_inventory",
 )
 
 
@@ -160,6 +161,32 @@ member approval. These tools do not enroll accounts, create grants, send,
 create provider records or schedule delivery. Due and follow-up dates record
 work state, not a timer. Completion never proves a provider effect or delivery.
 Use existing separately authorized provider and messaging workflows for effects.
+
+# Use the current workstation map
+
+Before choosing an account or explaining a failed route, call
+administrateme_workstation_inventory. It composes the owner-maintained private
+identity map with current account, enrollment, permission and native tool policy.
+Configured, connected, authenticated, authorized, tool-accessible, executable and
+outcome-verified are separate states. Null means unknown. A disabled or missing
+tool does not mean its provider account is disconnected. Historical acquisition
+and an accepted command do not prove a current connection or completed write.
+
+Keep requester, CoS worker, operating account, resource owner, executing device,
+represented person and recipient distinct. Prefer CoS's own account or a granted
+member bridge/delegation. Do not silently substitute an ambient connector or
+another person's browser, cookies or credentials. A profile label never proves a
+site's actual account, workspace and role; check that destination and the applicable
+native Apple service independently. Reuse unchanged verified session checks;
+recheck after handoffs, switches, redirects, authentication changes or uncertainty,
+and before external effects. The map records evidence; it does not grant access.
+
+Read the map again after account, permission, maintenance, deployment or capability
+changes. Use the existing supported OpenClaw tools to compose authorized work;
+AdministrateMe adds household authority, provenance and audit. Keep source and
+client restrictions when retaining notes or sharing results. If the actual loaded
+catalog or intended account is unavailable, report that precise prerequisite and
+use the supported recovery route. Do not invent a disconnection or success.
 """
 
 

@@ -14,6 +14,7 @@ export async function startServiceWorkFixtures({ secret, agent, sessions, validS
   let completed = false;
   const sourceEvent = "fixture-source-event";
   const steps = [
+    ["administrateme_workstation_inventory", {}],
     ["administrateme_service_context", { limit: 2 }],
     ["administrateme_service_private_work", { request_id: "fixture-private-note", title: "Prepare an internal brief", record_kind: "note", source_event_ids: [sourceEvent] }],
     ["administrateme_service_private_work_state", { task_id: "cos-task:fixture", request_id: "fixture-complete-work", expected_last_event_id: "fixture-created", action: "complete", reason_code: "completed" }],
@@ -54,7 +55,7 @@ export async function startServiceWorkFixtures({ secret, agent, sessions, validS
           return;
         }
         const freshRead = JSON.stringify(input).includes("PROBE_FRESH_READ");
-        const plan = freshRead ? [steps[3]] : steps;
+        const plan = freshRead ? [steps.at(-1)] : steps;
         if (outputs === 0) {
           const encoded = JSON.stringify(input);
           const prompt = JSON.stringify({ instructions: body.instructions, input });
@@ -125,7 +126,7 @@ export async function startServiceWorkFixtures({ secret, agent, sessions, validS
           conversationReplies.push({ source: body.source_message_event_id, channel: expected.channel_id });
           result = { status: "sent", fixture_only: true, provider_effect_count: 0 };
         }
-      } else if (req.url.startsWith("/api/openclaw/v1/tools/service-")) {
+      } else if (req.url.startsWith("/api/openclaw/v1/tools/service-") || req.url === "/api/openclaw/v1/tools/workstation-inventory") {
         assert.equal(body.provenance.actor_id, "service-principal:chief-of-staff");
         assert.equal(body.provenance.agent_id, agent);
         sessions.add(body.provenance.session_key);
@@ -134,7 +135,9 @@ export async function startServiceWorkFixtures({ secret, agent, sessions, validS
         assert.equal(body.provenance.account_id, undefined);
         assert.equal(body.openclaw_approval_receipt_id, undefined);
         receipts.push({ path: req.url, session: body.provenance.session_key });
-        if (req.url.endsWith("/service-context")) {
+        if (req.url.endsWith("/workstation-inventory")) {
+          result = { contract: "administrateme-workstation-inventory-v1", inventory_grants_authority: false, provider_effect_count: 0 };
+        } else if (req.url.endsWith("/service-context")) {
           result = { source_events: [{ event_id: sourceEvent, title: "GRANTED_SOURCE_FIXTURE", scope: "member-private:fixture", authority_grant_id: "fixture-standing-grant" }] };
         } else if (req.url.endsWith("/service-private-work")) {
           assert.equal(body.record_kind, "note");
