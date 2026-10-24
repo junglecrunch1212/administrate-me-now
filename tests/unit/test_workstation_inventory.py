@@ -150,3 +150,39 @@ def test_literal_tool_denial_is_not_provider_disconnection_or_native_registratio
     assert tools["browser"]["connected"]["value"] is None
     assert tools["memory_get"]["tool_accessible"]["value"] is None
     assert result["loaded_catalog_verified"] is False
+
+
+def test_native_additive_allow_and_scheduler_alias_do_not_report_false_absence(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "gateway.json"
+    path.write_text(
+        json.dumps(
+            {
+                "agents": {
+                    "list": [
+                        {
+                            "id": "cos",
+                            "tools": {
+                                "allow": ["administrateme", "cron"],
+                                "alsoAllow": ["browser"],
+                                "deny": ["BASH"],
+                            },
+                        }
+                    ]
+                }
+            }
+        )
+    )
+    path.chmod(0o600)
+    runtime = SimpleNamespace(
+        settings=SimpleNamespace(openclaw_runtime_config_path=path)
+    )
+    result = workstation_tools(runtime, "cos")
+    values = {
+        tool["tool"]: tool["states"]["tool_accessible"]["value"]
+        for row in result["capabilities"]
+        for tool in row["tools"]
+    }
+    assert values["browser"] is None and values["automations"] is None
+    assert values["exec"] is False

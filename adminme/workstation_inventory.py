@@ -348,7 +348,7 @@ GENERAL_TOOLS = {
     "commands": ["exec", "process"],
     "search": ["web_search", "web_fetch"],
     "memory": ["memory_search", "memory_get"],
-    "timers": ["cron"],
+    "timers": ["automations"],
 }
 
 
@@ -364,9 +364,10 @@ def workstation_tools(runtime: Any, agent_id: str) -> dict[str, Any]:
         allow = tools.get("allow")
         deny = tools.get("deny", [])
         global_deny = config.get("tools", {}).get("deny", [])
+        also_allow = tools.get("alsoAllow", [])
         if any(
             not isinstance(value, list) or any(not isinstance(x, str) for x in value)
-            for value in (deny, global_deny)
+            for value in (deny, global_deny, also_allow)
         ) or (
             allow is not None
             and (
@@ -375,6 +376,17 @@ def workstation_tools(runtime: Any, agent_id: str) -> dict[str, Any]:
             )
         ):
             raise ValueError("malformed native tool policy")
+        aliases = {"cron": "automations", "bash": "exec", "apply-patch": "apply_patch"}
+
+        def normalized(values: list[str]) -> list[str]:
+            return [
+                aliases.get(value.strip().lower(), value.strip().lower())
+                for value in values
+            ]
+
+        deny, global_deny = normalized(deny), normalized(global_deny)
+        if isinstance(allow, list):
+            allow = normalized([*allow, *also_allow])
     except (OSError, ValueError, AttributeError, TypeError):
         return {"state": "native_policy_unavailable", "capabilities": []}
     rows = []
@@ -386,8 +398,12 @@ def workstation_tools(runtime: Any, agent_id: str) -> dict[str, Any]:
             )
             # A literal closed allowlist can prove absence. Groups, globs and
             # provider policy remain OpenClaw's job; presence never proves load.
-            closed = isinstance(allow, list) and not any(
-                "*" in entry or entry.startswith("group:") for entry in allow
+            closed = (
+                isinstance(allow, list)
+                and bool(allow)
+                and not any(
+                    "*" in entry or entry.startswith("group:") for entry in allow
+                )
             )
             absent = explicit_deny or bool(closed and name not in (allow or []))
             observations.append(
