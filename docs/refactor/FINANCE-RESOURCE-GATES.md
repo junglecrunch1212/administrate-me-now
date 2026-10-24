@@ -873,3 +873,14 @@ repair initializes only Python's built-in MIME table (no wider host-file access)
 and replaces shared-event cancellation with one authenticated stop frame. Native
 correctness now has a five-minute step timeout and own-process traceback output;
 the two observed failures require fresh hosted proof before any native lab.
+
+
+The next hosted attempt (`c2cd5db7`) finished 86 checks, but its composition
+smoke remained incomplete: runtime bootstrap attempted its Git release-identity
+fallback and OpenPyXL attempted temporary files outside the fixture root. The
+Python guard denied both; all three registered children exited cleanly. The
+fixture now supplies the exact evaluated checkout through the existing
+`ADMINME_REVIEWED_COMMIT` input and pins both Python's temporary-directory cache
+and temporary-directory environment variables beneath its fresh root. These
+are fixture inputs, not wider filesystem or subprocess permission. Fresh hosted
+composition proof is required; the failed attempt remains unqualified.

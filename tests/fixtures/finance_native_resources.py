@@ -13,6 +13,7 @@ import math
 import multiprocessing
 import os
 import resource
+import re
 import sys
 import threading
 import time
@@ -228,6 +229,25 @@ def prepare_synthetic_mime_database():
     mimetypes.init(files=[])
 
 
+def prepare_synthetic_runtime(root, checkout):
+    """Keep temporary exports and release identity inside the owned fixture."""
+    import tempfile
+
+    if not isinstance(checkout, str) or not re.fullmatch(r"[0-9a-f]{40}", checkout):
+        raise EvidenceError("invalid fixture checkout identity")
+    temporary = Path(root).resolve() / "temporary"
+    temporary.mkdir(mode=0o700, exist_ok=True)
+    # Override an inherited tempfile cache as well as its environment inputs.
+    # OpenPyXL's intermediate worksheet files must stay under the fixture guard.
+    tempfile.tempdir = str(temporary)
+    for name in ("TMPDIR", "TMP", "TEMP"):
+        os.environ[name] = str(temporary)
+    # Production already accepts the reviewed release identity explicitly. Do
+    # not let its fallback spawn git from this three-child-only fixture.
+    os.environ["ADMINME_REVIEWED_COMMIT"] = checkout
+    prepare_synthetic_mime_database()
+
+
 class FixtureGuard:
     """Deny Python subprocess and nonfixture network/file accesses; not a sandbox.
 
@@ -338,7 +358,7 @@ def _entry(
         )
         guard = FixtureGuard(root, port, faults)
         sys.addaudithook(guard)
-        prepare_synthetic_mime_database()
+        prepare_synthetic_runtime(root, identity["checkout"])
 
         def monitor():
             try:

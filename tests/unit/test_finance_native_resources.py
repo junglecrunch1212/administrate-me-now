@@ -6,6 +6,7 @@ import ctypes
 import hmac
 import inspect
 from types import SimpleNamespace
+from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
@@ -417,3 +418,37 @@ async def test_loopback_client_ignores_ambient_proxy_and_certificate_settings(
     # transport trusted environment settings. No network request is made.
     async with _client("http://127.0.0.1:49152") as client:
         assert client.base_url.host == "127.0.0.1"
+
+
+@pytest.mark.parametrize("checkout", ["stale", "a" * 39, None])
+def test_synthetic_runtime_rejects_unbound_release_identity(tmp_path, checkout):
+    with pytest.raises(native.EvidenceError, match="checkout identity"):
+        native.prepare_synthetic_runtime(tmp_path, checkout)
+    assert not (tmp_path / "temporary").exists()
+
+
+def test_synthetic_runtime_pins_tempfiles_and_release_without_host_lookup(
+    tmp_path, monkeypatch
+):
+    import tempfile
+    from adminme import operating_agreements
+
+    for name in ("TMPDIR", "TMP", "TEMP", "ADMINME_REVIEWED_COMMIT"):
+        monkeypatch.setenv(name, "/private/production/not-the-fixture")
+    monkeypatch.setattr(tempfile, "tempdir", "/private/production/not-the-fixture")
+    mime_setup = Mock()
+    monkeypatch.setattr(native, "prepare_synthetic_mime_database", mime_setup)
+    launch = Mock(side_effect=AssertionError("fixture cannot launch git"))
+    monkeypatch.setattr(operating_agreements.subprocess, "run", launch)
+    native.prepare_synthetic_runtime(tmp_path, IDENTITY["checkout"])
+    expected = tmp_path.resolve() / "temporary"
+    with tempfile.NamedTemporaryFile() as worksheet:
+        assert Path(worksheet.name).parent == expected
+    assert all(
+        native.os.environ[name] == str(expected) for name in ("TMPDIR", "TMP", "TEMP")
+    )
+    assert (
+        operating_agreements._release_commit(tmp_path, "b" * 64) == IDENTITY["checkout"]
+    )
+    launch.assert_not_called()
+    mime_setup.assert_called_once_with()
