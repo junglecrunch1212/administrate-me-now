@@ -30,7 +30,8 @@ from adminme.products.openclaw import main as seam
 
 RULE = "current-human-request.apple-reminder-create.v1"
 COS_RULE = "current-human-request.cos-reminder-create.v1"
-REQUEST_RULES = frozenset({RULE, COS_RULE})
+EMAIL_RULE = "current-human-request.cos-email-to-requester.v1"
+REQUEST_RULES = frozenset({RULE, COS_RULE, EMAIL_RULE})
 CONTRACT = "authenticated-request-v1"
 GROUNDING_TYPE = "cos.action.request_grounded"
 
@@ -69,12 +70,24 @@ async def ground_action(
     action: dict[str, Any],
     rule_id: str = RULE,
 ) -> dict[str, Any]:
+    email = rule_id == EMAIL_RULE
     if (
         rule_id not in REQUEST_RULES
-        or action.get("provider") != "apple_reminders"
-        or action.get("operation") != "create_reminder"
+        or action.get("provider") != ("gmail" if email else "apple_reminders")
+        or action.get("operation") != ("send_email" if email else "create_reminder")
         or action.get("resource_owner")
-        != (COS_SERVICE_PRINCIPAL_ID if rule_id == COS_RULE else "requester")
+        != (
+            COS_SERVICE_PRINCIPAL_ID
+            if rule_id in {COS_RULE, EMAIL_RULE}
+            else "requester"
+        )
+        or (
+            email
+            and (
+                action.get("operating_principal") != COS_SERVICE_PRINCIPAL_ID
+                or action.get("recipient_member_id") != session.auth_member_id
+            )
+        )
     ):
         raise HTTPException(403, "Unsupported requested action or resource owner")
     if runtime.observation is None or await runtime.observation.is_active():
@@ -280,7 +293,7 @@ async def validate_request_authorization(
         or grounding.get("owner_scope") != f"private:{session.auth_member_id}"
         or grounding.get("actor_identity") != COS_SERVICE_PRINCIPAL_ID
         or p["member_id"] != session.auth_member_id
-        or rule_id not in REQUEST_RULES
+        or rule_id not in {RULE, COS_RULE}
         or p["action"].get("resource_owner")
         != (COS_SERVICE_PRINCIPAL_ID if own_reminder else "requester")
         or not datetime.fromisoformat(p["issued_at"])

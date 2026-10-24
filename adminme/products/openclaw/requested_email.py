@@ -77,7 +77,7 @@ class RequestedEmailStatusRequest(BaseModel):
 def _accounts(runtime: Any) -> list[dict[str, str]]:
     """Current enabled adapters plus the existing service-channel authority."""
     accounts: list[dict[str, str]] = []
-    for row in runtime.settings.adapter_config.get("adapters", []):
+    for row in getattr(runtime.settings, "adapter_config", {}).get("adapters", []):
         config = row.get("config", {})
         if (
             str(row.get("kind") or "").removeprefix("adapter:") != "messaging-gmail-api"
@@ -152,7 +152,9 @@ async def selected_email(
         )
     return responses.ResponseApprovalRequest(
         request_id=body.request_id,
-        **{key: value for key, value in accounts[0].items() if key != "label"},
+        channel="email",
+        service_channel_id=accounts[0]["service_channel_id"],
+        provider_account_id=accounts[0]["provider_account_id"],
         recipient=recipients[0],
         subject=body.subject,
         body=body.body,
@@ -224,7 +226,12 @@ async def retained_result(
         session.tenant_id, f"{prefix}:cos.response.attempted:{approved['event_id']}"
     )
     if terminal is not None:
-        valid = _terminal_valid(terminal, approved)
+        valid = bool(
+            terminal.get("type") == "cos.response.result"
+            and terminal.get("payload", {}).get("approval_event_id")
+            == approved["event_id"]
+            and _terminal_valid(terminal, approved)
+        )
         if terminal["payload"].get("status") == "sent":
             by_id = {approved["event_id"]: approved}
             for event_id in (
@@ -255,6 +262,9 @@ async def retained_result(
             valid = bool(
                 valid
                 and attempted
+                and attempted.get("type") == "cos.response.attempted"
+                and attempted.get("payload", {}).get("approval_event_id")
+                == approved["event_id"]
                 and _approval_valid(approved, by_id)
                 and _attempt_valid(attempted, approved, by_id, policies)
                 and len(sent) == 1

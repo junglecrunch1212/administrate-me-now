@@ -84,6 +84,9 @@ class ResponseApprovalRequest(BaseModel):
 
 
 class ResponseExecutionRequest(seam.ContextRequest):
+    request_authorization_event_id: str | None = Field(
+        default=None, min_length=1, max_length=240
+    )
     request_id: str = Field(min_length=8, max_length=120)
     approval_event_id: str = Field(min_length=1, max_length=240)
 
@@ -418,13 +421,18 @@ async def execute_response(
     seam._require_adult(session)
     runtime = seam._runtime(request)
     approved = await runtime.event_log.get(body.approval_event_id)
+    requested = bool(
+        approved
+        and approved.get("payload", {}).get("authorization_method") == "requested_email"
+    )
     if (
         approved is None
         or approved["tenant_id"] != session.tenant_id
         or approved["type"] != "cos.response.approved"
         or approved["owner_scope"] != f"private:{session.auth_member_id}"
         or approved["visibility_scope"] != f"private:{session.auth_member_id}"
-        or approved["actor_identity"] != session.auth_member_id
+        or approved["actor_identity"]
+        != (COS_SERVICE_PRINCIPAL_ID if requested else session.auth_member_id)
         or approved["payload"].get("member_id") != session.auth_member_id
     ):
         raise HTTPException(404, "exact member response approval is unavailable")
@@ -437,6 +445,22 @@ async def execute_response(
         async with runtime.settings_command_locks.setdefault(
             f"cos-response-policy:{session.tenant_id}", asyncio.Lock()
         ):
+            if requested:
+                from adminme.products.openclaw.requested_email import (
+                    execute_requested_email,
+                )
+
+                return await execute_requested_email(
+                    request,
+                    session,
+                    approved,
+                    body,
+                    body.request_authorization_event_id or "",
+                )
+            if body.request_authorization_event_id is not None:
+                raise HTTPException(
+                    403, "Legacy response cannot borrow request authorization"
+                )
             return await _execute_locked(
                 runtime, session, approved, body, request, payload
             )
@@ -452,6 +476,7 @@ async def _execute_locked(
     *,
     standing_check: Callable[[], Awaitable[None]] | None = None,
     standing_host_event_id: str | None = None,
+    request_authorization: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     approval_id = approved["event_id"]
     terminal_key = (
@@ -542,6 +567,7 @@ async def _execute_locked(
             tool_name="administrateme_cos_response",
             action="cos.response.send",
             causation_id=approval_id,
+            request_authorization=request_authorization,
         )
     except HTTPException as exc:
         await _terminal(

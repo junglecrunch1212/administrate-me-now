@@ -476,3 +476,22 @@ def test_cos_owned_reminder_catalog_is_distinct_from_member_permission(
     assert disabled["openclaw"]["effective_tools"] == [
         "administrateme_cos_apple_reminder_status"
     ]
+
+
+def test_requested_email_catalog_separates_confirmation_execution_and_readback() -> (
+    None
+):
+    catalog = load_catalog(REPO_ROOT)
+    row = next(
+        item
+        for item in catalog["items"]
+        if item["capability_id"] == "domain.cos_requested_email"
+    )
+    assert row["openclaw_tools"] == [
+        "administrateme_confirm_requested_email",
+        "administrateme_cos_response",
+        "administrateme_requested_email_status",
+    ]
+    assert row["verbs"]["execute"] == "current_authenticated_request"
+    assert row["terminal_result_support"] is True
+    assert row["later_observation_support"] is False
