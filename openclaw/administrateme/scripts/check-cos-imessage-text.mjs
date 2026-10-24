@@ -4,6 +4,7 @@
  * account configuration, Messages database or channel send is constructed.
  */
 import assert from "node:assert/strict";
+import { checkRequestedEmailPolicy } from "./requested-email-policy-probe.mjs";
 import { execFileSync } from "node:child_process";
 import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
@@ -100,7 +101,7 @@ try {
   // Real pinned llm-task composition, synthetic completion only. Its schema is
   // post-validation, not a model instruction: the pack must teach the root shape.
   const { createLlmTaskTool } = await jiti.import(path.join(sourceRoot, "extensions/llm-task/src/llm-task-tool.ts"));
-  const groundingRequest = JSON.parse(execFileSync("python3", ["-c", `
+  const groundingRequest = JSON.parse(execFileSync("poetry", ["run", "python", "-c", `
 import json
 from pathlib import Path
 from adminme.lib.skill_runner.pack_loader import load_pack
@@ -133,19 +134,19 @@ print(json.dumps(_build_request_body(pack=pack, session_key="agent:main:adminme:
         return { text: completionText, provider: "openai-codex", model: "gpt-5.4" };
       },
     } } });
-  const grounded = { match: "matched", evidence: [{ start: 0,
-    end: Array.from(groundingRequest.args.input.instruction).length, text: groundingRequest.args.input.instruction }] };
+  const grounded = { match: "matched", evidence: [{ text: groundingRequest.args.input.instruction }] };
   for (const output of [grounded, { match: "not_requested", evidence: [] }, { match: "ambiguous", evidence: [] }]) {
     completionText = JSON.stringify(output);
     const result = await groundTool.execute("fixture-grounding", groundingRequest.args);
     assert.deepEqual(result.details.json, output);
     assert.equal(result.details.provider, "openai-codex");
   }
-  for (const output of [{ result: grounded }, { match: "matched" }, { match: "matched", evidence: "invented" }]) {
+  for (const output of [{ result: grounded }, { match: "matched" }, { match: "matched", evidence: "invented" },
+    { match: "matched", evidence: [{ start: 0, end: 40, text: groundingRequest.args.input.instruction }] }]) {
     completionText = JSON.stringify(output);
     await assert.rejects(groundTool.execute("fixture-malformed", groundingRequest.args), /LLM JSON did not match schema/);
   }
-  assert.equal(groundingCalls, 6, "Schema failure must not trigger an automatic model retry");
+  assert.equal(groundingCalls, 7, "Schema failure must not trigger an automatic model retry");
   console.log("Pinned llm-task grounding boundary passed: explicit root contract, routed isolated runtime, valid and malformed completions");
   const { createPluginRegistryState } = await jiti.import(path.join(sourceRoot, "src/plugins/registry-state.ts"));
   const { createToolHookRegistrars } = await jiti.import(path.join(sourceRoot, "src/plugins/registry-registrars-tools-hooks.ts"));
@@ -395,6 +396,9 @@ print(json.dumps([enabled, entry["hooks"]]))
   delete process.env[policySecretName];
 
   }
+
+  await checkRequestedEmailPolicy({ compiledPlugin: appleDirectory, nativeRegistration,
+    preparedPolicy: preparedPolicies[0], api, hookSdk, createHookRunner, versions });
 
   const literalCases = [...corpus.cases.map((row) => row.text.replace(/\s+/gu, " ").trim()),
     "**bold** _italic_ ~~strike~~ `code` <u>underline</u> [link](https://example.invalid/?x=1&y=2)",

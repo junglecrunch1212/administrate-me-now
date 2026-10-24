@@ -7,6 +7,8 @@ case "${1:-}" in linux|macos) ;; *) echo "Expected linux or macos" >&2; exit 1 ;
 tests=(
   tests/unit/test_reminder_choices.py
   tests/acceptance/test_reminder_choice_continuation.py
+  tests/acceptance/test_requested_email_action.py
+  tests/unit/products/openclaw/test_requested_email.py
   tests/acceptance/test_cos_owned_apple_reminder.py
   tests/unit/adapters/reminders/test_cos_reminders_write.py
   tests/unit/adapters/reminders/test_cos_reminders_write_policy.py

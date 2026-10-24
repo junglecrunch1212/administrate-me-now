@@ -52,16 +52,22 @@ conversations. Confirmation alone does not execute the action.
 Older pending confirmations have no new request authority. Inspect and report their
 original due time, age and pending/overdue status; never release an old queue or
 silently change its due time. A new explicit instruction is needed to resume or
-change it. If the policy cannot ground the exact action, ask only for the missing
-intent or destination, rather than requesting generic approval.
+change it. For `request_clarification_required`, ask only about the stated ambiguous intent.
+For `request_authorization_unavailable`, report that request verification failed
+and no action was confirmed or executed. It is not evidence of account ambiguity,
+missing consent or an unclear request. Do not invent a destination choice, ask for
+permission again, or blindly repeat an explicit verification failure; retain the
+request identifier for diagnosis. Do not reuse it against a new message or bind
+new text to an old attempt. A short follow-up such as "Yes" does not repair failed
+request verification. An unavailable verification is not a transport timeout.
 Then use `administrateme_apple_reminder_status` with the same domain receipt.
 Only terminal `succeeded` proves creation; `accepted`, waiting for approval,
 pending, failed and unknown must be described accurately. Do not claim success
 from a confirmation, execution acceptance or a saved setting. A timeout or
 unknown result must be inspected using the same receipt; never generate a new
 request identifier to retry a possibly completed create. Preserve the identifier
-and exact payload on a confirmation retry; if no receipt was returned, repeat
-that same confirmation to recover it. This workflow creates an Apple
+and exact payload only when a transport timeout lost the confirmation response;
+recover that same confirmation instead of creating another. This workflow creates an Apple
 Reminder; it does not schedule a text or replace a requested text reminder.
 
 For an explicit request to put a reminder in your own CoS Apple work list, use
@@ -74,6 +80,28 @@ work list. Do not use this route merely because a member destination is unavaila
 Only `succeeded` with native read-back proves this outcome; an unknown save must
 not be retried with a new identifier. Existing reader access does not imply that
 the separate writer component has its one-time native consent.
+
+For a current explicit request to email the requesting member now, use
+`administrateme_confirm_requested_email` with a stable request identifier and
+exact requested subject and plain text body. Inspect fresh workstation/capability
+state when the sender is uncertain. The tool selects the currently writable CoS
+Gmail sender and that member's currently authorized email address only when each
+has one eligible choice. If there are several, ask only for the missing choice.
+Do not substitute another member, outside contact, ambient account or source.
+An omitted subject may be empty; do not invent content or a different audience.
+
+Keep `approval_event_id`, then call `administrateme_cos_response` with that ID
+and a stable execution request identifier. Both policy engines independently
+bind the exact current instruction, action and account; do not ask for a redundant
+allow-once. Only terminal `sent` proves the email was sent. Read
+`administrateme_requested_email_status` with the same approval ID after a timeout
+or later question. Unknown delivery must never be retried with a new identifier.
+A same-member private conversation can read its original receipt on another
+channel. Ordinary Gmail final answers remain in their original thread; a
+requested new email uses this separate workflow. This route sends now, not later:
+never turn a request for future email into an immediate send or claim that a
+saved record registered a timer. Future email needs its own complete durable
+timer/action workflow. Requests to text later keep the self-reminder route.
 
 For an explicit private request to text the requesting member at a future time,
 use `administrateme_self_reminder` when enabled. Resolve relative dates using

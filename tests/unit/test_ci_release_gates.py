@@ -3690,3 +3690,103 @@ def test_own_apple_focused_lane_keeps_native_helper_proof_on_macos() -> None:
     ):
         assert name not in portable
         assert name in native.split("fi", 1)[0]
+
+
+_REQUESTED_EMAIL_ROUTER = (
+    "    from adminme.products.openclaw.requested_email import router as requested_email_router\n"
+    "    app.include_router(requested_email_router)\n"
+)
+
+
+def test_requested_email_router_scope_is_exact_adjacent_and_keeps_neighbors() -> None:
+    before = _SERVICE_WIRED_RUNTIME
+    after = before.replace(
+        "    return app\n", _REQUESTED_EMAIL_ROUTER + "    return app\n"
+    )
+    assert _service_work_application(before) == _service_work_application(after)
+    for old, new in (
+        (_REQUESTED_EMAIL_ROUTER, _REQUESTED_EMAIL_ROUTER * 2),
+        ("    app.include_router(requested_email_router)\n", ""),
+        (
+            "    from adminme.products.openclaw.requested_email import router as requested_email_router\n",
+            "",
+        ),
+        (
+            "app.include_router(requested_email_router)",
+            "app.include_router(other_router)",
+        ),
+        (
+            _REQUESTED_EMAIL_ROUTER,
+            _REQUESTED_EMAIL_ROUTER.replace(
+                "    app.include_router",
+                "    unrelated_effect()\n    app.include_router",
+            ),
+        ),
+        (
+            _REQUESTED_EMAIL_ROUTER,
+            "    if enabled:\n"
+            + "\n".join("    " + line for line in _REQUESTED_EMAIL_ROUTER.splitlines())
+            + "\n",
+        ),
+        ("    return app\n", "    return untrusted_app\n"),
+    ):
+        assert _service_work_application(
+            after.replace(old, new)
+        ) != _service_work_application(before)
+
+
+def test_requested_email_router_scope_reads_immutable_tree(
+    repository: tuple[Path, str],
+) -> None:
+    path, _ = repository
+    _, base = _service_work_candidate(path)
+    after = _SERVICE_WIRED_RUNTIME.replace(
+        "    return app\n", _REQUESTED_EMAIL_ROUTER + "    return app\n"
+    )
+    head = _commit(path, COS_SERVICE_WORK_APPLICATION, after)
+    (path / COS_SERVICE_WORK_APPLICATION).write_text("UNCOMMITTED = True\n")
+    assert (
+        select_scope(path, _event(base, head), checkout_sha=head)["scope"]
+        == "cos-service-work"
+    )
+    bad = _commit(path, COS_SERVICE_WORK_APPLICATION, after + "\nUNRELATED = True\n")
+    assert (
+        select_scope(path, _event(base, bad), checkout_sha=bad)["scope"]
+        == "system-wide"
+    )
+
+
+@pytest.mark.parametrize(
+    "relative",
+    [
+        "adminme/products/openclaw/requested_email.py",
+        "adminme/events/schemas/requested_email.py",
+        "adminme/requested_email_assurance.py",
+        "openclaw/administrateme/src/requested-email.ts",
+        "openclaw/administrateme/test/requested-email.test.ts",
+        "openclaw/administrateme/scripts/requested-email-policy-probe.mjs",
+        "tests/acceptance/test_requested_email_action.py",
+        "tests/unit/products/openclaw/test_requested_email.py",
+    ],
+)
+def test_requested_email_closed_paths_use_existing_affected_lane(
+    repository: tuple[Path, str], relative: str
+) -> None:
+    path, _ = repository
+    _, base = _service_work_candidate(path)
+    head = _commit(path, relative, "# bounded exact requested email change\n")
+    if relative not in COS_SERVICE_WORK_COMPONENT_PATHS:
+        # A test alone does not establish the affected production component.
+        assert (
+            select_scope(path, _event(base, head), checkout_sha=head)["scope"]
+            == "system-wide"
+        )
+        head = _commit(
+            path,
+            "adminme/products/openclaw/requested_email.py",
+            "# Matching requested-email component change\n",
+        )
+    assert (
+        select_scope(path, _event(base, head), checkout_sha=head)["scope"]
+        == "cos-service-work"
+    )

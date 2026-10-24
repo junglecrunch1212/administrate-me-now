@@ -83,6 +83,7 @@ describe("host request policy independently binds precise evidence", () => {
 it.each(["request_authorization_unavailable", "request_clarification_required"].flatMap((code) => [
   { code, path: "/api/openclaw/v1/tools/confirm-apple-reminder" },
   { code, path: "/api/openclaw/v1/tools/cos-apple-reminders/confirm" },
+  { code, path: "/api/openclaw/v1/tools/confirm-requested-email" },
 ]))("exposes only the fixed safe $code diagnostic for $path", async ({ code, path }) => {
   fixture();
   const fetcher = vi.fn(async () => new Response(JSON.stringify({ detail: { code, reason: "PRIVATE provider token and source text", debug: "PRIVATE" } }), { status: 409 }));
@@ -90,6 +91,11 @@ it.each(["request_authorization_unavailable", "request_clarification_required"].
   const failure = await transport.request(path, {}).catch((error) => error);
   if (!(failure instanceof TransportError)) throw new Error("Expected transport rejection");
   expect(failure.message).toContain(code);
+  if (code === "request_authorization_unavailable") {
+    expect(failure.message).toContain("not a transport timeout");
+    expect(failure.message).toContain("does not establish an account choice");
+    expect(failure.message).toContain("do not blindly repeat");
+  }
   expect(failure.message).not.toContain("PRIVATE");
   expect(failure.message.toLowerCase()).toContain("no action was confirmed or executed");
   expect(failure.state).toBe("degraded");

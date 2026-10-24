@@ -4055,6 +4055,11 @@ def create_application(settings: RuntimeSettings) -> FastAPI:
     from adminme.products.openclaw.cos_apple_reminders import router as cos_apple_router
 
     app.include_router(cos_apple_router)
+    from adminme.products.openclaw.requested_email import (
+        router as requested_email_router,
+    )
+
+    app.include_router(requested_email_router)
     from adminme.products.openclaw.workstation import router as workstation_router
 
     app.include_router(workstation_router)

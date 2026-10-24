@@ -426,6 +426,10 @@ COS_SERVICE_WORK_COMPONENT_PATHS = frozenset(
         "adminme/products/openclaw/cos_responses.py",
         "adminme/products/openclaw/main.py",
         "adminme/products/openclaw/request_authorization.py",
+        "adminme/products/openclaw/requested_email.py",
+        "adminme/events/schemas/requested_email.py",
+        "adminme/requested_email_assurance.py",
+        "openclaw/administrateme/src/requested-email.ts",
         "adminme/request_actions_control.py",
         "adminme/lifecycle_catalog.py",
         "bootstrap/request_actions.py",
@@ -523,6 +527,10 @@ COS_SERVICE_WORK_TEST_PATHS = frozenset(
         "tests/unit/test_openclaw_approvals.py",
         "tests/unit/test_request_actions_control.py",
         "openclaw/administrateme/test/request-policy.test.ts",
+        "openclaw/administrateme/test/requested-email.test.ts",
+        "openclaw/administrateme/scripts/requested-email-policy-probe.mjs",
+        "tests/acceptance/test_requested_email_action.py",
+        "tests/unit/products/openclaw/test_requested_email.py",
         "openclaw/administrateme/test/conversation-input.test.ts",
         "tests/acceptance/test_workstation_inventory.py",
         "tests/unit/test_workstation_inventory.py",
@@ -1375,10 +1383,30 @@ def _service_work_application(source: str) -> tuple[str, bool] | None:
         choice_shapes[0]
     ) > body_shapes.index(choice_shapes[1]):
         return None
+    email_shapes = [
+        ast.dump(node, include_attributes=False)
+        for node in ast.parse(
+            "from adminme.products.openclaw.requested_email import router as requested_email_router\n"
+            "app.include_router(requested_email_router)\n"
+        ).body
+    ]
+    email_counts = [body_shapes.count(shape) for shape in email_shapes]
+    if email_counts not in ([0, 0], [1, 1]):
+        return None
+    if (
+        email_counts == [1, 1]
+        and body_shapes.index(email_shapes[1]) != body_shapes.index(email_shapes[0]) + 1
+    ):
+        return None
     application.body = [
         node
         for node, shape in zip(application.body, body_shapes, strict=True)
-        if shape not in shapes + reminder_shapes + workstation_shapes + choice_shapes
+        if shape
+        not in shapes
+        + reminder_shapes
+        + workstation_shapes
+        + choice_shapes
+        + email_shapes
     ]
     digest = hashlib.sha256(
         ast.dump(module, include_attributes=False).encode()

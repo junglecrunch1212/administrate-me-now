@@ -22,12 +22,12 @@ export class TransportError extends Error {
 // Only closed local error codes are exposed. Never forward backend reason text,
 // URLs, provider errors, private inputs, or arbitrary response fields to a model.
 const REQUEST_FAILURES = {
-  request_authorization_unavailable: "Request grounding could not be verified. No action was confirmed or executed; this does not establish a provider permission failure.",
+  request_authorization_unavailable: "Request grounding could not be verified. No action was confirmed or executed; this does not establish an account choice or provider permission failure. This explicit verification failure is not a transport timeout: stop, report it faithfully, and do not blindly repeat the request or ask for another permission.",
   request_clarification_required: "The proposed action did not match a clear current request. Clarify only the ambiguous intent; no action was confirmed or executed.",
 } as const;
 
 async function safeRequestFailure(response: Response, path: string): Promise<string | undefined> {
-  if (response.status !== 409 || !["/api/openclaw/v1/tools/confirm-apple-reminder", "/api/openclaw/v1/tools/cos-apple-reminders/confirm"].includes(path)) return undefined;
+  if (response.status !== 409 || !["/api/openclaw/v1/tools/confirm-apple-reminder", "/api/openclaw/v1/tools/cos-apple-reminders/confirm", "/api/openclaw/v1/tools/confirm-requested-email"].includes(path)) return undefined;
   try {
     const body: unknown = await response.json();
     if (!body || typeof body !== "object" || !("detail" in body)) return undefined;
@@ -75,7 +75,7 @@ export class AdministrateMeTransport {
     const controller = new AbortController();
     // One explicit source-grounding model invocation has a 30s deadline plus
     // the existing 2s completion allowance. Other calls keep their bounded limit.
-    const timeoutMs = (path === "/api/openclaw/v1/tools/confirm-apple-reminder" || path === "/api/openclaw/v1/tools/cos-apple-reminders/confirm")
+    const timeoutMs = (path === "/api/openclaw/v1/tools/confirm-apple-reminder" || path === "/api/openclaw/v1/tools/cos-apple-reminders/confirm" || path === "/api/openclaw/v1/tools/confirm-requested-email")
       ? Math.max(this.config.timeoutMs, 35_000) : this.config.timeoutMs;
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
     try {
