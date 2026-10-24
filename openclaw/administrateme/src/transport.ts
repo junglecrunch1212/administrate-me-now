@@ -22,7 +22,7 @@ export class TransportError extends Error {
 // Only closed local error codes are exposed. Never forward backend reason text,
 // URLs, provider errors, private inputs, or arbitrary response fields to a model.
 const REQUEST_FAILURES = {
-  request_authorization_unavailable: "Request grounding could not be verified. No action was confirmed or executed; this does not establish a provider permission failure.",
+  request_authorization_unavailable: "Request grounding could not be verified. No action was confirmed or executed; this does not establish an account choice or provider permission failure. This explicit verification failure is not a transport timeout: stop, report it faithfully, and do not blindly repeat the request or ask for another permission.",
   request_clarification_required: "The proposed action did not match a clear current request. Clarify only the ambiguous intent; no action was confirmed or executed.",
 } as const;
 

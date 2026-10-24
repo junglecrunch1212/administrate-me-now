@@ -22,19 +22,9 @@
         "type": "object",
         "additionalProperties": false,
         "required": [
-          "start",
-          "end",
           "text"
         ],
         "properties": {
-          "start": {
-            "type": "integer",
-            "minimum": 0
-          },
-          "end": {
-            "type": "integer",
-            "minimum": 1
-          },
           "text": {
             "type": "string",
             "minLength": 1,
