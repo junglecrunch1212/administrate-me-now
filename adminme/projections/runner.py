@@ -5,7 +5,9 @@ Per SYSTEM_INVARIANTS.md §2 and ADMINISTRATEME_BUILD.md §L3.
 
 The runner owns one SQLCipher writer per registered projection and one bounded
 query-only Parties handle for current authority reads. One serialized native
-owner worker owns every persistent projection handle, with one
+worker owns writers; one dedicated serialized reader worker prevents fresh
+Parties authority reads from queuing behind unrelated projection writes. Each
+native handle keeps one owner thread throughout its lifecycle, with one
 bus subscription per projection (``subscriber_id = f"projection:{name}"``).
 On each delivered event, the bound callback opens a transaction on the
 projection's DB, calls ``projection.apply(envelope, conn)``, commits, and
@@ -350,12 +352,19 @@ class ProjectionRunner:
         self._lifecycle_lock = asyncio.Lock()
         self._submission_lock = threading.Lock()
         self._worker_thread_id: int | None = None
+        self._parties_reader_thread_id: int | None = None
+        self._parties_submission_lock = threading.Lock()
         self._closing = False
         self._closed = False
         self._executor = concurrent.futures.ThreadPoolExecutor(
             max_workers=1,
             thread_name_prefix="adminme-projections",
             initializer=self._capture_worker_thread,
+        )
+        self._parties_executor = concurrent.futures.ThreadPoolExecutor(
+            max_workers=1,
+            thread_name_prefix="adminme-authority-reader",
+            initializer=self._capture_parties_reader_thread,
         )
         self._started = False
         self._config.projections_dir.mkdir(parents=True, exist_ok=True)
@@ -681,6 +690,7 @@ class ProjectionRunner:
                     cancellation = cancellation or exc
                 finally:
                     self._executor.shutdown(wait=True, cancel_futures=False)
+                    self._parties_executor.shutdown(wait=True, cancel_futures=False)
                     if close_call is not None:
                         try:
                             close_call.result()
@@ -1030,6 +1040,9 @@ class ProjectionRunner:
     def _capture_worker_thread(self) -> None:
         self._worker_thread_id = threading.get_ident()
 
+    def _capture_parties_reader_thread(self) -> None:
+        self._parties_reader_thread_id = threading.get_ident()
+
     def _submit(
         self, func: Callable[..., _T], *args: Any
     ) -> concurrent.futures.Future[_T]:
@@ -1062,6 +1075,23 @@ class ProjectionRunner:
         many: bool = False,
         read_only: bool = True,
     ) -> _DetachedCursor:
+        if read_only and name == "parties":
+            if threading.get_ident() == self._parties_reader_thread_id:
+                return self._execute_statement(name, sql, parameters, many, read_only)
+            # Serialize submissions with database publication: a request either
+            # finishes against the prior inode before close, or opens the newly
+            # published database afterwards. No grant values are cached.
+            with self._submission_lock, self._parties_submission_lock:
+                # A callback already accepted on the writer may finish its
+                # nested reads before the queued close. Reject new callers.
+                if self._closed or (
+                    self._closing and threading.get_ident() != self._worker_thread_id
+                ):
+                    raise RuntimeError("projection runner is closing")
+                call = self._parties_executor.submit(
+                    self._execute_statement, name, sql, parameters, many, read_only
+                )
+            return call.result()
         if threading.get_ident() == self._worker_thread_id:
             return self._execute_statement(name, sql, parameters, many, read_only)
         return self._submit(
@@ -1147,6 +1177,11 @@ class ProjectionRunner:
         return conn
 
     def _close_parties_reader(self) -> None:
+        # Called only by writer lifecycle work, with admission excluded during
+        # publication or after the runner is marked closing during shutdown.
+        self._parties_executor.submit(self._close_parties_reader_native).result()
+
+    def _close_parties_reader_native(self) -> None:
         conn, self._parties_read_conn = self._parties_read_conn, None
         if conn is not None:
             conn.close()
@@ -1334,6 +1369,18 @@ class ProjectionRunner:
         projection: Projection,
         stage_path: Path,
     ) -> None:
+        if name == "parties":
+            with self._parties_submission_lock:
+                self._publish_staged_projection_locked(name, projection, stage_path)
+        else:
+            self._publish_staged_projection_locked(name, projection, stage_path)
+
+    def _publish_staged_projection_locked(
+        self,
+        name: str,
+        projection: Projection,
+        stage_path: Path,
+    ) -> None:
         stage = self._staged_conns.pop(name)
         self._staged_paths.pop(name, None)
         target = self._config.projection_db_path(name)
@@ -1482,6 +1529,7 @@ class ProjectionRunner:
             close_call.result()
         finally:
             self._executor.shutdown(wait=True, cancel_futures=False)
+            self._parties_executor.shutdown(wait=True, cancel_futures=False)
             self._closed = True
             self._closing = False
 

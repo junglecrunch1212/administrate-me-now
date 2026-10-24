@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import threading
 
 import pytest
@@ -34,7 +35,10 @@ async def test_compiled_authority_query_reuse_still_observes_current_revocation(
     original = ProjectionRunner._query_only_authorizer
 
     def observed(action, arg1, arg2, database, source):
-        if action == sqlcipher3.SQLITE_READ and arg1 == "service_delegation_grants":
+        if (
+            action == getattr(sqlcipher3, "SQLITE_READ")
+            and arg1 == "service_delegation_grants"
+        ):
             reads.append(arg2)
         return original(action, arg1, arg2, database, source)
 
@@ -89,7 +93,7 @@ async def test_authority_reader_cannot_reuse_writer_privileges_or_disable_read_o
             ("CREATE TEMP TABLE forbidden(value TEXT)", ()),
             ("BEGIN", ()),
         ):
-            with pytest.raises(sqlcipher3.DatabaseError):
+            with pytest.raises(getattr(sqlcipher3, "DatabaseError")):
                 reader.execute(sql, parameters)
         assert resolve(reader).authority_grant_id == "grant-synthetic"
         approve(writer, member="member-extra")
@@ -107,7 +111,7 @@ async def test_authority_reader_preserves_failed_rebuild_and_reopens_after_publi
     runner, log = await start_runner(tmp_path)
     threads = []
     original_reader = runner._parties_reader
-    original_close = runner._close_parties_reader
+    original_close = runner._close_parties_reader_native
 
     def observe_reader():
         threads.append(threading.get_ident())
@@ -118,7 +122,7 @@ async def test_authority_reader_preserves_failed_rebuild_and_reopens_after_publi
         return original_close()
 
     monkeypatch.setattr(runner, "_parties_reader", observe_reader)
-    monkeypatch.setattr(runner, "_close_parties_reader", observe_close)
+    monkeypatch.setattr(runner, "_close_parties_reader_native", observe_close)
     try:
         writer = runner._unsafe_maintenance_connection("parties")
         grant(writer)
@@ -147,3 +151,89 @@ async def test_authority_reader_preserves_failed_rebuild_and_reopens_after_publi
         await log.close()
     assert runner._parties_read_conn is None
     assert len(set(threads)) == 1 and threading.get_ident() not in threads
+
+
+@pytest.mark.asyncio
+async def test_fresh_authority_does_not_queue_behind_unrelated_writer_work(tmp_path):
+    runner, log = await start_runner(tmp_path)
+    entered, release = threading.Event(), threading.Event()
+    held = None
+    try:
+        writer = runner._unsafe_maintenance_connection("parties")
+        grant(writer)
+        approve(writer)
+        reader = runner.connection("parties")
+        assert resolve(reader).authority_grant_id == "grant-synthetic"
+
+        def occupy_writer():
+            entered.set()
+            assert release.wait(10), "synthetic writer hold was not released"
+
+        held = asyncio.create_task(runner._run_on_worker(occupy_writer))
+        assert await asyncio.to_thread(entered.wait, 5)
+        # The writer stays blocked throughout this fresh native read. An
+        # ordinary writer FIFO implementation cannot finish before release.
+        current = await asyncio.wait_for(asyncio.to_thread(resolve, reader), 2)
+        assert current.authority_grant_id == "grant-synthetic"
+        assert not held.done()
+        release.set()
+        await held
+        writer.execute(
+            "UPDATE service_delegation_grants SET revoked_at='2026-01-02T00:00:00Z'"
+        )
+        with pytest.raises(ServiceDelegationResolutionError):
+            resolve(reader)
+    finally:
+        release.set()
+        if held is not None:
+            await held
+        await runner.stop()
+        await log.close()
+    assert runner._parties_reader_thread_id not in {
+        t.ident for t in threading.enumerate()
+    }
+
+
+@pytest.mark.asyncio
+async def test_authority_read_during_publish_waits_for_new_database(
+    tmp_path, monkeypatch
+):
+    import adminme.projections.runner as runner_module
+
+    runner, log = await start_runner(tmp_path)
+    entered, release = threading.Event(), threading.Event()
+    rebuilding = reading = None
+    original_replace = runner_module.os.replace
+
+    def held_replace(source, target):
+        if target == runner._config.projection_db_path("parties"):
+            entered.set()
+            assert release.wait(10), "synthetic publish hold was not released"
+        return original_replace(source, target)
+
+    try:
+        writer = runner._unsafe_maintenance_connection("parties")
+        grant(writer)
+        approve(writer)
+        reader = runner.connection("parties")
+        assert resolve(reader).authority_grant_id == "grant-synthetic"
+        monkeypatch.setattr(runner_module.os, "replace", held_replace)
+        rebuilding = asyncio.create_task(runner.rebuild("parties"))
+        assert await asyncio.to_thread(entered.wait, 5)
+        reading = asyncio.create_task(asyncio.to_thread(resolve, reader))
+        await asyncio.sleep(0.02)
+        assert not reading.done()
+        release.set()
+        await rebuilding
+        # The durable log contains no grant. Reopening an old inode here would
+        # wrongly disclose the maintenance-only prior grant.
+        with pytest.raises(ServiceDelegationResolutionError):
+            await reading
+    finally:
+        release.set()
+        if rebuilding is not None:
+            await asyncio.gather(rebuilding, return_exceptions=True)
+        if reading is not None:
+            await asyncio.gather(reading, return_exceptions=True)
+        await runner.stop()
+        await log.close()

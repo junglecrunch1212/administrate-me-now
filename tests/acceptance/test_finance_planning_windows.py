@@ -7,7 +7,7 @@ from functools import partial
 import pytest
 from fastapi.testclient import TestClient
 
-from adminme.finance.answers import render_result
+from adminme.finance.answers import answer_reference, render_result
 from adminme.finance.dated_projection import validate_projection
 from adminme.finance.planning_store import import_projection, query_projection
 from adminme.finance.publication import PublicationError
@@ -82,7 +82,9 @@ def test_overlap_pages_preserve_source_bounds_flags_and_scope_through_replay(
     tmp_path, shared
 ):
     configured = enabled_settings(tmp_path)
-    with TestClient(create_application(configured)) as client:
+    app = create_application(configured)
+    with TestClient(app) as client:
+        assert client.portal is not None
         _grant_cos(client, "window-overlap")
         accounting, owner = import_fixture(client)
         value = with_boundary_windows(projection(accounting, 24))
@@ -113,7 +115,7 @@ def test_overlap_pages_preserve_source_bounds_flags_and_scope_through_replay(
         originals = deepcopy(value["detail_events"])
         if shared:
             value = shared_layout(value)
-        runtime = client.app.state.runtime
+        runtime = app.state.runtime
         client.portal.call(import_projection, runtime, owner, value)
         other = build_internal_session("member-other", "principal", owner.tenant_id)
 
@@ -135,6 +137,7 @@ def test_overlap_pages_preserve_source_bounds_flags_and_scope_through_replay(
                 ]
                 for days in (7, 30, 90, 180, 365):
                     rows = []
+                    answer = {}
                     offset = 0
                     while offset is not None:
                         answer = client.portal.call(
@@ -155,6 +158,7 @@ def test_overlap_pages_preserve_source_bounds_flags_and_scope_through_replay(
                     if days not in (7, 365):
                         selected.append(expected[3])
                     assert rows == selected
+                    answer["answer_ref"] = answer_reference(answer)
                     assert "do not prove occurrence" in render_result(answer)
 
         context = value["contexts"][0]

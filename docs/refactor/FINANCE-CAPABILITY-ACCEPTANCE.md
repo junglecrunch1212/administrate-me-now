@@ -42,6 +42,11 @@ required privacy invariant or product function.
   and full producer parity. The coordinator reports structural review passed at
   `63691cc7` and schema `951a59286ca22396f2084484490aa1d54b47c0ee10c0bc727580134a31c4b925`;
   only Books-side bounded local canonical payload/parity construction is authorized.
+  The later frozen local candidate reports 6,020,614 bytes and 470,138 independent
+  source-parity assertions; six identity/accounting bindings and their audience
+  references remain deliberately unbound. The overlap validator correction is
+  at `1323abd5`, pending its hosted result. These reported producer checks do not
+  establish conforming adoption or private runtime parity.
   No private payload is being sent to this checkout or hosted CI.
   The producer distinguishes 18 oracle groups, 12 observed-opening native-tested
   tuples and 24 query aliases; verified-opening oracle nulls are not native-tested.
@@ -50,7 +55,8 @@ required privacy invariant or product function.
   raw core p95 regression limit of at most 10%. One earlier bounded latency pass
   did not establish stability; later runs failed. The authority-reader fix at
   `34d2bfe8` passed this bounded gate at 8.69%, with material bracketing-baseline
-  drift; broader resource isolation is still unproved. Large-ledger, reminder-delivery,
+  drift; `1323abd5` failed again at 18.12%. Broader resource isolation remains
+  unproved. Large-ledger, reminder-delivery,
   heavy-worker termination/memory and deployment-hardware evidence remain absent.
 - **Activation remains separate:** source approval/merge, private processing and
   import authority, supported immutable activation, compatible encrypted recovery,
@@ -286,3 +292,14 @@ layouts use the same inclusive-window/half-open-horizon overlap rule, retain
 source IDs, routes, recognition, flags and totals, and explain uncertainty in
 member/native output. Exact-boundary, pagination, scope, replay/restart and
 browser cases await their own hosted result. No schema/hash change is required.
+
+At `1323abd5`, 867 Python checks passed and two new replay-render checks failed
+because their direct-query fixtures lacked the renderer's required `answer_ref`.
+The fixture is corrected in the next candidate. All 20 inline/shared boundary
+cases, static checks, 100 native checks and the browser flow passed. The new
+browser PNG was opened and shows the exact outside-horizon dates with the
+uncertainty explanation; the other two PNG hashes match the prior reviewed
+images. The mixed-load gate failed again at 18.12%, so the prior bounded pass
+has not established stable resource isolation. The next candidate isolates
+fresh authority reads from unrelated projection writes and separately adds
+synthetic shared-inventory workload measurement; neither is claimed passed yet.

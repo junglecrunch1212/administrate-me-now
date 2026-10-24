@@ -58,6 +58,27 @@ Explicit invalidation removes affected pointers without changing accepted
 history. Limits are 50 entries/10 MiB per member, 24-hour maximum TTL, 128
 member buckets and 32 MiB globally. No private result is written to disk.
 
+## Accepted-planning resource coverage
+
+A separate hosted workload imports the synthetic accepted accounting publication
+and shared planning inventory through the production composition root: 3,307
+bodies, 38,382 context references, 141 original issues and a 2,818-row selected
+context. It alternates native balance-summary and single-event-page queries,
+checking the returned source value/row, projection pin, receipt and zero provider
+effects on every call. It uses the same independent clients, 500 samples per
+phase, 20 core/10 finance requests per second, both bracketing baselines and raw
+10% core regression ceiling. Both planning operations use the existing report
+p95 target of 500 ms. The original status/calculator workload retains its
+100/500 ms targets and runs independently. The longer 120-second synthetic
+startup allowance covers fixture import only, not measured request latency.
+
+This additional gate is pending hosted execution. It measures accepted planning
+retrieval, not a full raw accounting ledger, heavy computation, reminder delivery
+or deployment hardware. Passing the simpler status/calculator workload cannot
+substitute for it. Run only in hosted CI or an authorized disposable lab with
+`ADMINME_FINANCE_PLANNING_BENCHMARK=1` and the
+`test_accepted_planning_mixed_load_p95_gate` test.
+
 ## Heavy-work admission remains blocked
 
 `adminme.finance.jobs.finance_job_status` returns `temporarily_unavailable`
@@ -120,6 +141,7 @@ evidence, not passing acceptance.
 | `63691cc7` | 814 Python passed; one summary-size failure. 100 native/static passed; browser label failed | 4.595 → 5.620 ms (1.223142); after baseline 4.480 ms | Fail |
 | `cc159d8a` | 816 Python, 100 native/static and synthetic desktop checks passed | 3.857 → 4.838 ms (1.254260); after baseline 3.695 ms | Fail |
 | `34d2bfe8` | 847 Python, 100 native/static and synthetic desktop checks passed | Before 1.885, after 2.767 → mixed 3.007 ms (1.086922) | Bounded pass; baseline drift limits generalization |
+| `1323abd5` | 867 Python passed; two new raw-render fixtures lacked `answer_ref`. 100 native/static/browser passed | Before 4.395, after 4.270 → mixed 5.191 ms (1.181163) | Fail; earlier pass does not establish stable isolation |
 
 The [de8 hosted run](https://github.com/junglecrunch1212/administrate-me-now/actions/runs/40042497072)
 retains 251 admitted finance calls, 18.381/19.970 ms warm status/calculation
@@ -167,6 +189,21 @@ HTTP-loop projection dispatch from 0.565 to 0.235 ms; worker session resolution
 was 0.356 ms and event application 0.475 ms. Profiles support the compilation-cost
 diagnosis but never replace raw acceptance. Total memory remains unmeasured;
 the cache target is not an RSS claim. No threshold or offered load changed.
+
+At `1323abd5`, the original gate failed again at 18.12%, with 251 admitted calls
+and 17.324/19.288 ms status/calculation p95. Separate diagnostics showed worker
+statement p95 0.292 ms, but final HTTP-loop dispatch 0.787 ms and final authority
+0.943 ms; projection event application p95 was 1.021 ms. This supports examining
+queue contention beyond compilation, without proving a sole cause. The next
+candidate moves the existing Parties read-only handle to one dedicated serialized
+reader thread. Writers retain their existing owner. Final authority still reads
+current committed SQL data synchronously and never caches a grant. Publication
+excludes new reader submissions, drains/closes the old handle before replacing
+the DB, and permits readers only after the replacement; shutdown joins both
+workers. Focused hosted checks hold the writer busy while a fresh grant read
+finishes, then verify committed revocation, and hold publication while a new read
+must wait for the replacement. Existing lifecycle/identity tests remain included.
+The additional thread's memory cost and its latency benefit are not yet measured.
 
 Budget funding outlook, bank cash, debt payoff and noncash offsets remain
 distinct. The separate dated-projection transport is a declared summary subset;

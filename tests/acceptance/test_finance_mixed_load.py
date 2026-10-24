@@ -19,7 +19,7 @@ import time
 from contextlib import asynccontextmanager
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import httpx
 import pytest
@@ -103,7 +103,7 @@ class _SyntheticCpuProfile:
         # from work already dispatched to the native projection worker. It is
         # installed only in this separate profile server, never the p95 gate.
         import threading
-        from adminme.finance import disclosure
+        from adminme.finance import disclosure, planning_store
         from adminme.products.openclaw import main as native
         from adminme.projections.runner import ProjectionRunner
 
@@ -120,6 +120,10 @@ class _SyntheticCpuProfile:
                         thread = (
                             "http_loop"
                             if threading.get_ident() == self.loop_thread_id
+                            else "authority_reader"
+                            if threading.current_thread().name.startswith(
+                                "adminme-authority-reader"
+                            )
                             else "worker"
                         )
                         self.wall_calls.setdefault(f"{label}:{thread}", []).append(
@@ -129,6 +133,7 @@ class _SyntheticCpuProfile:
             setattr(owner, name, timed)
 
         instrument(disclosure, "validate_current_authority", "final_authority")
+        instrument(planning_store, "query_projection", "planning_query")
         instrument(native, "_session", "resolve_session")
         instrument(ProjectionRunner, "_execute_sync", "projection_dispatch")
         instrument(ProjectionRunner, "_execute_statement", "projection_statement")
@@ -152,7 +157,8 @@ class _SyntheticCpuProfile:
 
                 self.profile.disable()
                 self.completed = True
-                stats = pstats.Stats(self.profile)
+                # pstats exposes this public mapping at runtime; its stub omits it.
+                statistics = cast(Any, pstats.Stats(self.profile)).stats
 
                 def row(item):
                     (
@@ -185,7 +191,7 @@ class _SyntheticCpuProfile:
                             "top_self": [
                                 row(item)
                                 for item in sorted(
-                                    stats.stats.items(),
+                                    statistics.items(),
                                     key=lambda item: item[1][2],
                                     reverse=True,
                                 )[:20]
@@ -193,7 +199,7 @@ class _SyntheticCpuProfile:
                             "domain_cumulative": [
                                 row(item)
                                 for item in sorted(
-                                    stats.stats.items(),
+                                    statistics.items(),
                                     key=lambda item: item[1][3],
                                     reverse=True,
                                 )
@@ -204,7 +210,13 @@ class _SyntheticCpuProfile:
                 )
 
 
-def _serve(root: Path, listener: socket.socket, ready, profile: bool = False) -> None:
+def _serve(
+    root: Path,
+    listener: socket.socket,
+    ready,
+    profile: bool = False,
+    planning_workload: bool = False,
+) -> None:
     app = create_application(_settings(root))
     app.add_middleware(_SyntheticServerTiming)
     if profile:
@@ -222,7 +234,70 @@ def _serve(root: Path, listener: socket.socket, ready, profile: bool = False) ->
             )
             await runtime.wait_for_projection("parties", ids[5])
             await runtime.wait_for_projection("tasks", ids[-1])
-            ready.send(runtime.member_chat_binding(FIXTURE_MEMBER_ID))
+            binding = runtime.member_chat_binding(FIXTURE_MEMBER_ID)
+            if planning_workload:
+                # Synthetic inventory only. Seed through the same governed
+                # import/projection composition used by production.
+                from adminme.finance.importer import import_publication
+                from adminme.finance.planning_store import import_projection
+                from adminme.finance.publication import content_hash
+                from adminme.lib.session import build_internal_session
+                from tests.acceptance.test_finance_publications import publication
+                from tests.fixtures.finance_planning import (
+                    shared_projection,
+                    with_conservative_minima,
+                    with_grouped_issues,
+                )
+
+                accounting = publication(runtime.settings.instance.tenant_id)
+                accounting["owner_id"] = FIXTURE_MEMBER_ID
+                for report in accounting["reports"]:
+                    for metric in report["metrics"]:
+                        metric["owner_id"] = FIXTURE_MEMBER_ID
+                accounting["content_sha256"] = content_hash(accounting)
+                owner = build_internal_session(
+                    FIXTURE_MEMBER_ID, "principal", accounting["tenant_id"]
+                )
+                await import_publication(runtime, owner, accounting)
+                projection = with_grouped_issues(
+                    with_conservative_minima(shared_projection(accounting))
+                )
+                await import_projection(runtime, owner, projection)
+                largest = max(
+                    projection["detail_manifest"], key=lambda m: m["row_count"]
+                )
+                inventory = {
+                    r["record_id"]: r for r in projection["shared_event_inventory"]
+                }
+                expected = [
+                    {
+                        **{
+                            k: v
+                            for k, v in inventory[record_id].items()
+                            if k != "record_id"
+                        },
+                        "context_id": largest["context_id"],
+                    }
+                    for record_id in largest["record_ids"]
+                ]
+                ready.send(
+                    (
+                        *binding,
+                        {
+                            "book_id": accounting["book_id"],
+                            "publication_id": accounting["publication_id"],
+                            "projection_id": projection["projection_id"],
+                            "context_id": largest["context_id"],
+                            "expected_events": expected,
+                            "inventory_bodies": len(inventory),
+                            "context_references": sum(
+                                m["row_count"] for m in projection["detail_manifest"]
+                            ),
+                        },
+                    )
+                )
+            else:
+                ready.send(binding)
             ready.close()
             yield
 
@@ -233,7 +308,11 @@ def _serve(root: Path, listener: socket.socket, ready, profile: bool = False) ->
 
 
 async def _finance_call(
-    client, actor: str, session: str, number: int
+    client,
+    actor: str,
+    session: str,
+    number: int,
+    planning: dict[str, Any] | None = None,
 ) -> tuple[bool, float]:
     calculation = number % 2 == 0
     payload: dict[str, Any] = {
@@ -251,7 +330,27 @@ async def _finance_call(
             "openclaw_commit": OPENCLAW_COMMIT,
         }
     }
-    if calculation:
+    if planning is not None:
+        payload.update(
+            {
+                key: planning[key]
+                for key in (
+                    "book_id",
+                    "publication_id",
+                    "projection_id",
+                    "context_id",
+                )
+            }
+        )
+        payload.update(
+            report_id="planning_events" if calculation else "planning_projection",
+            horizon_days=365,
+        )
+        if calculation:
+            # Spread deterministic reads across the full context, including
+            # deep pages, rather than repeatedly measuring its first page.
+            payload["offset"] = (number * 7919) % len(planning["expected_events"])
+    elif calculation:
         payload.update(
             calculator_id="reserve_coverage",
             version="1",
@@ -267,13 +366,38 @@ async def _finance_call(
         )
     started = time.perf_counter()
     response = await client.post(
-        "/api/openclaw/v1/tools/finance-" + ("calculate" if calculation else "status"),
+        "/api/openclaw/v1/tools/finance-"
+        + (
+            "query"
+            if planning is not None
+            else "calculate"
+            if calculation
+            else "status"
+        ),
         headers={"Authorization": f"Bearer {SECRET}"},
         json=payload,
     )
     elapsed = time.perf_counter() - started
     assert response.status_code == 200, response.text
-    if calculation:
+    if planning is not None:
+        result = response.json()
+        assert result.get("projection", {}).get("id") == planning["projection_id"], (
+            response.text
+        )
+        if calculation:
+            assert result.get("events") == [
+                planning["expected_events"][payload["offset"]]
+            ], response.text
+        else:
+            assert result.get("summary", {}).get("minimum") == {
+                "kind": "CONSERVATIVE_SOURCE_SCALAR",
+                "value_minor": 100,
+                "unknown_reason": None,
+            }, response.text
+        assert result["provider_effect_count"] == 0 and result.get("answer_ref"), (
+            response.text
+        )
+    elif calculation:
         assert response.json()["values"]["reference_months_covered"] == "4.000000", (
             response.text
         )
@@ -292,7 +416,9 @@ def _client(url: str) -> httpx.AsyncClient:
     )
 
 
-def _finance_load(url: str, actor: str, session: str, ready, stop) -> None:
+def _finance_load(
+    url: str, actor: str, session: str, ready, stop, planning=None
+) -> None:
     """Independent process/event loop: finance client work cannot delay core timing."""
 
     async def load():
@@ -305,7 +431,7 @@ def _finance_load(url: str, actor: str, session: str, ready, stop) -> None:
                 if stop.is_set():
                     break
                 calculation, elapsed = await _finance_call(
-                    client, actor, session, index + 100
+                    client, actor, session, index + 100, planning
                 )
                 (calculations if calculation else statuses).append(elapsed)
                 # Ten tool calls/second is a bounded synthetic stress workload.
@@ -327,6 +453,18 @@ def _finance_load(url: str, actor: str, session: str, ready, stop) -> None:
     reason="Opt-in isolated hosted HTTP benchmark; not the family runtime",
 )
 async def test_light_finance_mixed_load_p95_gate(tmp_path: Path) -> None:
+    await _measure_mixed_load(tmp_path, planning_workload=False)
+
+
+@pytest.mark.skipif(
+    os.getenv("ADMINME_FINANCE_PLANNING_BENCHMARK") != "1",
+    reason="Opt-in hosted accepted-planning workload; not the family runtime",
+)
+async def test_accepted_planning_mixed_load_p95_gate(tmp_path: Path) -> None:
+    await _measure_mixed_load(tmp_path, planning_workload=True)
+
+
+async def _measure_mixed_load(tmp_path: Path, *, planning_workload: bool) -> None:
     context = multiprocessing.get_context("spawn")
     receive, send = context.Pipe(duplex=False)
     listener = socket.socket()
@@ -338,7 +476,8 @@ async def test_light_finance_mixed_load_p95_gate(tmp_path: Path) -> None:
     listener.listen(128)
     port = listener.getsockname()[1]
     process = context.Process(
-        target=_serve, args=(tmp_path / "instance", listener, send)
+        target=_serve,
+        args=(tmp_path / "instance", listener, send, False, planning_workload),
     )
     process.start()
     send.close()
@@ -346,10 +485,16 @@ async def test_light_finance_mixed_load_p95_gate(tmp_path: Path) -> None:
     load_receive = None
     stop_load = context.Event()
     try:
-        assert await asyncio.to_thread(receive.poll, 45), (
-            "synthetic HTTP server did not start"
-        )
-        actor, session = receive.recv()
+        assert await asyncio.to_thread(
+            receive.poll, 120 if planning_workload else 45
+        ), "synthetic HTTP server did not start"
+        binding = receive.recv()
+        actor, session = binding[:2]
+        planning = binding[2] if planning_workload else None
+        if planning is not None:
+            assert planning["inventory_bodies"] == 3307
+            assert planning["context_references"] == 38382
+            assert len(planning["expected_events"]) == 2818
         async with (
             httpx.AsyncClient(
                 base_url=f"http://127.0.0.1:{port}",
@@ -384,7 +529,7 @@ async def test_light_finance_mixed_load_p95_gate(tmp_path: Path) -> None:
                 nonlocal calls
                 calls += 1
                 calculation, elapsed = await _finance_call(
-                    finance_client, actor, session, calls
+                    finance_client, actor, session, calls, planning
                 )
                 (calculations if calculation else statuses).append(elapsed)
                 return elapsed
@@ -428,7 +573,14 @@ async def test_light_finance_mixed_load_p95_gate(tmp_path: Path) -> None:
             load_receive, load_send = context.Pipe(duplex=False)
             load_process = context.Process(
                 target=_finance_load,
-                args=(f"http://127.0.0.1:{port}", actor, session, load_send, stop_load),
+                args=(
+                    f"http://127.0.0.1:{port}",
+                    actor,
+                    session,
+                    load_send,
+                    stop_load,
+                    planning,
+                ),
             )
             load_process.start()
             load_send.close()
@@ -455,14 +607,20 @@ async def test_light_finance_mixed_load_p95_gate(tmp_path: Path) -> None:
             after_server = list(server_timings)
             baseline_p95 = max(_p95(baseline), _p95(after))
             report = {
-                "contract": "synthetic-light-finance-http-mixed-load-v3",
+                "contract": (
+                    "synthetic-accepted-planning-http-mixed-load-v1"
+                    if planning_workload
+                    else "synthetic-light-finance-http-mixed-load-v3"
+                ),
                 "python": platform.python_version(),
                 "samples_per_phase": SAMPLES,
                 "core_requests_per_second": 20,
                 "finance_requests_per_second": 10,
                 "finance_samples": len(finance),
                 "independent_load_processes": True,
-                "cold_status_ms": round(cold_status * 1000, 3),
+                ("cold_summary_ms" if planning_workload else "cold_status_ms"): round(
+                    cold_status * 1000, 3
+                ),
                 "baseline_before_server_p95_ms": round(_p95(baseline_server) * 1000, 3),
                 "baseline_after_server_p95_ms": round(_p95(after_server) * 1000, 3),
                 "mixed_server_p95_ms": round(_p95(mixed_server) * 1000, 3),
@@ -470,20 +628,28 @@ async def test_light_finance_mixed_load_p95_gate(tmp_path: Path) -> None:
                 "baseline_after_p95_ms": round(_p95(after) * 1000, 3),
                 "mixed_core_p95_ms": round(_p95(mixed) * 1000, 3),
                 "regression_ratio": _p95(mixed) / baseline_p95,
-                "warm_status_p95_ms": round(_p95(statuses) * 1000, 3),
-                "calculation_p95_ms": round(_p95(calculations) * 1000, 3),
+                (
+                    "summary_p95_ms" if planning_workload else "warm_status_p95_ms"
+                ): round(_p95(statuses) * 1000, 3),
+                ("detail_p95_ms" if planning_workload else "calculation_p95_ms"): round(
+                    _p95(calculations) * 1000, 3
+                ),
                 "mixed_finance_p95_ms": round(_p95(finance) * 1000, 3),
                 "heavy_worker_validated": False,
                 "reminder_delivery_validated": False,
                 "large_ledger_validated": False,
                 "deployment_hardware_validated": False,
             }
+            if planning is not None:
+                report["planning_inventory_bodies"] = planning["inventory_bodies"]
+                report["planning_context_references"] = planning["context_references"]
+                report["queried_context_rows"] = len(planning["expected_events"])
             (tmp_path / "finance-light-load-results.json").write_text(
                 json.dumps(report, indent=2)
             )
             print(json.dumps(report, sort_keys=True))
             assert _p95(mixed) <= baseline_p95 * 1.10, report
-            assert _p95(statuses) < 0.100, report
+            assert _p95(statuses) < (0.500 if planning_workload else 0.100), report
             assert _p95(calculations) < 0.500, report
     finally:
         stop_load.set()
@@ -511,6 +677,18 @@ async def test_light_finance_mixed_load_p95_gate(tmp_path: Path) -> None:
     reason="Isolated hosted diagnostic only",
 )
 async def test_profile_light_finance_request_cost(tmp_path):
+    await _profile_workload(tmp_path, planning_workload=False)
+
+
+@pytest.mark.skipif(
+    os.getenv("ADMINME_FINANCE_PLANNING_PROFILE") != "1",
+    reason="Isolated hosted accepted-planning diagnostic only",
+)
+async def test_profile_accepted_planning_request_cost(tmp_path):
+    await _profile_workload(tmp_path, planning_workload=True)
+
+
+async def _profile_workload(tmp_path, *, planning_workload):
     context = multiprocessing.get_context("spawn")
     receive, send = context.Pipe(duplex=False)
     listener = socket.socket()
@@ -519,13 +697,16 @@ async def test_profile_light_finance_request_cost(tmp_path):
     listener.listen(128)
     port = listener.getsockname()[1]
     server = context.Process(
-        target=_serve, args=(tmp_path / "profile-instance", listener, send, True)
+        target=_serve,
+        args=(tmp_path / "profile-instance", listener, send, True, planning_workload),
     )
     server.start()
     send.close()
     try:
-        assert await asyncio.to_thread(receive.poll, 45)
-        actor, session = receive.recv()
+        assert await asyncio.to_thread(receive.poll, 120 if planning_workload else 45)
+        binding = receive.recv()
+        actor, session = binding[:2]
+        planning = binding[2] if planning_workload else None
         async with (
             _client(f"http://127.0.0.1:{port}") as finance,
             _client(f"http://127.0.0.1:{port}") as core,
@@ -544,7 +725,7 @@ async def test_profile_light_finance_request_cost(tmp_path):
             async def finance_calls():
                 started = time.perf_counter()
                 for index in range(50):
-                    await _finance_call(finance, actor, session, index + 500)
+                    await _finance_call(finance, actor, session, index + 500, planning)
                     await asyncio.sleep(
                         max(0, started + (index + 1) * 0.1 - time.perf_counter())
                     )
@@ -575,7 +756,12 @@ async def test_profile_light_finance_request_cost(tmp_path):
                 and report["top_self"]
                 and report["domain_cumulative"]
             )
-            print("SYNTHETIC_FINANCE_CPU_PROFILE " + json.dumps(report), flush=True)
+            label = (
+                "SYNTHETIC_PLANNING_CPU_PROFILE"
+                if planning_workload
+                else "SYNTHETIC_FINANCE_CPU_PROFILE"
+            )
+            print(label + " " + json.dumps(report), flush=True)
     finally:
         receive.close()
         listener.close()

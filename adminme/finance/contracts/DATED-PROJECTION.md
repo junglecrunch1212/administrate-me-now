@@ -18,6 +18,31 @@ reported 1,611 local checks, including 780 field comparisons across 60 observed
 native horizons, do not establish a conforming payload, private runtime parity
 or adoption.
 
+The later Books-side frozen local candidate reports canonical size 6,020,614
+bytes (below 8 MiB), all 24 aliases/120 horizons, 3,307 body variants, 38,382
+ordered references and 141 original issues including 49 required. Its independent
+local checker reports 470,138 assertions with no source-parity failure. This is
+reported local producer evidence, not an application import or private runtime
+test. Canonical conformance still rejects six unbound accounting/application
+identity fields and their audience references; none were invented. Two original
+horizon-crossing windows account for 18 source-group/24 alias occurrences. The
+semantic overlap repair is pinned at
+`1323abd5738bf6d1f7d58994e8b40a1b49b94217`: all 20 synthetic inline/shared
+boundary cases and browser acceptance passed. Two replay-render fixture failures
+(`answer_ref` missing from direct-query results) are corrected in the next
+candidate and require its hosted completion. The original performance gate
+still failed at 18.12%, independently of source-window conformance.
+The producer separately reports the overlap delta verified against that exact
+implementation and validator SHA-256
+`7a2c74fa3e4dac7e05e6f07ccbde3f2f362638740032e788897214f14374c0dd`:
+all 24 original crossing-window occurrences and all nonauthority conformance
+checks passed, alongside 12 synthetic interval cases, without mutating the
+6,020,614-byte candidate or its content hash. Full validation still correctly
+rejects the unbound identities. This clears only the local producer overlap
+gate, not current-head hosted CI, resource qualification or runtime acceptance.
+No private payload was transferred to this checkout or hosted CI. Source
+adoption, binding authority and lossless unsupported collections remain open.
+
 The owner-only file-adapter seam requires finance publication processing to be
 enabled and the exact current accepted accounting publication ID/content hash.
 Declared accounting revisions must be a subset of that publication's accepted
