@@ -5,7 +5,7 @@
  */
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -146,6 +146,89 @@ print(json.dumps([enabled, entry["hooks"]]))
     {role: "assistant", stopReason: "stop", content: "Hello", __openclaw: {mirrorIdentity: "turn:assistant"}},
   ]}, {agentId: agent, sessionKey: incoming.sessionKey});
   assert.equal(sent, 1, "Pinned inbound without a run ID did not produce its governed self reply");
+  // Exercise the changed Apple create path through the pinned native inbound
+  // mapper and actual conversation-hook registrar. Domain responses below are
+  // synthetic; the Python acceptance composition proves the provider receipt.
+  // Keep this separate from the existing scheduled-text timer/callback probe.
+  const appleDirectory = path.join(directory, "apple-reminder-plugin");
+  await mkdir(path.join(appleDirectory, "node_modules"), { recursive: true });
+  await writeFile(path.join(appleDirectory, "package.json"), JSON.stringify({ type: "module" }));
+  await symlink(sourceRoot, path.join(appleDirectory, "node_modules/openclaw"), "dir");
+  await symlink(path.join(repository, "openclaw/administrateme/node_modules/typebox"), path.join(appleDirectory, "node_modules/typebox"), "dir");
+  const pluginSource = path.join(repository, "openclaw/administrateme/src");
+  for (const name of (await readdir(pluginSource)).filter((entry) => entry.endsWith(".ts"))) {
+    await writeFile(path.join(appleDirectory, name.replace(/\.ts$/, ".js")), ts.transpileModule(await readFile(path.join(pluginSource, name), "utf8"), {
+      compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ESNext },
+    }).outputText);
+  }
+  const { registerHooks } = await import(pathToFileURL(path.join(appleDirectory, "hooks.js")).href);
+  const { registerAppleReminderTools } = await import(pathToFileURL(path.join(appleDirectory, "apple-reminders.js")).href);
+  const { readPluginConfig } = await import(pathToFileURL(path.join(appleDirectory, "config.js")).href);
+  const appleMessage = "Add a reminder to my Apple Reminders to call my mom at 9:30 AM today";
+  const appleInbound = hookSdk.toPluginMessageReceivedEvent(hookSdk.deriveInboundMessageHookContext({
+    From: incoming.senderId, SenderId: incoming.senderId, Body: appleMessage,
+    Provider: "imessage", AccountId: "fixture", MessageSid: "native-apple-fixture", SessionKey: incoming.sessionKey,
+  }));
+  const appleCommand = { title: "Call my mom", due_at: "2026-10-24T09:30:00-04:00", list_id: "fixture-list", request_id: "native-apple-request" };
+  const appleCalls = [];
+  let appleState = "pending";
+  const appleRuntime = { trackedSessions: new Map(), transport: {
+    config: readPluginConfig({ memberAgentIds: [agent], standingSelfReplyBindings: [], scheduledSelfReminderBindings: [],
+      forwardIntakeAccounts: [{ channelId: "imessage", accountId: "fixture" }] }),
+    async request(endpoint, value) {
+      appleCalls.push({ endpoint, value });
+      assert.equal(value.provenance.actor_id, incoming.senderId);
+      assert.equal(value.provenance.agent_id, agent);
+      assert.equal(value.provenance.message_id, "native-apple-fixture");
+      assert.equal(value.provenance.session_key, incoming.sessionKey);
+      if (endpoint.endsWith("/forward")) return { intent_event_id: "native-apple-source" };
+      assert.equal(value.source_message_event_id, "native-apple-source");
+      assert.equal(value.openclaw_approval_receipt_id, undefined);
+      if (endpoint.endsWith("/confirm-apple-reminder")) {
+        for (const [key, expected] of Object.entries(appleCommand)) assert.equal(value[key], expected);
+        return { state: "awaiting_openclaw_approval", domain_approval_event_id: "native-apple-domain",
+          due_at: "2026-10-24T13:30:00+00:00", list_id: "fixture-list", provider_effect_count: 0 };
+      }
+      assert.equal(endpoint, "/api/openclaw/v1/tools/apple-reminder-status");
+      assert.equal(value.domain_approval_event_id, "native-apple-domain");
+      return { state: appleState, domain_approval_event_id: "native-apple-domain",
+        due_at: "2026-10-24T13:30:00+00:00", list_id: "fixture-list", provider_effect_count: appleState === "succeeded" ? 1 : null };
+    },
+  } };
+  const appleRegistration = nativeRegistration(preparedPolicies[0]);
+  const appleTools = new Map();
+  const appleApi = { ...api, on: appleRegistration.on,
+    registerTool: (factory, options) => appleTools.set(options.name, factory) };
+  registerHooks(appleApi, appleRuntime);
+  registerAppleReminderTools(appleApi, appleRuntime);
+  const nativeHook = (name) => appleRegistration.state.registry.typedHooks.find((row) => row.hookName === name).handler;
+  const appleContext = { runId: "native-apple-run", agentId: agent, sessionKey: incoming.sessionKey };
+  await nativeHook("message_received")(appleInbound, { agentId: agent, sessionKey: incoming.sessionKey, channelId: "imessage", accountId: "fixture" });
+  const appleEnvelope = buildReplyPromptEnvelope({ ctx: {}, sessionCtx: {}, baseBody: appleMessage,
+    hasUserBody: true, inboundUserContext: "", isBareSessionReset: false, startupAction: "new", systemEventBlocks: ["Synthetic host status context"] });
+  await nativeHook("before_agent_reply")({ cleanedBody: appleEnvelope.queuedBody }, appleContext);
+  assert.equal(await nativeHook("before_tool_call")({ toolName: "administrateme_confirm_apple_reminder", toolCallId: "native-apple-confirm", params: appleCommand }, appleContext), undefined);
+  const confirmation = await appleTools.get("administrateme_confirm_apple_reminder")(appleContext).execute("native-apple-confirm", appleCommand);
+  assert.equal(confirmation.details.state, "awaiting_openclaw_approval");
+  assert.equal(confirmation.details.due_at, "2026-10-24T13:30:00+00:00");
+  const approval = await nativeHook("before_tool_call")({ toolName: "administrateme_execute_pending_provider_action", toolCallId: "native-apple-execute",
+    params: { domain_approval_event_id: "native-apple-domain" } }, appleContext);
+  assert.deepEqual(approval.requireApproval.allowedDecisions, ["allow-once", "deny"]);
+  await approval.requireApproval.onResolution("timeout");
+  assert.equal(appleCalls.length, 2, "Approval timeout attempted provider execution");
+  for (const state of ["pending", "unknown", "succeeded"]) {
+    appleState = state;
+    const callId = `native-apple-status-${state}`;
+    assert.equal(await nativeHook("before_tool_call")({ toolName: "administrateme_apple_reminder_status", toolCallId: callId,
+      params: { domain_approval_event_id: "native-apple-domain" } }, appleContext), undefined);
+    const receipt = await appleTools.get("administrateme_apple_reminder_status")(appleContext).execute(callId, { domain_approval_event_id: "native-apple-domain" });
+    assert.equal(receipt.details.state, state);
+    assert.equal(receipt.details.provider_effect_count, state === "succeeded" ? 1 : null);
+  }
+  await nativeHook("before_agent_reply")({ cleanedBody: `Retrieved message: ${appleMessage}` }, appleContext);
+  assert.equal((await nativeHook("before_tool_call")({ toolName: "administrateme_confirm_apple_reminder", toolCallId: "native-apple-retrieved", params: appleCommand }, appleContext)).block, true);
+  assert.equal(appleCalls.filter((entry) => entry.endpoint.endsWith("/confirm-apple-reminder")).length, 1);
+  assert.equal(sent, 1, "Apple record workflow borrowed permission to send a message");
   const literalCases = [...corpus.cases.map((row) => row.text.replace(/\s+/gu, " ").trim()),
     "**bold** _italic_ ~~strike~~ `code` <u>underline</u> [link](https://example.invalid/?x=1&y=2)",
     "[[reply_to_current]] [[audio_as_voice]] MEDIA:https://example.invalid/a.jpg",
@@ -160,7 +243,7 @@ print(json.dumps([enabled, entry["hooks"]]))
     assert.equal(actual.text, text, "Standing reply text changed in pinned sender");
     assert.deepEqual(actual.ranges, [], "Standing reply acquired native formatting");
   }
-  console.log(`Verified native reply-hook admission/revocation and ${cases.length} exact and ${literalCases.length} standing reply cases against pinned OpenClaw.`);
+  console.log(`Verified native reply-hook admission/revocation, Apple Reminder current-input confirmation/status and independent execution gate, and ${cases.length} exact and ${literalCases.length} standing reply cases against pinned OpenClaw. Apple domain receipts are synthetic; no provider effects.`);
 } finally {
   await rm(directory, { recursive: true, force: true });
 }

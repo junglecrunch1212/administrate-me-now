@@ -220,14 +220,19 @@ async def _instruction_source(
     return source
 
 
-@router.post("/service-follow-up")
-async def member_follow_up(
-    body: MemberFollowUpRequest, request: Request
-) -> dict[str, Any]:
-    """Accept one bounded instruction; disclose a receipt, never private work content."""
-    member = seam._session(request, body.provenance)
+async def current_private_instruction(
+    request: Request,
+    provenance: seam.Provenance,
+    source_message_event_id: str,
+    *,
+    required_permission: Literal[
+        "read_context", "prepare_external_actions"
+    ] = "read_context",
+) -> tuple[Any, dict[str, Any]]:
+    """Authenticate one durably captured current native private instruction."""
+    member = seam._session(request, provenance, required_permission=required_permission)
     runtime = seam._runtime(request)
-    p = body.provenance
+    p = provenance
     if (
         member.auth_role != "principal"
         or p.call_kind != "bridge"
@@ -247,7 +252,7 @@ async def member_follow_up(
     current = await runtime.event_log.get_by_idempotency(
         member.tenant_id, f"openclaw-forward:{digest}"
     )
-    if current is None or current["event_id"] != body.source_message_event_id:
+    if current is None or current["event_id"] != source_message_event_id:
         raise HTTPException(
             403, "instruction does not match the current native message"
         )
@@ -258,6 +263,19 @@ async def member_follow_up(
     ).total_seconds()
     if not 0 <= age <= 3600:
         raise HTTPException(403, "current member instruction expired")
+    return member, current
+
+
+@router.post("/service-follow-up")
+async def member_follow_up(
+    body: MemberFollowUpRequest, request: Request
+) -> dict[str, Any]:
+    """Accept one bounded instruction; disclose a receipt, never private work content."""
+    member, current = await current_private_instruction(
+        request, body.provenance, body.source_message_event_id
+    )
+    runtime = seam._runtime(request)
+    p = body.provenance
     context = member.service_context
     # This exact instruction authorizes bounded internal organization. The CoS
     # owns her work under service-self authority, without a delegated-work grant.

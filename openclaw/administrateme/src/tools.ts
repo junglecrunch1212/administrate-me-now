@@ -539,7 +539,7 @@ export function registerTools(api: OpenClawPluginApi, runtime: PluginRuntime): v
     {
       name: "administrateme_execute_pending_provider_action",
       description:
-        "Execute one member-confirmed provider action after this separate OpenClaw allow-once approval.",
+        "Execute one member-confirmed provider action after this separate OpenClaw allow-once approval. For a current private Apple Reminder request, obtain domain_approval_event_id from administrateme_confirm_apple_reminder first. An accepted result only queues execution; use administrateme_apple_reminder_status and claim creation only from terminal succeeded. Never retry an unknown or timed-out outcome with a new request ID.",
       parameters: Type.Object(
         {
           domain_approval_event_id: Type.String({ minLength: 1, maxLength: 240 }),

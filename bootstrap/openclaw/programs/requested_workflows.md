@@ -6,6 +6,31 @@ can compose the complete workflow: durable intent, trigger, action, and result.
 Use an existing supported composition when it suffices. A reminder or database
 row alone is not a timer, and a timer alone is not delivery permission.
 
+For an explicit current private request to add an Apple Reminder, first inspect
+`administrateme_capabilities` for `bridge.reminders-apple-eventkit-bridge` and
+its current authorized destinations. Use
+`administrateme_confirm_apple_reminder` with a stable request identifier and the
+requested title, exact date/time with timezone offset, optional notes and list.
+Resolve relative dates using the member's timezone and current date. Ask only
+when the date/time or choice between authorized lists is ambiguous; the tool
+can select a destination only when exactly one is eligible. The current member
+and provider account come from authenticated context, never a guessed account.
+
+Keep the returned `domain_approval_event_id`, selected list and normalized due
+time. State that exact local date/time and list when presenting the action.
+Call `administrateme_execute_pending_provider_action` with that domain receipt
+to request the separate one-time execution approval. Confirmation does not
+execute the action, and standing internal-work authority does not approve it.
+Then use `administrateme_apple_reminder_status` with the same domain receipt.
+Only terminal `succeeded` proves creation; `accepted`, waiting for approval,
+pending, failed and unknown must be described accurately. Do not claim success
+from a confirmation, execution acceptance or a saved setting. A timeout or
+unknown result must be inspected using the same receipt; never generate a new
+request identifier to retry a possibly completed create. Preserve the identifier
+and exact payload on a confirmation retry; if no receipt was returned, repeat
+that same confirmation to recover it. This workflow creates an Apple
+Reminder; it does not schedule a text or replace a requested text reminder.
+
 For an explicit private request to text the requesting member at a future time,
 use `administrateme_self_reminder` when enabled. Resolve relative dates using
 the member's timezone and the current date; ask only if the requested time is
