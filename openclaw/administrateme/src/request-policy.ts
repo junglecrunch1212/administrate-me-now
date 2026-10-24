@@ -8,7 +8,9 @@ import { approvalRequestFingerprint, canonical } from "./approval.js";
 import { peekReminderInput } from "./self-replies.js";
 import type { PluginRuntime } from "./runtime.js";
 
-const RULE = "current-human-request.apple-reminder-create.v1";
+export const MEMBER_REMINDER_RULE = "current-human-request.apple-reminder-create.v1";
+export const COS_REMINDER_RULE = "current-human-request.cos-reminder-create.v1";
+type RequestRule = typeof MEMBER_REMINDER_RULE | typeof COS_REMINDER_RULE;
 const CONTRACT = "authenticated-request-v1";
 const TOOL = "administrateme_execute_pending_provider_action";
 type Context = { runId?: string | undefined; sessionKey?: string | undefined; agentId?: string | undefined; toolCallId?: string | undefined };
@@ -28,7 +30,7 @@ function secret(runtime: PluginRuntime): string {
   return value;
 }
 
-function validateTicket(runtime: PluginRuntime, candidate: unknown, input: Input): Ticket {
+function validateTicket(runtime: PluginRuntime, candidate: unknown, input: Input, expectedRule: RequestRule): Ticket {
   if (!candidate || typeof candidate !== "object") throw new Error("Request policy evidence unavailable");
   const ticket = candidate as Ticket;
   const { signature, ...body } = ticket;
@@ -40,8 +42,12 @@ function validateTicket(runtime: PluginRuntime, candidate: unknown, input: Input
   if (typeof signature !== "string" || !/^[a-f0-9]{64}$/.test(signature) ||
       !timingSafeEqual(Buffer.from(expected), Buffer.from(signature)) ||
       !ticket.action || createHash("sha256").update(canonical(ticket.action)).digest("hex") !== ticket.action_fingerprint ||
-      ticket.action.provider !== "apple_reminders" || ticket.action.operation !== "create_reminder" || ticket.action.resource_owner !== "requester" ||
-      ticket.contract !== CONTRACT || ticket.rule_id !== RULE ||
+      ticket.action.provider !== "apple_reminders" || ticket.action.operation !== "create_reminder" || ticket.action.resource_owner !== (expectedRule === COS_REMINDER_RULE ? "service-principal:chief-of-staff" : "requester") ||
+      (expectedRule === COS_REMINDER_RULE && (ticket.action.operating_principal !== "service-principal:chief-of-staff" ||
+        !["provider_account_id", "source_id", "list_id"].every((key) => typeof ticket.action[key] === "string" && ticket.action[key]) ||
+        !["device_identity_sha256", "selection_sha256", "write_policy_sha256"].every((key) => /^[a-f0-9]{64}$/.test(String(ticket.action[key]))) ||
+        !Number.isInteger(ticket.action.os_uid) || Number(ticket.action.os_uid) < 0)) ||
+      ticket.contract !== CONTRACT || ticket.rule_id !== expectedRule ||
       ticket.source_event_id !== input.source_message_event_id ||
       input.provenance.agent_id !== agent ||
       !Number.isFinite(issued) || !Number.isFinite(expires) || issued > now || expires <= now || expires - issued > 600_000 ||
@@ -54,9 +60,9 @@ function validateTicket(runtime: PluginRuntime, candidate: unknown, input: Input
   return ticket;
 }
 
-export function rememberRequestAuthorization(runtime: PluginRuntime, result: unknown, input: Input, requested: Record<string, unknown>): void {
+export function rememberRequestAuthorization(runtime: PluginRuntime, result: unknown, input: Input, requested: Record<string, unknown>, expectedRule: RequestRule = MEMBER_REMINDER_RULE): void {
   if (!result || typeof result !== "object" || !("request_authorization" in result)) return;
-  const ticket = validateTicket(runtime, (result as Record<string, unknown>).request_authorization, input);
+  const ticket = validateTicket(runtime, (result as Record<string, unknown>).request_authorization, input, expectedRule);
   if (ticket.action.title !== String(requested.title).trim() ||
       Date.parse(String(ticket.action.due_at)) !== Date.parse(String(requested.due_at)) ||
       ticket.action.notes !== (requested.notes ?? null) ||
@@ -79,7 +85,8 @@ export async function prepareRequestedApproval(runtime: PluginRuntime, toolName:
   if (!context.toolCallId) throw new Error("Current native tool identity is unavailable");
   const input = await peekReminderInput(runtime, context);
   if (!input) throw new Error("Current trusted request is unavailable");
-  validateTicket(runtime, ticket, input);
+  if (ticket.rule_id !== MEMBER_REMINDER_RULE && ticket.rule_id !== COS_REMINDER_RULE) throw new Error("Unsupported current request rule");
+  validateTicket(runtime, ticket, input, ticket.rule_id);
   if (Object.keys(params).some((key) => key !== "domain_approval_event_id")) {
     throw new Error("Request approval parameters cannot be supplied by the model");
   }
@@ -87,7 +94,7 @@ export async function prepareRequestedApproval(runtime: PluginRuntime, toolName:
   const authorization = {
     source_event_id: ticket.source_event_id, request_authorization_event_id: ticket.grounding_event_id,
     domain_approval_event_id: ticket.domain_approval_event_id,
-    action_fingerprint: ticket.action_fingerprint, rule_id: RULE,
+    action_fingerprint: ticket.action_fingerprint, rule_id: ticket.rule_id,
   };
   const receiptId = `ocreq_${randomUUID()}`;
   const fingerprint = approvalRequestFingerprint(updated);

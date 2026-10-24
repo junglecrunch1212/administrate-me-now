@@ -3862,7 +3862,7 @@
     "missing_source_candidate_cells": [],
     "object_lifecycles": 28,
     "source_candidate_cells": 143,
-    "technical_event_schemas": 383,
+    "technical_event_schemas": 384,
     "technical_event_types": 302,
     "uncataloged_event_types": [],
     "unproved_exact_lifecycle_transitions": [],
@@ -10346,7 +10346,10 @@
           "type": "string"
         },
         "rule_id": {
-          "const": "current-human-request.apple-reminder-create.v1",
+          "enum": [
+            "current-human-request.apple-reminder-create.v1",
+            "current-human-request.cos-reminder-create.v1"
+          ],
           "title": "Rule Id",
           "type": "string"
         },
@@ -15988,6 +15991,120 @@
         "attempted_at"
       ],
       "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "external_sync.write_attempted",
+      "family": "external_write",
+      "properties": {
+        "attempted_at": {
+          "format": "date-time",
+          "title": "Attempted At",
+          "type": "string"
+        },
+        "automatic_retry": {
+          "const": false,
+          "default": false,
+          "title": "Automatic Retry",
+          "type": "boolean"
+        },
+        "command_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Command Event Id",
+          "type": "string"
+        },
+        "command_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Command Id",
+          "type": "string"
+        },
+        "domain_approval_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Domain Approval Event Id",
+          "type": "string"
+        },
+        "list_id": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "List Id",
+          "type": "string"
+        },
+        "member_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Member Id",
+          "type": "string"
+        },
+        "openclaw_approval_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Openclaw Approval Event Id",
+          "type": "string"
+        },
+        "operating_principal": {
+          "const": "service-principal:chief-of-staff",
+          "title": "Operating Principal",
+          "type": "string"
+        },
+        "operation": {
+          "const": "create_reminder",
+          "title": "Operation",
+          "type": "string"
+        },
+        "provider": {
+          "const": "apple_reminders",
+          "title": "Provider",
+          "type": "string"
+        },
+        "provider_account_id": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Provider Account Id",
+          "type": "string"
+        },
+        "request_fingerprint": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Request Fingerprint",
+          "type": "string"
+        },
+        "resource_owner": {
+          "const": "service-principal:chief-of-staff",
+          "title": "Resource Owner",
+          "type": "string"
+        },
+        "selection_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Selection Sha256",
+          "type": "string"
+        },
+        "source_id": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "Source Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "command_id",
+        "command_event_id",
+        "member_id",
+        "provider",
+        "provider_account_id",
+        "operation",
+        "request_fingerprint",
+        "domain_approval_event_id",
+        "openclaw_approval_event_id",
+        "source_id",
+        "list_id",
+        "selection_sha256",
+        "resource_owner",
+        "operating_principal",
+        "attempted_at"
+      ],
+      "schema_version": 2
     },
     {
       "additional_properties": false,
@@ -30293,7 +30410,10 @@
         "rule_id": {
           "anyOf": [
             {
-              "const": "current-human-request.apple-reminder-create.v1",
+              "enum": [
+                "current-human-request.apple-reminder-create.v1",
+                "current-human-request.cos-reminder-create.v1"
+              ],
               "type": "string"
             },
             {

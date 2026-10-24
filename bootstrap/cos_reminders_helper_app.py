@@ -26,7 +26,9 @@ from bootstrap import contracts, source_identity
 from bootstrap.contracts import repository_root
 
 BUNDLE_IDENTIFIER = "com.administrateme.cos-reminders-helper"
+WRITE_BUNDLE_IDENTIFIER = "com.administrateme.cos-reminders-writer"
 HELPER_APP_CONTRACT = "cos-reminders-native-app-v1"
+HELPER_WRITE_APP_CONTRACT = "cos-reminders-native-app-v2"
 EXECUTABLE = "CoSRemindersHelper"
 LAUNCHER_SOURCE = "bootstrap/native/cos_reminders_launcher.m"
 WORKER_SOURCE = "bootstrap/cos_reminders_native_worker.py"
@@ -41,6 +43,11 @@ BUILD_SOURCES = (
 USAGE_DESCRIPTION = (
     "The Chief of Staff reads only the authorized Reminders list for private "
     "household coordination. It does not create, change, or send reminders."
+)
+
+WRITE_USAGE_DESCRIPTION = (
+    "The Chief of Staff reads and creates reminders in the authorized household "
+    "work list, only for currently authorized requests."
 )
 
 
@@ -98,10 +105,14 @@ def _reviewed_sources(root: Path, expected_commit: str | None) -> dict[str, byte
     return payloads
 
 
-def _component_manifest(sources: dict[str, bytes]) -> dict[str, object]:
+def _component_manifest(
+    sources: dict[str, bytes], *, write_enabled: bool = False
+) -> dict[str, object]:
     return {
-        "contract": HELPER_APP_CONTRACT,
-        "bundle_identifier": BUNDLE_IDENTIFIER,
+        "contract": HELPER_WRITE_APP_CONTRACT if write_enabled else HELPER_APP_CONTRACT,
+        "bundle_identifier": WRITE_BUNDLE_IDENTIFIER
+        if write_enabled
+        else BUNDLE_IDENTIFIER,
         "python_abi": "cpython-3.14",
         "native_in_process": True,
         "sources": {
@@ -111,19 +122,29 @@ def _component_manifest(sources: dict[str, bytes]) -> dict[str, object]:
     }
 
 
-def _info() -> dict[str, object]:
+def _info(*, write_enabled: bool = False) -> dict[str, object]:
     return {
-        "CFBundleIdentifier": BUNDLE_IDENTIFIER,
-        "CFBundleName": "CoS Reminders Helper",
-        "CFBundleDisplayName": "CoS Reminders Helper",
+        "CFBundleIdentifier": WRITE_BUNDLE_IDENTIFIER
+        if write_enabled
+        else BUNDLE_IDENTIFIER,
+        "CFBundleName": "CoS Reminders Writer"
+        if write_enabled
+        else "CoS Reminders Helper",
+        "CFBundleDisplayName": "CoS Reminders Writer"
+        if write_enabled
+        else "CoS Reminders Helper",
         "CFBundleExecutable": EXECUTABLE,
         "CFBundlePackageType": "APPL",
-        "CFBundleVersion": "1",
-        "CFBundleShortVersionString": "1.0",
+        "CFBundleVersion": "2" if write_enabled else "1",
+        "CFBundleShortVersionString": "2.0" if write_enabled else "1.0",
         "LSMinimumSystemVersion": "14.0",
         "LSUIElement": True,
-        "NSRemindersFullAccessUsageDescription": USAGE_DESCRIPTION,
-        "NSRemindersUsageDescription": USAGE_DESCRIPTION,
+        "NSRemindersFullAccessUsageDescription": WRITE_USAGE_DESCRIPTION
+        if write_enabled
+        else USAGE_DESCRIPTION,
+        "NSRemindersUsageDescription": WRITE_USAGE_DESCRIPTION
+        if write_enabled
+        else USAGE_DESCRIPTION,
     }
 
 
@@ -176,14 +197,16 @@ def _verify_app(app: Path, manifest: dict[str, object]) -> dict[str, str]:
         actual_info = plistlib.loads((app / "Contents/Info.plist").read_bytes())
     except (OSError, ValueError, plistlib.InvalidFileException) as exc:
         raise RuntimeError("helper artifact metadata is invalid") from exc
-    if actual_manifest != manifest or actual_info != _info():
+    if actual_manifest != manifest or actual_info != _info(
+        write_enabled=manifest.get("contract") == HELPER_WRITE_APP_CONTRACT
+    ):
         raise RuntimeError("existing helper differs; choose a new .app destination")
     digest = helper_artifact_sha256(app)
     _run(["/usr/bin/codesign", "--verify", "--deep", "--strict", str(app)])
     return {
         "app_path": str(app),
         "artifact_sha256": digest,
-        "bundle_identifier": BUNDLE_IDENTIFIER,
+        "bundle_identifier": str(manifest["bundle_identifier"]),
     }
 
 
@@ -196,9 +219,14 @@ def verify_helper_app(app: Path) -> dict[str, str]:
             (app / "Contents/Resources/helper-manifest.json").read_bytes()
         )
         sources = manifest["sources"]
+        contract = manifest.get("contract")
+        if contract not in {HELPER_APP_CONTRACT, HELPER_WRITE_APP_CONTRACT}:
+            raise ValueError("unsupported helper contract")
         expected = {
-            "contract": HELPER_APP_CONTRACT,
-            "bundle_identifier": BUNDLE_IDENTIFIER,
+            "contract": contract,
+            "bundle_identifier": WRITE_BUNDLE_IDENTIFIER
+            if contract == HELPER_WRITE_APP_CONTRACT
+            else BUNDLE_IDENTIFIER,
             "python_abi": "cpython-3.14",
             "native_in_process": True,
             "sources": sources,
@@ -223,7 +251,11 @@ def verify_helper_app(app: Path) -> dict[str, str]:
 
 
 def _build_app(
-    destination: Path, sources: dict[str, bytes], *, include_dir: Path
+    destination: Path,
+    sources: dict[str, bytes],
+    *,
+    include_dir: Path,
+    write_enabled: bool = False,
 ) -> dict[str, str]:
     """Internal packaging seam for hosted immutable-fixture tests, never CLI input."""
     if (
@@ -249,7 +281,7 @@ def _build_app(
         raise RuntimeError(
             "helper destination parent must already exist and be owner controlled"
         )
-    manifest = _component_manifest(sources)
+    manifest = _component_manifest(sources, write_enabled=write_enabled)
     if os.path.lexists(destination):
         return _verify_app(destination, manifest)
     # Sign only the new staged bundle. The published app is never replaced or re-signed.
@@ -268,7 +300,7 @@ def _build_app(
             json.dumps(manifest, sort_keys=True, indent=2) + "\n"
         )
         (staged / "Contents/Info.plist").write_bytes(
-            plistlib.dumps(_info(), sort_keys=True)
+            plistlib.dumps(_info(write_enabled=write_enabled), sort_keys=True)
         )
         executable = macos / EXECUTABLE
         _run(
@@ -281,6 +313,7 @@ def _build_app(
                 "-Wextra",
                 "-Werror",
                 "-Wno-deprecated-declarations",
+                *(["-DADMINME_COS_REMINDERS_WRITE=1"] if write_enabled else []),
                 "-mmacosx-version-min=14.0",
                 "-I",
                 str(include_dir),
@@ -320,7 +353,11 @@ def _build_app(
 
 
 def build_cos_reminders_helper_app(
-    destination: Path, *, root: Path | None = None, expected_commit: str | None = None
+    destination: Path,
+    *,
+    root: Path | None = None,
+    expected_commit: str | None = None,
+    write_enabled: bool = False,
 ) -> dict[str, str]:
     """Install/reuse exact protected helper bytes, without central runtime edits."""
     source_root = root or repository_root()
@@ -336,7 +373,9 @@ def build_cos_reminders_helper_app(
     include = sysconfig.get_path("include")
     if not include or not (Path(include) / "Python.h").is_file():
         raise RuntimeError("reviewed CPython headers are unavailable")
-    return _build_app(destination, sources, include_dir=Path(include))
+    return _build_app(
+        destination, sources, include_dir=Path(include), write_enabled=write_enabled
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -344,12 +383,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--destination", required=True, type=Path)
     parser.add_argument("--source", type=Path, default=repository_root())
     parser.add_argument("--expected-commit", required=True)
+    parser.add_argument(
+        "--enable-writes",
+        action="store_true",
+        help="install the separately reviewed create-capable component; preserve any existing helper",
+    )
     arguments = parser.parse_args(argv)
     try:
         receipt = build_cos_reminders_helper_app(
             arguments.destination,
             root=arguments.source,
             expected_commit=arguments.expected_commit,
+            write_enabled=arguments.enable_writes,
         )
     except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
         print(

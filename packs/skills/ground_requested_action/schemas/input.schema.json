@@ -21,46 +21,126 @@
       "type": "string"
     },
     "action": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "provider",
-        "operation",
-        "resource_owner",
-        "title",
-        "due_at",
-        "list_id",
-        "selected_by_policy"
-      ],
-      "properties": {
-        "provider": {
-          "const": "apple_reminders"
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "provider",
+            "operation",
+            "resource_owner",
+            "title",
+            "due_at",
+            "list_id",
+            "selected_by_policy"
+          ],
+          "properties": {
+            "provider": {
+              "const": "apple_reminders"
+            },
+            "operation": {
+              "const": "create_reminder"
+            },
+            "resource_owner": {
+              "const": "requester"
+            },
+            "title": {
+              "type": "string"
+            },
+            "notes": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "due_at": {
+              "type": "string"
+            },
+            "list_id": {
+              "type": "string"
+            },
+            "selected_by_policy": {
+              "type": "boolean"
+            }
+          }
         },
-        "operation": {
-          "const": "create_reminder"
-        },
-        "resource_owner": {
-          "const": "requester"
-        },
-        "title": {
-          "type": "string"
-        },
-        "notes": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "due_at": {
-          "type": "string"
-        },
-        "list_id": {
-          "type": "string"
-        },
-        "selected_by_policy": {
-          "type": "boolean"
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "provider",
+            "operation",
+            "resource_owner",
+            "title",
+            "due_at",
+            "list_id",
+            "selected_by_policy",
+            "operating_principal",
+            "provider_account_id",
+            "source_id",
+            "device_identity_sha256",
+            "selection_sha256",
+            "write_policy_sha256",
+            "os_uid"
+          ],
+          "properties": {
+            "provider": {
+              "const": "apple_reminders"
+            },
+            "operation": {
+              "const": "create_reminder"
+            },
+            "resource_owner": {
+              "const": "service-principal:chief-of-staff"
+            },
+            "title": {
+              "type": "string"
+            },
+            "notes": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "due_at": {
+              "type": "string"
+            },
+            "list_id": {
+              "type": "string"
+            },
+            "selected_by_policy": {
+              "type": "boolean"
+            },
+            "operating_principal": {
+              "const": "service-principal:chief-of-staff"
+            },
+            "provider_account_id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "source_id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "device_identity_sha256": {
+              "type": "string",
+              "minLength": 1
+            },
+            "selection_sha256": {
+              "type": "string",
+              "minLength": 1
+            },
+            "write_policy_sha256": {
+              "type": "string",
+              "minLength": 1
+            },
+            "os_uid": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
         }
-      }
+      ]
     }
   }
 }

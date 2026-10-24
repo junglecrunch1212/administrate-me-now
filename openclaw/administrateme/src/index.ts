@@ -10,6 +10,7 @@ import { registerWorkstationBrowserHooks } from "./workstation-browser-hooks.js"
 import { registerWorkstationInventory } from "./workstation.js";
 import { registerWorkstationWorkTool, registerWorkstationWorkHooks } from "./workstation-work.js";
 import { registerMemberWorkTool } from "./member-work.js";
+import { registerCoSReminderTools } from "./cos-reminders.js";
 import { registerAppleReminderTools } from "./apple-reminders.js";
 import { registerSelfReminderTools } from "./self-reminders.js";
 import { registerServicePrivateTools, registerServiceWorkGateway } from "./service-private.js";
@@ -44,6 +45,7 @@ export default definePluginEntry({
     registerTools(api, runtime);
     registerMemberWorkTool(api, runtime);
     registerAppleReminderTools(api, runtime);
+    registerCoSReminderTools(api, runtime);
     registerSelfReminderTools(api, runtime);
     registerServicePrivateTools(api, runtime);
     registerWorkstationInventory(api, runtime);

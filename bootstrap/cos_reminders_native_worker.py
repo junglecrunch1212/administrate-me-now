@@ -4,7 +4,8 @@
 
 This file is copied into the signed component. It must not import its controller
 from the selected central release: setup precedes central-client deployment.
-Only the existing exact-list EventKit reader is imported after identity checks.
+Exact-list EventKit operations are imported only after identity checks. A create
+additionally requires the separately reviewed version-two write component.
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ from pathlib import Path
 from typing import Any
 
 BUNDLE_ID = "com.administrateme.cos-reminders-helper"
+WRITE_BUNDLE_ID = "com.administrateme.cos-reminders-writer"
 REQUEST_KEYS = frozenset(
     {
         "contract",
@@ -142,13 +144,20 @@ def validate_request(value: dict[str, Any], *, now_ms: int | None = None) -> Non
     elif operation == "inspect":
         if set(payload) != {"lookup"} or not isinstance(payload["lookup"], dict):
             raise ValueError("exact lookup required")
-    elif operation == "read":
+    elif operation in {"read", "inspect_write", "create_reminder"}:
         if (
-            set(payload) != {"selection"}
+            set(payload)
+            != (
+                {"selection", "command"}
+                if operation == "create_reminder"
+                else {"selection"}
+            )
             or not isinstance(payload["selection"], dict)
             or set(payload["selection"]) != SELECTION_FIELDS
         ):
             raise ValueError("exact source selection required")
+        if operation == "create_reminder" and not isinstance(payload["command"], dict):
+            raise ValueError("typed creation command required")
     else:
         raise ValueError("unsupported operation")
 
@@ -188,6 +197,18 @@ def native_identity(request: dict[str, Any]) -> dict[str, Any]:
 
     bundle = NSBundle.mainBundle()
     app = Path(str(bundle.bundlePath()))
+    manifest = json.loads(
+        (app / "Contents/Resources/helper-manifest.json").read_bytes()
+    )
+    expected_bundle_id = {
+        "cos-reminders-native-app-v1": BUNDLE_ID,
+        "cos-reminders-native-app-v2": WRITE_BUNDLE_ID,
+    }.get(manifest.get("contract"))
+    if (
+        expected_bundle_id is None
+        or manifest.get("bundle_identifier") != expected_bundle_id
+    ):
+        raise PermissionError("Native component contract and bundle identity differ")
     executable = str(bundle.executablePath())
     buffer = ctypes.create_string_buffer(4096)
     library = ctypes.CDLL("/usr/lib/libproc.dylib")
@@ -196,7 +217,7 @@ def native_identity(request: dict[str, Any]) -> dict[str, Any]:
     if library.proc_pidpath(os.getpid(), buffer, len(buffer)) <= 0:
         raise PermissionError("native executable unavailable")
     if (
-        str(bundle.bundleIdentifier()) != BUNDLE_ID
+        str(bundle.bundleIdentifier()) != expected_bundle_id
         or executable != os.fsdecode(buffer.value)
         or not executable.startswith(str(app / "Contents/MacOS") + "/")
         or not bundle.objectForInfoDictionaryKey_(
@@ -235,7 +256,7 @@ def native_identity(request: dict[str, Any]) -> dict[str, Any]:
     return {
         "app_path": str(app),
         "artifact_sha256": artifact_sha256(app),
-        "bundle_identifier": BUNDLE_ID,
+        "bundle_identifier": expected_bundle_id,
         "native_executable": executable,
         "native_pid": os.getpid(),
         **{
@@ -295,7 +316,7 @@ def perform(request: dict[str, Any], identity: dict[str, Any]) -> dict[str, Any]
     if operation == "inspect":
         lookup = CoSRemindersLookup.model_validate(request["payload"]["lookup"])
         result["resource"] = NativeRemindersReader().inspect_selection(lookup)
-    elif operation == "read":
+    elif operation in {"read", "inspect_write", "create_reminder"}:
         selected = dict(request["payload"]["selection"])
         # a10 and the helper client release share the exact provider read contract.
         # The latter additionally pins this component in configuration, never in the
@@ -311,6 +332,38 @@ def perform(request: dict[str, Any], identity: dict[str, Any]) -> dict[str, Any]
             request["os_uid"],
         ):
             raise PermissionError("selected source belongs to another work computer")
+        if operation in {"inspect_write", "create_reminder"}:
+            manifest = json.loads(
+                (
+                    Path(identity["app_path"])
+                    / "Contents/Resources/helper-manifest.json"
+                ).read_bytes()
+            )
+            if (
+                manifest.get("contract") != "cos-reminders-native-app-v2"
+                or identity["bundle_identifier"] != WRITE_BUNDLE_ID
+            ):
+                raise PermissionError("This installed helper only supports reads")
+            from adminme.adapters import cos_reminders_write as writes
+
+            if (
+                Path(writes.__file__).resolve()
+                != Path(request["release_root"])
+                / "adminme/adapters/cos_reminders_write.py"
+            ):
+                raise PermissionError("Native writer release differs")
+            if operation == "inspect_write":
+                result["write_source"] = writes.NativeRemindersWriter().inspect(
+                    selection
+                )
+                return result
+            command = writes.CoSReminderCreate.model_validate(
+                request["payload"]["command"]
+            )
+            result["write_result"] = writes.NativeRemindersWriter().create(
+                selection, command
+            )
+            return result
         snapshot = NativeRemindersReader().read(selection)
         if (
             snapshot.source_id != selection.source_id
