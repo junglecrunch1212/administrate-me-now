@@ -287,6 +287,33 @@ def test_one_task_continues_across_real_channels_with_one_terminal_effect(
                 client.portal.call(_events, runtime, "external_sync.write_requested")
                 == []
             )
+            from adminme.products.openclaw.reminder_choice_authorization import (
+                historical_choice_domain_matches,
+            )
+
+            domain = client.portal.call(
+                runtime.event_log.get, receipt["domain_approval_event_id"]
+            )
+            grounded = client.portal.call(
+                runtime.event_log.get,
+                receipt["request_authorization"]["grounding_event_id"],
+            )
+            # Creation targets the exact selected list in the shared production
+            # confirmer; it is neither a null target nor an existing item.
+            assert domain["payload"]["target_external_id"] == LIST
+            assert client.portal.call(
+                historical_choice_domain_matches, runtime.event_log, domain, grounded
+            )
+            changed_target = {
+                **domain,
+                "payload": {**domain["payload"], "target_external_id": "another-list"},
+            }
+            assert not client.portal.call(
+                historical_choice_domain_matches,
+                runtime.event_log,
+                changed_target,
+                grounded,
+            )
             execution = policy_receipt(client, fresh, receipt)
             accepted = client.post(EXECUTE, headers=AUTH, json=execution)
             assert accepted.status_code == 200, accepted.text

@@ -392,7 +392,7 @@ async def historical_choice_domain_matches(
             and decision["provider"] == "apple_reminders"
             and decision["operation"] == "create_reminder"
             and decision["provider_account_id"] == pending.provider_account_id
-            and decision.get("target_external_id") is None
+            and decision.get("target_external_id") == p.action["list_id"]
             and decision.get("expected_provider_revision") is None
             and command["title"] == pending.title
             and command.get("notes") == pending.notes

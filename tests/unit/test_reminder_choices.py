@@ -98,13 +98,16 @@ def test_lowercase_list_selection_matches_native_policy_without_casefold_expansi
     ]
     pending = offered(choices=choices)
     if accepted:
-        assert selected_choice(
-            pending,
-            answer,
-            provider_account_id=pending.provider_account_id,
-            current_choices=pending.choices,
-            now=NOW,
-        ) == pending.choices[0]
+        assert (
+            selected_choice(
+                pending,
+                answer,
+                provider_account_id=pending.provider_account_id,
+                current_choices=pending.choices,
+                now=NOW,
+            )
+            == pending.choices[0]
+        )
     else:
         with pytest.raises(HTTPException) as caught:
             selected_choice(
