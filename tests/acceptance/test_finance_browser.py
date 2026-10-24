@@ -272,13 +272,22 @@ async def test_owner_saves_goal_and_preference_then_reloads(tmp_path):
                 )
                 await evaluate("scrollTo(0, 0)")
                 await asyncio.sleep(0.1)
-                assert await evaluate(
-                    "document.documentElement.scrollWidth <= innerWidth"
-                ), name
                 shot = await call("Page.captureScreenshot", {"format": "png"})
                 (dashboard_output / f"finance-books-{name}.png").write_bytes(
                     base64.b64decode(shot["data"])
                 )
+                fits = await evaluate(
+                    "document.documentElement.scrollWidth <= innerWidth"
+                )
+                if not fits:
+                    overflow = await evaluate("""Array.from(document.querySelectorAll('body *')).map(e => {
+                      const r = e.getBoundingClientRect();
+                      return {tag:e.tagName, class:e.className, left:r.left, right:r.right, width:r.width, height:r.height, text:e.textContent.slice(0,120)};
+                    }).filter(r => r.width > 0 && r.height > 0 && (r.right > innerWidth + 1 || r.left < -1)).slice(-80)""")
+                    (
+                        dashboard_output / f"finance-books-{name}-overflow.json"
+                    ).write_text(json.dumps(overflow, indent=2))
+                    raise AssertionError(f"{name} page overflow: {overflow}")
             await call(
                 "Emulation.setDeviceMetricsOverride",
                 {
