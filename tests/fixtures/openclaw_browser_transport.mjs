@@ -40,7 +40,7 @@ export async function startBrowserTransport({ directory, state, relayPort }) {
       if (frame.method === "Fetch.requestPaused" && frame.sessionId === rootSession) {
         try {
           assert.equal(frame.params.request.url, url, "No outside browser navigation is permitted by the fixture");
-          const html = '<!doctype html><html><head><title>Synthetic CoS workspace</title></head><body><span id="account">cos@example.invalid</span><span id="workspace">Synthetic household</span><main>Review the garage plan on Friday.</main></body></html>';
+          const html = '<!doctype html><html><head><title>Synthetic CoS workspace</title><link rel="icon" href="data:,"></head><body><span id="account">cos@example.invalid</span><span id="workspace">Synthetic household</span><main>Review the garage plan on Friday.</main></body></html>';
           await send("Fetch.fulfillRequest", { requestId: frame.params.requestId, responseCode: 200,
             responseHeaders: [{ name: "Content-Type", value: "text/html" }], body: Buffer.from(html).toString("base64") }, rootSession);
         } catch (error) { errors.push(error.message); await send("Fetch.failRequest", { requestId: frame.params.requestId, errorReason: "BlockedByClient" }, rootSession); }
