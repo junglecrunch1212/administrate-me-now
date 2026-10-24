@@ -241,7 +241,9 @@ async def test_native_resource_qualification(tmp_path, workload):
         "",
         "hosted-correctness-only",
     }
-    output = await native_run(tmp_path, workload, qualification=True)
+    output = await asyncio.wait_for(
+        native_run(tmp_path, workload, qualification=True), 1800
+    )
     summary, raw = load_evidence(output)
     verdict = evaluate(
         summary, raw, **identity(), environment=os.environ["FINANCE_NATIVE_ENVIRONMENT"]

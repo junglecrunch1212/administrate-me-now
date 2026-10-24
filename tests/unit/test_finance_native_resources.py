@@ -19,6 +19,12 @@ class Buffer:
     def __init__(self):
         self.frames = []
 
+    def poll(self, timeout=0):
+        return bool(self.frames)
+
+    def close(self):
+        pass
+
     def send_bytes(self, frame):
         self.frames.append(frame)
 
@@ -313,3 +319,45 @@ async def test_expired_watchdog_does_not_prevent_owned_cleanup(tmp_path):
     assert not result["whole_os_process_tree_coverage_proven"]
     m.process.join.assert_called_once()
     m.wire.close.assert_called_once()
+    m.stop.set.assert_not_called()
+    m.stop.close.assert_called_once()
+
+
+def test_owned_stop_is_single_frame_and_never_waits_for_dead_worker():
+    sender, receiver = wire_pair()
+    stop = native.StopSender(sender)
+    child = native.StopReceiver(receiver)
+    assert not child.is_set()
+    stop.set()
+    stop.set()
+    assert len(sender.connection.frames) == 1
+    assert child.is_set()
+    assert not sender.connection.frames
+    stop.close()
+    child.close()
+
+
+def test_dead_owned_stop_pipe_is_terminal_without_fallback():
+    wire = Mock()
+    wire.send.side_effect = BrokenPipeError()
+    stop = native.StopSender(wire)
+    stop.set()
+    stop.set()
+    wire.send.assert_called_once_with({"stop": True})
+
+
+def test_each_darwin_peak_must_cover_current_rss():
+    for peaks in ((1, 8192), (8192, 1)):
+        with pytest.raises(native.EvidenceError, match="RSS"):
+            native.metric_record(0, 0, 4096, *peaks)
+
+
+def test_three_registered_children_bound_including_coordinator_and_spawn_tracker(
+    tmp_path,
+):
+    registry = native.Registry(tmp_path, 49152, IDENTITY)
+    registry.members = [member(str(i)) for i in range(3)]
+    registry.context = Mock()
+    with pytest.raises(native.EvidenceError, match="process cap"):
+        registry.spawn("worker")
+    registry.context.Process.assert_not_called()

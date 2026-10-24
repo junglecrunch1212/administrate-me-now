@@ -139,7 +139,20 @@ def evidence(*, workload="light", latency=6, outlier=None, cpu=0.2, growth=0, pe
         "all_registered_processes_stopped": True,
         "registered_coverage_complete": True,
         "errors": [],
-        "members": [{"birth": m["birth"], "exitcode": 0} for m in members],
+        "members": [
+            {
+                "birth": m["birth"],
+                "pid": m["pid"],
+                "target": m["target"],
+                "exitcode": 0,
+                "samples": sum(
+                    row.get("birth") == m["birth"]
+                    and row.get("record", {}).get("kind") in {"sample", "terminal"}
+                    for row in raw["lifecycle"]
+                ),
+            }
+            for m in members
+        ],
     }
     raw["lifecycle"].append({"kind": "cleanup", **summary["cleanup"]})
     return summary, raw
@@ -228,6 +241,7 @@ def valid():
         "queue",
         "startup_peak",
         "retention",
+        "lifecycle_count",
     ],
 )
 def test_incomplete_or_failed_evidence_never_passes(valid, defect):
@@ -264,6 +278,8 @@ def test_incomplete_or_failed_evidence_never_passes(valid, defect):
         raw["core"][100]["queue_ms"] = 999
     elif defect == "startup_peak":
         raw["lifecycle"][6]["record"]["metrics"]["peak_rss_bytes"] = None
+    elif defect == "lifecycle_count":
+        summary["cleanup"]["members"][0]["samples"] += 1
     elif defect == "retention":
         summary["errors"].append("retention failed")
     result = evaluate((summary, raw))

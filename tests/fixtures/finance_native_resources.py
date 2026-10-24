@@ -25,7 +25,9 @@ FRAME_LIMIT = 8192
 WORK_LIMIT = 4 * 1024 * 1024
 SAMPLE_SECONDS = 0.1
 MAX_GAP_SECONDS = 2.0
-MAX_PROCESSES = 5
+MAX_PROCESSES = (
+    3  # Plus the coordinator and standard spawn tracker: five expected live processes.
+)
 WALL_SECONDS = 180
 CPU_SECONDS = 60
 RSS_BYTES = 512 * 1024 * 1024
@@ -97,6 +99,50 @@ class Wire:
         self.connection.close()
 
 
+class StopSender:
+    """One authenticated small frame; no shared mutex or dead-child acknowledgement."""
+
+    def __init__(self, wire):
+        self.wire = wire
+        self.sent = False
+
+    def set(self):
+        if not self.sent:
+            self.sent = True
+            try:
+                self.wire.send({"stop": True})
+            except (OSError, EOFError):
+                pass  # The owned child may already have exited.
+
+    def close(self):
+        self.wire.close()
+
+
+class StopReceiver:
+    def __init__(self, wire):
+        self.wire = wire
+        self.local = threading.Event()
+        self.lock = threading.Lock()
+
+    def set(self):
+        self.local.set()
+
+    def is_set(self):
+        with self.lock:
+            if not self.local.is_set() and self.wire.poll():
+                try:
+                    command = self.wire.recv()
+                except EOFError:
+                    command = {"stop": True}  # Parent closure stops this owned child.
+                if command != {"stop": True}:
+                    raise EvidenceError("invalid owned stop command")
+                self.local.set()
+            return self.local.is_set()
+
+    def close(self):
+        self.wire.close()
+
+
 class _TimeValue(ctypes.Structure):
     _fields_ = [("seconds", ctypes.c_int), ("microseconds", ctypes.c_int)]
 
@@ -157,7 +203,7 @@ def metric_record(user_seconds, system_seconds, rss_bytes, peak_bytes, mach_peak
         for value in numbers
     ):
         raise EvidenceError("invalid self resource counter")
-    if any(type(value) is not int for value in numbers[2:]) or rss_bytes > max(
+    if any(type(value) is not int for value in numbers[2:]) or rss_bytes > min(
         peak_bytes, mach_peak_bytes
     ):
         raise EvidenceError("invalid RSS units or counters")
@@ -247,12 +293,13 @@ def _entry(
     identity,
     metrics_connection,
     work_connection,
-    stop,
+    stop_connection,
     wall_seconds,
 ):
     """Only child self APIs are called here, never in the parent/operational host."""
     metrics = Wire(metrics_connection, key, birth, "metrics", "child")
     work = Wire(work_connection, key, birth, "work", "child", WORK_LIMIT)
+    stop = StopReceiver(Wire(stop_connection, key, birth, "stop", "child"))
     faults: list[str] = []
     done = threading.Event()
     sampler = None
@@ -341,7 +388,9 @@ def _entry(
             for index in range(0, len(allocation), 4096):
                 allocation[index] = 1
             work.send({"worker_ready": True})
-            stop.wait(10)
+            deadline = time.monotonic() + 10
+            while not stop.is_set() and time.monotonic() < deadline:
+                time.sleep(0.02)
         elif target == "failure":
             raise RuntimeError("synthetic target failure")
         else:
@@ -373,6 +422,7 @@ def _entry(
         )
         metrics.close()
         work.close()
+        stop.close()
 
 
 @dataclass
@@ -441,7 +491,7 @@ class Member:
         if any(
             type(value[key]) is not int
             for key in ("rss_bytes", "peak_rss_bytes", "mach_peak_rss_bytes")
-        ) or value["rss_bytes"] > max(
+        ) or value["rss_bytes"] > min(
             value["peak_rss_bytes"], value["mach_peak_rss_bytes"]
         ):
             raise EvidenceError("invalid RSS units or counters")
@@ -548,7 +598,7 @@ class Registry:
         birth, key = uuid.uuid4().hex, os.urandom(32)
         parent_metrics, child_metrics = self.context.Pipe()
         parent_work, child_work = self.context.Pipe()
-        stop = self.context.Event()
+        child_stop, parent_stop = self.context.Pipe(duplex=False)
         process = self.context.Process(
             target=_entry,
             args=(
@@ -561,13 +611,14 @@ class Registry:
                 self.identity,
                 child_metrics,
                 child_work,
-                stop,
+                child_stop,
                 self.wall_seconds,
             ),
         )
         process.start()
         child_metrics.close()
         child_work.close()
+        child_stop.close()
         assert process.pid is not None
         member = Member(
             birth,
@@ -577,7 +628,7 @@ class Registry:
             process,
             Wire(parent_metrics, key, birth, "metrics", "parent"),
             Wire(parent_work, key, birth, "work", "parent", WORK_LIMIT),
-            stop,
+            StopSender(Wire(parent_stop, key, birth, "stop", "parent")),
         )
         self.members.append(member)
         self._retain(
@@ -674,7 +725,8 @@ class Registry:
         import asyncio
 
         for member in self.members:
-            member.stop.set()
+            if member.process.is_alive():
+                member.stop.set()
             if member.target in {"core", "finance"} and member.process.is_alive():
                 try:
                     member.work.send(None)
@@ -717,4 +769,5 @@ class Registry:
             for member in self.members:
                 member.wire.close()
                 member.work.close()
+                member.stop.close()
         return result

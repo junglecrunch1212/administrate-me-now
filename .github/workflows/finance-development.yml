@@ -261,11 +261,13 @@ jobs:
       - run: pipx install poetry==2.4.1
       - run: poetry sync --with dev
       - name: Verify self counters, registered lifecycle and short production composition
+        timeout-minutes: 5
         env:
           ADMINME_FINANCE_NATIVE_SMOKE: '1'
           FINANCE_NATIVE_ARTIFACT_DIR: ${{ runner.temp }}/native-finance
         run: >-
           poetry run pytest -q -s
+          -o faulthandler_timeout=60 --durations=10
           --junitxml="${{ runner.temp }}/native-finance/results.xml"
           tests/unit/test_finance_native_resources.py
           tests/unit/test_finance_resource_acceptance.py

@@ -99,6 +99,15 @@ def lifecycle(summary, rows, expected):
         "unexpected registered fixture topology",
     )
     require(
+        all(
+            m.verdict()["samples"] == exits[birth]["samples"]
+            and m.pid == exits[birth]["pid"]
+            and m.target == exits[birth]["target"]
+            for birth, m in members.items()
+        ),
+        "retained lifecycle count/ownership mismatch",
+    )
+    require(
         all(m.verdict()["complete"] for m in members.values()),
         "incomplete self-report lifecycle",
     )

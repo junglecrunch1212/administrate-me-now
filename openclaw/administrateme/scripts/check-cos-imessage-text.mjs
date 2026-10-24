@@ -311,7 +311,19 @@ print(json.dumps([enabled, entry["hooks"]]))
   } };
   const policyApi = { ...api, on: policyRegistration.on, registerTool: (factory, options) => policyTools.set(options.name, factory) };
   registerHooks(policyApi, policyRuntime); registerAppleReminderTools(policyApi, policyRuntime); registerTools(policyApi, policyRuntime);
-  const policyHook = (name) => policyRegistration.state.registry.typedHooks.find((row) => row.hookName === name).handler;
+  const policyHook = (name) => {
+    const hooks = policyRegistration.state.registry.typedHooks.filter((row) => row.hookName === name);
+    assert.ok(hooks.length > 0, `Missing registered native policy hook: ${name}`);
+    if (name === "before_agent_reply") {
+      // The host dispatches every observer. Finance admission and current
+      // request binding are separate observers on the same lifecycle event.
+      return async (...args) => {
+        for (const hook of hooks) await hook.handler(...args);
+      };
+    }
+    assert.equal(hooks.length, 1, `Unexpected multiple native policy hooks: ${name}`);
+    return hooks[0].handler;
+  };
   const runner = createHookRunner(policyRegistration.state.registry, { catchErrors: false });
   const deliverPolicyInput = async (messageId, content) => {
     const received = hookSdk.toPluginMessageReceivedEvent(hookSdk.deriveInboundMessageHookContext({

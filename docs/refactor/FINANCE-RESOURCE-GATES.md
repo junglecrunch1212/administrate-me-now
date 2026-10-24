@@ -683,15 +683,23 @@ not enforce OS filesystem/network/Keychain confinement** against native code.
 Environment variables and audit hooks are not an OS sandbox; that remaining
 boundary must be reviewed before any local lab approval.
 
-Implemented limits are five registered processes, authenticated 8-KiB telemetry
+Implemented limits are three registered children (five expected live processes
+including the coordinator and spawn tracker), authenticated 8-KiB telemetry
 and 4-MiB work frames, 20,000 telemetry frames per process, per-child hard CPU
 limit at most 60 seconds (preserving a lower inherited limit), zero core dumps,
 a 180-second checked smoke watchdog (1,800 seconds only for the separately
 scoped full qualification), and a cooperative 512-MiB per-child RSS stop.
 The watchdog and RSS stop are not hard OS memory/wall limits; the hosted job
-has a 20-minute outer timeout. Normal cleanup allows ten seconds, then terminates
+has a 20-minute outer timeout. A single authenticated stop frame avoids shared multiprocessing event locks,
+which can wait forever for a forcibly killed waiter. Native correctness includes
+that cancellation path; a five-minute step limit retains partial evidence on
+failure. Normal cleanup allows ten seconds, then terminates
 or kills only its owned handles and records incomplete coverage. No broad kill,
-PID lookup or retry after a measurement denial is supported.
+PID lookup or retry after a measurement denial is supported. The coordinator and
+standard-library spawn resource tracker are harness overhead, excluded from the
+runtime resource totals; full phases use three registered targets, five live
+processes including those two helpers. No OS-wide enumeration proves absence of
+other native descendants.
 
 For a future approved lab, set `FINANCE_CANDIDATE_SHA` to the immutable source
 SHA, `GITHUB_SHA` to the exact evaluated checkout SHA, and
@@ -712,7 +720,7 @@ binding and `ADMINME_FINANCE_NATIVE_QUALIFICATION=1`; invoke the two parameteriz
 `test_native_resource_qualification` cases with the same exact immutable pins,
 fresh per-workload state and private artifact directory. Leave the smoke flag
 unset. Each workload has 1,591 seconds of scheduled phases, a checked 1,800-second
-watchdog, 60 CPU seconds per child, five-process cap and 512-MiB cooperative RSS
+watchdog, 60 CPU seconds per child, three-child/five-total expected process cap and 512-MiB cooperative RSS
 per child; allow a bounded 70-minute outer lab window for both, then owned cleanup.
 No automatic retry or alternate collector follows denial. Evaluate each retained
 directory using `python -m scripts.finance_resource_acceptance DIRECTORY
