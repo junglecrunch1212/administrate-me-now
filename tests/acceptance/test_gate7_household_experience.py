@@ -913,6 +913,10 @@ def test_ac32_finance_workbook_to_cockpit_replay_and_member_isolation(
         assert cockpit["summary"]["cash_minor"] == 500_000
         assert cockpit["summary"]["base_monthly_income_minor"] == 600_000
         assert cockpit["summary"]["base_monthly_expenses_minor"] == 400_000
+        # Observed bank cash does not supply the missing planning opening cash
+        # or reserve. The browser's complete fixture chooses those separately.
+        assert cockpit["scenarios"] == []
+        assert cockpit["reports"]["monthly_scenarios"]["state"] == "missing_evidence"
         assert cockpit["budgets"][0]["state"] == "watch"
         assert cockpit["focus"]["state"] == "budget_watch"
         assert cockpit["goals"][0]["status"] == "active"
