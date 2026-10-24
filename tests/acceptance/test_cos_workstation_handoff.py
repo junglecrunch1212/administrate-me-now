@@ -222,7 +222,9 @@ def test_real_gmail_and_dashboard_chat_private_draft_and_cross_channel_readback(
         source = intake(client, "workstation-channel-create", text=INSTRUCTION)
 
         def send(path: str, body: dict[str, Any], status: int = 200) -> dict[str, Any]:
-            response = client.post(path, headers={"Authorization": f"Bearer {SECRET}"}, json=body)
+            response = client.post(
+                path, headers={"Authorization": f"Bearer {SECRET}"}, json=body
+            )
             assert response.status_code == status, response.text
             return response.json()
 
