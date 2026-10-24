@@ -4086,6 +4086,9 @@ class UpgradeManager:
                 "POETRY_CACHE_DIR": str(private_home / "poetry-cache"),
                 "POETRY_CONFIG_DIR": str(private_home / "poetry-config"),
                 "POETRY_NO_INTERACTION": "1",
+                # installer queries process-wide umask while marking scripts
+                # executable. Parallel wheel writes can inherit its temporary 0.
+                "POETRY_INSTALLER_PARALLEL": "false",
                 "PYTHONNOUSERSITE": "1",
             }
         )
