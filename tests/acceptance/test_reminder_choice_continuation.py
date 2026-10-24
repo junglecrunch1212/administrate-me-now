@@ -321,6 +321,31 @@ def test_one_task_continues_across_real_channels_with_one_terminal_effect(
                 is True
             )
             assert len(store.effects) == 1
+            from adminme.apple_service_history import apple_command_owner_matches
+            from adminme.source_assurance import (
+                _provider_effect_counts,
+                _provider_effect_integrity_healthy,
+            )
+
+            command = client.portal.call(
+                _events, runtime, "external_sync.write_requested"
+            )[-1]
+            terminal = client.portal.call(
+                _events, runtime, "external_sync.write_completed"
+            )[-1]
+            assert client.portal.call(
+                partial(
+                    apple_command_owner_matches,
+                    runtime.event_log,
+                    command,
+                    through=terminal["event_id"],
+                )
+            )
+            counts = _provider_effect_counts(
+                [command], {receipt["command_id"]: [terminal]}
+            )
+            assert _provider_effect_integrity_healthy(counts)
+            assert counts["provider_called_true"] == 1
         finally:
             client.portal.call(model.aclose)
 
@@ -392,3 +417,164 @@ def test_ambiguous_pending_answer_cross_member_and_cancel_never_confirm(
         assert (
             client.portal.call(_events, runtime, "external_sync.write_requested") == []
         )
+
+
+@pytest.mark.parametrize("failure", ["revoked_list", "expired_pending", "bad_quote"])
+def test_changed_authority_or_unproved_answer_never_creates_a_domain(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
+) -> None:
+    from tests.acceptance.test_native_apple_reminder import MEMBER_HEADERS
+    from tests.acceptance.test_apple_service_permissions import PATH
+    import adminme.products.openclaw.reminder_choice_authorization as authorization
+
+    monkeypatch.setenv("ADMINME_TEST_MODE", "1")
+    two_lists(monkeypatch)
+    with TestClient(
+        create_application(configured(tmp_path)),
+        base_url="https://central-fixture.ts.net",
+    ) as client:
+        runtime = client.app.state.runtime
+        prepare_apple_sources(client, tmp_path)
+        _grant(client)
+        grant_services(client)
+        _normal_operation(client)
+        model, _ = model_boundary(client, invalid=failure == "bad_quote")
+        try:
+            _, _, offered = offer(client, "portal")
+            label = next(
+                row["label"] for row in offered["lists"] if row["list_id"] == LIST
+            )
+            fresh = instruction(client, "imessage", "answer-after-change", label)
+            if failure == "revoked_list":
+                response = client.post(
+                    f"{PATH}/apple_reminders",
+                    headers=MEMBER_HEADERS,
+                    json={
+                        "request_id": "revoke-pending-reminder",
+                        "expected_revision": 1,
+                        "enabled": False,
+                        "scope_ids": [],
+                    },
+                )
+                assert response.status_code == 202, response.text
+            elif failure == "expired_pending":
+
+                class AfterDue(datetime):
+                    @classmethod
+                    def now(cls, tz=None):
+                        return datetime.fromisoformat(offered["due_at"]).astimezone(tz)
+
+                monkeypatch.setattr(authorization, "datetime", AfterDue)
+            result = client.post(
+                CHOICE,
+                headers=AUTH,
+                json={**fresh, "action": "answer", "task_id": offered["task_id"]},
+            )
+            assert result.status_code == 409, result.text
+            assert (
+                client.portal.call(_events, runtime, "member.provider_action.confirmed")
+                == []
+            )
+            assert (
+                client.portal.call(_events, runtime, "external_sync.write_requested")
+                == []
+            )
+        finally:
+            client.portal.call(model.aclose)
+
+
+@pytest.mark.parametrize(
+    "failure", ["omitted_ticket", "expired_ticket", "after_due", "mutated_offer"]
+)
+def test_choice_domain_cannot_fall_back_or_refresh_its_original_authority(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
+) -> None:
+    import copy
+    import adminme.products.openclaw.reminder_choice_authorization as authorization
+    from tests.acceptance.test_apple_messages_governed_reply import _allow_once
+
+    monkeypatch.setenv("ADMINME_TEST_MODE", "1")
+    two_lists(monkeypatch)
+    with TestClient(
+        create_application(configured(tmp_path)),
+        base_url="https://central-fixture.ts.net",
+    ) as client:
+        runtime = client.app.state.runtime
+        prepare_apple_sources(client, tmp_path)
+        _grant(client)
+        grant_services(client)
+        _normal_operation(client)
+        model, _ = model_boundary(client)
+        try:
+            _, _, offered = offer(client, "portal")
+            label = next(
+                row["label"] for row in offered["lists"] if row["list_id"] == LIST
+            )
+            fresh = instruction(client, "imessage", "verified-choice-answer", label)
+            response = client.post(
+                CHOICE,
+                headers=AUTH,
+                json={**fresh, "action": "answer", "task_id": offered["task_id"]},
+            )
+            assert response.status_code == 200, response.text
+            receipt = response.json()
+            execution = policy_receipt(client, fresh, receipt)
+            if failure == "omitted_ticket":
+                # A valid legacy fixture receipt still cannot replace this rule.
+                execution = {
+                    "provenance": fresh["provenance"],
+                    "domain_approval_event_id": receipt["domain_approval_event_id"],
+                    "openclaw_approval_receipt_id": _allow_once(
+                        client,
+                        receipt["domain_approval_event_id"],
+                        "choice-forbidden-fallback",
+                    ),
+                }
+            elif failure in {"expired_ticket", "after_due"}:
+                expired = (
+                    receipt["request_authorization"]["expires_at"]
+                    if failure == "expired_ticket"
+                    else offered["due_at"]
+                )
+
+                class Expired(datetime):
+                    @classmethod
+                    def now(cls, tz=None):
+                        return datetime.fromisoformat(expired).astimezone(tz)
+
+                monkeypatch.setattr(authorization, "datetime", Expired)
+            else:
+                original_get = runtime.event_log.get
+
+                async def altered(event_id):
+                    event = await original_get(event_id)
+                    if event_id == offered["choice_event_id"]:
+                        event = copy.deepcopy(event)
+                        event["payload"]["title"] = "A different requested action"
+                    return event
+
+                monkeypatch.setattr(runtime.event_log, "get", altered)
+            refused = client.post(EXECUTE, headers=AUTH, json=execution)
+            assert refused.status_code in {403, 409}, refused.text
+            assert (
+                client.portal.call(_events, runtime, "external_sync.write_requested")
+                == []
+            )
+            status = client.post(
+                CHOICE,
+                headers=AUTH,
+                json={**fresh, "action": "status", "task_id": offered["task_id"]},
+            )
+            assert status.status_code in {200, 409}, status.text
+            assert (
+                len(
+                    client.portal.call(_events, runtime, "cos.reminder.choice_grounded")
+                )
+                == 1
+            )
+        finally:
+            client.portal.call(model.aclose)
