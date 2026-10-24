@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -18,8 +19,30 @@ from bootstrap import cos_reminders_native_worker as worker
 from tests.unit.bootstrap import test_cos_apple_reminders as acquisition
 
 
-def _transport(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+def _transport(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    *,
+    helper_contract: str | None = None,
+):
     selected = acquisition._selection().model_copy(update={"os_uid": os.getuid()})
+    if helper_contract:
+        app = tmp_path / "Fixture Reminders.app"
+        metadata = app / "Contents/Resources/helper-manifest.json"
+        metadata.parent.mkdir(parents=True)
+        metadata.write_text(json.dumps({"contract": helper_contract}))
+        selected = selected.model_copy(
+            update={
+                "native_helper": selected.native_helper.model_copy(
+                    update={
+                        "app_path": str(app),
+                        "bundle_identifier": package.WRITE_BUNDLE_IDENTIFIER
+                        if helper_contract == package.HELPER_WRITE_APP_CONTRACT
+                        else package.BUNDLE_IDENTIFIER,
+                    }
+                )
+            }
+        )
     coordinates = {
         "release_root": "/fixture/protected",
         "release_commit": "e" * 40,
@@ -413,3 +436,144 @@ def test_every_fixed_native_failure_remains_diagnosable():
     assert codes and codes <= client.NATIVE_ERROR_CODES
     for code in codes:
         assert client.NativeHelperError(code).code == code
+
+
+def _write_transport(monkeypatch, tmp_path, *, contract="cos-reminders-native-app-v2"):
+    from adminme.adapters import cos_reminders_write as writes
+    from tests.unit.adapters.reminders.test_cos_reminders_write import _command
+
+    selected, state = _transport(monkeypatch, tmp_path, helper_contract=contract)
+    command = _command(
+        selection_sha256=writes.selected_source_sha256(selected),
+        provider_account_id=selected.provider_account_id,
+    )
+    # The fixture transport's selected protected release contains this exact module.
+    monkeypatch.setattr(
+        writes, "__file__", "/fixture/protected/adminme/adapters/cos_reminders_write.py"
+    )
+    effects = []
+
+    class Writer:
+        def inspect(self, selection):
+            assert selection == selected
+            return {
+                "writable": True,
+                "provider_account_id": selection.provider_account_id,
+                "source_id": selection.source_id,
+                "list_id": selection.list_id,
+            }
+
+        def create(self, selection, supplied):
+            assert selection == selected and supplied == command
+            writes.validate_native_create(supplied, selection)
+            effects.append(supplied.command_id)
+            due = supplied.due_at.astimezone(timezone.utc)
+            return {
+                "applied": True,
+                "suppressed": False,
+                "external_id": "fixture-created-reminder",
+                "provider_account_id": selection.provider_account_id,
+                "source_id": selection.source_id,
+                "list_id": selection.list_id,
+                "requested_due_at": supplied.due_at.isoformat(),
+                "observed_due": {
+                    **{
+                        key: getattr(due, key)
+                        for key in ("year", "month", "day", "hour", "minute", "second")
+                    },
+                    "time_zone": "UTC",
+                    "all_day": False,
+                    "floating": False,
+                },
+                "observed_at": datetime.now(timezone.utc).isoformat(),
+            }
+
+    monkeypatch.setattr(writes, "NativeRemindersWriter", Writer)
+    return selected, command, state, effects
+
+
+def test_write_transport_proves_native_identity_exact_source_and_result(
+    monkeypatch, tmp_path
+):
+    selected, command, state, effects = _write_transport(monkeypatch, tmp_path)
+    result = client.HelperRemindersWriter().create(selected, command)
+    assert result.applied is True and result.suppressed is False
+    assert result.list_id == selected.list_id
+    assert result.requested_due_at == command.due_at
+    assert effects == [command.command_id]
+    assert state.calls == ["create_reminder"]
+    assert state.request["payload"]["command"] == command.model_dump(mode="json")
+
+
+def test_write_inspection_proves_exact_destination_without_save(monkeypatch, tmp_path):
+    selected, _command, state, effects = _write_transport(monkeypatch, tmp_path)
+    result = client.HelperRemindersWriter().inspect(selected)
+    assert result.writable is True
+    assert result.source_id == selected.source_id and result.list_id == selected.list_id
+    assert state.calls == ["inspect_write"] and effects == []
+
+
+@pytest.mark.parametrize("side", ["client", "native"])
+def test_read_component_never_accepts_create(monkeypatch, tmp_path, side):
+    selected, command, state, effects = _write_transport(
+        monkeypatch, tmp_path, contract="cos-reminders-native-app-v1"
+    )
+    if side == "client":
+        with pytest.raises(PermissionError, match="write-capable helper"):
+            client.HelperRemindersWriter().create(selected, command)
+        assert state.calls == []
+    else:
+        request = _request()
+        request["operation"] = "create_reminder"
+        request["payload"] = {
+            "selection": selected.model_dump(mode="json", exclude={"native_helper"}),
+            "command": command.model_dump(mode="json"),
+        }
+        request["device_identity_sha256"] = selected.device_identity_sha256
+        with pytest.raises(PermissionError, match="only supports reads"):
+            worker.perform(request, selected.native_helper.model_dump())
+    assert effects == []
+
+
+@pytest.mark.parametrize(
+    "fault", ["account", "source", "list", "time", "suppressed", "extra"]
+)
+def test_unverified_native_write_receipt_never_claims_success_or_retries(
+    monkeypatch, tmp_path, fault
+):
+    selected, command, state, effects = _write_transport(monkeypatch, tmp_path)
+
+    def mutate(output):
+        receipt = output["result"]["write_result"]
+        if fault == "account":
+            receipt["provider_account_id"] = "other-account"
+        elif fault == "source":
+            receipt["source_id"] = "other-source"
+        elif fault == "list":
+            receipt["list_id"] = "other-list"
+        elif fault == "time":
+            receipt["observed_due"]["hour"] += 1
+        elif fault == "suppressed":
+            receipt["suppressed"] = True
+        else:
+            receipt["extra"] = True
+
+    state.mutation = mutate
+    with pytest.raises((PermissionError, ValidationError)):
+        client.HelperRemindersWriter().create(selected, command)
+    assert effects == [command.command_id] and state.calls == ["create_reminder"]
+
+
+def test_write_does_not_prompt_when_native_permission_is_missing(monkeypatch, tmp_path):
+    selected, command, state, effects = _write_transport(monkeypatch, tmp_path)
+    state.permission = 0
+    from adminme.adapters import cos_apple_reminders_native as native
+
+    monkeypatch.setattr(
+        native,
+        "request_reminders_permission",
+        lambda: pytest.fail("Runtime attempted to prompt for consent"),
+    )
+    with pytest.raises(client.NativeHelperError):
+        client.HelperRemindersWriter().create(selected, command)
+    assert effects == []
