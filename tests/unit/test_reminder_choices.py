@@ -84,6 +84,39 @@ def test_ambiguous_or_unoffered_answer_never_selects_a_destination(answer):
     assert caught.value.status_code == 409
 
 
+@pytest.mark.parametrize("field", ["label", "list_id"])
+@pytest.mark.parametrize(
+    "answer,accepted",
+    [("Straße", True), (" STRAßE ", True), ("straße", True), ("STRASSE", False)],
+)
+def test_lowercase_list_selection_matches_native_policy_without_casefold_expansion(
+    field, answer, accepted
+):
+    choices = [
+        {"list_id": "fixture-personal", "label": "Personal", field: "Straße"},
+        {"list_id": "fixture-work", "label": "Work"},
+    ]
+    pending = offered(choices=choices)
+    if accepted:
+        assert selected_choice(
+            pending,
+            answer,
+            provider_account_id=pending.provider_account_id,
+            current_choices=pending.choices,
+            now=NOW,
+        ) == pending.choices[0]
+    else:
+        with pytest.raises(HTTPException) as caught:
+            selected_choice(
+                pending,
+                answer,
+                provider_account_id=pending.provider_account_id,
+                current_choices=pending.choices,
+                now=NOW,
+            )
+        assert caught.value.status_code == 409
+
+
 def test_yes_requires_one_recorded_offered_choice():
     pending = offered(choices=[{"list_id": "fixture-personal", "label": "Personal"}])
     assert (

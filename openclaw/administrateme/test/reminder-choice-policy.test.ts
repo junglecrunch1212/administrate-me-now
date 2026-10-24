@@ -60,6 +60,20 @@ describe("retained reminder list-choice host checks", () => {
     if (kind === "same-source") f.ticket.continuation.offered.original_source_event_id = f.input.source_message_event_id;
     expect(() => validateReminderChoice(f.ticket, f.input)).toThrow();
   });
+  for (const field of ["label", "list_id"] as const) {
+    it.each([
+      { answer: "Straße", accepted: true }, { answer: " STRAßE ", accepted: true },
+      { answer: "straße", accepted: true }, { answer: "STRASSE", accepted: false },
+    ])(`matches domain lowercase policy for ${field}: $answer`, ({ answer, accepted }) => {
+      const f = fixture();
+      f.ticket.continuation.offered.choices[0]![field] = "Straße";
+      if (field === "list_id") f.ticket.action.list_id = "Straße";
+      f.input.instruction_text = answer; f.ticket.evidence = span(answer);
+      const validate = () => validateReminderChoice(f.ticket, f.input);
+      if (accepted) expect(validate).not.toThrow();
+      else expect(validate).toThrow();
+    });
+  }
   it("does not treat yes as choosing among multiple offered destinations", () => {
     const f = fixture(); f.input.instruction_text = "Yes"; f.ticket.evidence = span("Yes");
     expect(() => validateReminderChoice(f.ticket, f.input)).toThrow();

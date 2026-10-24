@@ -44,18 +44,22 @@ def selected_choice(
     current_choices: list[ReminderListChoice],
     now: datetime,
 ) -> ReminderListChoice:
-    """Resolve an exact offered label/ID, never infer account or revive expiry."""
+    """Match trimmed lowercase labels/answers, as the independent native policy does.
+
+    Lowercase is deliberately narrower than Unicode casefold: e.g. ``Straße``
+    does not authorize ``STRASSE``. IDs retain their literal whitespace.
+    """
     if now >= offered.pending_expires_at:
         raise HTTPException(409, "This pending reminder choice has expired")
     if provider_account_id != offered.provider_account_id:
         raise HTTPException(409, "The original reminder account is no longer current")
-    answer = authored_answer.strip().casefold()
+    answer = authored_answer.strip().lower()
     if not answer:
         raise HTTPException(409, "An exact offered list choice is required")
     candidates = [
         choice
         for choice in offered.choices
-        if answer in {choice.list_id.casefold(), choice.label.strip().casefold()}
+        if answer in {choice.list_id.lower(), choice.label.strip().lower()}
     ]
     if answer in {"yes", "yes please"}:
         candidates = list(offered.choices) if len(offered.choices) == 1 else []
