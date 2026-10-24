@@ -36,10 +36,13 @@ required privacy invariant or product function.
 - **Producer and private parity remain unproved:** map the exact native context
   tuples and every supported field/clock, review the pinned schema/hash, then
   compare an authorized private export. Synthetic 12/24-context fixtures and
-  3,215-body transport coverage do not prove native parity or source correctness.
+  3,307-body/3,215-original-ID transport coverage do not prove native parity or source correctness.
   Current producer-fit source work adds shared detail manifests, undated rows,
   reversible issue groups and typed conservative minima. It needs hosted tests
-  and review of the revised schema/hash before a producer export is built.
+  and full producer parity. The coordinator reports structural review passed at
+  `63691cc7` and schema `951a59286ca22396f2084484490aa1d54b47c0ee10c0bc727580134a31c4b925`;
+  only Books-side bounded local canonical payload/parity construction is authorized.
+  No private payload is being sent to this checkout or hosted CI.
   The producer distinguishes 18 oracle groups, 12 observed-opening native-tested
   tuples and 24 query aliases; verified-opening oracle nulls are not native-tested.
 - **Final-head validation and performance remain gates:** the current candidate
@@ -252,3 +255,10 @@ The supported card is intentionally deterministic. Free-form personalized
 recommendations, durable operational workflow integration and authorized app
 source drilldown remain unfinished work; a grounded calculation card does not
 establish those broader capabilities.
+
+At `63691cc7`, hosted validation passed 814 Python cases, static checks and all
+100 native checks. One grouped-scalar summary exceeded the unchanged response
+budget, and the browser expected a human-readable issue label that still used
+hyphens. The next source repair separates date/clock views and formats the label;
+all source fields and conditions must still round-trip. Mixed-load core p95 was
+4.595 → 5.620 ms (22.31% regression), so the resource gate still failed.

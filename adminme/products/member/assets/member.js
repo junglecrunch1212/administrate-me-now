@@ -4016,7 +4016,7 @@ function financePlanningCard(books) {
     if (generation !== requestNumber || !section.isConnected) return;
     detail.replaceChildren(text("h3", "Dated events"), text("p", `Full context manifest: ${answer.manifest.row_count} events. This page lists dated events starting within ${answer.horizon_days} days, plus undated items that are not placed in this horizon.`, "state-note"));
     const table = document.createElement("table"); table.className = "finance-table";
-    const head = document.createElement("tr"); for (const label of ["Dates / route", "Type", "Amount range", "Included"]) head.append(text("th", label)); table.append(head);
+    const head = document.createElement("tr"); for (const label of ["Dates / route", "Type", "Amount range", "Source included"]) head.append(text("th", label)); table.append(head);
     for (const item of answer.events || []) {
       const row = document.createElement("tr"); row.append(text("td", `${item.earliest_date ? `${item.earliest_date} – ${item.latest_date}` : `Undated (${titleCase(item.date_unknown_reason)})`} · ${item.account_route_id}`), text("td", titleCase(item.kind)), text("td", range([item.amount.lower_minor, item.amount.upper_minor], answer.context.currency)), text("td", item.included ? "Yes" : "No")); table.append(row);
     }
@@ -4071,7 +4071,7 @@ function financePlanningCard(books) {
         }
       }
       for (const condition of h.conditions) {
-        const item = document.createElement("details"); item.append(text("summary", `Resolve: ${titleCase(condition)}`)); const target = text("div", "Open to view the required input and evidence."); item.append(target); let loaded = false;
+        const item = document.createElement("details"); item.append(text("summary", `Resolve: ${titleCase(condition.replaceAll("-", " "))}`)); const target = text("div", "Open to view the required input and evidence."); item.append(target); let loaded = false;
         item.addEventListener("toggle", () => { if (item.open && !loaded) { loaded = true; void reference("planning_gaps", condition, target).catch(() => { loaded = false; target.textContent = "This gap is unavailable in the current private context."; }); } }); references.append(item);
       }
       content.append(references);

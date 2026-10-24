@@ -117,6 +117,7 @@ evidence, not passing acceptance.
 | `b9466312` | 779 Python, 96 native and synthetic desktop checks passed | 3.524 → 4.305 ms (1.221600) | Fail |
 | `de8a6fe1` | 782 Python, 96 native and synthetic desktop checks passed | 4.389 → 5.440 ms (1.239571) | Fail |
 | `7d120a86` | 793 Python, 96 native and synthetic desktop checks passed | 2.725 → 3.059 ms (1.122426); after baseline 1.932 ms | Fail |
+| `63691cc7` | 814 Python passed; one summary-size failure. 100 native/static passed; browser label failed | 4.595 → 5.620 ms (1.223142); after baseline 4.480 ms | Fail |
 
 The [de8 hosted run](https://github.com/junglecrunch1212/administrate-me-now/actions/runs/40042497072)
 retains 251 admitted finance calls, 18.381/19.970 ms warm status/calculation
@@ -127,12 +128,17 @@ they do not prove the required performance isolation.
 Profiles show shared projection dispatch cost. Initial finance reads and
 identity resolution already use whole-query worker callbacks with detached
 results. Exact grant/quorum resolution uses one SQL snapshot; final private
-checks remain fresh and synchronous. The next candidate also moves the two
-ordinary What Now/active-commitment reads onto that same existing projection
-worker as complete callbacks, so their statement dispatch does not block HTTP
-I/O. Member identity is rechecked after the await. A synthetic blocked-read
-liveness test and changed-role/login tests accompany it. No extra runtime,
-authority cache, lower offered load or relaxed acceptance threshold is added.
+checks remain fresh and synchronous. The two ordinary What Now/active-commitment
+reads now run on that same existing projection worker as complete callbacks,
+so their statement dispatch does not block HTTP I/O. Member identity is
+rechecked after the await; delegated CoS state retains its own authenticated
+domain boundary. Hosted blocked-read liveness and changed-role/login cases
+passed at `7d120a86`. The next narrow candidate selects only consumed grant
+columns and copies the immutable Session/context fields without recursive
+copying. It retains the exact current SQL snapshot, quorum, expiry and final
+revocation check. Its performance effect is unproved until hosted measurement.
+No extra runtime, authority cache, lower offered load or relaxed acceptance
+threshold is added.
 
 Budget funding outlook, bank cash, debt payoff and noncash offsets remain
 distinct. The separate dated-projection transport is a declared summary subset;

@@ -4165,7 +4165,9 @@ class FinanceQueryRequest(ContextRequest):
     as_of_date: str | None = Field(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$")
     reference_id: str | None = Field(default=None, min_length=1, max_length=80)
     gap_group_id: str | None = Field(default=None, min_length=1, max_length=80)
-    projection_view: Literal["balances", "signals", "provenance"] = "balances"
+    projection_view: Literal["balances", "signals", "dates", "provenance", "clocks"] = (
+        "balances"
+    )
     offset: int = Field(default=0, ge=0, le=10000)
     limit: int = Field(default=50, ge=1, le=100)
 
@@ -4215,19 +4217,33 @@ async def _finance_session(request: Request, provenance: Provenance) -> Session:
     Only detached dataclass fields cross the projection worker boundary. This
     does not cache a grant; final delivery independently rechecks current scope.
     """
-    from dataclasses import asdict
+    from dataclasses import fields
     from adminme.service_identities import ServiceRequestContext
 
     runtime = _runtime(request)
     if runtime.projections is None:
         raise HTTPException(503, "CoS delegation projection is unavailable")
-    fields = await runtime.projections.read(
-        "parties", lambda _conn: asdict(_session(request, provenance))
-    )
-    context = fields.get("service_context")
+
+    def detached_session(_conn: Any) -> dict[str, Any]:
+        resolved = _session(request, provenance)
+        # Both records contain only immutable scalar/tuple/frozenset fields.
+        # Copy the field mapping, without deepcopying immutable permissions
+        # twice per finance request. The runner still validates detachment.
+        values = {
+            field.name: getattr(resolved, field.name) for field in fields(Session)
+        }
+        if resolved.service_context is not None:
+            values["service_context"] = {
+                field.name: getattr(resolved.service_context, field.name)
+                for field in fields(ServiceRequestContext)
+            }
+        return values
+
+    values = await runtime.projections.read("parties", detached_session)
+    context = values.get("service_context")
     if context is not None:
-        fields["service_context"] = ServiceRequestContext(**context)
-    return Session(**fields)
+        values["service_context"] = ServiceRequestContext(**context)
+    return Session(**values)
 
 
 def _finance_private_context(

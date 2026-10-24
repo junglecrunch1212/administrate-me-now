@@ -489,7 +489,15 @@ def test_each_opening_selection_is_reachable_with_status_selection_and_summary_b
 
             for context in value["contexts"]:
                 for days in (7, 30, 90, 180, 365):
-                    for view in ("balances", "signals", "provenance"):
+                    restored_summary = {}
+                    restored_unknowns = {}
+                    for view in (
+                        "balances",
+                        "signals",
+                        "dates",
+                        "provenance",
+                        "clocks",
+                    ):
                         result = await runtime.projections.read(
                             "money",
                             lambda conn: query_projection(
@@ -503,9 +511,43 @@ def test_each_opening_selection_is_reachable_with_status_selection_and_summary_b
                                 view=view,
                             ),
                         )
+                        assert result["summary"]["conditions"] == next(
+                            h["conditions"]
+                            for h in context["horizons"]
+                            if h["days"] == days
+                        )
+                        restored_unknowns.update(result["summary"].get("unknowns", {}))
+                        restored_summary.update(
+                            {
+                                k: v
+                                for k, v in result["summary"].items()
+                                if k != "unknowns"
+                            }
+                        )
+                        if view == "clocks":
+                            assert result["source_clocks"] == value["source_clocks"]
+                        if view == "provenance":
+                            assert result["engine"][2] == value["input_sha256"]
+                            assert result["verification"] == {
+                                "id": value["verification_id"],
+                                "published_at": value["published_at"],
+                                "verified_at": value["verified_at"],
+                            }
                         result["provider_effect_count"] = 0
                         result["answer_ref"] = answer_reference(result)
-                        enforce_context(result)
+                        try:
+                            enforce_context(result)
+                        except ValueError as exc:
+                            from adminme.finance.budgets import json_bytes
+
+                            raise AssertionError(
+                                (
+                                    context["context_id"],
+                                    days,
+                                    view,
+                                    len(json_bytes(result)),
+                                )
+                            ) from exc
                         rendered = render_result(result)
                         assert (
                             "non-additive" in rendered
@@ -514,6 +556,19 @@ def test_each_opening_selection_is_reachable_with_status_selection_and_summary_b
                         assert (
                             "daily_balances" in rendered
                         )  # Visible unsupported collection.
+                    whole = await runtime.projections.read(
+                        "money",
+                        lambda conn: query_projection(
+                            conn,
+                            owner,
+                            book_id=value["book_id"],
+                            context_id=context["context_id"],
+                            report_id="planning_projection",
+                            horizon_days=days,
+                        ),
+                    )
+                    restored_summary["unknowns"] = restored_unknowns
+                    assert restored_summary == whole["summary"]
 
         client.portal.call(all_views)
 
@@ -799,8 +854,15 @@ def test_shared_inventory_full_pagination_replay_and_owner_isolation(tmp_path):
         value = with_grouped_issues(
             with_conservative_minima(shared_projection(accounting))
         )
-        assert len(value["shared_event_inventory"]) == 3215
+        assert len(value["shared_event_inventory"]) == 3307
+        assert len({r["event_id"] for r in value["shared_event_inventory"]}) == 3215
+        assert max(m["row_count"] for m in value["detail_manifest"]) == 2818
         assert sum(m["row_count"] for m in value["detail_manifest"]) == 38382
+        source_groups = {
+            tuple(manifest["record_ids"]): manifest["row_count"]
+            for manifest in value["detail_manifest"]
+        }
+        assert len(source_groups) == 18 and sum(source_groups.values()) == 35988
         assert len(canonical_bytes(value)) < 8 * 1024 * 1024
         runtime = client.app.state.runtime
         client.portal.call(import_projection, runtime, owner, value)
@@ -851,7 +913,7 @@ def test_shared_inventory_full_pagination_replay_and_owner_isolation(tmp_path):
             conn.execute("SELECT COUNT(*) FROM finance_dated_shared_events").fetchone()[
                 0
             ]
-            == 3215
+            == 3307
         )
         assert (
             conn.execute(
@@ -941,7 +1003,7 @@ def test_conservative_minimum_and_absent_zero_crossing_remain_source_typed(tmp_p
         }
         assert "source scalar, not a lower/upper range" in render_result(answer.json())
         signals = _post(
-            client, "query", "scalar-signals", projection_view="signals", **common
+            client, "query", "scalar-dates", projection_view="dates", **common
         )
         assert signals.status_code == 200 and "summary" in signals.json(), signals.text
         assert signals.json()["summary"]["first_zero_crossing_date"] == {
@@ -957,7 +1019,7 @@ def test_shared_record_keys_preserve_original_event_ids_across_source_variants()
     manifest = value["detail_manifest"][
         6
     ]  # A funding view, independent of bank aliases.
-    original_id = manifest["record_ids"][0]
+    original_id = manifest["record_ids"][100]
     original = next(
         row
         for row in value["shared_event_inventory"]
@@ -968,7 +1030,7 @@ def test_shared_record_keys_preserve_original_event_ids_across_source_variants()
     variant["amount"] = bounds(2)
     variant["bank_effect"] = bounds(2)
     value["shared_event_inventory"].append(variant)
-    manifest["record_ids"][0] = variant["record_id"]
+    manifest["record_ids"][100] = variant["record_id"]
     assert variant["event_id"] == original["event_id"]
     assert validate_projection(seal(value)) == value
 
@@ -1112,3 +1174,68 @@ def test_original_issues_are_fully_recoverable_with_required_flags_and_exact_hor
         assert issue.status_code == 200 and issue.json().get("records"), issue.text
         assert issue.json()["records"][0]["required"] is True
         assert issue.json()["records"][0]["issue_id"] == "source-issue-000"
+
+
+def test_issue_groups_do_not_invent_context_horizon_cross_products(tmp_path):
+    from tests.fixtures.finance_planning import with_grouped_issues
+
+    with TestClient(create_application(enabled_settings(tmp_path))) as client:
+        accounting, owner = import_fixture(client)
+        value = with_grouped_issues(projection(accounting))
+        left, right = [c["context_id"] for c in value["contexts"][6:8]]
+        group = next(g for g in value["gaps"] if g["gap_id"] == "source-issues-8")
+        group["context_ids"] = [left, right]
+        group["horizon_days"] = [7, 30]
+        children = [i for i in value["gap_issues"] if i["gap_id"] == group["gap_id"]][
+            :2
+        ]
+        children[0]["memberships"] = [{"context_id": left, "horizon_days": [7]}]
+        children[1]["memberships"] = [{"context_id": right, "horizon_days": [30]}]
+        value["gap_issues"] = [
+            i for i in value["gap_issues"] if i["gap_id"] != group["gap_id"]
+        ] + children
+        seal(value)
+        runtime = client.app.state.runtime
+        client.portal.call(import_projection, runtime, owner, value)
+
+        async def check_memberships():
+            for context_id, days, expected in (
+                (left, 7, [children[0]["issue_id"]]),
+                (left, 30, []),
+                (right, 7, []),
+                (right, 30, [children[1]["issue_id"]]),
+            ):
+                issues = await runtime.projections.read(
+                    "money",
+                    lambda conn: query_projection(
+                        conn,
+                        owner,
+                        book_id=value["book_id"],
+                        context_id=context_id,
+                        report_id="planning_issues",
+                        gap_group_id=group["gap_id"],
+                        horizon_days=days,
+                        limit=100,
+                    ),
+                )
+                assert [row["issue_id"] for row in issues["records"]] == expected
+                groups = await runtime.projections.read(
+                    "money",
+                    lambda conn: query_projection(
+                        conn,
+                        owner,
+                        book_id=value["book_id"],
+                        context_id=context_id,
+                        report_id="planning_gaps",
+                        reference_id=group["gap_id"],
+                        horizon_days=days,
+                    ),
+                )
+                assert bool(groups["records"]) == bool(expected)
+                if expected:
+                    assert groups["records"][0]["issue_counts"] == {
+                        "total": 1,
+                        "required": 0,
+                    }
+
+        client.portal.call(check_memberships)

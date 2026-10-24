@@ -341,7 +341,7 @@ def with_unavailable_openings(value):
 
 
 def shared_projection(accounting):
-    """Synthetic 3,215-body/38,382-reference fit case, not native parity."""
+    """Synthetic 3,307 variants/3,215 IDs/38,382 references, not native parity."""
     value = with_unavailable_openings(projection(accounting))
     value["shared_event_inventory"] = [
         {
@@ -374,11 +374,18 @@ def shared_projection(accounting):
         )
         group = groups.setdefault(key, len(groups))
         count = (
-            1600
+            399
             if context["measure"] == BANK
-            and context["opening_basis"] == "observed_cash_hypothetical"
-            else 1599
+            else 2800
+            if context["opening_basis"] == "observed_cash_hypothetical"
+            else 2799
         )
+        if (
+            context["measure"] == FUNDING
+            and context["opening_basis"] == "observed_cash_hypothetical"
+            and context["scenario_id"] == "current"
+        ):
+            count += 18 if context["income_basis"] == "OBSERVED_BASE_ONLY" else -18
         value["detail_manifest"].append(
             {
                 "context_id": context["context_id"],
@@ -389,6 +396,17 @@ def shared_projection(accounting):
             }
         )
     assert len(groups) == 18
+    # Source identity is separate from its context-specific body. Preserve
+    # original IDs while retaining 92 additional variants in one funding view.
+    variant_context = value["detail_manifest"][6]
+    original_bodies = {row["record_id"]: row for row in value["shared_event_inventory"]}
+    for index, record_id in enumerate(variant_context["record_ids"][:92]):
+        variant = deepcopy(original_bodies[record_id])
+        variant["record_id"] = f"variant-{index:03d}"
+        variant["amount"] = bounds(2)
+        variant["bank_effect"] = bounds(2)
+        value["shared_event_inventory"].append(variant)
+        variant_context["record_ids"][index] = variant["record_id"]
     return seal(value)
 
 

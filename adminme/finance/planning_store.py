@@ -406,7 +406,7 @@ def query_projection(
         raise PublicationError("projection_pagination_invalid")
     if horizon_days not in {7, 30, 90, 180, 365} or type(horizon_days) is not int:
         raise PublicationError("projection_horizon_invalid")
-    if view not in {"all", "balances", "signals", "provenance"}:
+    if view not in {"all", "balances", "signals", "dates", "provenance", "clocks"}:
         raise PublicationError("projection_view_invalid")
     if reference_id is not None and report_id not in {
         "planning_gaps",
@@ -545,7 +545,6 @@ def query_projection(
                 "encumbered",
                 "closing",
                 "minimum",
-                "minimum_date",
                 "cash_in",
                 "cash_out",
             }
@@ -555,6 +554,9 @@ def query_projection(
                 "reserve_breach",
                 "negative_bank_cash",
                 "checking_shortage",
+            }
+            dates = {
+                "minimum_date",
                 "first_negative_date",
                 "first_zero_crossing_date",
                 "first_reserve_breach_date",
@@ -564,18 +566,21 @@ def query_projection(
                 if view == "balances"
                 else signals
                 if view == "signals"
+                else dates
+                if view == "dates"
                 else set()
             )
             result["view"] = view
             result["summary"] = {k: v for k, v in summary.items() if k in fields}
-            if view != "provenance":
+            if view in {"balances", "signals", "dates"}:
                 result["summary"]["unknowns"] = {
                     k: v
                     for k, v in summary["unknowns"].items()
                     if k.split(".")[0] in fields
                 }
-            else:
+            elif view == "clocks":
                 result["source_clocks"] = p["source_clocks"]
+            else:
                 result["engine"] = [
                     p["engine_id"],
                     p["engine_version"],

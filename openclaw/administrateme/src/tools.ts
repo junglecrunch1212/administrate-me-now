@@ -197,7 +197,7 @@ export function registerTools(api: OpenClawPluginApi, runtime: PluginRuntime): v
     },
     {
       name: "administrateme_finance_query",
-      description: "Read a private accepted report, owner_choices (up to three/page), or planning_contexts, planning_projection and planning_events (one/page, next_offset), planning_gaps/evidence/sources (one reference_id/page), planning_issues (original required flags; optional gap_group_id), or planning_engines. Select planning by context_id OR typed measure/scenario_id/income_basis/opening_basis; optional case/currency/timezone/as_of_date disambiguate. Use projection_view balances/signals/provenance, each a bounded section, and 7/30/90/180/365 days. Bank and funding views are non-additive. No raw transactions, SQL or source links.",
+      description: "Read a private accepted report, owner_choices (up to three/page), or planning_contexts, planning_projection and planning_events (one/page, next_offset), planning_gaps/evidence/sources (one reference_id/page), planning_issues (original required flags; optional gap_group_id), or planning_engines. Select planning by context_id OR typed measure/scenario_id/income_basis/opening_basis; optional case/currency/timezone/as_of_date disambiguate. Use projection_view balances/signals/dates/provenance/clocks, each a bounded section, and 7/30/90/180/365 days. Bank and funding views are non-additive. No raw transactions, SQL or source links.",
       parameters: Type.Object({
         book_id: Type.String({ minLength: 1, maxLength: 120 }),
         publication_id: Type.String({ minLength: 1, maxLength: 120 }),
@@ -215,7 +215,7 @@ export function registerTools(api: OpenClawPluginApi, runtime: PluginRuntime): v
         currency: Type.Optional(Type.String({ pattern: "^[A-Z]{3}$" })),
         timezone: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
         as_of_date: Type.Optional(Type.String({ maxLength: 10 })),
-        projection_view: Type.Optional(Type.Union([Type.Literal("balances"), Type.Literal("signals"), Type.Literal("provenance")])),
+        projection_view: Type.Optional(Type.Union([Type.Literal("balances"), Type.Literal("signals"), Type.Literal("dates"), Type.Literal("provenance"), Type.Literal("clocks")])),
         offset: Type.Optional(Type.Integer({ minimum: 0, maximum: 10000 })),
         limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
       }, { additionalProperties: false }),

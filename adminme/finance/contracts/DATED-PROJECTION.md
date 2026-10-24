@@ -113,12 +113,14 @@ Unknown/duplicate references, unreferenced inventory entries, conflicting IDs,
 wrong counts/digests and undeclared contexts reject before head advancement.
 No value, inclusion policy or date is inferred while materializing a reference.
 
-The producer-fit handoff reports 3,215 unique native detail items, 35,988
+The producer-fit handoff reports 3,215 original native detail items, 35,988
 occurrences across the 18 oracle groups, and 38,382 when bank aliases expand.
 Those are different populations. The reported dated-only count of 35,646 still
-exceeds the former inline capacity. The synthetic shared fixture tests 3,215
-bodies and 38,382 ordered references; it is an export-fit test, not proof that
-those synthetic bodies or memberships equal the native export. Exact field,
+exceeds the former inline capacity. The updated synthetic shared fixture tests
+3,307 body variants across 3,215 original IDs, 18 source groups with 35,988
+occurrences, 24 aliases with 38,382 ordered references, and a largest context of
+2,818 events. This is an export-fit test, not proof that synthetic bodies or
+memberships equal the native export. Exact field,
 variant, alias and ordering parity remains the producer's separate review gate.
 
 Validation expands one bounded context at a time. Storage keeps bodies and
@@ -147,7 +149,7 @@ a time. Native `finance-query` uses `planning_contexts`, `planning_projection`
 or `planning_events`, returning at most one item per page with `next_offset`.
 A typed measure/scenario/income/opening selector, optionally disambiguated by
 case/currency/timezone/as-of, reaches an exact context without scanning the
-index. Summary views (`balances`, `signals`, `provenance`) are fixed bounded
+index. Summary views (`balances`, `signals`, `dates`, `provenance`, `clocks`) are fixed bounded
 sections that each retain the applicable conditions and exact publication pins.
 Status, selection and one summary fit the existing three sequential-call limit;
 separate follow-up turns retrieve other sections. The limits are unchanged.
@@ -202,3 +204,19 @@ remain in encrypted history. This new projection schema needs a schema-aware
 runtime for replay; a later deployment must verify compatible recovery before
 activation. No private import, live activation or rollback claim follows from
 these synthetic checks.
+
+Native summary sections keep source date observations and root source clocks in
+their own fixed `dates` and `clocks` views. `balances` carries all amount and
+minimum values; `signals` carries thresholds, booleans and their unknown reasons;
+`provenance` carries engine input and verification pins. Every section retains
+all horizon conditions, evidence IDs, exact context and publication bindings.
+This avoids dropping source fields or enlarging the 2,000-byte response budget
+when original issues are grouped. The member card still retrieves the complete
+summary. Full-budget matrix coverage includes both ranges and grouped scalar
+minima across all declared synthetic contexts and horizons.
+
+Storage `record_id` identifies a body variant, while `event_id` keeps the
+original source identity. The coordinator reports structural review passed at `63691cc7` and schema
+`951a59286ca22396f2084484490aa1d54b47c0ee10c0bc727580134a31c4b925`.
+Books-side canonical payload construction/parity work is separate; it grants
+no private transfer, import, adoption, merge or activation here.

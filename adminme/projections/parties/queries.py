@@ -119,12 +119,17 @@ def resolve_service_delegation(
     """Resolve one current grant and its exact quorum in one SQL snapshot.
 
     The correlated aggregation includes zero and extra approvals; it never
-    filters approvals down to the required members. No authority is cached.
+    filters approvals down to the required members. Select only the fields
+    consumed by the exact authority context, avoiding unrelated lifecycle
+    metadata in each detached worker result. No authority is cached.
     """
 
     rows = conn.execute(
         """
-        SELECT g.*,
+        SELECT g.grant_id, g.service_principal_id, g.context_scope,
+               g.context_member_id, g.resource_owner_principal_id, g.owner_party_id,
+               g.required_approvals_json, g.approval_quorum, g.permissions_json,
+               g.audience_json, g.visibility_json, g.expires_at,
                COALESCE((
                    SELECT json_group_array(ordered.approved_by_member_id)
                      FROM (
