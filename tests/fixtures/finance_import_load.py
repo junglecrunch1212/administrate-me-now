@@ -5,14 +5,14 @@ from __future__ import annotations
 import hashlib
 import math
 
-from adminme.finance.publication import canonical_bytes, content_hash
+from adminme.finance.publication import canonical_bytes
 from adminme.finance.publication_provenance import ClosedPackage, digest
 from tests.fixtures.finance_provenance import (
     native_rows,
     package_fixture,
     seal_publication,
 )
-from tests.fixtures.finance_planning import projection
+from tests.fixtures.finance_planning import shared_projection, seal
 from tests.fixtures.finance_activation import witness_projection
 
 PROVENANCE_TARGET = 18 * 1024 * 1024
@@ -158,12 +158,22 @@ def sized_package(tenant, owner):
     assert len(package.blobs) == 98
     assert PROVENANCE_TARGET <= raw_size < PROVENANCE_TARGET + 2 * UNIT_COUNT
     assert max(map(len, package.blobs.values())) <= 1024 * 1024
-    # Account for the accepted unit anchor separately from dated event bodies.
-    base = len(canonical_bytes(witness_projection(projection(publication))))
-    sample = len(canonical_bytes(witness_projection(projection(publication, 1200))))
-    count = math.ceil((DATED_TARGET - base) / ((sample - base) / 1200)) + 24
-    assert 0 < count <= 10000
-    dated = witness_projection(projection(publication, count))
-    dated["content_sha256"] = content_hash(dated)
+    # Preserve the existing shared inventory and reference geometry. Valid long
+    # source IDs model wire expansion without adding unsupported padding fields.
+    dated = shared_projection(publication)
+    inventory = dated["shared_event_inventory"]
+    renamed = {r["record_id"]: r["record_id"].ljust(80, "x") for r in inventory}
+    for row in inventory:
+        row["record_id"] = renamed[row["record_id"]]
+        for key in ("event_id", "account_route_id", "recognition_id"):
+            row[key] = row[key].ljust(80, "x")
+    for context in dated["detail_manifest"]:
+        context["record_ids"] = [renamed[ref] for ref in context["record_ids"]]
+    dated = witness_projection(seal(dated))
+    assert len(inventory) == 3307
+    assert len({row["event_id"] for row in inventory}) == 3215
+    assert (
+        sum(len(context["record_ids"]) for context in dated["detail_manifest"]) == 38382
+    )
     assert DATED_TARGET <= len(canonical_bytes(dated)) <= 8 * 1024 * 1024
     return publication, dated, package

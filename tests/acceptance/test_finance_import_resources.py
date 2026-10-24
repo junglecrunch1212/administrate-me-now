@@ -344,6 +344,13 @@ async def test_actual_size_closed_import_core_responsiveness_and_revocation(tmp_
             "encoded_request_bytes": len(wire),
             "accepted_units": len(p["accepted_journal_revision_ids"]),
             "dated_events": len(d["detail_events"]),
+            "shared_variants": len(d.get("shared_event_inventory", [])),
+            "source_event_ids": len(
+                {row["event_id"] for row in d.get("shared_event_inventory", [])}
+            ),
+            "context_references": sum(
+                len(context.get("record_ids", [])) for context in d["detail_manifest"]
+            ),
         }
         publication_id, projection_id = p["publication_id"], d["projection_id"]
         del p, d, package, packet

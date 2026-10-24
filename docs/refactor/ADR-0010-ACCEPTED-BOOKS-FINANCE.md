@@ -138,7 +138,9 @@ not financial values. Synthetic production-composition coverage lives in
 `tests/acceptance/test_finance_activation.py`.
 
 The separate hosted Linux import diagnostic uses valid synthetic 98-blob proof
-of at least 18 MiB plus a dated payload of at least 6,020,614 bytes. It records
+of at least 18 MiB plus a dated payload of at least 6,020,614 bytes, preserving
+the synthetic shared-inventory geometry (3,307 variants, 3,215 source IDs and
+38,382 context references) with valid long identifiers. It records
 provenance, envelope, dated and encoded request sizes independently; measures
 upload, decoding, validation, archival, current/peak/retained runtime RSS, CPU,
 core request cadence and the owner-control critical section/revocation wait;
