@@ -69,7 +69,7 @@ def _conversation_valid(
         p.get("authorization_method") == "authenticated_conversation"
         and p.get("channel") == "email"
         and _private(source, approved)
-        and approved.get("actor_identity") == p.get("member_id")
+        and approved.get("actor_identity") == COS_SERVICE_PRINCIPAL_ID
         and source.get("type") == "cos.conversation.instruction"
         and source.get("schema_version") == 1
         and source.get("source_adapter") == "cos-conversation"

@@ -201,6 +201,12 @@ def test_three_conversations_complete_exact_request_without_manual_allow_once(
             confirmed = client.post(CONFIRM, headers=AUTH, json=body)
             assert confirmed.status_code == 200, confirmed.text
             receipt = confirmed.json()
+            grounded = client.portal.call(
+                runtime.event_log.get,
+                receipt["request_authorization"]["grounding_event_id"],
+            )
+            assert grounded["actor_identity"] == "service-principal:chief-of-staff"
+            assert grounded["payload"]["member_id"] == MEMBER_A
             assert receipt["state"] == "awaiting_request_policy"
             assert (
                 len(model_calls) == 1

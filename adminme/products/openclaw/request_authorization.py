@@ -15,6 +15,7 @@ from typing import Any
 from fastapi import HTTPException, Request
 
 from adminme.request_actions_control import request_actions_allowed
+from adminme.service_identities import COS_SERVICE_PRINCIPAL_ID
 from adminme.lib.session import Session
 from adminme.lib.skill_runner import (
     SkillContext,
@@ -235,7 +236,7 @@ async def validate_request_authorization(
         or grounding.get("tenant_id") != session.tenant_id
         or grounding.get("owner_scope") != grounding.get("visibility_scope")
         or grounding.get("owner_scope") != f"private:{session.auth_member_id}"
-        or grounding.get("actor_identity") != session.auth_member_id
+        or grounding.get("actor_identity") != COS_SERVICE_PRINCIPAL_ID
         or p["member_id"] != session.auth_member_id
         or p["rule_id"] != RULE
         or not datetime.fromisoformat(p["issued_at"])
@@ -279,7 +280,6 @@ async def require_current_bridge_request(runtime: Any, command: dict[str, Any]) 
         ServiceDelegationResolutionError,
     )
     from adminme.service_identities import (
-        COS_SERVICE_PRINCIPAL_ID,
         COS_AUTOMATION_OPERATOR_ID,
     )
 

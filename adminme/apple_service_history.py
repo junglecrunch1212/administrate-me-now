@@ -133,7 +133,7 @@ async def apple_command_owner_matches(
             or grounding.get("type") != "cos.action.request_grounded"
             or grounding.get("schema_version") != 1
             or not _private(grounding, tenant=tenant, member=member)
-            or grounding.get("actor_identity") != member
+            or grounding.get("actor_identity") != COS_SERVICE_PRINCIPAL_ID
         ):
             return False
         grounded = grounding.get("payload") or {}
