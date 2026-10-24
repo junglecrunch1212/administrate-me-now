@@ -42,6 +42,9 @@ from adminme.lib.observation import (
 from adminme.lib.session import Session, build_internal_session
 from adminme.products.auth import require_principal, session_from_request
 from adminme.products.openclaw import main as seam
+from adminme.products.openclaw.conversation_reply import (
+    router as conversation_reply_router,
+)
 from adminme.projections.parties.queries import (
     ServiceDelegationResolutionError,
     list_service_delegations,
@@ -663,6 +666,8 @@ async def _execute_locked(
             member_id=session.auth_member_id,
             approval_event_id=approval_id,
             final_check=final_check,
+            thread_id=payload.get("thread_id"),
+            in_reply_to=payload.get("in_reply_to"),
         )
     )
     audit_token = set_outbound_audit_context(
@@ -687,7 +692,17 @@ async def _execute_locked(
                 channel="gmail",
                 recipient=payload["recipient"],
                 body=payload["body"],
-                metadata={"subject": payload["subject"]},
+                metadata={
+                    "subject": payload["subject"],
+                    **(
+                        {
+                            "thread_id": payload["thread_id"],
+                            "in_reply_to": payload["in_reply_to"],
+                        }
+                        if payload.get("thread_id")
+                        else {}
+                    ),
+                },
             ),
         )
         status = "suppressed" if result.suppressed else "sent"
@@ -1065,3 +1080,6 @@ async def _native_outbound(
         if not ready.done():
             ready.set_result(False)
         reset_outbound_audit_context(token)
+
+
+router.include_router(conversation_reply_router)

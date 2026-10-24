@@ -63,6 +63,11 @@ def test_authenticated_member_stream_subscribes_and_finishes_without_refresh(
 
         monkeypatch.setattr(transport, "_connect", connect)
         runtime.member_chat = transport
+        client.portal.call(
+            runtime.observation.disable,
+            "operator:fixture",
+            "Enable authenticated conversation fixture",
+        )
         before = client.portal.call(_events, runtime)
         response = client.post(
             "/api/member/v1/chat/stream",
@@ -88,7 +93,13 @@ def test_authenticated_member_stream_subscribes_and_finishes_without_refresh(
         assert socket.sent[0]["params"] == {"key": own_key}
         assert [row["method"] for row in socket.sent] == [
             "sessions.messages.subscribe",
+            "administrateme.conversation.prepare",
             "chat.send",
         ]
         assert socket.closed
-        assert client.portal.call(_events, runtime) == before
+        added = client.portal.call(_events, runtime)[len(before) :]
+        assert len(added) == 1
+        assert added[0]["type"] == "cos.conversation.instruction"
+        assert added[0]["payload"]["text"] == "Show the current reply status."
+        assert added[0]["payload"]["channel_id"] == "administrateme-portal"
+        assert added[0]["actor_identity"] == ADULT

@@ -207,6 +207,11 @@ class ApprovalResolutionRequest(BaseModel):
     signature: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
+class RequestApprovalResolutionRequest(ApprovalResolutionRequest):
+    decision: Literal["authenticated_request"]  # type: ignore[assignment]
+    authorization: dict[str, str]
+
+
 class ActionRequest(ContextRequest):
     request_id: str = Field(min_length=1, max_length=120)
     mode: Literal["propose", "capture"]
@@ -473,6 +478,9 @@ class NotificationResultRequest(ContextRequest):
 
 class ExecutePendingProviderActionRequest(ContextRequest):
     domain_approval_event_id: str = Field(min_length=1, max_length=240)
+    request_authorization_event_id: str | None = Field(
+        default=None, min_length=1, max_length=240
+    )
 
 
 class DelegatedActionPrepareRequest(ContextRequest):
@@ -627,6 +635,10 @@ def _session(
                 )
             ):
                 member_id = candidate
+    if member_id is None and provenance.channel_id == "gmail":
+        from adminme.conversation_instructions import gmail_member
+
+        member_id = gmail_member(runtime, provenance)
     if not member_id:
         raise HTTPException(403, "OpenClaw actor is not mapped to a household member")
     role = runtime.settings.member_roles.get(member_id)
@@ -835,12 +847,13 @@ async def _consume_openclaw_approval(
     tool_name: str,
     action: str,
     causation_id: str | None = None,
+    request_authorization: dict[str, str] | None = None,
 ) -> str:
-    """Consume the exact allow-once receipt and append its private audit fact."""
+    """Consume the exact independently evaluated receipt and append its private audit fact."""
 
     receipt_id = body.openclaw_approval_receipt_id
     if not receipt_id:
-        raise HTTPException(403, "independent OpenClaw allow-once approval is required")
+        raise HTTPException(403, "independent OpenClaw approval is required")
     runtime = _runtime(request)
     if runtime.openclaw_approval_store is None:
         raise HTTPException(503, "OpenClaw approval storage is unavailable")
@@ -851,6 +864,9 @@ async def _consume_openclaw_approval(
     )
     fingerprint = _fingerprint(values)
     try:
+        pending_receipt = runtime.openclaw_approval_store.get(receipt_id)
+        if pending_receipt.authorization != request_authorization:
+            raise ApprovalReceiptError("approval policy binding is mismatched")
         receipt = runtime.openclaw_approval_store.consume(
             receipt_id=receipt_id,
             tool_name=tool_name,
@@ -890,7 +906,10 @@ async def _consume_openclaw_approval(
             ).isoformat(),
             "consumed_at": consumed_at,
             "single_use": True,
-            "approval_method": "allow_once",
+            "approval_method": "authenticated_request"
+            if request_authorization
+            else "allow_once",
+            **(request_authorization or {}),
             "openclaw_version": receipt.openclaw_version,
             "openclaw_commit": receipt.openclaw_commit,
             "provenance": provenance.audit_payload(member_id=session.auth_member_id),
@@ -898,6 +917,7 @@ async def _consume_openclaw_approval(
         request_id=receipt.receipt_id,
         causation_id=causation_id,
         request_fingerprint=receipt.request_fingerprint,
+        schema_version=2 if request_authorization else 1,
     )
     return event_id
 
@@ -956,6 +976,31 @@ async def resolve_approval(
             openclaw_version=body.openclaw_version,
             openclaw_commit=body.openclaw_commit,
             signature=body.signature,
+        )
+    except ApprovalReceiptError as exc:
+        raise HTTPException(403, str(exc)) from exc
+    return {
+        "accepted": True,
+        "receipt_id": receipt.receipt_id,
+        "expires_at_ms": receipt.expires_at_ms,
+    }
+
+
+@router.post("/approvals/authenticated-request")
+async def resolve_request_approval(
+    body: RequestApprovalResolutionRequest, request: Request
+) -> dict[str, Any]:
+    _authenticate(request)
+    runtime = _runtime(request)
+    if (
+        runtime.openclaw_approval_store is None
+        or not runtime.settings.openclaw_shared_secret
+    ):
+        raise HTTPException(503, "OpenClaw approval storage is unavailable")
+    try:
+        receipt = runtime.openclaw_approval_store.resolve(
+            secret=runtime.settings.openclaw_shared_secret,
+            **body.model_dump(exclude={"decision"}),
         )
     except ApprovalReceiptError as exc:
         raise HTTPException(403, str(exc)) from exc
@@ -3020,6 +3065,16 @@ async def _execute_pending_provider_action(
         or domain_event.get("payload", {}).get("member_id") != session.auth_member_id
     ):
         raise HTTPException(404, "pending provider action not found")
+    request_authorization = None
+    grounding_id = getattr(approval_body, "request_authorization_event_id", None)
+    if grounding_id:
+        from adminme.products.openclaw.request_authorization import (
+            validate_request_authorization,
+        )
+
+        request_authorization = await validate_request_authorization(
+            request, session, provenance, domain_event, grounding_id
+        )
     canceled = await runtime.event_log.get_by_idempotency(
         session.tenant_id,
         f"messages-reply-cancel:{session.auth_member_id}:{domain_event['payload']['action_id']}",
@@ -3110,6 +3165,7 @@ async def _execute_pending_provider_action(
         tool_name=tool_name,
         action=str(payload["operation"]),
         causation_id=domain_event["event_id"],
+        request_authorization=request_authorization,
     )
     now = EventEnvelope.now_utc_iso()
     command_payload = {
