@@ -139,6 +139,27 @@ def verify_archived(
     return verify_package(publication, package, previous)
 
 
+async def read_archived_proof(
+    runtime: Any, publication: dict[str, Any]
+) -> VerifiedProvenance | None:
+    """Cross the projection worker boundary with detached scalar containers."""
+
+    def read(conn: Any) -> dict[str, Any] | None:
+        proof = verify_archived(conn, publication)
+        if proof is None:
+            return None
+        return {
+            "root": proof.root,
+            "source_snapshot_sha256": proof.source_snapshot_sha256,
+            "line_units": proof.line_units,
+            "unit_ids": proof.unit_ids,
+            "held_events_by_revision": proof.held_events_by_revision,
+        }
+
+    value = await runtime.projections.read("money", read)
+    return VerifiedProvenance(**value) if value is not None else None
+
+
 async def archive_package(
     runtime: Any, session: Any, publication: dict[str, Any], package: ClosedPackage
 ) -> None:

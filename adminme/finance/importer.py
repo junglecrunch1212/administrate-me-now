@@ -25,7 +25,7 @@ from adminme.finance.publication_provenance import (
     namespace_root,
     verify_package,
 )
-from adminme.finance.provenance_store import archive_package, verify_archived
+from adminme.finance.provenance_store import archive_package, read_archived_proof
 
 
 def _key(p: dict[str, Any]) -> str:
@@ -97,9 +97,7 @@ async def import_publication(
                 raise PublicationError("publication_identity_or_prior_conflict")
             await _settled(runtime)
             if namespace_root(p):
-                await runtime.projections.read(
-                    "money", lambda conn: verify_archived(conn, p)
-                )
+                await read_archived_proof(runtime, p)
             require_import_owner(runtime, session)
             return {
                 "state": "accepted",
@@ -133,9 +131,7 @@ async def import_publication(
             if provenance_package is None:
                 raise PublicationError("provenance_closed_package_required")
             prior_proof = (
-                await runtime.projections.read(
-                    "money", lambda c: verify_archived(c, prior_publication)
-                )
+                await read_archived_proof(runtime, prior_publication)
                 if prior_publication
                 else None
             )

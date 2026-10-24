@@ -7,12 +7,16 @@ import pytest
 
 from adminme.finance.importer import import_publication
 from adminme.finance.planning_store import import_projection
-from adminme.finance.provenance_store import verify_archived
+from adminme.finance.provenance_store import read_archived_proof, verify_archived
 from adminme.finance.publication import PublicationError, content_hash
 from adminme.lib.session import build_internal_session
 from adminme.runtime.application import create_application
 from tests.acceptance.test_finance_publications import settings
-from tests.fixtures.finance_provenance import package_fixture
+from tests.fixtures.finance_provenance import (
+    native_rows,
+    package_fixture,
+    seal_publication,
+)
 from tests.fixtures.finance_planning import projection
 
 
@@ -53,6 +57,7 @@ def test_closed_package_required_then_archived_restart_and_dated_binding(tmp_pat
             evidence_id="hbsource1:" + "a" * 64, artifact_ref="hbsource1:" + "a" * 64
         )
         dated["evidence"].append(witness)
+        dated["evidence_ids"].append(witness["evidence_id"])
         dated["content_sha256"] = content_hash(dated)
         assert (
             client.portal.call(import_projection, runtime, owner, dated)["state"]
@@ -61,15 +66,31 @@ def test_closed_package_required_then_archived_restart_and_dated_binding(tmp_pat
     with TestClient(create_application(config)) as client:
         runtime = client.app.state.runtime
 
-        async def inspect():
-            return await runtime.projections.read(
-                "money", lambda conn: verify_archived(conn, p)
-            )
-
-        assert client.portal.call(inspect).unit_ids == frozenset(
-            p["accepted_journal_revision_ids"]
-        )
+        assert client.portal.call(
+            read_archived_proof, runtime, p
+        ).unit_ids == frozenset(p["accepted_journal_revision_ids"])
         assert client.portal.call(import_publication, runtime, owner, p)["idempotent"]
+        successor, closure = package_fixture(
+            config.instance.tenant_id, rows=native_rows(5)
+        )
+        successor["prior_publication_id"] = p["publication_id"]
+        seal_publication(successor)
+        assert (
+            client.portal.call(
+                partial(
+                    import_publication,
+                    runtime,
+                    owner,
+                    successor,
+                    provenance_package=closure,
+                )
+            )["state"]
+            == "accepted"
+        )
+        assert (
+            len(client.portal.call(read_archived_proof, runtime, successor).unit_ids)
+            == 5
+        )
 
 
 def test_proof_archive_is_rebuildable_and_missing_proof_is_hold(tmp_path):
@@ -122,7 +143,6 @@ def test_unverified_predecessor_and_revoked_owner_append_no_publication(
     tmp_path, monkeypatch
 ):
     from dataclasses import replace
-    from tests.fixtures.finance_provenance import seal_publication
 
     config = settings(tmp_path)
     p, package = package_fixture(config.instance.tenant_id)
