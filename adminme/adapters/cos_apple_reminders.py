@@ -64,7 +64,10 @@ class NativeHelperBinding(BaseModel):
     model_config = {"extra": "forbid", "strict": True, "frozen": True}
     app_path: str = Field(min_length=1, max_length=4096)
     artifact_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    bundle_identifier: Literal["com.administrateme.cos-reminders-helper"]
+    bundle_identifier: Literal[
+        "com.administrateme.cos-reminders-helper",
+        "com.administrateme.cos-reminders-writer",
+    ]
 
     @field_validator("app_path")
     @classmethod

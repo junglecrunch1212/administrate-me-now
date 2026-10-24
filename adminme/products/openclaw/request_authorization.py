@@ -29,6 +29,8 @@ from adminme.lib.skill_runner import (
 from adminme.products.openclaw import main as seam
 
 RULE = "current-human-request.apple-reminder-create.v1"
+COS_RULE = "current-human-request.cos-reminder-create.v1"
+REQUEST_RULES = frozenset({RULE, COS_RULE})
 CONTRACT = "authenticated-request-v1"
 GROUNDING_TYPE = "cos.action.request_grounded"
 
@@ -65,7 +67,16 @@ async def ground_action(
     action_id: str,
     request_fingerprint: str,
     action: dict[str, Any],
+    rule_id: str = RULE,
 ) -> dict[str, Any]:
+    if (
+        rule_id not in REQUEST_RULES
+        or action.get("provider") != "apple_reminders"
+        or action.get("operation") != "create_reminder"
+        or action.get("resource_owner")
+        != (COS_SERVICE_PRINCIPAL_ID if rule_id == COS_RULE else "requester")
+    ):
+        raise HTTPException(403, "Unsupported requested action or resource owner")
     if runtime.observation is None or await runtime.observation.is_active():
         raise HTTPException(409, "Observation mode suppresses requested actions")
     if not request_actions_allowed(
@@ -79,7 +90,8 @@ async def ground_action(
     if prior is not None:
         p = prior["payload"]
         if (
-            p["request_fingerprint"] != request_fingerprint
+            p["rule_id"] != rule_id
+            or p["request_fingerprint"] != request_fingerprint
             or p["action_fingerprint"] != fingerprint(action)
             or p["source_event_id"] != source["event_id"]
         ):
@@ -145,7 +157,7 @@ async def ground_action(
         "action_id": action_id,
         "request_fingerprint": request_fingerprint,
         "action_fingerprint": fingerprint(action),
-        "rule_id": RULE,
+        "rule_id": rule_id,
         "source_fingerprint": fingerprint(text),
         "skill_event_id": result.recorded_event_id,
         "action": action,
@@ -185,6 +197,8 @@ def ticket(
     runtime: Any, session: Session, domain: dict[str, Any], grounding: dict[str, Any]
 ) -> dict[str, Any]:
     p = grounding["payload"]
+    if p["rule_id"] not in REQUEST_RULES:
+        raise HTTPException(403, "Unsupported request authorization rule")
     body = {
         "contract": CONTRACT,
         "member_id": session.auth_member_id,
@@ -192,7 +206,7 @@ def ticket(
         "grounding_event_id": grounding["event_id"],
         "source_event_id": p["source_event_id"],
         "action_fingerprint": p["action_fingerprint"],
-        "rule_id": RULE,
+        "rule_id": p["rule_id"],
         "issued_at": p["issued_at"],
         "expires_at": p["expires_at"],
         "evidence": p["evidence"],
@@ -230,6 +244,34 @@ async def validate_request_authorization(
         required_permission="prepare_external_actions",
     )
     now = datetime.now(timezone.utc)
+    rule_id = p.get("rule_id")
+    own_reminder = rule_id == COS_RULE
+    if own_reminder:
+        from adminme.cos_reminders_commands import CoSReminderIntent, SOURCE_ADAPTER
+
+        try:
+            intent = CoSReminderIntent.model_validate(
+                domain["payload"]["command_payload"]
+            )
+            intent.require_current(runtime.settings.adapter_config)
+            if (
+                intent.action() != p["action"]
+                or intent.source_event_id != source["event_id"]
+                or intent.authorization_expires_at
+                != datetime.fromisoformat(p["expires_at"])
+                or domain["payload"].get("provider_account_id")
+                != intent.selection.provider_account_id
+                or domain["payload"].get("target_external_id") is not None
+                or domain["payload"].get("expected_provider_revision") is not None
+            ):
+                raise ValueError("CoS native action differs from grounded intent")
+        except (KeyError, ValueError, PermissionError) as exc:
+            raise HTTPException(
+                403, "CoS reminder authority changed or mismatched"
+            ) from exc
+        expected_adapter = SOURCE_ADAPTER
+    else:
+        expected_adapter = "openclaw-apple-reminder"
     if (
         grounding.get("type") != GROUNDING_TYPE
         or grounding.get("schema_version") != 1
@@ -238,11 +280,16 @@ async def validate_request_authorization(
         or grounding.get("owner_scope") != f"private:{session.auth_member_id}"
         or grounding.get("actor_identity") != COS_SERVICE_PRINCIPAL_ID
         or p["member_id"] != session.auth_member_id
-        or p["rule_id"] != RULE
+        or rule_id not in REQUEST_RULES
+        or p["action"].get("resource_owner")
+        != (COS_SERVICE_PRINCIPAL_ID if own_reminder else "requester")
         or not datetime.fromisoformat(p["issued_at"])
         <= now
         < datetime.fromisoformat(p["expires_at"])
-        or domain.get("source_adapter") != "openclaw-apple-reminder"
+        or domain.get("source_adapter") != expected_adapter
+        or domain.get("actor_identity") != session.auth_member_id
+        or domain.get("source_account_id") != session.auth_member_id
+        or domain.get("visibility_scope") != f"private:{session.auth_member_id}"
         or domain.get("causation_id") != source["event_id"]
         or domain["payload"].get("action_id") != p["action_id"]
         or domain["payload"].get("request_fingerprint") != p["request_fingerprint"]
@@ -262,7 +309,7 @@ async def validate_request_authorization(
         "source_event_id": source["event_id"],
         "domain_approval_event_id": domain["event_id"],
         "action_fingerprint": p["action_fingerprint"],
-        "rule_id": RULE,
+        "rule_id": str(rule_id),
     }
 
 

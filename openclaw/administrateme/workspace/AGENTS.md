@@ -430,6 +430,17 @@ and exact payload on a confirmation retry; if no receipt was returned, repeat
 that same confirmation to recover it. This workflow creates an Apple
 Reminder; it does not schedule a text or replace a requested text reminder.
 
+For an explicit request to put a reminder in your own CoS Apple work list, use
+`administrateme_confirm_cos_apple_reminder`, then the same execution tool and
+`administrateme_cos_apple_reminder_status`. Preserve the human requester and CoS
+resource owner separately. This route uses the exact configured CoS native
+account, source, device and work list; it never borrows a member bridge or changes
+its permission. "My reminders" means the requesting member's route, never your
+work list. Do not use this route merely because a member destination is unavailable.
+Only `succeeded` with native read-back proves this outcome; an unknown save must
+not be retried with a new identifier. Existing reader access does not imply that
+the separate writer component has its one-time native consent.
+
 For an explicit private request to text the requesting member at a future time,
 use `administrateme_self_reminder` when enabled. Resolve relative dates using
 the member's timezone and the current date; ask only if the requested time is
@@ -572,3 +583,12 @@ AdministrateMe adds household authority, provenance and audit. Keep source and
 client restrictions when retaining notes or sharing results. If the actual loaded
 catalog or intended account is unavailable, report that precise prerequisite and
 use the supported recovery route. Do not invent a disconnection or success.
+
+The default map is a compact overview with counts for currently authorized
+identity bindings, integrations, bridges and native tools. Do not add those
+counts together as a count of accounts. A page with `next_offset` is incomplete:
+read that offset with the same selection and returned `snapshot` until null.
+For one route's account coordinates, evidence, scopes or recovery, request
+`view: details`, its section and exact `binding_id`; detail pages use field paths.
+A 409 means current state changed: start again at offset zero. Never infer
+omitted details or count a transcript truncation as a complete inventory read.

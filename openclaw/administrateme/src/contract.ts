@@ -74,6 +74,8 @@ export const TOOL_NAMES = [
   "administrateme_standing_order",
   "administrateme_service_follow_up",
   "administrateme_confirm_apple_reminder",
+  "administrateme_confirm_cos_apple_reminder",
+  "administrateme_cos_apple_reminder_status",
   "administrateme_apple_reminder_status",
   "administrateme_self_reminder",
   "administrateme_self_reminder_fire",
