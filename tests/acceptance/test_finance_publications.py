@@ -305,3 +305,48 @@ def test_publication_semantic_clocks_and_bases(case):
     p["content_sha256"] = content_hash(p)
     with pytest.raises(PublicationError):
         validate_publication(p)
+
+
+def test_books_mode_excludes_legacy_finance_reverse_but_preserves_operations(tmp_path):
+    from adminme.projections.xlsx_workbooks import (
+        FINANCE_WORKBOOK_NAME,
+        OPS_WORKBOOK_NAME,
+    )
+
+    configured = settings(tmp_path)
+    app = create_application(configured)
+    with TestClient(app) as client:
+        assert client.portal
+        runtime = app.state.runtime
+        daemon = runtime.xlsx_reverse
+        assert daemon is not None
+        # Stop filesystem notifications so this test exercises each cycle once.
+        client.portal.call(daemon.stop)
+        p = publication(configured.instance.tenant_id)
+        owner = build_internal_session("member-synthetic", "principal", p["tenant_id"])
+        client.portal.call(import_publication, runtime, owner, p)
+
+        async def exercise():
+            # Books ingress excludes legacy writeback even if a caller bypasses
+            # watchdog scheduling. Operations still traverses its real cycle.
+            daemon._schedule_cycle(FINANCE_WORKBOOK_NAME)
+            assert FINANCE_WORKBOOK_NAME not in daemon._debounce_tasks
+            await daemon.run_cycle_now(FINANCE_WORKBOOK_NAME)
+            await daemon.run_cycle_now(OPS_WORKBOOK_NAME)
+            return [
+                event
+                async for event in runtime.event_log.read_since()
+                if event["source_adapter"] == "xlsx_reverse"
+            ]
+
+        reverse_events = client.portal.call(exercise)
+        assert reverse_events
+        assert all(
+            event["payload"].get("workbook_name") != FINANCE_WORKBOOK_NAME
+            for event in reverse_events
+        )
+        assert any(
+            event["type"] == "xlsx.reverse_projected"
+            and event["payload"]["workbook_name"] == OPS_WORKBOOK_NAME
+            for event in reverse_events
+        )

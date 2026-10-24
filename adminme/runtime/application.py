@@ -1236,6 +1236,9 @@ class AdministrateMeRuntime:
                 self._xlsx_query_context(),
                 event_sink=self.events,
                 guarded_write=self.guarded_write,
+                # One legacy household Finance file cannot remain a second
+                # write authority when accepted Books ingress is selected.
+                finance_reverse_enabled=not self.settings.finance_publications_enabled,
             )
             if policy_from_adapter_config(self.settings.adapter_config) is None:
                 await self.xlsx_reverse.start()

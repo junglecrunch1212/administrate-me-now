@@ -65,6 +65,7 @@ jobs:
           tests/unit/test_projection_parties.py
           tests/integration/test_projection_rebuild.py
           tests/unit/test_xlsx_finance_workbook.py
+          tests/unit/test_xlsx_reverse_finance.py
           tests/acceptance/test_finance_publications.py
           tests/acceptance/test_finance_planning.py
           tests/acceptance/test_finance_planning_windows.py

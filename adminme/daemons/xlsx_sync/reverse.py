@@ -151,10 +151,14 @@ class XlsxReverseDaemon:
         delete_undo_window_s: float = 5.0,
         guarded_write: GuardedWrite | None = None,
         principal_member_id_resolver: Any = None,
+        finance_reverse_enabled: bool = True,
     ) -> None:
         self._config = config
         self._ctx = query_context
         self._events = event_sink
+        # Fixed for this daemon lifetime: switching accounting authority requires
+        # a runtime restart, which also drains/cancels prior reverse cycles.
+        self._finance_reverse_enabled = finance_reverse_enabled
         self._flush_wait_s = flush_wait_s
         self._forward_lock_timeout_s = forward_lock_timeout_s
         self._delete_undo_window_s = delete_undo_window_s
@@ -257,6 +261,8 @@ class XlsxReverseDaemon:
     def _schedule_cycle(self, workbook: str) -> None:
         """On the asyncio loop: cancel any pending debounce for ``workbook``
         and schedule a fresh cycle after the flush wait."""
+        if workbook == FINANCE_WORKBOOK_NAME and not self._finance_reverse_enabled:
+            return
         existing = self._debounce_tasks.get(workbook)
         if existing is not None and not existing.done():
             existing.cancel()
@@ -284,6 +290,10 @@ class XlsxReverseDaemon:
     # The cycle itself
     # ------------------------------------------------------------------
     async def _run_cycle_internal(self, workbook: str, *, waited: bool) -> None:
+        # Guard the execution boundary too: direct/recovered cycles must not
+        # read the old file, advance its sidecars or emit legacy financial facts.
+        if workbook == FINANCE_WORKBOOK_NAME and not self._finance_reverse_enabled:
+            return
         lock = self._cycle_locks.setdefault(workbook, asyncio.Lock())
         async with lock:
             self._inflight_cycles[workbook] += 1

@@ -6,8 +6,12 @@ Date: 2026-10-23
 **SUPERSEDE** ADR-0007's XLSX planning authority for a Books-owned book. Books
 owns accepted accounting/planning publications and its scenario math. The legacy
 XLSX path is not reused for this namespace. No automatic migration or dual write
-is authorized. Activation must disable the legacy planning reverse path for the
-adopted book; until that exclusion is proven, activation remains blocked.
+is authorized. Selecting accepted Books ingress disables reverse processing of
+the single legacy household Finance workbook for that runtime lifetime, including
+scheduled and direct cycles. Operations workbook processing remains enabled.
+This preserves the old file and sidecars without accepting a second financial
+write authority. Switching authority requires a restart; it is not a hot toggle.
+Hosted composition-root coverage must prove this exclusion before activation.
 
 **PRESERVE** ADR-0001's dependency direction, one Python runtime, OpenClaw model
 and scheduling boundary, domain approval, privileged owner access, observation,
