@@ -6,11 +6,13 @@ only the pinned OpenClaw/provider boundaries are credential-free fixtures.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import copy
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import importlib.util
+import json
 from pathlib import Path
 from typing import Any
 
@@ -19,7 +21,11 @@ from fastapi.testclient import TestClient
 import pytest
 
 from adminme.conversation_instructions import authored_email_text
+from adminme.events.bus import EventBus
 from adminme.events.envelope import EventEnvelope
+from adminme.events.log import EventLog
+from adminme.events.writer import EventWriter
+from adminme.lib.observation import ObservationManager
 from adminme.openclaw_contract import OPENCLAW_COMMIT, OPENCLAW_VERSION
 from adminme.products.openclaw.main import Provenance
 from adminme.products.openclaw.service_work import current_private_instruction
@@ -115,6 +121,7 @@ def gmail_observation(
     untrusted: bool = False,
     group: bool = False,
     old: bool = False,
+    received_at: datetime | None = None,
 ) -> str:
     spec = importlib.util.spec_from_file_location(
         "gmail_conversation_fixture", ROOT / "packs/adapters/messaging/gmail/adapter.py"
@@ -155,7 +162,11 @@ def gmail_observation(
         headers.append({"name": "Cc", "value": "third-party@example.invalid"})
     if untrusted:
         headers = [row for row in headers if row["name"] != "Authentication-Results"]
-    now_ms = 1 if old else int(datetime.now(timezone.utc).timestamp() * 1000)
+    now_ms = (
+        1
+        if old
+        else int((received_at or datetime.now(timezone.utc)).timestamp() * 1000)
+    )
     payload, version, occurred = adapter._received_observation(
         {
             "id": native_id,
@@ -366,3 +377,215 @@ def test_observation_startup_and_portal_chat_write_no_new_feature_history(
             len(client.portal.call(_events, runtime, "cos.conversation.activation"))
             == 1
         )
+
+
+async def _restore_gmail_while_stopped(
+    value: Any, receipt: dict[str, Any], facts: Any, *, revoked: bool = False
+) -> None:
+    """Use the updater's stopped-process event/receipt/observation composition."""
+    log = EventLog(value.instance, value.encryption_key)
+    bus = EventBus(log, value.instance.bus_checkpoint_path)
+    writer = EventWriter(log, bus)
+    policy_id: str | None = None
+    try:
+        for fact in facts.events:
+            payload = copy.deepcopy(fact["payload"])
+            if fact["type"] == "cos.channels.activated":
+                assert policy_id is not None
+                payload["allowlist_event_id"] = policy_id
+                payload["self_reply_bindings"] = []
+                receipt["activation"] = payload
+            else:
+                payload["changed_at"] = EventEnvelope.now_utc_iso()
+            event_id = await writer.write(
+                EventEnvelope(
+                    event_at_ms=int(datetime.now(timezone.utc).timestamp() * 1000),
+                    tenant_id=value.instance.tenant_id,
+                    type=fact["type"],
+                    schema_version=2 if fact["type"] == "cos.channels.activated" else 1,
+                    occurred_at=payload.get("enabled_at", EventEnvelope.now_utc_iso()),
+                    source_adapter="cos-channel-operation",
+                    source_account_id="system",
+                    owner_scope="shared:household",
+                    visibility_scope="shared:household",
+                    actor_identity="operator:fixture-activation",
+                    payload=payload,
+                )
+            )
+            if fact["type"] == "cos.channels.activated":
+                receipt["event_id"] = event_id
+            else:
+                policy_id = event_id
+        (value.instance.config_dir / "cos-channel-operation.json").write_text(
+            json.dumps(receipt)
+        )
+        await ObservationManager(
+            writer, value.instance.config_dir / "runtime.yaml"
+        ).disable("operator:fixture-activation", "Restore authorized Gmail operation")
+        if revoked:
+            await writer.write(
+                EventEnvelope(
+                    event_at_ms=int(datetime.now(timezone.utc).timestamp() * 1000),
+                    tenant_id=value.instance.tenant_id,
+                    type="cos.channels.deactivated",
+                    schema_version=1,
+                    occurred_at=EventEnvelope.now_utc_iso(),
+                    source_adapter="cos-channel-operation",
+                    source_account_id="system",
+                    owner_scope="shared:household",
+                    visibility_scope="shared:household",
+                    actor_identity="operator:fixture-activation",
+                    payload={
+                        "activation_id": receipt["activation"]["activation_id"],
+                        "reason": "operator_requested",
+                        "operator_principal_id": "operator:fixture-activation",
+                        "observation_active": True,
+                    },
+                )
+            )
+    finally:
+        await bus.stop()
+        await log.close()
+
+
+def _gmail_restart_fixture(path: Path) -> tuple[Any, dict[str, Any], Any]:
+    from tests.unit.test_cos_channel_operation import _fixture
+
+    config, receipt, facts = _fixture(path)
+    # Production authorization and provider provenance are real; no credential
+    # lookup or provider acquisition runs in this disposable composition test.
+    for adapter in config["adapters"]:
+        adapter["enabled"] = False
+    return replace(settings(path), adapter_config=config), receipt, facts
+
+
+@pytest.mark.parametrize("pending_journal", [False, True])
+def test_gmail_initializes_after_stopped_restore_without_releasing_old_inbox(
+    tmp_path: Path, pending_journal: bool
+) -> None:
+    value, receipt, facts = _gmail_restart_fixture(tmp_path / "stopped-restore")
+    with TestClient(create_application(value)) as client:
+        runtime = client.app.state.runtime
+        gmail_observation(client, "candidate-mail")
+        assert client.portal.call(runtime.observation.is_active) is True
+        assert client.portal.call(_events, runtime, "cos.conversation.activation") == []
+        assert (
+            client.portal.call(_events, runtime, "cos.conversation.instruction") == []
+        )
+    asyncio.run(_restore_gmail_while_stopped(value, receipt, facts))
+    journal = (
+        value.instance.config_dir.parent.parent
+        / "app/cos-channel-operation/active.json"
+    )
+    if pending_journal:
+        journal.parent.mkdir(parents=True, exist_ok=True)
+        journal.write_text("{}")
+    with TestClient(create_application(value)) as client:
+        runtime = client.app.state.runtime
+        assert client.portal.call(runtime.observation.is_active) is False
+        intake = runtime.gmail_conversations
+        assert intake is not None
+        if pending_journal:
+            gmail_observation(client, "before-journal-commit")
+            assert intake.activated_at is None
+            assert (
+                client.portal.call(_events, runtime, "cos.conversation.activation")
+                == []
+            )
+            assert (
+                client.portal.call(_events, runtime, "cos.conversation.instruction")
+                == []
+            )
+            journal.unlink()
+        gmail_observation(
+            client,
+            "recent-before-process",
+            received_at=intake.started_at - timedelta(seconds=1),
+        )
+        assert (
+            client.portal.call(_events, runtime, "cos.conversation.instruction") == []
+        )
+        fresh = gmail_observation(client, "fresh-after-restoration")
+        activations = client.portal.call(
+            _events, runtime, "cos.conversation.activation"
+        )
+        assert len(activations) == 1
+        assert intake.activated_at == intake.started_at
+        assert intake.activated_at > datetime.fromisoformat(
+            receipt["activation"]["enabled_at"]
+        )
+        instructions = client.portal.call(
+            _events, runtime, "cos.conversation.instruction"
+        )
+        assert [row["payload"]["source_message_event_id"] for row in instructions] == [
+            fresh
+        ]
+        assert [
+            row["payload"]["state"]
+            for row in client.portal.call(_events, runtime, "cos.conversation.delivery")
+        ] == ["running", "answered"]
+        original_activation = activations[0]
+    # Later startup preserves the original boundary and never redispatches a
+    # completed or unknown native turn solely because the process restarted.
+    with TestClient(create_application(value)) as client:
+        runtime = client.app.state.runtime
+        gmail_observation(client, "old-on-restart", old=True)
+        assert client.portal.call(_events, runtime, "cos.conversation.activation") == [
+            original_activation
+        ]
+        assert (
+            len(client.portal.call(_events, runtime, "cos.conversation.instruction"))
+            == 1
+        )
+        assert (
+            len(client.portal.call(_events, runtime, "cos.conversation.delivery")) == 2
+        )
+
+
+@pytest.mark.parametrize(
+    "blocked", ["revoked", "missing_receipt", "source_disabled", "observation"]
+)
+def test_gmail_first_start_needs_current_authority_and_normal_operation(
+    tmp_path: Path, blocked: str
+) -> None:
+    value, receipt, facts = _gmail_restart_fixture(tmp_path / blocked)
+    with TestClient(create_application(value)):
+        pass
+    asyncio.run(
+        _restore_gmail_while_stopped(
+            value, receipt, facts, revoked=blocked == "revoked"
+        )
+    )
+    if blocked == "missing_receipt":
+        (value.instance.config_dir / "cos-channel-operation.json").unlink()
+    elif blocked == "source_disabled":
+        journal = (
+            value.instance.config_dir.parent.parent
+            / "app/cos-channel-operation/active.json"
+        )
+        journal.parent.mkdir(parents=True, exist_ok=True)
+        journal.write_text("{}")
+    elif blocked == "observation":
+        # Candidate startup sees the restored facts, but observation is still on.
+        (value.instance.config_dir / "runtime.yaml").unlink()
+    with TestClient(create_application(value)) as client:
+        runtime = client.app.state.runtime
+        if blocked == "source_disabled":
+            object.__setattr__(
+                runtime.settings,
+                "service_channel_accounts",
+                tuple(
+                    replace(channel, state="disabled")
+                    if channel.provider == "gmail"
+                    else channel
+                    for channel in runtime.settings.service_channel_accounts
+                ),
+            )
+            journal.unlink()
+        gmail_observation(client, "blocked-current-input")
+        assert runtime.gmail_conversations.activated_at is None
+        assert client.portal.call(_events, runtime, "cos.conversation.activation") == []
+        assert (
+            client.portal.call(_events, runtime, "cos.conversation.instruction") == []
+        )
+        assert client.portal.call(_events, runtime, "cos.conversation.delivery") == []
