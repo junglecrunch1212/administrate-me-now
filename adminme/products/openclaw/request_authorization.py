@@ -14,6 +14,7 @@ from typing import Any
 
 from fastapi import HTTPException, Request
 
+from adminme.events.log import EventLogError
 from adminme.request_actions_control import request_actions_allowed
 from adminme.service_identities import COS_SERVICE_PRINCIPAL_ID
 from adminme.lib.session import Session
@@ -130,6 +131,16 @@ async def ground_action(
         return prior
     text = source["payload"]["text"]
     try:
+        # A failed invocation has no successful result. Its old source causation
+        # must not let a new message spend that same action identity again.
+        # This exact delimited member/action/skill prefix uses the existing
+        # tenant/idempotency index, reads at most 32 receipts, and fails closed
+        # on overflow. A pack update does not turn an old failure into authority.
+        failed = await runtime.event_log.get_by_idempotency_prefix(
+            session.tenant_id, f"skill:failed:{key}:skill:ground_requested_action:"
+        )
+        if failed:
+            raise SkillInputInvalid("request identity already has failed grounding")
         result = await runtime.run_skill_fn(
             "ground_requested_action",
             {
@@ -150,6 +161,8 @@ async def ground_action(
             input_sensitivities={"instruction": source["sensitivity"]},
         )
     except (
+        EventLogError,
+        ValueError,
         OpenClawResponseMalformed,
         OpenClawTimeout,
         OpenClawUnreachable,

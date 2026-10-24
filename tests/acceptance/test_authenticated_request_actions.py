@@ -599,6 +599,28 @@ def test_followup_cannot_rebind_failed_invocation_or_escape_as_server_error(
                 "external.sent",
             ):
                 assert client.portal.call(_events, runtime, kind) == []
+            # The failed identity is spent, not a blanket block on a genuinely
+            # new full instruction with its own stable identity.
+            client.portal.call(model.aclose)
+            model, fresh_calls = model_boundary(client)
+            fresh = _instruction(client, "fresh-full-request")
+            confirmed = client.post(
+                CONFIRM,
+                headers=AUTH,
+                json={
+                    **_body(fresh, "fresh-distinct-action"),
+                    "notes": None,
+                    "request_authorization": True,
+                },
+            )
+            assert confirmed.status_code == 200, confirmed.text
+            assert len(calls) == len(fresh_calls) == 1
+            for retained in before.values():
+                for event in retained:
+                    assert (
+                        client.portal.call(runtime.event_log.get, event["event_id"])
+                        == event
+                    )
         finally:
             client.portal.call(model.aclose)
 
