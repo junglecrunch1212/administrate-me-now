@@ -1921,6 +1921,10 @@ def _service_work_candidate(path: Path) -> tuple[str, str]:
     for relative in COS_SERVICE_WORK_REQUIRED_PATHS:
         target = path / relative
         target.parent.mkdir(parents=True, exist_ok=True)
+        if relative == ENROLLMENT_INGEST_PATH and target.exists():
+            # The shared router's unrelated baseline remains outside this lane.
+            # Only its terminal receipt seam may change, not the whole module.
+            continue
         target.write_text(
             _SERVICE_WIRED_RUNTIME
             if relative == COS_SERVICE_WORK_APPLICATION
