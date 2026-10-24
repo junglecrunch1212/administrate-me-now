@@ -303,12 +303,21 @@ jobs:
         run: |
           python -m pip install 'poetry==2.4.1'
           poetry sync --with dev --no-interaction
+      - name: Prove retained Apple provenance and predecessor replay
+        run: |
+          poetry run pytest -p no:cacheprovider --runxfail -q -ra \
+            --basetemp="$RUNNER_TEMP/cos-apple-history-tests" \
+            --junitxml="$RUNNER_TEMP/cos-apple-history.xml" \
+            tests/unit/test_cos_apple_source_history.py \
+            tests/acceptance/test_cos_apple_source_history.py
       - name: Validate recovery history, fault compensation and retained compatibility
         run: |
           poetry run pytest -p no:cacheprovider --runxfail -q -ra \
             -k 'not test_sealed_component_reuses_exact_old_runtime_and_preserves_rollback and not test_sealed_mixed_release_keeps_exact_paired_archive_and_requires_central_negotiation' \
             --basetemp="$RUNNER_TEMP/cos-recovery-history-tests" \
             --junitxml="$RUNNER_TEMP/cos-recovery-history.xml" \
+            tests/unit/test_historical_attribution.py \
+            tests/unit/test_lifecycle_catalog.py \
             tests/unit/bootstrap/test_cos_recovery_history.py \
             tests/unit/bootstrap/test_cos_recovery_history_operation.py \
             tests/acceptance/test_cos_live_maintenance.py \
@@ -350,7 +359,9 @@ jobs:
         if: ${{ !cancelled() }}
         with:
           name: cos-recovery-history-macos
-          path: ${{ runner.temp }}/cos-recovery-history.xml
+          path: |
+            ${{ runner.temp }}/cos-recovery-history.xml
+            ${{ runner.temp }}/cos-apple-history.xml
           if-no-files-found: error
           retention-days: 7
       - name: Bind successful validation to this revision

@@ -12,6 +12,10 @@ from pydantic import ValidationError
 
 from adminme.bridge_history import BridgeHistory, SOURCE_ADAPTERS
 from adminme.apple_service_history import apple_command_owner_matches
+from adminme.cos_apple_source_history import (
+    receipt_idempotency_key,
+    source_owner_matches,
+)
 from adminme.cos_response_assurance import APPROVED, ATTEMPTED
 from adminme.cos_responses import RESPONSE_CONTRACT
 from adminme.direct_intake import DirectIntakeProcessor
@@ -497,6 +501,19 @@ async def audit_historical_attribution(
             if event_type == "external_sync.write_requested"
             else None
         )
+        apple_source = (
+            await event_log.get(str(event["event_id"]))
+            if event_type == "list.created"
+            else None
+        )
+        apple_history_receipt = (
+            await event_log.get_by_idempotency(
+                str((apple_source or {}).get("tenant_id") or ""),
+                receipt_idempotency_key(str(event["event_id"])),
+            )
+            if event_type == "list.created"
+            else None
+        )
         bindings = bindings_by_account.get(account.casefold(), [])
         matching_bindings = [
             binding for binding in bindings if owner_scope == binding.owner_scope
@@ -507,7 +524,17 @@ async def audit_historical_attribution(
         }
         binding_state = "unattributed"
         workspace = "unattributed"
-        if event_type == ATTEMPTED:
+        if apple_history_receipt is not None:
+            # An exact retrospective receipt is historical evidence, never a
+            # present provider binding. A malformed claim cannot fall through
+            # to a coincidentally matching current account or owner.
+            if apple_source is not None and await source_owner_matches(
+                event_log, apple_source, through=watermark or ""
+            ):
+                binding_state = "retained_cos_apple_source_reconciled"
+                workspace = "service"
+                attributed += 1
+        elif event_type == ATTEMPTED:
             # This command is emitted by the governed internal reply route,
             # not the enrolled provider adapter. Never fall back to provider
             # matching when its member/private correlation is malformed.

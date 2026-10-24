@@ -36,6 +36,7 @@ from scripts.release_scope import (
     COS_RECOVERY_CONTROLLER,
     COS_RECOVERY_HISTORY,
     COS_RECOVERY_TEST_PATHS,
+    COS_RETAINED_SOURCE_HISTORY_PATHS,
     ENROLLMENT_INGEST_PATH,
     MEMBER_GOOGLE_SETTINGS_WIRING,
     MEMBER_GOOGLE_SETTINGS_CHECK_SCRIPT,
@@ -1283,6 +1284,9 @@ def test_recovery_worker_requires_affected_persistence_and_compatibility_contrac
     assert "if" not in job["steps"][-1]
     commands = "\n".join(step.get("run", "") for step in job["steps"])
     for required in (
+        "test_cos_apple_source_history.py",
+        "test_historical_attribution.py",
+        "test_lifecycle_catalog.py",
         "test_cos_recovery_history.py",
         "test_cos_recovery_history_operation.py",
         "test_cos_channel_activation.py",
@@ -2978,3 +2982,38 @@ def test_native_boundary_is_visible_before_remaining_macos_suite() -> None:
     )
     assert "cos-reminders-native.xml" in native["run"]
     assert "('skipped', 'failures', 'errors')" in native["run"]
+
+
+@pytest.mark.parametrize(
+    "defect", ["none", "missing-proof", "unknown", "storage", "mode"]
+)
+def test_retained_service_history_uses_existing_recovery_worker_with_closed_inputs(
+    repository: tuple[Path, str], defect: str
+) -> None:
+    path, _ = repository
+    _recovery_candidate(path)
+    base = _git(path, "rev-parse", "HEAD")
+    for source in sorted(COS_RETAINED_SOURCE_HISTORY_PATHS):
+        if (
+            defect == "missing-proof"
+            and source == "tests/acceptance/test_cos_apple_source_history.py"
+        ):
+            continue
+        _commit(path, source, "# Exact retained source recovery contract\n")
+    if defect == "unknown":
+        _commit(path, "adminme/unrelated_runtime.py", "# Unrelated\n")
+    elif defect == "storage":
+        _commit(path, "adminme/events/log.py", "# Persistence change\n")
+    elif defect == "mode":
+        source = path / "bootstrap/cos_apple_source_history.py"
+        source.chmod(0o755)
+        _git(path, "add", "--all")
+        _git(path, "commit", "-m", "Unexpected executable mode")
+    head = _git(path, "rev-parse", "HEAD")
+    proof = select_scope(path, _event(base, head), checkout_sha=head)
+    assert proof["scope"] == (
+        "cos-recovery-history" if defect == "none" else "system-wide"
+    )
+    if defect == "none":
+        for platform in ("linux", "macos"):
+            verify_gate(proof, _needs(proof, platform), platform=platform)

@@ -244,6 +244,16 @@ COS_RECOVERY_COMPONENT_PATHS = frozenset(
         "bootstrap/member_bridge_component.py",
     }
 )
+COS_RETAINED_SOURCE_HISTORY_PATHS = frozenset(
+    {
+        "bootstrap/cos_apple_source_history.py",
+        "adminme/cos_apple_source_history.py",
+        "adminme/events/schemas/cos_apple_source_history.py",
+        "adminme/historical_attribution.py",
+        "tests/unit/test_cos_apple_source_history.py",
+        "tests/acceptance/test_cos_apple_source_history.py",
+    }
+)
 COS_RECOVERY_TEST_PATHS = frozenset(
     {
         "tests/unit/bootstrap/test_cos_channel_activation.py",
@@ -608,7 +618,10 @@ def choose_scope(
     ):
         return "updater-delivery"
     recovery_allowed = (
-        COS_RECOVERY_COMPONENT_PATHS | COS_RECOVERY_TEST_PATHS | POLICY_PATHS
+        COS_RECOVERY_COMPONENT_PATHS
+        | COS_RECOVERY_TEST_PATHS
+        | COS_RETAINED_SOURCE_HISTORY_PATHS
+        | POLICY_PATHS
     )
     if (
         cos_recovery_interfaces_equal
@@ -619,7 +632,12 @@ def choose_scope(
             for status, path in changes
         )
         and any(
-            path in {COS_RECOVERY_CONTROLLER, COS_RECOVERY_HISTORY}
+            path
+            in {
+                COS_RECOVERY_CONTROLLER,
+                COS_RECOVERY_HISTORY,
+                "bootstrap/cos_apple_source_history.py",
+            }
             for _, path in changes
         )
     ):
@@ -884,7 +902,12 @@ def _cos_recovery_dependency_fingerprint(entries: tuple[GitTreeEntry, ...]) -> s
     # Only this closed controller/history/compatibility edit set may differ.
     # Every other tracked byte and mode, including tests and unknown inputs,
     # stays frozen across the protected base, head, and exact-parent test merge.
-    allowed = COS_RECOVERY_COMPONENT_PATHS | COS_RECOVERY_TEST_PATHS | POLICY_PATHS
+    allowed = (
+        COS_RECOVERY_COMPONENT_PATHS
+        | COS_RECOVERY_TEST_PATHS
+        | COS_RETAINED_SOURCE_HISTORY_PATHS
+        | POLICY_PATHS
+    )
     coordinates = sorted(
         (entry.path, entry.mode, entry.object_id)
         for entry in entries
@@ -1297,9 +1320,16 @@ def select_scope(
         required_recovery_paths = COS_RECOVERY_COMPONENT_PATHS - (
             {COS_RECOVERY_HISTORY} if revision == base else set()
         )
-        recovery_sources_present[revision] = required_recovery_paths <= {
+        regular_recovery_paths = {
             entry.path for entry in entries if entry.mode == "100644"
         }
+        recovery_sources_present[revision] = (
+            required_recovery_paths <= regular_recovery_paths
+            and (
+                "bootstrap/cos_apple_source_history.py" not in regular_recovery_paths
+                or COS_RETAINED_SOURCE_HISTORY_PATHS <= regular_recovery_paths
+            )
+        )
         enrollment_route_present[revision] = any(
             entry.path == ENROLLMENT_INGEST_PATH and entry.mode == "100644"
             for entry in entries
