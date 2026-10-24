@@ -35,6 +35,7 @@ from bootstrap.contracts import (
     load_versions,
     repository_root,
 )
+from bootstrap.native_account_policy import prepare_native_account_policy
 from bootstrap.openclaw_cron import OpenClawCronReconciler
 from bootstrap.openclaw_install import resolve_reviewed_openclaw
 from bootstrap.secrets import secret_store
@@ -534,8 +535,9 @@ def prepare_service_topology(
     The installer uses the same transformation; no agent, tool or grant field
     is omitted from the later compatibility comparison.
     """
-    return _prepare_service_topology(
-        gateway, paths, _service_release_workspace(release)
+    return prepare_native_account_policy(
+        _prepare_service_topology(gateway, paths, _service_release_workspace(release)),
+        release,
     )
 
 
@@ -545,8 +547,11 @@ def reconcile_service_topology(paths: DeploymentPaths, release: Path) -> dict[st
     config_path = paths.instance_dir / "openclaw" / "runtime" / "openclaw.json"
     if config_path.is_symlink() or not config_path.is_file():
         raise RuntimeError("service topology requires the runtime configuration")
-    config = _prepare_service_topology(
-        json.loads(config_path.read_text("utf-8")), paths, files
+    config = prepare_native_account_policy(
+        _prepare_service_topology(
+            json.loads(config_path.read_text("utf-8")), paths, files
+        ),
+        release,
     )
     if files is not None:
         workspace = service_workspace_path(
