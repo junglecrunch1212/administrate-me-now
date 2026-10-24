@@ -3721,8 +3721,7 @@ def test_requested_email_router_scope_reads_immutable_tree(
     repository: tuple[Path, str],
 ) -> None:
     path, _ = repository
-    _service_work_candidate(path)
-    base = _commit(path, COS_SERVICE_WORK_APPLICATION, _SERVICE_WIRED_RUNTIME)
+    _, base = _service_work_candidate(path)
     after = _SERVICE_WIRED_RUNTIME.replace(
         "    return app\n", _REQUESTED_EMAIL_ROUTER + "    return app\n"
     )
@@ -3758,6 +3757,17 @@ def test_requested_email_closed_paths_use_existing_affected_lane(
     path, _ = repository
     _, base = _service_work_candidate(path)
     head = _commit(path, relative, "# bounded exact requested email change\n")
+    if relative not in COS_SERVICE_WORK_COMPONENT_PATHS:
+        # A test alone does not establish the affected production component.
+        assert (
+            select_scope(path, _event(base, head), checkout_sha=head)["scope"]
+            == "system-wide"
+        )
+        head = _commit(
+            path,
+            "adminme/products/openclaw/requested_email.py",
+            "# Matching requested-email component change\n",
+        )
     assert (
         select_scope(path, _event(base, head), checkout_sha=head)["scope"]
         == "cos-service-work"
