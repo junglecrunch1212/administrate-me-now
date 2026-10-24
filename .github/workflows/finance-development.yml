@@ -91,29 +91,29 @@ jobs:
           if-no-files-found: error
           retention-days: 7
       - name: Measure dedicated authority reader memory and shutdown
-        if: always()
+        if: '!cancelled()'
         env:
           ADMINME_FINANCE_READER_MEMORY: '1'
         run: poetry run pytest -q -s tests/acceptance/test_finance_authority_memory.py
       - name: Diagnose shared planning query plans and deep-page work
-        if: always()
+        if: '!cancelled()'
         env:
           ADMINME_FINANCE_QUERY_COST: '1'
         run: poetry run pytest -q -s tests/acceptance/test_finance_planning_query_cost.py
       - name: Static checks
-        if: always()
+        if: '!cancelled()'
         run: |
           poetry run ruff check adminme bridge/adminme_bridge
           poetry run mypy adminme bridge/adminme_bridge
           bash scripts/verify_invariants.sh
       - name: Native plugin
-        if: always()
+        if: '!cancelled()'
         run: |
           npm --prefix openclaw/administrateme ci
           npm --prefix openclaw/administrateme run check
           npm --prefix openclaw/administrateme test
       - name: Synthetic owner choice browser smoke
-        if: always()
+        if: '!cancelled()'
         env:
           ADMINME_FINANCE_BROWSER: '1'
           FINANCE_BROWSER_ARTIFACT_DIR: ${{ runner.temp }}/finance-browser
@@ -127,40 +127,40 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
       - name: Synthetic light mixed-load measurement
-        if: always()
+        if: '!cancelled()'
         env:
           ADMINME_FINANCE_BENCHMARK: '1'
         run: poetry run pytest -q -s tests/acceptance/test_finance_mixed_load.py
       - name: Synthetic accepted-planning mixed-load measurement
-        if: always()
+        if: '!cancelled()'
         env:
           ADMINME_FINANCE_PLANNING_BENCHMARK: '1'
         run: poetry run pytest -q -s tests/acceptance/test_finance_mixed_load.py::test_accepted_planning_mixed_load_p95_gate
       - name: Profile shared request cost in a separate synthetic server
-        if: always()
+        if: '!cancelled()'
         env:
           ADMINME_FINANCE_PROFILE: '1'
           FINANCE_PROFILE_ARTIFACT_DIR: ${{ runner.temp }}/finance-profiles
         run: poetry run pytest -q -s tests/acceptance/test_finance_mixed_load.py::test_profile_light_finance_request_cost
       - name: Profile accepted-planning queries in a separate synthetic server
-        if: always()
+        if: '!cancelled()'
         env:
           ADMINME_FINANCE_PLANNING_PROFILE: '1'
           FINANCE_PROFILE_ARTIFACT_DIR: ${{ runner.temp }}/finance-profiles
         run: poetry run pytest -q -s tests/acceptance/test_finance_mixed_load.py::test_profile_accepted_planning_request_cost
       - name: Isolate final authority SQL cost with an unqualified synthetic control
-        if: always()
+        if: '!cancelled()'
         env:
           ADMINME_FINANCE_AUTHORITY_CONTROL: '1'
           FINANCE_PROFILE_ARTIFACT_DIR: ${{ runner.temp }}/finance-profiles
         run: poetry run pytest -q -s tests/acceptance/test_finance_mixed_load.py::test_profile_final_authority_sql_control
       - name: Check the diagnostic Tasks control against fixed durable history
-        if: always()
+        if: '!cancelled()'
         env:
           ADMINME_FINANCE_TASKS_NOOP_DIAGNOSTIC: '1'
         run: poetry run pytest -q -s tests/acceptance/test_finance_tasks_noop.py::test_fixed_corpus_order_projection_checkpoint_replay_restart_and_cancellation
       - name: Single matched Tasks no-op diagnostic across both workloads
-        if: always()
+        if: '!cancelled()'
         env:
           ADMINME_FINANCE_TASKS_NOOP_DIAGNOSTIC: '1'
           FINANCE_PROFILE_ARTIFACT_DIR: ${{ runner.temp }}/finance-profiles
