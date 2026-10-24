@@ -25,6 +25,7 @@ from tests.unit.bootstrap.test_cos_apple_reminders import (
     Reader,
     _adapter,
     _item,
+    _start,
 )
 
 
@@ -48,7 +49,7 @@ def apple(tmp_path: Path):
         )
 
         async def start() -> None:
-            await adapter.start(ctx=ctx)
+            await _start(adapter, ctx, runtime.event_log)
 
         try:
             client.portal.call(start)

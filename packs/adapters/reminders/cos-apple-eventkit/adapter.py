@@ -104,6 +104,15 @@ class CoSAppleRemindersAdapter(ExternalStateMirrorAdapter):
             },
         )
         self._task = asyncio.create_task(self._poll(ctx))
+        try:
+            # The supervisor owns start() for the entire acquisition lifetime.
+            # Returning here makes its inventory report a successfully read list
+            # as stopped while an unobserved task continues polling.
+            await self._task
+        finally:
+            self._task = None
+            self._reader = None
+            self._status.state = "stopped"
 
     async def stop(self) -> None:
         if self._task is not None:
