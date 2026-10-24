@@ -18,7 +18,7 @@ export function rememberSelfReply(runtime: PluginRuntime, provenance: Provenance
   const binding = createHash("sha256").update(JSON.stringify([
     "cos-self-reply-v1", agent, "imessage", provenance.account_id, provenance.actor_id,
   ])).digest("hex");
-  if (!runtime.transport.config.standingSelfReplyBindings.includes(binding)) return;
+  // Capture the current instruction independently of permission to send a reply.
   let inbox = pending.get(runtime);
   if (!inbox) { inbox = new Map(); pending.set(runtime, inbox); }
   for (const [key, entry] of inbox) {
@@ -157,6 +157,12 @@ export function registerSelfReplies(api: OpenClawPluginApi, runtime: PluginRunti
     const matches = matchInputs(inbox, event.messages, session, runId);
     const input = matches.at(-1)?.[1];
     if (!input || context.agentId !== input.provenance.agent_id) return;
+    if (!runtime.transport.config.standingSelfReplyBindings.includes(input.binding)) {
+      // Internal-only turns still finish: stale identical inputs must not make
+      // the next explicit request ambiguous or retain unnecessary private text.
+      for (const [key] of matches) inbox.delete(key);
+      return;
+    }
     const accountId = input.provenance.account_id;
     if (!accountId) return;
     const parts = replyParts(event.messages);

@@ -6,6 +6,7 @@ import { registerDashboard } from "./dashboard.js";
 import { registerHooks } from "./hooks.js";
 import { registerService } from "./service.js";
 import { registerTools } from "./tools.js";
+import { registerMemberWorkTool } from "./member-work.js";
 import { registerSelfReminderTools } from "./self-reminders.js";
 import { registerServicePrivateTools, registerServiceWorkGateway } from "./service-private.js";
 import { AdministrateMeTransport } from "./transport.js";
@@ -36,6 +37,7 @@ export default definePluginEntry({
     registerDashboard(api, runtime);
     if (registrationMode === "discovery") return;
     registerTools(api, runtime);
+    registerMemberWorkTool(api, runtime);
     registerSelfReminderTools(api, runtime);
     registerServicePrivateTools(api, runtime);
     if (registrationMode === "tool-discovery") return;
