@@ -45,6 +45,7 @@ const expectedTools = [
   "administrateme_service_private_state",
   "administrateme_service_context",
   "administrateme_workstation_inventory",
+  "administrateme_workstation_work",
 ];
 
 function assert(condition, message) {

@@ -35,7 +35,10 @@ function validSession(candidate) {
   return signature === expected;
 }
 const sessions = new Set();
-const fixtures = await startServiceWorkFixtures({ secret, agent, sessions, validSession });
+const conversations = new Map();
+const member = "member-conversation-fixture";
+const memberAgent = `adminme-${createHash("sha256").update(member).digest("hex").slice(0, 16)}`;
+const fixtures = await startServiceWorkFixtures({ secret, agent, sessions, validSession, conversations });
 let gateway, socket, logs = "";
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 async function until(check, label, timeout = 150_000) {
@@ -112,14 +115,17 @@ try {
   for (const filename of ["AGENTS.md", "IDENTITY.md"]) {
     await copyFile(path.join(repository, "openclaw/administrateme/workspace/service-private", filename), path.join(workspace, filename));
   }
+  const memberWorkspace = path.join(state, "member-workspace");
+  await mkdir(memberWorkspace);
+  await copyFile(path.join(repository, "openclaw/administrateme/workspace/AGENTS.md"), path.join(memberWorkspace, "AGENTS.md"));
   const model = "fixture/service-work";
   const tools = ["administrateme_service_private_work", "administrateme_service_private_work_state", "administrateme_service_private_state", "administrateme_service_context", "administrateme_workstation_inventory"];
   const config = {
     gateway: { mode: "local", bind: "loopback", port, auth: { mode: "token", token }, controlUi: { enabled: false }, reload: { mode: "off" } },
-    agents: { defaults: { workspace, heartbeat: { every: "0m" }, model: { primary: model }, models: { [model]: { params: { transport: "sse", openaiWsWarmup: false } } } }, list: [{ id: agent, workspace, tools: { allow: tools } }] },
+    agents: { defaults: { workspace, heartbeat: { every: "0m" }, model: { primary: model }, models: { [model]: { params: { transport: "sse", openaiWsWarmup: false } } } }, list: [{ id: agent, workspace, tools: { allow: tools } }, { id: memberAgent, workspace: memberWorkspace, tools: { allow: ["administrateme_apple_reminder_status"] } }] },
     models: { mode: "replace", providers: { fixture: { baseUrl: `${fixtures.baseUrl}/v1`, apiKey: "synthetic-fixture-only", api: "openai-responses", models: [{ id: "service-work", name: "service-work", api: "openai-responses", reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 128000, maxTokens: 4096 }] } } },
     tools: { codeMode: false },
-    plugins: { allow: ["administrateme"], load: { paths: [plugin] }, slots: { memory: "none" }, entries: { administrateme: { enabled: true, config: { baseUrl: fixtures.baseUrl } } } },
+    plugins: { allow: ["administrateme"], load: { paths: [plugin] }, slots: { memory: "none" }, entries: { administrateme: { enabled: true, config: { baseUrl: fixtures.baseUrl, memberAgentIds: [memberAgent] }, hooks: { allowConversationAccess: true, allowPromptInjection: false } } } },
     channels: {}, cron: { enabled: false }, browser: { enabled: false }, discovery: { mdns: { mode: "off" } }, update: { checkOnStart: false, auto: { enabled: false } }, logging: { file: path.join(state, "gateway.log") },
   };
   await writeFile(configPath, JSON.stringify(config), { mode: 0o600 });
@@ -143,6 +149,40 @@ try {
     "/api/openclaw/v1/tools/service-private-work/cos-task%3Afixture/state",
     "/api/openclaw/v1/tools/service-private-state",
   ]);
+  // Run both real chat.send routes through the actual pinned host. Signed input
+  // metadata travels in a separate plugin RPC, never as a privileged prompt.
+  for (const channel of ["administrateme-portal", "gmail"]) {
+    const account = channel === "gmail" ? "cos@example.invalid" : "member-portal";
+    const thread = channel === "gmail" ? "fixture-email-thread" : "";
+    const peer = createHmac("sha256", secret).update(channel === "gmail" ? JSON.stringify(["gmail-peer", "fixture-tenant", member, account, thread]) : `portal-peer|fixture-tenant|${member}`).digest("hex").slice(0, channel === "gmail" ? 32 : 20);
+    const signature = createHmac("sha256", secret).update(`${channel === "gmail" ? "gmail" : "portal"}-session|${peer}`).digest("hex").slice(0, 32);
+    const session = `agent:${memberAgent}:administrateme-${channel === "gmail" ? "gmail" : "portal"}-${peer}-${signature}`;
+    sessions.add(session);
+    const inputText = channel === "gmail" ? "PROBE_CONVERSATION_GMAIL: read my exact reminder status." : "PROBE_CONVERSATION_PORTAL: read my exact reminder status.";
+    const ticket = {
+      source_event_id: `fixture-${channel}-instruction`, session_key: session, agent_id: memberAgent,
+      actor_id: `${channel === "gmail" ? "gmail" : "portal"}:${peer}`, channel_id: channel, account_id: account,
+      message_id: `fixture-${channel}-message`, thread_id: thread,
+      text_sha256: createHash("sha256").update(inputText).digest("hex"), nonce: randomBytes(16).toString("hex"), expires_at_ms: Date.now() + 9000,
+    };
+    const fields = ["source_event_id", "session_key", "agent_id", "actor_id", "channel_id", "account_id", "message_id", "thread_id", "text_sha256", "nonce"];
+    const signed = { ...ticket, signature: createHmac("sha256", secret).update(["cos-conversation-input-v1", ...fields.map((key) => ticket[key]), String(ticket.expires_at_ms)].join("|")).digest("hex") };
+    conversations.set(ticket.source_event_id, ticket);
+    await assert.rejects(request("administrateme.conversation.prepare", { ...signed, signature: "0".repeat(64) }), /input unavailable/);
+    assert.equal((await request("administrateme.conversation.prepare", signed)).accepted, true);
+    await assert.rejects(request("administrateme.conversation.prepare", signed), /input unavailable/);
+    const admitted = await request("chat.send", { sessionKey: session, message: inputText, deliver: false, idempotencyKey: `native-${channel}-input` });
+    await until(async () => {
+      if (fixtures.errors.length) throw new Error(fixtures.errors.join("; "));
+      const result = await request("agent.wait", { runId: admitted.runId, timeoutMs: 1000 });
+      if (result.status === "error") throw new Error(`Native ${channel} input failed`);
+      return result.status === "ok";
+    }, `native ${channel} conversation`);
+    await until(() => fixtures.conversationReceipts.some((row) => row.source === ticket.source_event_id), `${channel} source-bound tool receipt`);
+    if (channel === "gmail") await until(() => fixtures.conversationReplies.some((row) => row.source === ticket.source_event_id), "signed native Gmail final reply");
+  }
+  assert.deepEqual(fixtures.conversationReceipts.map((row) => row.channel), ["administrateme-portal", "gmail"]);
+  assert.deepEqual(fixtures.conversationReplies.map((row) => row.channel), ["gmail"]);
   // A restart clears the native five-minute admission cache. Reusing the public
   // ID must still get a fresh signed session, never old granted model context.
   await stop(); request = await start();
@@ -164,7 +204,7 @@ try {
   await assert.rejects(request("administrateme.service.run", { message: "Denied after revocation", request_id: "native-revoked-001" }), /disabled/);
   assert.equal(fixtures.modelCalls, callsBeforeRevoked);
   assert.deepEqual(fixtures.errors, []);
-  console.log("Pinned Gateway service work: established CoS identity without onboarding, sealed operator entry, native hook/context, granted context/create/lifecycle/read, fresh per-request session, persisted revocation. Synthetic loopback fixtures only.");
+  console.log("Pinned Gateway service work: established CoS identity without onboarding, sealed operator entry, native hook/context, granted context/create/lifecycle/read, fresh per-request session, persisted revocation. Real portal/Gmail chat.send current-input and signed same-thread reply verified; synthetic loopback fixtures only.");
 } catch (error) {
   let redacted = logs.replaceAll(token, "[redacted]").replaceAll(secret, "[redacted]");
   for (const session of sessions) redacted = redacted.replaceAll(session, "[service-session]");

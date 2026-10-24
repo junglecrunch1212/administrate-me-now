@@ -71,7 +71,7 @@ describe("native private Apple Reminder workflow", () => {
     expect(await f.start()).toBeUndefined();
     const result = await f.confirm.execute("fixture-confirm", command);
     expect(f.request.mock.calls.at(-1)).toEqual(["/api/openclaw/v1/tools/confirm-apple-reminder", {
-      ...command, source_message_event_id: "fixture-source",
+      ...command, source_message_event_id: "fixture-source", request_authorization: true,
       provenance: expect.objectContaining({ actor_id: actor, agent_id: agent, account_id: account,
         message_id: "fixture-native-message", session_key: session, call_kind: "bridge" }),
     }]);
@@ -158,7 +158,7 @@ describe("native private Apple Reminder workflow", () => {
     expect(duePattern.test("2026-10-24T09:30:00")).toBe(false);
     expect(Object.keys(f.status.parameters.properties)).toEqual(["domain_approval_event_id"]);
     expect(f.confirm.description).toContain("administrateme_self_reminder");
-    expect(f.confirm.description).toContain("separate allow-once");
+    expect(f.confirm.description).toContain("without another permission question");
     expect(f.status.description).toContain("Only terminal succeeded");
     expect(f.status.description).toContain("never a new-ID create attempt");
   });

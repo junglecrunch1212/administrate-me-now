@@ -37,6 +37,15 @@ class _PinnedGatewaySocket:
                     "payload": {"subscribed": True, "key": self.session_key},
                 }
             )
+        if request["method"] == "administrateme.conversation.prepare":
+            return json.dumps(
+                {
+                    "type": "res",
+                    "id": request["id"],
+                    "ok": True,
+                    "payload": {"accepted": True},
+                }
+            )
         assert self.subscribed, "Gateway withholds scoped chat without subscription"
         if self._responses == 0:
             self._responses += 1

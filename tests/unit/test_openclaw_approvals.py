@@ -190,7 +190,9 @@ async def test_audit_retains_exact_first_consumption(
         app=SimpleNamespace(
             state=SimpleNamespace(
                 runtime=SimpleNamespace(
-                    openclaw_approval_store=SimpleNamespace(consume=consume)
+                    openclaw_approval_store=SimpleNamespace(
+                        consume=consume, get=store.get
+                    )
                 )
             )
         )
@@ -229,3 +231,75 @@ async def test_audit_retains_exact_first_consumption(
         )
     finally:
         store.close()
+
+
+def test_machine_policy_receipts_cannot_claim_human_approval_and_survive_restart(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "approvals.sqlite3"
+    store = OpenClawApprovalStore(path)
+    authorization = {
+        "source_event_id": "source-a",
+        "request_authorization_event_id": "grounded-a",
+        "domain_approval_event_id": "domain-a",
+        "action_fingerprint": "b" * 64,
+        "rule_id": "current-human-request.apple-reminder-create.v1",
+    }
+    values = dict(
+        receipt_id="ocreq_policy-a",
+        tool_name="administrateme_execute_pending_provider_action",
+        request_fingerprint=FINGERPRINT,
+        issued_at_ms=1_000_000,
+        expires_at_ms=1_120_000,
+        openclaw_version=VERSION,
+        openclaw_commit=COMMIT,
+    )
+    signature = sign_approval_receipt(SECRET, **values, authorization=authorization)
+    try:
+        with pytest.raises(ApprovalReceiptError, match="kind"):
+            store.resolve(
+                secret=SECRET, **values, signature=signature, now_ms=1_000_001
+            )
+        with pytest.raises(ApprovalReceiptError, match="signature"):
+            store.resolve(
+                secret=SECRET,
+                **values,
+                authorization={**authorization, "source_event_id": "source-b"},
+                signature=signature,
+                now_ms=1_000_001,
+            )
+        store.resolve(
+            secret=SECRET,
+            **values,
+            authorization=authorization,
+            signature=signature,
+            now_ms=1_000_001,
+        )
+        _resolve(
+            store
+        )  # legacy rows retain their original shape and independent meaning
+    finally:
+        store.close()
+    restored = OpenClawApprovalStore(path)
+    try:
+        assert restored.get("receipt-a").authorization is None
+        assert restored.get("ocreq_policy-a").authorization == authorization
+        result = restored.consume(
+            receipt_id="ocreq_policy-a",
+            tool_name=values["tool_name"],
+            request_fingerprint=FINGERPRINT,
+            member_id="member-a",
+            now_ms=1_000_002,
+        )
+        assert result.authorization == authorization
+        with pytest.raises(ApprovalReceiptError, match="consumed"):
+            restored.consume(
+                receipt_id="ocreq_policy-a",
+                tool_name=values["tool_name"],
+                request_fingerprint=FINGERPRINT,
+                member_id="member-b",
+                now_ms=1_000_003,
+                allow_same_binding_recovery=True,
+            )
+    finally:
+        restored.close()

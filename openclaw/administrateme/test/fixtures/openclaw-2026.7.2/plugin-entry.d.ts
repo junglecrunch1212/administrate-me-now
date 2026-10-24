@@ -178,7 +178,8 @@ export type OpenClawPluginApi = {
   config: Record<string, unknown>;
   runtime: {
     subagent?: {
-      run: (params: { sessionKey: string; message: string; deliver?: boolean; idempotencyKey?: string }) => Promise<{ runId: string }>;
+      run: (params: { sessionKey: string; message: string; deliver?: boolean; lane?: string; idempotencyKey?: string }) => Promise<{ runId: string }>;
+      waitForRun: (params: { runId: string; timeoutMs?: number }) => Promise<{ status: "ok" | "error" | "timeout"; error?: string }>;
     };
     channel: {
       outbound: {
@@ -211,6 +212,8 @@ export type OpenClawPluginApi = {
   ) => void;
   registerService: (service: OpenClawPluginService) => void;
   on: {
+    (hook: "before_prompt_build", handler: (event: { prompt: string; messages: unknown[] }, context: PluginHookAgentContext) => { toolsAllow?: string[] } | void | Promise<{ toolsAllow?: string[] } | void>): void;
+    (hook: "after_tool_call", handler: (event: { toolName: string; params: Record<string, unknown>; runId?: string; toolCallId?: string; result?: unknown; error?: string; durationMs?: number }, context: Record<string, unknown>) => void | Promise<void>): void;
     (hook: "before_agent_reply", handler: (event: { cleanedBody: string }, context: PluginHookAgentContext) => void | Promise<void>, options?: { eligibleTriggers?: readonly ["user", ...Array<"user" | "cron" | "heartbeat">] }): void;
     (
       hook: "agent_end",

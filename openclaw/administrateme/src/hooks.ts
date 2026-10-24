@@ -1,3 +1,4 @@
+import { prepareRequestedApproval } from "./request-policy.js";
 import type {
   OpenClawPluginApi,
   PluginHookAgentContext,
@@ -63,6 +64,17 @@ export function registerHooks(api: OpenClawPluginApi, runtime: PluginRuntime): v
       if (event.toolName === "administrateme_review" && event.params.action === "inspect") return;
       if (event.toolName === "administrateme_policy_proposal" && event.params.action === "inspect") {
         return;
+      }
+      try {
+        const requested = await prepareRequestedApproval(runtime, event.toolName, event.params, {
+          runId: typeof context.runId === "string" ? context.runId : undefined,
+          sessionKey: typeof context.sessionKey === "string" ? context.sessionKey : undefined,
+          agentId: typeof context.agentId === "string" ? context.agentId : undefined,
+          toolCallId: typeof context.toolCallId === "string" ? context.toolCallId : event.toolCallId,
+        });
+        if (requested) return { params: requested };
+      } catch {
+        return { block: true, blockReason: "The exact current request could not authorize this action. Check its receipt; do not create a new-ID retry." };
       }
       const approval = prepareApproval(runtime, event.toolName, event.params);
       if (event.toolName === "administrateme_cos_response" ||

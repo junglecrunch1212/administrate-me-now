@@ -25,7 +25,7 @@ function pythonJsonNumber(value: number): string {
   });
 }
 
-function canonical(value: unknown): string {
+export function canonical(value: unknown): string {
   if (value === null) return "null";
   if (typeof value === "string") return pythonJsonString(value);
   if (typeof value === "number") return pythonJsonNumber(value);

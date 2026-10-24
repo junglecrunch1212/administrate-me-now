@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from adminme.events.registry import registry
 from adminme.events.schemas.domain import ServiceWorkSourceAuthority
@@ -179,6 +179,53 @@ class OpenClawApprovalReceivedV1(BaseModel):
     provenance: dict[str, Any]
 
 
+class RequestedActionGroundedV1(BaseModel):
+    """Source-bound semantic evidence, not provider permission or execution."""
+
+    model_config = {"extra": "forbid"}
+    member_id: str
+    source_event_id: str
+    action_id: str
+    request_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
+    action_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
+    rule_id: Literal["current-human-request.apple-reminder-create.v1"]
+    source_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
+    skill_event_id: str
+    action: dict[str, Any]
+    evidence: list[dict[str, Any]] = Field(min_length=1, max_length=8)
+    issued_at: str
+    expires_at: str
+
+
+class OpenClawApprovalReceivedV2(OpenClawApprovalReceivedV1):
+    """Machine policy and legacy decisions retain their distinct provenance."""
+
+    approval_method: Literal["allow_once", "standing_order", "authenticated_request"]  # type: ignore[assignment]
+    request_authorization_event_id: str | None = None
+    source_event_id: str | None = None
+    domain_approval_event_id: str | None = None
+    action_fingerprint: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    rule_id: Literal["current-human-request.apple-reminder-create.v1"] | None = None
+
+    @model_validator(mode="after")
+    def distinct_authority(self) -> "OpenClawApprovalReceivedV2":
+        fields = (
+            self.request_authorization_event_id,
+            self.source_event_id,
+            self.domain_approval_event_id,
+            self.action_fingerprint,
+            self.rule_id,
+        )
+        if self.approval_method == "authenticated_request":
+            if not all(fields):
+                raise ValueError(
+                    "authenticated request requires exact source/action policy binding"
+                )
+        elif any(fields):
+            raise ValueError("legacy approval cannot borrow current request authority")
+        return self
+
+
 registry.register(
     "openclaw.integration.state_changed", 1, OpenClawIntegrationStateChangedV1
 )
@@ -192,6 +239,11 @@ registry.register("openclaw.tool_call.recorded", 1, OpenClawToolCallRecordedV1)
 registry.register("openclaw.tool_call.recorded", 2, OpenClawToolCallRecordedV2)
 registry.register("openclaw.tool_call.recorded", 3, OpenClawToolCallRecordedV3)
 registry.register("openclaw.approval.received", 1, OpenClawApprovalReceivedV1)
+registry.register("openclaw.approval.received", 2, OpenClawApprovalReceivedV2)
+registry.register_upcaster(
+    "openclaw.approval.received", 1, lambda payload: dict(payload)
+)
+registry.register("cos.action.request_grounded", 1, RequestedActionGroundedV1)
 
 
 __all__ = []
