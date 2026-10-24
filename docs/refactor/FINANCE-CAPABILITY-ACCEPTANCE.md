@@ -16,6 +16,37 @@ unavailable until its specific evidence, semantics, independent oracle and
 runtime gates pass. This is an explicit implementation gap, not a waiver of a
 required privacy invariant or product function.
 
+## Remaining completion scope
+
+- **Implemented, with bounded hosted evidence:** truthful missing-data states,
+  the four-tool private facade, 18 deterministic hypothetical calculators,
+  accepted accounting import/replay, receipt-bound deterministic answers,
+  owner goals/preferences and the declared planning summary subset. At
+  `b9466312`, 779 Python checks, 96 native checks and synthetic desktop acceptance
+  passed. Routing/preparation for F01–F31 is not implementation of every model.
+- **Unsupported functions still required by the original ambition:** durable
+  heavy analysis and resource reservation; remaining strategic/tax/retirement
+  variants with independent oracles; production joint decisions, outcomes and
+  professional packet workflows; complete reconciliation/close integration.
+  The capability table below specifies each supported boundary.
+- **Lossless planning remains incomplete:** daily balances, card-debt paths and
+  per-account shortfalls remain required follow-up work. Their explicit
+  unsupported labels make the summary subset honest, not complete.
+- **Producer and private parity remain unproved:** map the exact native context
+  tuples and every supported field/clock, review the pinned schema/hash, then
+  compare an authorized private export. Synthetic 12/24-context fixtures and
+  3,215-row transport coverage do not prove native parity or source correctness.
+- **Final-head validation and performance remain gates:** the current candidate
+  needs its hosted required checks, native/browser results and the unchanged
+  raw core p95 regression limit of at most 10%. One earlier bounded latency pass
+  did not establish stability; later runs failed. Large-ledger, reminder-delivery,
+  heavy-worker termination/memory and deployment-hardware evidence remain absent.
+- **Activation remains separate:** source approval/merge, private processing and
+  import authority, supported immutable activation, compatible encrypted recovery,
+  loaded tool/hook verification and live member-device acceptance are not implied
+  by hosted synthetic success. This task has not merged, deployed, imported
+  private data, changed credentials or resumed the paused implementation chat.
+
 ## Evidence and release gates
 
 The registry in `adminme/finance/capabilities.py` routes F01–F31. Its
@@ -48,7 +79,10 @@ The following common test locations establish the intended validation paths:
 - `tests/acceptance/test_finance_planning.py`: separate source projection and
   accounting anchors, conditional ranges, declared contexts, full detail
   pagination, replay and current authority. The new transport/card remains a
-  candidate pending its hosted run and native Books mapping review.
+  candidate pending current-head hosted evidence and native Books mapping review.
+  The declared summary subset does not satisfy the outstanding lossless daily
+  balance/card-debt path and per-account shortfall requirements. Those remain
+  on the completion scope alongside exact native context/field parity.
 - `tests/acceptance/test_finance_choices.py`: private explicit owner goals and
   preferences through member APIs, duplicate/conflicting requests, denied-write
   redaction, projection rebuild and restart.

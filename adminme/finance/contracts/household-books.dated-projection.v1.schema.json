@@ -753,6 +753,7 @@
         "timezone",
         "balance_as_of",
         "provider_as_of",
+        "provider_sync_at",
         "retrieved_at",
         "observed_at",
         "refresh_state"
@@ -789,6 +790,9 @@
             "OFF",
             "UNKNOWN"
           ]
+        },
+        "provider_sync_at": {
+          "$ref": "#/$defs/clock"
         }
       }
     },

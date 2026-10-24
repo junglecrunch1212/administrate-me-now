@@ -54,13 +54,31 @@ the context timezone.
 
 Provider-as-of, retrieval and observation clocks each carry an independent
 value or null reason. An unknown provider clock is not filled with a retrieval
-time. Each source separately retains its balance-as-of date, timezone, three
+time. Each source separately retains its balance-as-of date, timezone, four
 clocks, declared content hash and refresh state. A three-role manifest identifies
 the dated, funding and income engines and their input hashes. The dated engine
 matches the top-level engine coordinates. `refresh_state` remains visible,
 including `OFF`. Unknown encumbrances
 and thresholds stay unknown. Accounting and projection head changes invalidate
 previous native answer receipts independently of current grant revocation.
+
+## Exact source clock meanings
+
+| Contract field | Meaning and producer mapping |
+|---|---|
+| `sources[].provider_sync_at` | The exact Books `provider_sync_at` timestamp: the provider's reported last synchronization. Preserve its timestamp/offset when supplied; otherwise null with its own reason. |
+| `sources[].provider_as_of` | A separately reported timestamp describing the data's effective time at the provider. It does not mean last synchronization. Without an explicit producer data-as-of field, it stays unknown. |
+| `sources[].balance_as_of` | The source's accounting balance date in its declared timezone. A date does not imply a midnight synchronization timestamp. |
+| `sources[].retrieved_at` | When the source material was fetched. Retrieval does not establish provider freshness. |
+| `sources[].observed_at` | When that source observation was captured. It is independent of retrieval and synchronization. |
+
+There is no clock alias or fallback. Root `source_clocks` retain the producer's
+aggregate data-as-of/retrieval/observation fields only; they do not summarize or
+replace the per-source synchronization clocks. Known source timestamps cannot
+postdate projection verification. Unknown synchronization remains visible in
+`planning_sources` and the member source-provenance drilldown even when another
+clock is known. This mapping establishes transport meaning; exact native field
+and context parity still needs producer evidence before adoption.
 
 ## Complete details with bounded consumption
 

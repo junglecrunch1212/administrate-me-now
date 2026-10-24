@@ -1,5 +1,6 @@
 """Wholly synthetic producer outputs; no household values or forecast engine."""
 
+from copy import deepcopy
 from datetime import date, timedelta
 from adminme.finance.dated_projection import (
     BANK,
@@ -184,7 +185,11 @@ def projection(accounting, total_events=0):
             "content_sha256": "a" * 64,
             "timezone": "America/New_York",
             "balance_as_of": {"date": None, "unknown_reason": "balance_clock_unknown"},
-            **value["source_clocks"],
+            **deepcopy(value["source_clocks"]),
+            "provider_sync_at": {
+                "value": None,
+                "unknown_reason": "provider_sync_clock_unknown",
+            },
             "refresh_state": "OFF",
         }
     ]

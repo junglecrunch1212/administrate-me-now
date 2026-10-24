@@ -268,7 +268,12 @@ def validate_projection(value: dict[str, Any]) -> dict[str, Any]:
                 and date.fromisoformat(balance["date"]) > local_verified
             ):
                 raise PublicationError("projection_future_balance_date")
-            for name in ("provider_as_of", "retrieved_at", "observed_at"):
+            for name in (
+                "provider_as_of",
+                "provider_sync_at",
+                "retrieved_at",
+                "observed_at",
+            ):
                 clock = source[name]
                 _nullable(clock["value"], clock["unknown_reason"])
                 if (

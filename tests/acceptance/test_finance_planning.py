@@ -514,6 +514,7 @@ def test_each_opening_selection_is_reachable_with_status_selection_and_summary_b
     [
         "future_context",
         "future_balance",
+        "future_provider_sync",
         "engine_role",
         "gap_audience",
         "gap_scope",
@@ -539,6 +540,11 @@ def test_projection_provenance_dates_and_private_gap_boundaries(fault):
     elif fault == "future_balance":
         value["sources"][0]["balance_as_of"] = {
             "date": "2026-03-08",
+            "unknown_reason": None,
+        }
+    elif fault == "future_provider_sync":
+        value["sources"][0]["provider_sync_at"] = {
+            "value": "2026-03-08T00:00:00Z",
             "unknown_reason": None,
         }
     elif fault == "engine_role":
@@ -612,6 +618,10 @@ def test_private_gap_resolution_and_source_hashes_remain_scoped(tmp_path):
             == evidence.json()["records"][0]["content_sha256"]
         )
         assert source.json()["records"][0]["provider_as_of"]["value"] is None
+        assert source.json()["records"][0]["provider_sync_at"] == {
+            "value": None,
+            "unknown_reason": "provider_sync_clock_unknown",
+        }
         assert source.json()["records"][0]["balance_as_of"]["date"] is None
         assert "https://" not in gap.text + evidence.text + source.text
         engines = _post(
@@ -671,3 +681,34 @@ def test_projection_filters_cannot_be_ignored_on_other_reports(tmp_path):
                 not {"contexts", "summary", "records", "choices"}
                 & response.json().keys()
             )
+
+
+def test_provider_sync_clock_is_preserved_without_relabeling_other_clocks(tmp_path):
+    with TestClient(create_application(enabled_settings(tmp_path))) as client:
+        _grant_cos(client, "source-sync-clock")
+        accounting, owner = import_fixture(client)
+        value = projection(accounting)
+        sync = {"value": "2026-03-07T10:12:00-05:00", "unknown_reason": None}
+        value["sources"][0]["provider_sync_at"] = sync
+        value = seal(value)
+        client.portal.call(import_projection, client.app.state.runtime, owner, value)
+        response = _post(
+            client,
+            "query",
+            "source-sync-clock",
+            book_id=value["book_id"],
+            publication_id=accounting["publication_id"],
+            projection_id=value["projection_id"],
+            context_id=value["contexts"][0]["context_id"],
+            report_id="planning_sources",
+            reference_id="source-synthetic",
+        )
+        assert response.status_code == 200 and response.json().get("records"), (
+            response.text
+        )
+        source = response.json()["records"][0]
+        assert source["provider_sync_at"] == sync
+        assert source["provider_as_of"]["value"] is None
+        assert source["balance_as_of"]["date"] is None
+        assert source["observed_at"]["value"] is None
+        assert source["retrieved_at"]["value"] == "2026-03-07T17:00:00Z"
