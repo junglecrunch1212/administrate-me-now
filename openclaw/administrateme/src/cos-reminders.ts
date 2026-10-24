@@ -2,7 +2,7 @@ import { Type } from "typebox";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "./runtime.js";
 import { takeReminderInput } from "./self-replies.js";
-import { rememberRequestAuthorization } from "./request-policy.js";
+import { COS_REMINDER_RULE, rememberRequestAuthorization } from "./request-policy.js";
 import { toolResult } from "./result.js";
 
 export const COS_REMINDER_INPUT_TOOLS = [
@@ -28,7 +28,7 @@ export function registerCoSReminderTools(api: OpenClawPluginApi, runtime: Plugin
         ...params, provenance: input.provenance, source_message_event_id: input.source_message_event_id,
         request_authorization: true,
       });
-      rememberRequestAuthorization(runtime, result, input, params as Record<string, unknown>);
+      rememberRequestAuthorization(runtime, result, input, params as Record<string, unknown>, COS_REMINDER_RULE);
       return toolResult(result);
     },
   }), { name: "administrateme_confirm_cos_apple_reminder", optional: true });

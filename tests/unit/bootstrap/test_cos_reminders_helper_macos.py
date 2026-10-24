@@ -36,9 +36,11 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-@pytest.mark.parametrize("write_enabled", [False, True])
+@pytest.mark.parametrize(
+    "write_enabled,previous_reader", [(False, False), (True, False), (False, True)]
+)
 def test_real_sealed_worker_proves_native_permission_identity_without_prompt(
-    tmp_path, release, monkeypatch, write_enabled
+    tmp_path, release, monkeypatch, write_enabled, previous_reader
 ):
     for name in ("adminme", "bootstrap", "packs"):
         shutil.copytree(
@@ -50,6 +52,16 @@ def test_real_sealed_worker_proves_native_permission_identity_without_prompt(
     site.rmdir()
     site.symlink_to(Path(sysconfig.get_path("purelib")))
     sources = {name: (ROOT / name).read_bytes() for name in helper.BUILD_SOURCES}
+    if previous_reader:
+        # The old sealed launcher/worker runs unchanged against the new runtime.
+        # This is the protected predecessor, never an installed household app.
+        predecessor = "01877e4d75df90fad13bbbcbe139401e9b798eb6"
+        sources = {
+            name: subprocess.check_output(
+                ["git", "show", f"{predecessor}:{name}"], cwd=ROOT
+            )
+            for name in helper.BUILD_SOURCES
+        }
     app = tmp_path.resolve() / "Production Reminders Helper.app"
     receipt = helper._build_app(
         app,
@@ -57,6 +69,16 @@ def test_real_sealed_worker_proves_native_permission_identity_without_prompt(
         include_dir=Path(sysconfig.get_path("include")),
         write_enabled=write_enabled,
     )
+    retained_reader_digest = helper.helper_artifact_sha256(app)
+    if previous_reader:
+        writer_receipt = helper._build_app(
+            tmp_path.resolve() / "Separate Reminders Writer.app",
+            {name: (ROOT / name).read_bytes() for name in helper.BUILD_SOURCES},
+            include_dir=Path(sysconfig.get_path("include")),
+            write_enabled=True,
+        )
+        assert writer_receipt["bundle_identifier"] == helper.WRITE_BUNDLE_IDENTIFIER
+        assert helper.helper_artifact_sha256(app) == retained_reader_digest
     device, uid = local_device_identity()
     request, value = _request(
         tmp_path, release, device_identity_sha256=device, os_uid=uid
@@ -121,6 +143,7 @@ def test_real_sealed_worker_proves_native_permission_identity_without_prompt(
     assert len(request_paths) == 1
     assert str(request_paths[0]).startswith("/private/var/")
     assert not request_paths[0].parent.exists()
+    assert helper.helper_artifact_sha256(app) == retained_reader_digest
 
 
 def test_native_main_loop_services_completion_while_operation_waits(monkeypatch):

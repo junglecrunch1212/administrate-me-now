@@ -195,7 +195,10 @@ class OpenClawApprovalStore:
             or any(not isinstance(v, str) or not v for v in authorization.values())
             or tool_name != "administrateme_execute_pending_provider_action"
             or authorization["rule_id"]
-            != "current-human-request.apple-reminder-create.v1"
+            not in {
+                "current-human-request.apple-reminder-create.v1",
+                "current-human-request.cos-reminder-create.v1",
+            }
         ):
             raise ApprovalReceiptError("request authorization binding is invalid")
         now = int(time.time() * 1000) if now_ms is None else now_ms
