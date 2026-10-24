@@ -45,6 +45,7 @@ class GmailConversationIntake:
         if not any(
             channel.provider == "gmail"
             and channel.enrolled
+            and channel.state in {"healthy", "observation", "degraded"}
             and channel.service_principal_id == COS_SERVICE_PRINCIPAL_ID
             for channel in runtime.settings.service_channel_accounts
         ):
