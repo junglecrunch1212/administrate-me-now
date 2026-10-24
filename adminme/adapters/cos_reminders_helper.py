@@ -17,7 +17,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import AwareDatetime, BaseModel, Field
 
 from adminme.adapters.cos_apple_reminders import (
     CoSRemindersLookup,
@@ -27,6 +27,11 @@ from adminme.adapters.cos_apple_reminders import (
     verify_device,
 )
 from adminme.adapters.cos_apple_reminders_native import SelectedSnapshot
+from adminme.adapters.cos_reminders_write import (
+    CoSReminderCreate,
+    exact_due_observed,
+    validate_native_create,
+)
 
 
 NATIVE_ERROR_CODES = frozenset(
@@ -135,10 +140,22 @@ class NativeSnapshot(StrictModel):
 class NativeResult(StrictModel):
     contract: Literal["cos-reminders-helper-result-v1"]
     nonce: str
-    operation: Literal["status", "request", "inspect", "read"]
+    operation: Literal["status", "request", "inspect", "read", "create_reminder"]
     status: Literal["ok"]
     identity: NativeIdentity
     result: dict[str, Any]
+
+
+class NativeWriteResult(StrictModel):
+    applied: Literal[True]
+    suppressed: Literal[False]
+    external_id: str = Field(min_length=1, max_length=1000)
+    provider_account_id: str
+    source_id: str
+    list_id: str
+    requested_due_at: AwareDatetime
+    observed_due: dict[str, Any]
+    observed_at: AwareDatetime
 
 
 def release_coordinates(release_root: Path | None = None) -> dict[str, Any]:
@@ -181,7 +198,7 @@ def release_coordinates(release_root: Path | None = None) -> dict[str, Any]:
 
 def invoke(
     binding: NativeHelperBinding,
-    operation: Literal["status", "request", "inspect", "read"],
+    operation: Literal["status", "request", "inspect", "read", "create_reminder"],
     payload: dict[str, Any],
     *,
     release_root: Path | None = None,
@@ -194,6 +211,14 @@ def invoke(
     receipt = verify_helper_app(Path(binding.app_path))
     if receipt != binding.model_dump():
         raise PermissionError("native helper differs from its reviewed component")
+    if operation == "create_reminder":
+        manifest = json.loads(
+            (
+                Path(binding.app_path) / "Contents/Resources/helper-manifest.json"
+            ).read_bytes()
+        )
+        if manifest.get("contract") != "cos-reminders-native-app-v2":
+            raise PermissionError("Install the reviewed write-capable helper first")
     device, uid = local_device_identity()
     issued = int(time.time() * 1000)
     request = {
@@ -268,6 +293,8 @@ def invoke(
             expected_keys.add("resource")
         if operation == "read":
             expected_keys.add("snapshot")
+        if operation == "create_reminder":
+            expected_keys.add("write_result")
         if (
             set(result) != expected_keys
             or type(result["authorization_status"]) is not int
@@ -341,3 +368,39 @@ class HelperRemindersReader:
         ):
             raise PermissionError("native metadata result differs from exact lookup")
         return resource
+
+
+class HelperRemindersWriter:
+    """A single attempt through the selected write component, with exact read-back."""
+
+    def __init__(self, *, release_root: Path | None = None) -> None:
+        self._release_root = release_root
+
+    def create(
+        self, selection: CoSRemindersSelection, command: CoSReminderCreate
+    ) -> NativeWriteResult:
+        verify_device(selection, local_device_identity())
+        validate_native_create(command, selection)
+        result = invoke(
+            selection.native_helper,
+            "create_reminder",
+            {
+                "selection": selection.model_dump(
+                    mode="json", exclude={"native_helper"}
+                ),
+                "command": command.model_dump(mode="json"),
+            },
+            release_root=self._release_root,
+        )
+        receipt = NativeWriteResult.model_validate_json(
+            json.dumps(result["write_result"])
+        )
+        if (
+            receipt.provider_account_id != selection.provider_account_id
+            or receipt.source_id != selection.source_id
+            or receipt.list_id != selection.list_id
+            or receipt.requested_due_at != command.due_at
+            or not exact_due_observed(receipt.observed_due, command.due_at)
+        ):
+            raise PermissionError("Native reminder receipt differs from the command")
+        return receipt

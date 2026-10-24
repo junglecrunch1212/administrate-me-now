@@ -148,7 +148,7 @@ static BOOL validRequest(NSDictionary *request) {
         ![request[@"contract"] isEqual:@"cos-reminders-helper-request-v1"] ||
         !hexString(request[@"nonce"], 32) || !hexString(request[@"release_commit"], 40) ||
         !hexString(request[@"python_library_sha256"], 64) || !hexString(request[@"device_identity_sha256"], 64) ||
-        ![@[@"status", @"request", @"inspect", @"read"] containsObject:request[@"operation"]] ||
+        ![@[@"status", @"request", @"inspect", @"read", @"create_reminder"] containsObject:request[@"operation"]] ||
         ![request[@"payload"] isKindOfClass:NSDictionary.class] ||
         !integer(request[@"issued_at_ms"]) || !integer(request[@"expires_at_ms"]) ||
         !integer(request[@"os_uid"]) || [request[@"os_uid"] longLongValue] != getuid() ||

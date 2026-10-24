@@ -27,6 +27,22 @@ def test_component_identity_excludes_central_release_coordinates() -> None:
     assert helper._info()["NSRemindersUsageDescription"] == helper.USAGE_DESCRIPTION
 
 
+def test_write_component_is_explicit_without_reidentifying_the_read_component():
+    sources = {name: f"fixture:{name}".encode() for name in helper.BUILD_SOURCES}
+    readonly = helper._component_manifest(sources)
+    writable = helper._component_manifest(sources, write_enabled=True)
+    assert readonly["contract"] == "cos-reminders-native-app-v1"
+    assert writable["contract"] == "cos-reminders-native-app-v2"
+    assert {k: v for k, v in readonly.items() if k != "contract"} == {
+        k: v for k, v in writable.items() if k != "contract"
+    }
+    assert helper._info()["CFBundleVersion"] == "1"
+    assert helper._info(write_enabled=True)["CFBundleVersion"] == "2"
+    assert helper._info(write_enabled=True)[
+        "NSRemindersFullAccessUsageDescription"
+    ] == (helper.WRITE_USAGE_DESCRIPTION)
+
+
 def test_builder_rejects_changed_loaded_sources(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

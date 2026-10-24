@@ -11,6 +11,7 @@ import sysconfig
 import tempfile
 import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -35,8 +36,9 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+@pytest.mark.parametrize("write_enabled", [False, True])
 def test_real_sealed_worker_proves_native_permission_identity_without_prompt(
-    tmp_path, release, monkeypatch
+    tmp_path, release, monkeypatch, write_enabled
 ):
     for name in ("adminme", "bootstrap", "packs"):
         shutil.copytree(
@@ -50,7 +52,10 @@ def test_real_sealed_worker_proves_native_permission_identity_without_prompt(
     sources = {name: (ROOT / name).read_bytes() for name in helper.BUILD_SOURCES}
     app = tmp_path.resolve() / "Production Reminders Helper.app"
     receipt = helper._build_app(
-        app, sources, include_dir=Path(sysconfig.get_path("include"))
+        app,
+        sources,
+        include_dir=Path(sysconfig.get_path("include")),
+        write_enabled=write_enabled,
     )
     device, uid = local_device_identity()
     request, value = _request(
@@ -142,3 +147,16 @@ def test_foundation_string_bridge_is_supported_on_native_wire():
 
     notes = NSString.stringWithString_("Private fixture notes")
     assert worker._wire({"notes": notes}) == {"notes": "Private fixture notes"}
+
+
+def test_native_foundation_due_components_preserve_the_requested_instant():
+    from adminme.adapters.cos_apple_reminders_native import _shim
+    from adminme.adapters.cos_reminders_write import exact_due_observed
+
+    # Foundation value conversion only: no EventKit store, permission or provider save.
+    due = datetime.fromisoformat("2026-10-24T09:30:00-04:00")
+    shim = _shim()
+    native = shim._native_components(None, due.astimezone(timezone.utc))
+    observed = shim._components_dict(native)
+    assert exact_due_observed(observed, due)
+    assert observed["hour"] == 13 and observed["minute"] == 30

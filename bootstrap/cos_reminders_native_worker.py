@@ -4,7 +4,8 @@
 
 This file is copied into the signed component. It must not import its controller
 from the selected central release: setup precedes central-client deployment.
-Only the existing exact-list EventKit reader is imported after identity checks.
+Exact-list EventKit operations are imported only after identity checks. A create
+additionally requires the separately reviewed version-two write component.
 """
 
 from __future__ import annotations
@@ -142,13 +143,20 @@ def validate_request(value: dict[str, Any], *, now_ms: int | None = None) -> Non
     elif operation == "inspect":
         if set(payload) != {"lookup"} or not isinstance(payload["lookup"], dict):
             raise ValueError("exact lookup required")
-    elif operation == "read":
+    elif operation in {"read", "create_reminder"}:
         if (
-            set(payload) != {"selection"}
+            set(payload)
+            != (
+                {"selection", "command"}
+                if operation == "create_reminder"
+                else {"selection"}
+            )
             or not isinstance(payload["selection"], dict)
             or set(payload["selection"]) != SELECTION_FIELDS
         ):
             raise ValueError("exact source selection required")
+        if operation == "create_reminder" and not isinstance(payload["command"], dict):
+            raise ValueError("typed creation command required")
     else:
         raise ValueError("unsupported operation")
 
@@ -295,7 +303,7 @@ def perform(request: dict[str, Any], identity: dict[str, Any]) -> dict[str, Any]
     if operation == "inspect":
         lookup = CoSRemindersLookup.model_validate(request["payload"]["lookup"])
         result["resource"] = NativeRemindersReader().inspect_selection(lookup)
-    elif operation == "read":
+    elif operation in {"read", "create_reminder"}:
         selected = dict(request["payload"]["selection"])
         # a10 and the helper client release share the exact provider read contract.
         # The latter additionally pins this component in configuration, never in the
@@ -311,6 +319,30 @@ def perform(request: dict[str, Any], identity: dict[str, Any]) -> dict[str, Any]
             request["os_uid"],
         ):
             raise PermissionError("selected source belongs to another work computer")
+        if operation == "create_reminder":
+            manifest = json.loads(
+                (
+                    Path(identity["app_path"])
+                    / "Contents/Resources/helper-manifest.json"
+                ).read_bytes()
+            )
+            if manifest.get("contract") != "cos-reminders-native-app-v2":
+                raise PermissionError("This installed helper only supports reads")
+            from adminme.adapters import cos_reminders_write as writes
+
+            if (
+                Path(writes.__file__).resolve()
+                != Path(request["release_root"])
+                / "adminme/adapters/cos_reminders_write.py"
+            ):
+                raise PermissionError("Native writer release differs")
+            command = writes.CoSReminderCreate.model_validate(
+                request["payload"]["command"]
+            )
+            result["write_result"] = writes.NativeRemindersWriter().create(
+                selection, command
+            )
+            return result
         snapshot = NativeRemindersReader().read(selection)
         if (
             snapshot.source_id != selection.source_id
