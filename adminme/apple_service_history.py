@@ -124,9 +124,37 @@ async def apple_command_owner_matches(
         "expected_provider_revision": payload.get("expected_provider_revision"),
         "request_fingerprint": payload.get("request_fingerprint"),
     }
+    native_parameters = {"domain_approval_event_id": domain_id}
+    if native.get("schema_version") == 2:
+        grounding_id = approval.get("request_authorization_event_id")
+        grounding = await event_log.get(str(grounding_id)) if grounding_id else None
+        if (
+            grounding is None
+            or grounding.get("type") != "cos.action.request_grounded"
+            or grounding.get("schema_version") != 1
+            or not _private(grounding, tenant=tenant, member=member)
+            or grounding.get("actor_identity") != member
+        ):
+            return False
+        grounded = grounding.get("payload") or {}
+        if (
+            grounded.get("member_id") != member
+            or grounded.get("action_id") != decision.get("action_id")
+            or grounded.get("source_event_id") != domain.get("causation_id")
+            or grounded.get("request_fingerprint")
+            != decision.get("request_fingerprint")
+            or approval.get("source_event_id") != grounded.get("source_event_id")
+            or approval.get("domain_approval_event_id") != domain_id
+            or approval.get("action_fingerprint") != grounded.get("action_fingerprint")
+            or approval.get("rule_id") != grounded.get("rule_id")
+            or approval.get("rule_id")
+            != "current-human-request.apple-reminder-create.v1"
+        ):
+            return False
+        native_parameters["request_authorization_event_id"] = grounding_id
     native_fingerprint = hashlib.sha256(
         json.dumps(
-            {"domain_approval_event_id": domain_id},
+            native_parameters,
             sort_keys=True,
             separators=(",", ":"),
         ).encode()
@@ -154,7 +182,7 @@ async def apple_command_owner_matches(
         and domain.get("raw_ref")
         == f"request-sha256:{payload.get('request_fingerprint')}"
         and native.get("type") == "openclaw.approval.received"
-        and native.get("schema_version") == 1
+        and native.get("schema_version") in {1, 2}
         and native.get("source_adapter") == "openclaw-plugin"
         and native.get("actor_identity") in {member, COS_SERVICE_PRINCIPAL_ID}
         and native.get("causation_id") == domain_id
@@ -162,7 +190,12 @@ async def apple_command_owner_matches(
         and approval.get("tool_name")
         == "administrateme_execute_pending_provider_action"
         and approval.get("action") == payload.get("operation")
-        and approval.get("approval_method") == "allow_once"
+        and approval.get("approval_method")
+        == (
+            "authenticated_request"
+            if native.get("schema_version") == 2
+            else "allow_once"
+        )
         and approval.get("single_use") is True
         and approval.get("request_fingerprint") == native_fingerprint
         and approval.get("resource_fingerprint") == native_fingerprint

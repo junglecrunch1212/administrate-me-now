@@ -1,3 +1,4 @@
+import { requestExecutionProvenance } from "./request-policy.js";
 import { Type } from "typebox";
 import type {
   AnyAgentTool,
@@ -114,7 +115,7 @@ function makeTool(
     description: definition.description,
     parameters: definition.parameters,
     async execute(id, params) {
-      const provenance = provenanceFromTool(
+      const provenance = requestExecutionProvenance(runtime, id, params as Record<string, unknown>, context) ?? provenanceFromTool(
         context,
         definition.standingOrder ? "standing_order" : "tool",
         runtime.transport.config.sharedSecretEnv,
