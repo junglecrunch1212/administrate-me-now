@@ -1,0 +1,48 @@
+name: Exact metadata predecessor compatibility
+on:
+  push:
+    branches: ['codex/finance-metadata-predecessor-proof']
+permissions:
+  contents: read
+jobs:
+  predecessor-compatibility:
+    runs-on: macos-14
+    timeout-minutes: 12
+    env:
+      ADMINME_TEST_MODE: '1'
+      PYTHONDONTWRITEBYTECODE: '1'
+      POETRY_VIRTUALENVS_IN_PROJECT: 'true'
+      FINANCE_METADATA_CURRENT_SOURCE: ${{ runner.temp }}/metadata-current
+      FINANCE_METADATA_PRIOR_SOURCE: ${{ runner.temp }}/metadata-prior
+      FINANCE_METADATA_RECOVERY_OUTPUT: ${{ runner.temp }}/metadata-recovery-evidence
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.14.7'
+      - run: pipx install poetry==2.4.1
+      - run: poetry sync --with dev --no-interaction
+      - name: Bind exact current and predecessor sources
+        run: |
+          mkdir -p "$FINANCE_METADATA_RECOVERY_OUTPUT"
+          git diff --exit-code 7751c462b0788eccf8435ac4dd6b1da9bbc26b30 HEAD -- adminme bootstrap pyproject.toml poetry.lock
+          git diff --exit-code 04a9805e4c91698017dd10b38aac51c5e1d0e5d9 7751c462b0788eccf8435ac4dd6b1da9bbc26b30 -- tests/acceptance/test_openclaw_native_seam.py pyproject.toml poetry.lock
+          git worktree add --detach "$FINANCE_METADATA_CURRENT_SOURCE" 7751c462b0788eccf8435ac4dd6b1da9bbc26b30
+          git worktree add --detach "$FINANCE_METADATA_PRIOR_SOURCE" 04a9805e4c91698017dd10b38aac51c5e1d0e5d9
+          git rev-parse HEAD 7751c462:adminme 04a9805e:adminme HEAD:poetry.lock > "$FINANCE_METADATA_RECOVERY_OUTPUT/source-pins.txt"
+      - name: Genuine off-control and denied-audit history across predecessor startup and replay
+        timeout-minutes: 7
+        run: |
+          .venv/bin/ruff check tests/fixtures/finance_metadata_rollback_probe.py tests/fixtures/test_finance_metadata_predecessor.py
+          .venv/bin/ruff format --check tests/fixtures/finance_metadata_rollback_probe.py tests/fixtures/test_finance_metadata_predecessor.py
+          .venv/bin/python -m pytest -q --runxfail tests/fixtures/test_finance_metadata_predecessor.py --junitxml="$FINANCE_METADATA_RECOVERY_OUTPUT/results.xml"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: metadata-predecessor-compatibility
+          path: ${{ runner.temp }}/metadata-recovery-evidence
+          if-no-files-found: error
+          retention-days: 7
