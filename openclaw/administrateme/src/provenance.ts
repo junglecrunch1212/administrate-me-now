@@ -1,11 +1,10 @@
+import type { GatewayClient, PluginHookMessageContext } from "./sdk-types.js";
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { conversationToolProvenance } from "./conversation-input.js";
 import type { PluginRuntime } from "./runtime.js";
 import type {
-  GatewayClient,
   OpenClawPluginToolContext,
   PluginCommandContext,
-  PluginHookMessageContext,
   PluginHookMessageReceivedEvent,
 } from "openclaw/plugin-sdk/plugin-entry";
 import {

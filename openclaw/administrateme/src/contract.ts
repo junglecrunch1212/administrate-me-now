@@ -1,5 +1,5 @@
-export const OPENCLAW_VERSION = "2026.7.2" as const;
-export const OPENCLAW_COMMIT = "ce67ffb70e83e5ebb56ea02e814e577153f84f61" as const;
+export const OPENCLAW_VERSION = "2026.10.7" as const;
+export const OPENCLAW_COMMIT = "157d8c2bc3ea2fa183afdc11088e69690bf8e64e" as const;
 export const PLUGIN_ID = "administrateme" as const;
 
 export const BRIDGE_EVENT_KINDS = [

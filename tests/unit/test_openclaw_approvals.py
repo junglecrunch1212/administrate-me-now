@@ -16,8 +16,8 @@ from adminme.openclaw_approvals import (
 
 
 SECRET = "fixture-secret-at-least-24-characters"
-VERSION = "2026.7.2"
-COMMIT = "ce67ffb70e83e5ebb56ea02e814e577153f84f61"
+VERSION = "2026.10.7"
+COMMIT = "157d8c2bc3ea2fa183afdc11088e69690bf8e64e"
 FINGERPRINT = "a" * 64
 
 
@@ -378,3 +378,46 @@ def test_request_approval_rules_are_bound_to_their_exact_execution_tool(
             assert consumed.consumed_by_member_id == "member-fixture"
     finally:
         with_store.close()
+
+
+def test_stable_upgrade_retains_legacy_pin_receipts_without_reauthorizing_them(
+    tmp_path: Path,
+) -> None:
+    """A new transport pin must not rewrite retained approval identity or expiry."""
+    path = tmp_path / "approvals.sqlite3"
+    store = OpenClawApprovalStore(path)
+    fields: dict[str, Any] = dict(
+        receipt_id="legacy-pending",
+        tool_name="administrateme_execute_pending_provider_action",
+        request_fingerprint=FINGERPRINT,
+        issued_at_ms=1_000_000,
+        expires_at_ms=1_120_000,
+        openclaw_version="2026.7.2",
+        openclaw_commit="ce67ffb70e83e5ebb56ea02e814e577153f84f61",
+    )
+    signature = sign_approval_receipt(SECRET, **fields)
+    store.resolve(secret=SECRET, **fields, signature=signature, now_ms=1_000_001)
+    original = store.get("legacy-pending")
+    store.close()
+    restored = OpenClawApprovalStore(path)
+    try:
+        assert restored.get("legacy-pending") == original
+        with pytest.raises(ApprovalReceiptError, match="expired"):
+            restored.consume(
+                receipt_id="legacy-pending",
+                tool_name=fields["tool_name"],
+                request_fingerprint=FINGERPRINT,
+                member_id="member_fixture",
+                now_ms=1_120_001,
+            )
+        upgraded = {**fields, "openclaw_version": VERSION, "openclaw_commit": COMMIT}
+        with pytest.raises(ApprovalReceiptError):
+            restored.resolve(
+                secret=SECRET,
+                **upgraded,
+                signature=sign_approval_receipt(SECRET, **upgraded),
+                now_ms=1_000_002,
+            )
+        assert restored.get("legacy-pending") == original
+    finally:
+        restored.close()

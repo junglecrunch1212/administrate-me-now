@@ -308,7 +308,7 @@ def test_required_llm_tool_status_proves_config_and_runtime_registration(
                         "toolNames": ["llm-task"],
                         "origin": "bundled",
                         "packageName": "@openclaw/llm-task",
-                        "packageVersion": "2026.7.2",
+                        "packageVersion": "2026.10.7",
                     }
                 }
             ),
@@ -362,7 +362,7 @@ def test_required_llm_tool_configuration_preserves_existing_allow_entries(
                             "toolNames": ["llm-task"],
                             "origin": "bundled",
                             "packageName": "@openclaw/llm-task",
-                            "packageVersion": "2026.7.2",
+                            "packageVersion": "2026.10.7",
                         }
                     }
                 ),
@@ -1028,7 +1028,7 @@ def test_launchers_share_keychain_gateway_token_and_load_member_chat_policy(
     monkeypatch.setattr(
         openclaw_service.subprocess,
         "run",
-        lambda *_args, **_kwargs: SimpleNamespace(stdout="OpenClaw 2026.7.2"),
+        lambda *_args, **_kwargs: SimpleNamespace(stdout="OpenClaw 2026.10.7"),
     )
     exec_capture: dict[str, object] = {}
 
@@ -1037,6 +1037,7 @@ def test_launchers_share_keychain_gateway_token_and_load_member_chat_policy(
             executable=executable,
             arguments=arguments,
             gateway_token=environment.get("OPENCLAW_GATEWAY_TOKEN"),
+            supervisor_mode=environment.get("OPENCLAW_SUPERVISOR_MODE"),
         )
         raise SystemExit(0)
 
@@ -1044,6 +1045,7 @@ def test_launchers_share_keychain_gateway_token_and_load_member_chat_policy(
     with pytest.raises(SystemExit):
         openclaw_service.main()
     assert exec_capture["gateway_token"] == shared
+    assert exec_capture["supervisor_mode"] == "external"
     assert exec_capture["arguments"] == ["/openclaw", "gateway", "run"]
 
 
@@ -1064,7 +1066,7 @@ def test_openclaw_activation_probes_server_side_and_writes_metadata_only(
     def run(command, **kwargs):
         commands.append(command)
         environments.append(dict(kwargs.get("env", {})))
-        return SimpleNamespace(stdout="OpenClaw 2026.7.2")
+        return SimpleNamespace(stdout="OpenClaw 2026.10.7")
 
     monkeypatch.setattr(
         "bootstrap.openclaw_activation.resolve_reviewed_openclaw",
@@ -1988,12 +1990,12 @@ def test_runtime_baseline_change_requires_explicit_pre_switch_approval(
         "node": {
             "from": {
                 "compatible": ">=22.22.3,<23",
-                "preferred": "24.19.0",
+                "preferred": "24.22.1",
                 "formula": "node@24",
             },
             "to": {
-                "compatible": ">=24.15,<25",
-                "preferred": "24.19.0",
+                "compatible": ">=24.22.1,<25",
+                "preferred": "24.22.1",
                 "formula": "node@24",
             },
         },
@@ -2069,7 +2071,7 @@ def test_same_version_openclaw_repair_requires_declared_successor(
 
     assert result["openclaw_migration"] == {
         "from": old_commit,
-        "to": "ce67ffb70e83e5ebb56ea02e814e577153f84f61",
+        "to": "157d8c2bc3ea2fa183afdc11088e69690bf8e64e",
     }
 
     candidate_versions_path = candidate / "bootstrap" / "versions.json"

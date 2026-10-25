@@ -1,6 +1,5 @@
 import vm from "node:vm";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolveGlobalMap } from "openclaw/plugin-sdk/global-singleton";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { registerWorkstationBrowserHooks } from "../src/workstation-browser-hooks.js";
 import { serviceAgentId, serviceSessionKey } from "../src/service-private.js";
@@ -55,7 +54,8 @@ function fixture(options: {
 }
 
 afterEach(() => {
-  resolveGlobalMap(Symbol.for("administrateme.workstation-browser.pending.v1")).clear();
+  const pending = (globalThis as unknown as Record<symbol, Map<unknown, unknown>>)[Symbol.for("administrateme.workstation-browser.pending.v1")];
+  pending?.clear();
   vi.unstubAllEnvs();
 });
 describe("installed browser source boundary", () => {

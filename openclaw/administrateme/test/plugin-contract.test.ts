@@ -1,3 +1,4 @@
+import type { GatewayHandlerOptions } from "../src/sdk-types.js";
 import { readFile } from "node:fs/promises";
 import { createHmac, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
@@ -5,7 +6,6 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   AnyAgentTool,
-  GatewayHandlerOptions,
   OpenClawPluginApi,
   OpenClawPluginCommandDefinition,
   OpenClawPluginService,
@@ -17,8 +17,8 @@ import { OPENCLAW_COMMIT, OPENCLAW_VERSION } from "../src/contract.js";
 import { AdministrateMeTransport, TransportError } from "../src/transport.js";
 import { readPluginConfig } from "../src/config.js";
 import { COS_SERVICE_PRINCIPAL_ID, serviceAgentId, serviceSessionKey } from "../src/service-private.js";
-import { fixtureApprovalRuntimes } from "./fixtures/openclaw-2026.7.2/approval-runtime.js";
-import * as approvalRuntimeFixture from "./fixtures/openclaw-2026.7.2/approval-runtime.js";
+import { fixtureApprovalRuntimes } from "./fixtures/openclaw-2026.10.7/approval-runtime.js";
+import * as approvalRuntimeFixture from "./fixtures/openclaw-2026.10.7/approval-runtime.js";
 import type { PluginApprovalRequest } from "openclaw/plugin-sdk/approval-runtime";
 
 type ToolFactory = (context: OpenClawPluginToolContext) => AnyAgentTool | AnyAgentTool[];

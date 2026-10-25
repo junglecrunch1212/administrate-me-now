@@ -1,8 +1,8 @@
 # AdministrateMe native OpenClaw plugin
 
 This is the only OpenClaw plugin package for AdministrateMe v2. It targets the
-official-contract snapshot for OpenClaw `2026.7.2` at commit
-`ce67ffb70e83e5ebb56ea02e814e577153f84f61`. The repository fixture validates
+official-contract snapshot for OpenClaw `2026.10.7` at commit
+`157d8c2bc3ea2fa183afdc11088e69690bf8e64e`. The repository fixture validates
 the used SDK surface; it is not a claim that a live Gateway ran on Windows.
 
 ## Trust boundary
@@ -63,7 +63,7 @@ npm run build
 npm pack --dry-run
 ```
 
-AdministrateMe's reviewed runtime baseline requires Node `>=24.15.0 <25`. The current
+AdministrateMe's reviewed runtime baseline requires Node `>=24.22.1 <25`. The current
 Windows development host is intentionally fixture-only. In a disposable Mac
 lab with the exact OpenClaw checkout, set `ADMINME_LIVE_GATE=1` and
 `OPENCLAW_SOURCE_DIR`, then run `npm run test:live:mac`. That gate links the

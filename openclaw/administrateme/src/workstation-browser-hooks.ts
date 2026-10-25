@@ -1,6 +1,5 @@
 /** Installed native hook + fail-closed result middleware for one admitted read. */
 import { createHmac } from "node:crypto";
-import { resolveGlobalMap } from "openclaw/plugin-sdk/global-singleton";
 import type { OpenClawPluginApi, OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "./runtime.js";
 import { provenanceFromServiceTool, serviceAgentId } from "./service-private.js";
@@ -17,7 +16,8 @@ export function registerWorkstationBrowserHooks(api: OpenClawPluginApi, runtime:
   // Pinned native result middleware may load a separate plugin registration.
   // Keep only bounded, process-local admission receipts; no browser text or
   // credential is retained here. Restart deliberately loses pending authority.
-  const pending = resolveGlobalMap<string, PendingRead>(PENDING_READS);
+  const store = globalThis as typeof globalThis & { [PENDING_READS]?: Map<string, PendingRead> };
+  const pending = store[PENDING_READS] ??= new Map<string, PendingRead>();
   const service = (context: Record<string, unknown>) => context.agentId === serviceAgentId();
   const provenance = (context: Record<string, unknown>) => provenanceFromServiceTool(context as OpenClawPluginToolContext,
     runtime.transport.config.sharedSecretEnv, runtime.transport.config.serviceWorkEnabled);

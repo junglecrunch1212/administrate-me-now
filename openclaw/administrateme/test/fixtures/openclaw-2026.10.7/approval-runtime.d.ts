@@ -1,4 +1,4 @@
-/** Public SDK surface used at exact source ce67ffb70e83e5ebb56ea02e814e577153f84f61. */
+/** Synthetic unit fixture; hosted target-SDK compilation verifies the public contract. */
 export type PluginApprovalRequest = {
   id: string; createdAtMs: number; expiresAtMs: number;
   request: {

@@ -242,10 +242,18 @@ def validate_candidate(
     incoming = load_versions(candidate)
     active_claw = active["openclaw"]
     incoming_claw = incoming["openclaw"]
-    for key in ("version", "plugin_api"):
-        if incoming_claw[key] != active_claw[key]:
+    claw_coordinates = ("commit", "version", "plugin_api")
+    active_identity = {key: active_claw[key] for key in claw_coordinates}
+    reviewed_api_transition = (
+        incoming_claw.get("reviewed_predecessor") == active_identity
+        and incoming_claw["commit"] != active_claw["commit"]
+        and incoming_claw.get("supersedes_commit") == active_claw["commit"]
+    )
+    if any(incoming_claw[key] != active_claw[key] for key in ("version", "plugin_api")):
+        if not reviewed_api_transition:
             raise UpgradeError(
-                f"candidate OpenClaw {key} is incompatible; service replacement refused"
+                "candidate OpenClaw version/API is not the exact reviewed transition; "
+                "service replacement refused"
             )
     commit_changed = incoming_claw["commit"] != active_claw["commit"]
     reviewed_forward_transition = (
@@ -263,7 +271,10 @@ def validate_candidate(
     compat = package.get("openclaw", {}).get("compat", {})
     if (
         build.get("openclawCommit") != incoming_claw["commit"]
-        or compat.get("pluginApi") != active_claw["plugin_api"]
+        or build.get("openclawVersion") != incoming_claw["version"]
+        or build.get("pluginSdkVersion") != incoming_claw["plugin_api"]
+        or compat.get("pluginApi") != incoming_claw["plugin_api"]
+        or compat.get("minGatewayVersion") != incoming_claw["version"]
     ):
         raise UpgradeError(
             "candidate plugin package contradicts its compatibility manifest"
@@ -301,7 +312,7 @@ def validate_candidate(
     )
     return {
         "compatible": True,
-        "openclaw_version": active_claw["version"],
+        "openclaw_version": incoming_claw["version"],
         "openclaw_commit": incoming_claw["commit"],
         "openclaw_migration": (
             {"from": active_claw["commit"], "to": incoming_claw["commit"]}

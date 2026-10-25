@@ -1,4 +1,5 @@
-import type { GatewayHandlerOptions, OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import type { GatewayHandlerOptions } from "./sdk-types.js";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { provenanceFromDashboard } from "./provenance.js";
 import { safeError } from "./result.js";
 import { trackSession, type PluginRuntime } from "./runtime.js";

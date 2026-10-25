@@ -1,7 +1,7 @@
 /**
- * Narrow official-contract fixture copied from the OpenClaw plugin SDK shape
- * at commit ce67ffb70e83e5ebb56ea02e814e577153f84f61.  It is intentionally
- * limited to the surfaces used by this plugin and is not a live-runtime claim.
+ * Narrow synthetic fixture for the surfaces used from OpenClaw 2026.10.7.
+ * The hosted target-SDK compile separately checks the real published declarations;
+ * this unit fixture is not source-install or live-runtime compatibility proof.
  */
 
 export type JsonSchema = Record<string, unknown>;
@@ -216,45 +216,10 @@ export type OpenClawPluginApi = {
     opts?: { scope?: "operator.read" | "operator.write" | "operator.admin" },
   ) => void;
   registerService: (service: OpenClawPluginService) => void;
-  on: {
-    (hook: "before_prompt_build", handler: (event: { prompt: string; messages: unknown[] }, context: PluginHookAgentContext) => { toolsAllow?: string[] } | void | Promise<{ toolsAllow?: string[] } | void>): void;
-    (hook: "after_tool_call", handler: (event: { toolName: string; params: Record<string, unknown>; runId?: string; toolCallId?: string; result?: unknown; error?: string; durationMs?: number }, context: Record<string, unknown>) => void | Promise<void>): void;
-    (hook: "before_agent_reply", handler: (event: { cleanedBody: string }, context: PluginHookAgentContext) => void | Promise<void>, options?: { eligibleTriggers?: readonly ["user", ...Array<"user" | "cron" | "heartbeat">] }): void;
-    (
-      hook: "agent_end",
-      handler: (event: { runId?: string; messages: unknown[]; success: boolean; error?: string; durationMs?: number }, context: PluginHookAgentContext) => void | Promise<void>,
-    ): void;
-    (
-      hook: "message_sending",
-      handler: (
-        event: PluginHookMessageSendingEvent,
-        context: PluginHookMessageContext,
-      ) => PluginHookMessageSendingResult | void | Promise<PluginHookMessageSendingResult | void>,
-      opts?: { priority?: number },
-    ): void;
-    (
-      hook: "before_tool_call",
-      handler: (
-        event: PluginHookBeforeToolCallEvent,
-        context: Record<string, unknown>,
-      ) => PluginHookBeforeToolCallResult | void | Promise<PluginHookBeforeToolCallResult | void>,
-      opts?: { priority?: number },
-    ): void;
-    (
-      hook: "message_received",
-      handler: (
-        event: PluginHookMessageReceivedEvent,
-        context: PluginHookMessageContext,
-      ) => void | Promise<void>,
-    ): void;
-    (
-      hook: "model_call_started" | "model_call_ended",
-      handler: (
-        event: PluginHookModelCallEvent,
-        context: PluginHookAgentContext,
-      ) => void | Promise<void>,
-    ): void;
-  };
+  on: <K extends keyof FixtureHookMap>(
+    hook: K, handler: FixtureHookMap[K],
+    options?: { priority?: number; eligibleTriggers?: readonly ["user", ...Array<"user" | "cron" | "heartbeat">] },
+  ) => void;
 };
 
 export type PluginEntry = {
@@ -266,3 +231,15 @@ export type PluginEntry = {
 };
 
 export declare function definePluginEntry(entry: PluginEntry): PluginEntry;
+
+export type FixtureHookMap = {
+  before_prompt_build: (event: { prompt: string; messages: unknown[] }, context: PluginHookAgentContext) => { toolsAllow?: string[] } | void | Promise<{ toolsAllow?: string[] } | void>;
+  after_tool_call: (event: { toolName: string; params: Record<string, unknown>; runId?: string; toolCallId?: string; result?: unknown; error?: string; durationMs?: number }, context: Record<string, unknown>) => void | Promise<void>;
+  before_agent_reply: (event: { cleanedBody: string }, context: PluginHookAgentContext) => void | Promise<void>;
+  agent_end: (event: { runId?: string; messages: unknown[]; success: boolean; error?: string; durationMs?: number }, context: PluginHookAgentContext) => void | Promise<void>;
+  message_sending: (event: PluginHookMessageSendingEvent, context: PluginHookMessageContext) => PluginHookMessageSendingResult | void | Promise<PluginHookMessageSendingResult | void>;
+  before_tool_call: (event: PluginHookBeforeToolCallEvent, context: Record<string, unknown>) => PluginHookBeforeToolCallResult | void | Promise<PluginHookBeforeToolCallResult | void>;
+  message_received: (event: PluginHookMessageReceivedEvent, context: PluginHookMessageContext) => void | Promise<void>;
+  model_call_started: (event: PluginHookModelCallEvent, context: PluginHookAgentContext) => void | Promise<void>;
+  model_call_ended: (event: PluginHookModelCallEvent & { durationMs: number; outcome: "completed" | "error" }, context: PluginHookAgentContext) => void | Promise<void>;
+};
