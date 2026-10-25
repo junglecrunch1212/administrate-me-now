@@ -737,9 +737,10 @@ async def test_fixed_schedule_representative_storage_measurement(tmp_path):
         planned_requests=planned_requests(run.started),
         imports=[],
         faults=[],
-        source_tree="9e739956d85316dff9b54880914e576268fe56fb",
+        source_tree="7b89c73a0420eb73925119b9f0550629389586c6",
         lock_tree="cc2102f6e9dd2fd029bd636566806493c1df91dc",
-        production_source_changed=False,
+        comparison_source_tree="9e739956d85316dff9b54880914e576268fe56fb",
+        production_source_changed=True,
         environment={
             "python": sys.version,
             "platform": platform.platform(),
