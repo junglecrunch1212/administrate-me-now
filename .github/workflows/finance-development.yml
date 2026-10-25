@@ -345,6 +345,16 @@ jobs:
           path: ${{ runner.temp }}/finance-idle
           if-no-files-found: error
           retention-days: 7
+      - name: Verify committed metadata reads and native connection cleanup
+        timeout-minutes: 2
+        run: >-
+          poetry run pytest -q
+          --junitxml="${{ runner.temp }}/native-finance/metadata-results.xml"
+          tests/unit/test_event_log.py::test_metadata_reads_committed_state_while_writer_waits_at_commit
+          tests/unit/test_event_log.py::test_metadata_reader_denies_payloads_and_mutations
+          tests/unit/test_event_log.py::test_metadata_open_queries_and_close_share_owner_thread
+          tests/unit/test_event_log.py::test_cancelled_metadata_query_and_close_drain_native_work
+          tests/unit/test_event_log.py::test_metadata_initialization_failure_closes_both_workers
       - name: Verify self counters, registered lifecycle and short production composition
         timeout-minutes: 5
         env:
@@ -366,6 +376,7 @@ jobs:
             ${{ runner.temp }}/native-finance/**/*.json
             ${{ runner.temp }}/native-finance/**/*.jsonl
             ${{ runner.temp }}/native-finance/results.xml
+            ${{ runner.temp }}/native-finance/metadata-results.xml
           if-no-files-found: error
           retention-days: 7
 
