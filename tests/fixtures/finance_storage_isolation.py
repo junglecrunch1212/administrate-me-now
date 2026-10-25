@@ -39,6 +39,7 @@ ARTIFACT_FILES = (
     "tests/fixtures/finance_staging_store.py",
     "tests/fixtures/finance_staging_prepare.py",
     "tests/fixtures/finance_staging.py",
+    "tests/fixtures/finance_staging_evidence.py",
     "tests/fixtures/finance_staging_contract.json",
     "adminme/finance/closed_import.py",
     "adminme/finance/dated_projection.py",
@@ -595,7 +596,7 @@ async def executor(*, staged=False):
     def reply(kind, **values):
         write_control(outgoing, {"birth": birth, "seq": seq, "kind": kind, **values})
 
-    def durable_guard():
+    def durable_guard(stage="commit_guard"):
         tenant, owner, book = scope
         row = log._read_finance_import_approval(
             tenant, owner, prepared_header["approval_id"]
@@ -616,8 +617,17 @@ async def executor(*, staged=False):
             or policy.event_id != approval.policy_event_id
             or policy.binding != approval.manifest.binding
             or policy.binding.book_id != book
-            or datetime.fromisoformat(approval.expires_at) <= datetime.now(timezone.utc)
         ):
+            if staged:
+                from tests.fixtures.finance_staging_evidence import GuardRejection
+
+                raise GuardRejection("synthetic_durable_authority_changed", stage)
+            raise ValueError("synthetic_durable_authority_changed")
+        if datetime.fromisoformat(approval.expires_at) <= datetime.now(timezone.utc):
+            if staged:
+                from tests.fixtures.finance_staging_evidence import GuardRejection
+
+                raise GuardRejection("synthetic_approval_expired", stage)
             raise ValueError("synthetic_durable_authority_changed")
 
     try:
@@ -659,7 +669,7 @@ async def executor(*, staged=False):
                             PreparationDiagnostics,
                         )
 
-                        durable_guard()
+                        durable_guard("prepare_before_upload")
                         stage_store = new_stage(root, command)
                         diagnostics = PreparationDiagnostics()
                         with diagnostics.instrument(), diagnostics.stage("prepare"):
@@ -924,8 +934,13 @@ async def executor(*, staged=False):
                 else:
                     raise ValueError("synthetic_operation_denied")
             except Exception as exc:
-                # Only a class name is returned; no keys, SQL or payload text.
-                reply("error", reason="synthetic_" + type(exc).__name__)
+                if staged:
+                    from tests.fixtures.finance_staging_evidence import failure
+
+                    reply("error", **failure(exc, "executor"))
+                else:
+                    # Preserve the original, non-staged fixture protocol.
+                    reply("error", reason="synthetic_" + type(exc).__name__)
                 return
     finally:
         if stage_store is not None:

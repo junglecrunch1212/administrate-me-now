@@ -7,6 +7,7 @@ import pytest
 
 from tests.acceptance.test_finance_storage_isolation import OwnedRun
 from tests.fixtures.finance_storage_cases import CASES
+from tests.fixtures.finance_staging_evidence import collect_owned_case
 
 pytestmark = pytest.mark.skipif(
     os.getenv("ADMINME_SYNTHETIC_STAGING_CORRECTNESS") != "1"
@@ -27,10 +28,4 @@ def test_staged_small_lifecycle_atomicity_authority_and_isolation(tmp_path, name
     run.record["cohort"] = "focused_staging_correctness"
     run.record["production_or_native_qualification"] = False
     run.record["performance_qualification"] = False
-    try:
-        result = run.receive()
-        run.record["result"] = result
-        assert result["state"] == "passed", result
-        run.record["state"] = "correctness_passed"
-    finally:
-        run.close()
+    collect_owned_case(run)

@@ -138,7 +138,7 @@ def prepare_staged(header, incoming, money, store, guard, diagnostics):
     manifest = FinanceImportManifest.model_validate(header["manifest"])
     worker_child._input = incoming
     packet = StagedUpload(manifest, store).packet()
-    guard()  # Fresh durable authority after the upload wait.
+    guard("prepare_after_upload")  # Fresh durable authority after the upload wait.
     publication, projection, package = decode_staged_packet(packet, manifest, store)
     events, metadata = StagedEvents(store), None
 
@@ -330,7 +330,7 @@ def prepare_staged(header, incoming, money, store, guard, diagnostics):
         expected.append("finance.projection_verified")
     if metadata is None or [event.type for event in events] != expected:
         raise ValueError("finance_worker_output_invalid")
-    guard()  # Validation and all staged emission have completed; recheck expiry/policy.
+    guard("prepare_before_seal")  # Recheck after validation and staged emission.
     names = ["publication", "index", *["blob:" + key for key in manifest.blobs]]
     if manifest.projection is not None:
         names.append("projection")
