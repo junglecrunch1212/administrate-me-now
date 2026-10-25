@@ -369,6 +369,23 @@ describe("native OpenClaw contract fixture", () => {
     expect(() => readPluginConfig({ serviceWorkEnabled: "false" })).toThrow("boolean");
   });
 
+  it("passes bounded source discovery through the existing isolated service context tool", async () => {
+    const context = { agentId: serviceAgentId(), sessionKey: serviceSessionKey(process.env.ADMINME_OPENCLAW_SHARED_SECRET!) };
+    const runtime = fakeApi();
+    const tool = runtime.tools.get("administrateme_service_context")!(context) as AnyAgentTool;
+    const schema = tool.parameters as { additionalProperties?: boolean; properties: Record<string, { anyOf?: Array<{ const: string }> }> };
+    expect(schema.additionalProperties).toBe(false);
+    expect(schema.properties.source_kind?.anyOf?.map((entry) => entry.const)).toEqual(["calendar", "google_tasks", "apple_reminders"]);
+    for (const source_kind of ["calendar", "google_tasks", "apple_reminders"]) {
+      fetchMock.mockClear();
+      await tool.execute(`selected-${source_kind}`, { source_kind, limit: 3, after_event_id: "fixture-context-cursor" });
+      expect(requestBody(fetchMock)).toMatchObject({ source_kind, limit: 3, after_event_id: "fixture-context-cursor", provenance: {
+        actor_id: COS_SERVICE_PRINCIPAL_ID, agent_id: context.agentId, session_key: context.sessionKey,
+      } });
+      expect(String(fetchMock.mock.calls[0]?.[0])).toMatch(/\/api\/openclaw\/v1\/tools\/service-context$/);
+    }
+  });
+
   it("cancels ordinary CoS replies and blocks generic delivery tool bypasses", async () => {
     const runtime = fakeApi({
       forwardIntakeAccounts: [{ channelId: "imessage", accountId: "cos-fixture" }],
