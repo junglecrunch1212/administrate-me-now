@@ -124,6 +124,10 @@ def test_service_install_and_rollback_preserve_member_and_service_state(
     agent = _service(current)
     assert agent["id"] == service_agent_id(COS_SERVICE_PRINCIPAL_ID)
     assert agent["tools"] == {"allow": list(SERVICE_PRIVATE_TOOLS)}
+    assert {
+        "administrateme_workstation_source_policy",
+        "administrateme_provision_workstation_source_policy",
+    } <= set(agent["tools"]["allow"])
     workspace = service_workspace_path(
         paths.instance_dir / "openclaw", COS_SERVICE_PRINCIPAL_ID
     )

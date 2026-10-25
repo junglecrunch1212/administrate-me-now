@@ -1,7 +1,7 @@
 """Real authenticated intake, encrypted browser observation and audience return."""
 
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
 from typing import Any
@@ -263,7 +263,6 @@ def test_browser_resource_choice_is_filtered_and_bounded(
 def test_operator_source_provision_is_exact_append_only_and_does_not_override_restrictions(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from datetime import timedelta
     from bootstrap.workstation_browser import stage_source_request
     from adminme.workstation_source_policy import PROVISION_FILE
 
@@ -315,6 +314,16 @@ def test_operator_source_provision_is_exact_append_only_and_does_not_override_re
         assert event["payload"]["owner_principal_id"] == COS_SERVICE_PRINCIPAL_ID
         assert event["actor_identity"] == staged["operator_principal_id"]
         assert staged["owner_authorization_sha256"] in event["raw_ref"]
+        # Reusing the identifier cannot substitute a new operator authorization.
+        stage_source_request(
+            directory, {**staged, "owner_authorization_sha256": "b" * 64}
+        )
+        _post(client, BASE + "/provision-source-policy", call, 409)
+        stage_source_request(directory, staged)
+        assert (
+            _post(client, BASE + "/provision-source-policy", call)["event_id"]
+            == granted["event_id"]
+        )
         client.portal.call(
             runtime.settings_control.replay_source_policy_v2_events, runtime.event_log
         )
@@ -362,4 +371,109 @@ def test_operator_source_provision_is_exact_append_only_and_does_not_override_re
             BASE + "/provision-source-policy",
             {"provenance": service, "request_id": staged["request_id"]},
             409,
+        )
+
+
+def test_source_policy_tools_require_exact_service_and_current_operator_request(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from adminme.products.openclaw import workstation_source_policy as endpoint
+    from bootstrap.workstation_browser import stage_source_request
+
+    with TestClient(create_application(_settings(tmp_path / "instance"))) as client:
+        setup_browser(client, monkeypatch)
+        monkeypatch.undo()
+        runtime = client.app.state.runtime
+        source = _body(client, text=INSTRUCTION)
+        service = _service(source, NONCE)
+        read = {"provenance": service, "resource_id": "own-planning-page"}
+        state = _post(client, BASE + "/source-policy", read)
+        staged = {
+            "request_id": "4" * 32,
+            "resource_id": "own-planning-page",
+            "policy_key": state["policy_key"],
+            "expected_source_revision": state["revision"],
+            "expected_binding_revision": state["binding_revision"],
+            "operator_principal_id": "operator:fixture:owner-delegated",
+            "owner_authorization_sha256": "a" * 64,
+            "expires_at": (
+                datetime.now(timezone.utc) + timedelta(minutes=15)
+            ).isoformat(),
+            "context_mode": "content_on_explicit_authorized_demand",
+        }
+        directory = runtime.settings.instance.config_dir
+        stage_source_request(directory, staged)
+        apply = {"provenance": service, "request_id": staged["request_id"]}
+        for path, body in (
+            ("/source-policy", read),
+            ("/provision-source-policy", apply),
+        ):
+            _post(
+                client,
+                BASE + path,
+                {k: v for k, v in body.items() if k != "provenance"},
+                422,
+            )
+            _post(
+                client, BASE + path, {**body, "provenance": source["provenance"]}, 403
+            )
+            for field, value in (
+                ("session_key", service["session_key"] + "0"),
+                ("actor_id", "another-member"),
+                ("agent_id", "operator"),
+                ("account_id", "another-account"),
+                ("channel_id", "imessage"),
+            ):
+                _post(
+                    client,
+                    BASE + path,
+                    {**body, "provenance": {**service, field: value}},
+                    403,
+                )
+            _post(
+                client,
+                BASE + path,
+                {**body, "context_mode": staged["context_mode"]},
+                422,
+            )
+        _post(
+            client,
+            BASE + "/source-policy",
+            {**read, "resource_id": "unconfigured"},
+            403,
+        )
+        for invalid in ("", "4" * 31, "G" * 32, "4" * 33):
+            _post(
+                client,
+                BASE + "/provision-source-policy",
+                {**apply, "request_id": invalid},
+                422,
+            )
+        for field, value in (
+            ("expected_source_revision", state["revision"] + 1),
+            ("expected_binding_revision", state["binding_revision"] + 1),
+            ("policy_key", "spv2_" + "0" * 64),
+        ):
+            stage_source_request(directory, {**staged, field: value})
+            _post(client, BASE + "/provision-source-policy", apply, 409)
+        stage_source_request(directory, staged)
+
+        class AfterExpiry(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return datetime.fromisoformat(staged["expires_at"]) + timedelta(
+                    seconds=1
+                )
+
+        with monkeypatch.context() as patch:
+            patch.setattr(endpoint, "datetime", AfterExpiry)
+            _post(client, BASE + "/provision-source-policy", apply, 409)
+        assert _post(client, BASE + "/source-policy", read) == state
+        assert (
+            client.portal.call(
+                runtime.event_log.get_by_idempotency,
+                runtime.settings.instance.tenant_id,
+                "workstation-browser-source-policy:" + staged["request_id"],
+            )
+            is None
         )

@@ -35,12 +35,16 @@ print(json.dumps([overview, detail, next_page]))
   const errors = [];
   let modelCalls = 0;
   let completed = false;
+  let sourcePolicyApplied = false;
   const sourceEvent = "fixture-source-event";
   const steps = [
     ["administrateme_workstation_inventory", {}],
     ["administrateme_workstation_inventory", { view: "details", section: "identities", binding_id: "fixture-route-17" }],
     ["administrateme_workstation_inventory", { view: "details", section: "identities", binding_id: "fixture-route-17", offset: inventoryPages[1].page.next_offset, snapshot: inventoryPages[1].snapshot }],
     ["administrateme_service_context", { limit: 2 }],
+    ["administrateme_workstation_source_policy", { resource_id: "fixture-resource" }],
+    ["administrateme_provision_workstation_source_policy", { request_id: "4".repeat(32) }],
+    ["administrateme_workstation_source_policy", { resource_id: "fixture-resource" }],
     ["administrateme_service_private_work", { request_id: "fixture-private-note", title: "Prepare an internal brief", record_kind: "note", source_event_ids: [sourceEvent] }],
     ["administrateme_service_private_work_state", { task_id: "cos-task:fixture", request_id: "fixture-complete-work", expected_last_event_id: "fixture-created", action: "complete", reason_code: "completed" }],
     ["administrateme_service_private_state", { task_id: "cos-task:fixture", limit: 10 }],
@@ -162,7 +166,7 @@ print(json.dumps([overview, detail, next_page]))
           conversationReplies.push({ source: body.source_message_event_id, channel: expected.channel_id });
           result = { status: "sent", fixture_only: true, provider_effect_count: 0 };
         }
-      } else if (req.url.startsWith("/api/openclaw/v1/tools/service-") || req.url === "/api/openclaw/v1/tools/workstation-inventory") {
+      } else if (req.url.startsWith("/api/openclaw/v1/tools/service-") || ["/api/openclaw/v1/tools/workstation-inventory", "/api/openclaw/v1/tools/workstation-browser/source-policy", "/api/openclaw/v1/tools/workstation-browser/provision-source-policy"].includes(req.url)) {
         assert.equal(body.provenance.actor_id, "service-principal:chief-of-staff");
         assert.equal(body.provenance.agent_id, agent);
         sessions.add(body.provenance.session_key);
@@ -175,6 +179,15 @@ print(json.dumps([overview, detail, next_page]))
           const index = body.view !== "details" ? 0 : body.offset ? 2 : 1;
           assert.deepEqual(Object.fromEntries(Object.entries(body).filter(([key]) => key !== "provenance")), steps[index][1]);
           result = inventoryPages[index];
+        } else if (req.url.endsWith("/provision-source-policy")) {
+          assert.deepEqual(Object.keys(body).sort(), ["provenance", "request_id"]);
+          assert.equal(body.request_id, "4".repeat(32));
+          sourcePolicyApplied = true;
+          result = { status: "policy_recorded", event_id: "fixture-policy-event", idempotent: false, policy: { context_mode: "content_on_explicit_authorized_demand" } };
+        } else if (req.url.endsWith("/source-policy")) {
+          assert.deepEqual(Object.keys(body).sort(), ["provenance", "resource_id"]);
+          assert.equal(body.resource_id, "fixture-resource");
+          result = { resource_id: body.resource_id, revision: sourcePolicyApplied ? 1 : 0, policy: { context_mode: sourcePolicyApplied ? "content_on_explicit_authorized_demand" : "metadata_only" } };
         } else if (req.url.endsWith("/service-context")) {
           result = { source_events: [{ event_id: sourceEvent, title: "GRANTED_SOURCE_FIXTURE", scope: "member-private:fixture", authority_grant_id: "fixture-standing-grant" }] };
         } else if (req.url.endsWith("/service-private-work")) {

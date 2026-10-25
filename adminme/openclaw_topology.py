@@ -16,6 +16,8 @@ SERVICE_PRIVATE_TOOLS = (
     "administrateme_service_private_work_state",
     "administrateme_service_private_state",
     "administrateme_service_context",
+    "administrateme_workstation_source_policy",
+    "administrateme_provision_workstation_source_policy",
     "administrateme_workstation_inventory",
 )
 
