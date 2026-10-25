@@ -1,0 +1,55 @@
+name: Synthetic Finance storage prototype
+on:
+  push:
+    branches: ['codex/finance-storage-prototype-e626bab3']
+    paths:
+      - 'tests/fixtures/finance_storage_isolation.py'
+      - 'tests/fixtures/finance_storage_cases.py'
+      - 'tests/acceptance/test_finance_storage_isolation.py'
+      - '.github/workflows/finance-storage-prototype.yml'
+permissions:
+  contents: read
+concurrency:
+  group: finance-storage-prototype-${{ github.ref }}-${{ github.sha }}
+  cancel-in-progress: false
+jobs:
+  synthetic-storage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      ADMINME_TEST_MODE: '1'
+      ADMINME_SYNTHETIC_STORAGE_EVALUATION: '1'
+      PYTHONPATH: bridge
+      PYTHONDONTWRITEBYTECODE: '1'
+      POETRY_VIRTUALENVS_IN_PROJECT: 'true'
+      FINANCE_STORAGE_ARTIFACT_DIR: ${{ runner.temp }}/finance-storage-prototype
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.14.7'
+      - run: pipx install poetry==2.4.1
+      - run: poetry sync --with dev --no-interaction
+      - name: Bind unchanged production source and check the prototype
+        run: |
+          git rev-parse HEAD HEAD:adminme HEAD:poetry.lock
+          git diff --exit-code e626bab37b032ce099022e11e5a21bcba88dab34 HEAD -- adminme pyproject.toml poetry.lock
+          .venv/bin/ruff check tests/fixtures/finance_storage_isolation.py tests/fixtures/finance_storage_cases.py tests/acceptance/test_finance_storage_isolation.py
+          .venv/bin/ruff format --check tests/fixtures/finance_storage_isolation.py tests/fixtures/finance_storage_cases.py tests/acceptance/test_finance_storage_isolation.py
+      - name: One bounded synthetic correctness and resource evaluation
+        timeout-minutes: 37
+        run: >-
+          exec .venv/bin/python -m pytest -q --runxfail --maxfail=3
+          --junitxml="${{ runner.temp }}/finance-storage-prototype/results.xml"
+          tests/acceptance/test_finance_storage_isolation.py
+      - name: Retain every completion or failure receipt
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: finance-storage-prototype
+          path: ${{ runner.temp }}/finance-storage-prototype
+          if-no-files-found: error
+          retention-days: 7
