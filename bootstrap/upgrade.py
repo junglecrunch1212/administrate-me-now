@@ -133,6 +133,14 @@ from bootstrap.workspace_instructions import (
 )
 
 
+from bootstrap.effect_context_repair import (
+    EffectContextProof,
+    load_plan as load_effect_context_plan,
+    verify_proof as verify_effect_context,
+    wait_contained as wait_effect_context,
+)
+
+
 class UpgradeError(RuntimeError):
     pass
 
@@ -371,6 +379,7 @@ class UpgradeManager:
         pending_attestation_id: str | None = None,
         test_reset_manifest: Path | None = None,
         submission_repair_manifest: Path | None = None,
+        effect_context_repair_plan: Path | None = None,
     ) -> None:
         self.paths = paths
         self.root = root.resolve()
@@ -381,6 +390,17 @@ class UpgradeManager:
         self.pending_attestation_id = pending_attestation_id
         self.test_reset_manifest = test_reset_manifest
         self.submission_repair_manifest = submission_repair_manifest
+        self.effect_context_repair_plan = effect_context_repair_plan
+        if effect_context_repair_plan is not None and (
+            submission_repair_manifest is not None
+            or approve_source_assessment_repair
+            or test_reset_manifest is not None
+            or approve_provider_binding_migration
+            or approve_runtime_migration
+        ):
+            raise UpgradeError(
+                "effect-context repair cannot combine deployment exceptions"
+            )
         if submission_repair_manifest is not None and (
             approve_source_assessment_repair
             or test_reset_manifest is not None
@@ -2280,6 +2300,20 @@ class UpgradeManager:
                     )
                 except Exception as exc:
                     recovery_errors.append(exc)
+            effect_proof = (
+                EffectContextProof.model_validate(
+                    recovery_journal["effect_context_proof"]
+                )
+                if "effect_context_proof" in recovery_journal
+                else None
+            )
+            if not recovery_errors and effect_proof is not None:
+                try:
+                    verify_effect_context(
+                        self.paths, self.root, effect_proof, test_mode=self.test_mode
+                    )
+                except Exception as exc:
+                    recovery_errors.append(exc)
             baseline = recovery_journal.get("initial_readiness_baseline")
             if not recovery_errors and baseline is not None:
                 try:
@@ -2323,6 +2357,20 @@ class UpgradeManager:
                             recovery_healthy = (
                                 recovery_proof.get("status") == "contained_degraded"
                             )
+                        elif effect_proof is not None:
+                            assert self._recovery_settlement_deadline is not None
+                            recovery_proof = wait_effect_context(
+                                self.paths,
+                                self.root,
+                                effect_proof,
+                                diagnostics=self.services.runtime_diagnostics,
+                                doctor=lambda: self._run_release_doctor(
+                                    predecessor, include_synthetic_proof=True
+                                ),
+                                deadline=self._recovery_settlement_deadline,
+                                test_mode=self.test_mode,
+                            )
+                            recovery_healthy = True
                         else:
                             recovery_proof = self._post_switch_doctor(predecessor)
                             recovery_healthy = recovery_proof.get("status") == "healthy"
@@ -2339,7 +2387,7 @@ class UpgradeManager:
                     if recovery_healthy:
                         restored_readiness = (
                             "contained_degraded"
-                            if repair_manifest is not None
+                            if repair_manifest is not None or effect_proof is not None
                             else "healthy"
                         )
                     elif (
@@ -2496,6 +2544,10 @@ class UpgradeManager:
             if recovered is not None:
                 return recovered
             if self.pending_attestation_id is None:
+                if self.effect_context_repair_plan is not None:
+                    raise UpgradeError(
+                        "effect-context repair requires journaled pending activation"
+                    )
                 if self.submission_repair_manifest is not None:
                     raise UpgradeError(
                         "submission repair requires journaled pending activation"
@@ -2553,6 +2605,29 @@ class UpgradeManager:
         )
         if submission_repair is not None:
             self._validate_submission_repair_online(submission_repair, active_root)
+        effect_plan = (
+            load_effect_context_plan(
+                self.effect_context_repair_plan,
+                self.paths,
+                candidate,
+                candidate=commit,
+                predecessor=pending_snapshot.predecessor_commit,
+                test_mode=self.test_mode,
+            )
+            if self.effect_context_repair_plan is not None
+            else None
+        )
+        effect_proof = (
+            effect_plan.effect_context_proof if effect_plan is not None else None
+        )
+        if effect_proof is not None:
+            verify_effect_context(
+                self.paths,
+                candidate,
+                effect_proof,
+                diagnostics=self.services.runtime_diagnostics() or {},
+                test_mode=self.test_mode,
+            )
         repair_policy = (
             load_repair_policy(candidate)
             if self.approve_source_assessment_repair
@@ -2631,7 +2706,9 @@ class UpgradeManager:
         predecessor_release = Path(pointer_rows[0]["path"])
         was_running = self.services.status().status != "stopped"
         if (
-            repair_policy is not None or submission_repair is not None
+            repair_policy is not None
+            or submission_repair is not None
+            or effect_proof is not None
         ) and not was_running:
             raise UpgradeError(
                 "declared source-assessment repair requires running services "
@@ -2662,8 +2739,20 @@ class UpgradeManager:
                     "initial_readiness_baseline": self._capture_recovery_readiness_baseline(
                         readiness_payload
                     )
-                    if was_running and submission_repair is None
+                    if was_running
+                    and submission_repair is None
+                    and effect_proof is None
                     else None,
+                    **(
+                        {
+                            "effect_context_proof": effect_proof.model_dump(
+                                mode="json"
+                            ),
+                            "effect_context_plan_sha256": effect_plan.digest(),
+                        }
+                        if effect_plan is not None and effect_proof is not None
+                        else {}
+                    ),
                     **(
                         {
                             "submission_repair_manifest": submission_repair.model_dump(
@@ -2938,6 +3027,10 @@ class UpgradeManager:
                         "services_quiesced",
                     )
                 self._require_instance_intake_compatibility(active_root, release)
+                if effect_proof is not None:
+                    verify_effect_context(
+                        self.paths, candidate, effect_proof, test_mode=self.test_mode
+                    )
                 # Graceful stop can consume time; reserve admission must still
                 # hold at the first selector mutation. This does not reset the
                 # already established candidate settlement deadline.
