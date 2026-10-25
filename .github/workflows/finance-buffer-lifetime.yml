@@ -36,7 +36,7 @@ jobs:
           .venv/bin/ruff check adminme/finance/dated_projection.py adminme/finance/publication_provenance.py tests/unit/test_finance_validation_buffer_lifetime.py
           .venv/bin/ruff format --check adminme/finance/dated_projection.py adminme/finance/publication_provenance.py tests/unit/test_finance_validation_buffer_lifetime.py
           .venv/bin/mypy adminme/finance/dated_projection.py adminme/finance/publication_provenance.py
-          .venv/bin/pyright adminme/finance/dated_projection.py adminme/finance/publication_provenance.py
+          .venv/bin/pyright --pythonpath .venv/bin/python adminme/finance/dated_projection.py adminme/finance/publication_provenance.py
       - name: Cold cache-hit and failure parity with observed buffer release
         timeout-minutes: 2
         run: |
