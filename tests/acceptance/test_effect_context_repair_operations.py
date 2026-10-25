@@ -405,6 +405,7 @@ def test_real_email_containment_upgrade_and_schema_aware_fallback(
             for field, value in (
                 ("phase", "prepared"),
                 ("controller_commit", "d" * 40),
+                ("owner_member_id", "other-fixture-member"),
                 ("maintenance_plan_sha256", "0" * 64),
                 ("operation", "activate"),
             ):

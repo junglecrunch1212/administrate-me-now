@@ -2694,6 +2694,10 @@ class CoSChannelActivator:
                 or journal.get("request")
                 != plan.observation_request().model_dump(mode="json")
                 or journal.get("prior_activation_id") != plan.prior_activation_id
+                or journal.get("operator_principal_id") != plan.operator_principal_id
+                or journal.get("owner_member_id") != plan.owner_member_id
+                or journal.get("owner_authorization_sha256")
+                != plan.owner_authorization_sha256
                 or journal.get("initial_snapshot") != plan.deployment_snapshot
                 or not journal.get("observation_started_at")
                 or "submission_repair_manifest" in journal
