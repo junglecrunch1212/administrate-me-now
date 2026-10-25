@@ -57,6 +57,12 @@ CASES = (
 
 async def inspect(runtime, storage):
     await _settled(runtime)
+    checkpoint = await runtime.bus.subscriber_status("projection:money")
+    durable_checkpoint = runtime.bus._ckpt_conn.execute(
+        "SELECT checkpoint_event_id FROM bus_consumer_offsets WHERE subscriber_id=?",
+        ("projection:money",),
+    ).fetchone()[0]
+    assert durable_checkpoint == checkpoint["checkpoint_event_id"]
     counts = await runtime.projections.read(
         "money",
         lambda conn: {
@@ -81,6 +87,7 @@ async def inspect(runtime, storage):
     ]
     return {
         "counts": counts,
+        "money_checkpoint": durable_checkpoint,
         "audit": [
             {"event_id": r["event_id"], "payload": r["payload"]} for r in receipts
         ],
