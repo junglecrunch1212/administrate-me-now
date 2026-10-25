@@ -1,0 +1,68 @@
+name: Focused Finance validation buffer lifetime
+on:
+  push:
+    branches: ['codex/finance-buffer-lifetime']
+permissions:
+  contents: read
+jobs:
+  buffer-lifetime:
+    runs-on: ubuntu-latest
+    timeout-minutes: 9
+    env:
+      ADMINME_TEST_MODE: '1'
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONPATH: bridge
+      POETRY_VIRTUALENVS_IN_PROJECT: 'true'
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.14.7'
+      - run: pipx install poetry==2.4.1
+      - run: poetry sync --with dev --no-interaction
+      - name: Bind narrow source and unchanged dependencies
+        run: |
+          mkdir -p "$RUNNER_TEMP/finance-buffer-lifetime"
+          git rev-parse HEAD HEAD:adminme HEAD:poetry.lock > "$RUNNER_TEMP/finance-buffer-lifetime/source-pins.txt"
+          git diff --exit-code 7419175f5508cf21bc7b86e046f65c5c2893269e HEAD -- bootstrap pyproject.toml poetry.lock scripts/release_scope.py tests/unit/test_ci_release_gates.py
+          .venv/bin/python - <<'PY_CHECK'
+          import subprocess
+          files=subprocess.check_output(['git','diff','--name-only','7419175f5508cf21bc7b86e046f65c5c2893269e','HEAD','--','adminme'],text=True).splitlines()
+          assert files == ['adminme/finance/dated_projection.py','adminme/finance/publication_provenance.py'], files
+          PY_CHECK
+          .venv/bin/ruff check adminme/finance/dated_projection.py adminme/finance/publication_provenance.py tests/unit/test_finance_validation_buffer_lifetime.py
+          .venv/bin/ruff format --check adminme/finance/dated_projection.py adminme/finance/publication_provenance.py tests/unit/test_finance_validation_buffer_lifetime.py
+          .venv/bin/mypy adminme/finance/dated_projection.py adminme/finance/publication_provenance.py
+          .venv/bin/pyright adminme/finance/dated_projection.py adminme/finance/publication_provenance.py
+      - name: Cold cache-hit and failure parity with observed buffer release
+        timeout-minutes: 2
+        run: |
+          .venv/bin/python -m pytest -p no:cacheprovider -q --runxfail --junitxml="$RUNNER_TEMP/finance-buffer-lifetime/lifetime.xml" tests/unit/test_finance_validation_buffer_lifetime.py
+      - name: Existing exact-byte proof and caller ownership contracts
+        timeout-minutes: 4
+        env:
+          FINANCE_FOCUSED_OUTPUT: ${{ runner.temp }}/finance-buffer-lifetime
+        run: |
+          .venv/bin/python -m pytest -p no:cacheprovider -q --runxfail --junitxml="$FINANCE_FOCUSED_OUTPUT/preservation.xml" tests/unit/test_finance_projection_ownership.py tests/unit/test_finance_provenance.py tests/acceptance/test_finance_planning.py -k 'ownership or exact_projection_validation or dated_snapshot or semantic_conflations or closed_decoder or closed_upload_rejection or independently or proof_receipt or closed_bytes'
+      - name: Require selected verdicts without promoting performance
+        run: |
+          .venv/bin/python - <<'PY_CHECK'
+          import os, pathlib, xml.etree.ElementTree as ET
+          root=pathlib.Path(os.environ['RUNNER_TEMP'])/'finance-buffer-lifetime'
+          for name, expected in [('lifetime.xml',16),('preservation.xml',27)]:
+              doc=ET.parse(root/name).getroot()
+              suites=list(doc.iter('testsuite'))
+              assert suites and sum(int(s.attrib['tests']) for s in suites)==expected
+              assert not any(list(doc.iter(k)) for k in ('failure','error','skipped'))
+          PY_CHECK
+      - name: Retain focused evidence including failures
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: finance-buffer-lifetime
+          path: ${{ runner.temp }}/finance-buffer-lifetime
+          if-no-files-found: error
+          retention-days: 7
