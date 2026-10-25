@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from adminme.openclaw_roster import agent_rows, replace_agent_rows
 from adminme.openclaw_topology import (
     SERVICE_PRIVATE_IDENTITY,
     SERVICE_PRIVATE_INSTRUCTIONS,
@@ -75,6 +76,14 @@ def _fixture(tmp_path: Path) -> tuple[DeploymentPaths, Path, Path, dict]:
     return paths, release, config_path, config
 
 
+def _agents(config: dict) -> dict[str, dict]:
+    return {row["id"]: row for row in agent_rows(config)}
+
+
+def _service(config: dict) -> dict:
+    return _agents(config)[service_agent_id(COS_SERVICE_PRINCIPAL_ID)]
+
+
 def test_service_binding_matches_native_plugin_fixture() -> None:
     principal = COS_SERVICE_PRINCIPAL_ID
     assert service_agent_id(principal) == "am-service-4f2e45be890cdc3f"
@@ -94,10 +103,15 @@ def test_service_binding_matches_native_plugin_fixture() -> None:
     ).read_text() == SERVICE_PRIVATE_IDENTITY
 
 
+@pytest.mark.parametrize("canonical", [False, True])
 def test_service_install_and_rollback_preserve_member_and_service_state(
     tmp_path: Path,
+    canonical: bool,
 ) -> None:
     paths, release, config_path, previous = _fixture(tmp_path)
+    if canonical:
+        replace_agent_rows(previous, agent_rows(previous))
+        config_path.write_text(json.dumps(previous))
     before = config_path.read_bytes()
     expected = prepare_service_topology(previous, paths, release)
     assert config_path.read_bytes() == before
@@ -107,10 +121,11 @@ def test_service_install_and_rollback_preserve_member_and_service_state(
     assert result["provider_authority"] is False
     current = json.loads(config_path.read_text())
     assert current == expected
-    assert current["agents"]["list"][:-1] == previous["agents"]["list"]
+    assert "list" not in current["agents"]
+    assert all(_agents(current)[key] == row for key, row in _agents(previous).items())
     assert current["bindings"] == previous["bindings"]
     assert current["plugins"] == previous["plugins"]
-    agent = current["agents"]["list"][-1]
+    agent = _service(current)
     assert agent["id"] == service_agent_id(COS_SERVICE_PRINCIPAL_ID)
     assert agent["tools"] == {"allow": list(SERVICE_PRIVATE_TOOLS)}
     workspace = service_workspace_path(
@@ -132,30 +147,31 @@ def test_service_install_and_rollback_preserve_member_and_service_state(
         SERVICE_PRIVATE_INSTRUCTIONS + "\nRevised internal instructions.\n"
     )
     reconcile_service_topology(paths, release)
-    revised = json.loads(config_path.read_text())["agents"]["list"][-1]
+    revised = _service(json.loads(config_path.read_text()))
     assert revised["workspace"] != agent["workspace"]
     assert (workspace / "AGENTS.md").read_text() == SERVICE_PRIVATE_INSTRUCTIONS
     source.write_text(SERVICE_PRIVATE_INSTRUCTIONS)
     reconcile_service_topology(paths, release)
-    assert json.loads(config_path.read_text())["agents"]["list"][-1] == agent
+    assert _service(json.loads(config_path.read_text())) == agent
     assert private_memory.read_text() == "retained operational context"
 
     identity = source.parent / "IDENTITY.md"
     identity.write_text(SERVICE_PRIVATE_IDENTITY + "\nEstablished role refinement.\n")
     reconcile_service_topology(paths, release)
     assert (
-        json.loads(config_path.read_text())["agents"]["list"][-1]["workspace"]
-        != agent["workspace"]
+        _service(json.loads(config_path.read_text()))["workspace"] != agent["workspace"]
     )
     assert (workspace / "IDENTITY.md").read_text() == SERVICE_PRIVATE_IDENTITY
     identity.write_text(SERVICE_PRIVATE_IDENTITY)
     reconcile_service_topology(paths, release)
-    assert json.loads(config_path.read_text())["agents"]["list"][-1] == agent
+    assert _service(json.loads(config_path.read_text())) == agent
 
     (release / "openclaw/administrateme/openclaw.plugin.json").write_text("{}")
-    assert prepare_service_topology(current, paths, release) == previous
+    retained = copy.deepcopy(previous)
+    replace_agent_rows(retained, agent_rows(retained))
+    assert prepare_service_topology(current, paths, release) == retained
     assert reconcile_service_topology(paths, release)["service_agent_count"] == 0
-    assert json.loads(config_path.read_text()) == previous
+    assert json.loads(config_path.read_text()) == retained
     assert private_memory.read_text() == "retained operational context"
 
 
@@ -233,7 +249,7 @@ def test_service_legacy_workspace_is_reselected_without_rewriting_history(
     identity = plugin / "workspace/service-private/IDENTITY.md"
     identity.unlink()
     reconcile_service_topology(paths, release)
-    old_agent = json.loads(config_path.read_text())["agents"]["list"][-1]
+    old_agent = _service(json.loads(config_path.read_text()))
     old_workspace = Path(old_agent["workspace"])
     assert (
         old_workspace.name
@@ -245,13 +261,14 @@ def test_service_legacy_workspace_is_reselected_without_rewriting_history(
     manifest.write_text(json.dumps(declared))
     reconcile_service_topology(paths, release)
     current = json.loads(config_path.read_text())
-    assert current["agents"]["list"][-1]["workspace"] != old_agent["workspace"]
-    assert current["agents"]["list"][:-1] == previous["agents"]["list"]
+    assert _service(current)["workspace"] != old_agent["workspace"]
+    assert "list" not in current["agents"]
+    assert all(_agents(current)[key] == row for key, row in _agents(previous).items())
     assert "defaults" not in current["agents"]
     assert not (old_workspace / "IDENTITY.md").exists()
     manifest.write_text(json.dumps(legacy))
     reconcile_service_topology(paths, release)
-    assert json.loads(config_path.read_text())["agents"]["list"][-1] == old_agent
+    assert _service(json.loads(config_path.read_text())) == old_agent
     assert memory.read_text() == "retained legacy work"
 
 
@@ -325,3 +342,38 @@ def test_supported_workstation_hook_changes_only_exact_reviewed_capability(
         prepare_service_topology(previous, paths, release)["plugins"]
         == previous["plugins"]
     )
+
+
+@pytest.mark.parametrize("default_mode", ["service", "operator", "explicit"])
+def test_current_service_reconciliation_preserves_exact_default_ownership(
+    tmp_path: Path,
+    default_mode: str,
+) -> None:
+    paths, release, config_path, previous = _fixture(tmp_path)
+    prepared = prepare_service_topology(previous, paths, release)
+    rows = agent_rows(prepared)
+    for row in rows:
+        row.pop("default", None)
+        if default_mode != "explicit":
+            row["default"] = row["id"] == (
+                service_agent_id(COS_SERVICE_PRINCIPAL_ID)
+                if default_mode == "service"
+                else "operator"
+            )
+    if default_mode == "explicit":
+        prepared["agents"]["ownership"] = "explicit"
+        # The codec refuses a mixed ownership/default declaration even before
+        # replacement; construct the valid current input from the selected rows.
+        prepared["agents"]["entries"] = {
+            row["id"]: {key: value for key, value in row.items() if key != "id"}
+            for row in rows
+        }
+    else:
+        replace_agent_rows(prepared, rows)
+    config_path.write_text(json.dumps(prepared))
+    before = config_path.read_bytes()
+    assert prepare_service_topology(prepared, paths, release) == prepared
+    assert config_path.read_bytes() == before
+    reconcile_service_topology(paths, release)
+    assert json.loads(config_path.read_text()) == prepared
+    assert json.loads(config_path.read_text())["bindings"] == previous["bindings"]

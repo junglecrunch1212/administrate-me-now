@@ -13,6 +13,7 @@ from typing import Any
 
 import yaml
 
+from adminme.openclaw_roster import agent_rows, replace_agent_rows
 from adminme.openclaw_topology import (
     SERVICE_PRIVATE_TOOLS,
     binding_fingerprints,
@@ -97,9 +98,10 @@ def prepare_existing_member_topology(
         for member in members
     }
     result = copy.deepcopy(config)
-    agents = (result.get("agents") or {}).get("list")
-    if not isinstance(agents, list) or not all(isinstance(row, dict) for row in agents):
-        raise RuntimeError("OpenClaw prepared member agents are unavailable")
+    try:
+        agents = agent_rows(result)
+    except ValueError as exc:
+        raise RuntimeError("OpenClaw prepared member agents are unavailable") from exc
     member_rows = [
         row for row in agents if str(row.get("id", "")).startswith("adminme-")
     ]
@@ -212,10 +214,10 @@ def reconcile_member_topology(paths: DeploymentPaths) -> dict[str, Any]:
     config = json.loads(config_path.read_text("utf-8")) if config_path.is_file() else {}
     if not isinstance(config, dict):
         raise RuntimeError("OpenClaw configuration root is invalid")
-    agents = config.setdefault("agents", {})
-    existing_agents = agents.get("list") or []
-    if not isinstance(existing_agents, list):
-        raise RuntimeError("OpenClaw agents.list is invalid")
+    try:
+        existing_agents = agent_rows(config)
+    except ValueError as exc:
+        raise RuntimeError("OpenClaw agent roster is invalid") from exc
     retained_agents = [
         row
         for row in existing_agents
@@ -269,9 +271,15 @@ def reconcile_member_topology(paths: DeploymentPaths) -> dict[str, Any]:
         isinstance(row, dict) and row.get("default") is True
         for row in [*retained_agents, *member_agents]
     )
-    if only_service_retained and member_agents and not has_default:
+    if (
+        only_service_retained
+        and member_agents
+        and not has_default
+        and config.get("agents", {}).get("ownership") != "explicit"
+        and "entries" not in config.get("agents", {})
+    ):
         member_agents[0]["default"] = True
-    agents["list"] = retained_agents + member_agents
+    replace_agent_rows(config, retained_agents + member_agents)
 
     existing_bindings = config.get("bindings") or []
     if not isinstance(existing_bindings, list):
@@ -367,12 +375,10 @@ def remove_unsupported_member_topology(paths: DeploymentPaths) -> dict[str, Any]
     if not isinstance(config, dict):
         raise RuntimeError("OpenClaw configuration root is invalid")
 
-    agents = config.get("agents") or {}
-    if not isinstance(agents, dict):
-        raise RuntimeError("OpenClaw agents configuration is invalid")
-    existing_agents = agents.get("list") or []
-    if not isinstance(existing_agents, list):
-        raise RuntimeError("OpenClaw agents.list is invalid")
+    try:
+        existing_agents = agent_rows(config)
+    except ValueError as exc:
+        raise RuntimeError("OpenClaw agent roster is invalid") from exc
     retained_agents = [
         row
         for row in existing_agents
@@ -380,8 +386,7 @@ def remove_unsupported_member_topology(paths: DeploymentPaths) -> dict[str, Any]
             isinstance(row, dict) and str(row.get("id") or "").startswith("adminme-")
         )
     ]
-    agents["list"] = retained_agents
-    config["agents"] = agents
+    replace_agent_rows(config, retained_agents, canonical=False)
 
     existing_bindings = config.get("bindings") or []
     if not isinstance(existing_bindings, list):
@@ -460,9 +465,12 @@ def _prepare_service_topology(
     native_tools: list[str] | None = None,
 ) -> dict[str, Any]:
     config = copy.deepcopy(gateway)
-    agents = config.get("agents", {}).get("list", [])
+    try:
+        agents = agent_rows(config)
+    except ValueError as exc:
+        raise RuntimeError("service topology is invalid") from exc
     bindings = config.get("bindings", [])
-    if not isinstance(agents, list) or not isinstance(bindings, list):
+    if not isinstance(bindings, list):
         raise RuntimeError("service topology is invalid")
     expected_agent = service_agent_id(COS_SERVICE_PRINCIPAL_ID)
     retained = [
@@ -525,7 +533,12 @@ def _prepare_service_topology(
                 "tools": {"allow": [*SERVICE_PRIVATE_TOOLS, *(native_tools or [])]},
             }
         )
-    config.setdefault("agents", {})["list"] = retained
+        previous_service = next(
+            (row for row in agents if row.get("id") == expected_agent), None
+        )
+        if previous_service is not None and "default" in previous_service:
+            retained[-1]["default"] = previous_service["default"]
+    replace_agent_rows(config, retained, canonical=files is not None)
     config["bindings"] = retained_bindings
     return config
 

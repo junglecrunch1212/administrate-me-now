@@ -10,6 +10,7 @@ from typing import Any
 
 import pytest
 
+from adminme.openclaw_roster import agent_rows, replace_agent_rows
 from adminme.openclaw_topology import (
     inspect_runtime_topology,
     member_agent_id,
@@ -76,10 +77,14 @@ def _fixture(tmp_path: Path) -> tuple[Path, dict[str, Any], dict[str, Any]]:
     return root, config, adapters
 
 
+@pytest.mark.parametrize("canonical", [False, True])
 def test_new_service_peer_bindings_are_exact_and_preserve_member_state(
     tmp_path: Path,
+    canonical: bool,
 ) -> None:
     root, previous, adapters = _fixture(tmp_path)
+    if canonical:
+        replace_agent_rows(previous, agent_rows(previous))
     original = copy.deepcopy(previous)
     prepared = prepare_existing_member_topology(
         previous, adapter_config=adapters, openclaw_root=root, known_members={A, B}
@@ -135,9 +140,10 @@ def test_unprovisioned_topology_is_rejected_without_writes(
     assert not (root / "runtime/openclaw.json").exists()
 
 
+@pytest.mark.parametrize("canonical", [False, True])
 @pytest.mark.parametrize("prior_default", [None, A, B, "service", "operator"])
 def test_repeated_reconciliation_preserves_or_recovers_member_default(
-    tmp_path: Path, prior_default: str | None
+    tmp_path: Path, prior_default: str | None, canonical: bool
 ) -> None:
     paths = DeploymentPaths.from_root(tmp_path)
     root, config, adapters = _fixture(paths.instance_dir)
@@ -154,6 +160,8 @@ def test_repeated_reconciliation_preserves_or_recovers_member_default(
         service["default"] = True
     elif prior_default == "operator":
         config["agents"]["list"].insert(0, {"id": "operator", "default": True})
+    if canonical:
+        replace_agent_rows(config, agent_rows(config))
     gateway = root / "runtime/openclaw.json"
     gateway.parent.mkdir()
     gateway.write_text(json.dumps(config))
@@ -172,8 +180,9 @@ def test_repeated_reconciliation_preserves_or_recovers_member_default(
     for _ in range(2):
         reconcile_member_topology(paths)
         current = json.loads(gateway.read_text())
+        assert "list" not in current["agents"]
         assert [
-            row["id"] for row in current["agents"]["list"] if row.get("default") is True
+            row["id"] for row in agent_rows(current) if row.get("default") is True
         ] == [expected]
         if first is not None:
             assert current == first
@@ -182,3 +191,52 @@ def test_repeated_reconciliation_preserves_or_recovers_member_default(
         assert (
             member_workspace_path(root, member) / "private.txt"
         ).read_text() == "preserved private member state"
+
+
+def test_current_explicit_ownership_is_not_replaced_with_a_member_default(
+    tmp_path: Path,
+) -> None:
+    paths = DeploymentPaths.from_root(tmp_path)
+    root, config, adapters = _fixture(paths.instance_dir)
+    config["agents"]["list"] = config["agents"]["list"][1:]
+    config["agents"]["ownership"] = "explicit"
+    config["bindings"] = []
+    replace_agent_rows(config, agent_rows(config))
+    gateway = root / "runtime/openclaw.json"
+    gateway.parent.mkdir()
+    gateway.write_text(json.dumps(config))
+    adapter_path = paths.instance_dir / "config/adapters.json"
+    adapter_path.parent.mkdir()
+    adapter_path.write_text(json.dumps(adapters))
+    for _ in range(2):
+        reconcile_member_topology(paths)
+        current = json.loads(gateway.read_text())
+        assert current["agents"]["ownership"] == "explicit"
+        assert not any(row.get("default") is True for row in agent_rows(current))
+        assert {row["id"] for row in agent_rows(current)} == {
+            member_agent_id(A),
+            member_agent_id(B),
+        }
+        assert len(current["bindings"]) == 2
+        assert {row["agentId"] for row in current["bindings"]} == {
+            member_agent_id(A),
+            member_agent_id(B),
+        }
+    for member in (A, B):
+        assert (member_workspace_path(root, member) / "private.txt").read_text() == (
+            "preserved private member state"
+        )
+
+
+def test_mixed_roster_is_rejected_before_member_state_is_changed(
+    tmp_path: Path,
+) -> None:
+    root, config, adapters = _fixture(tmp_path)
+    config["agents"]["entries"] = {"administrator": {}}
+    original = copy.deepcopy(config)
+    with pytest.raises(RuntimeError, match="member agents"):
+        prepare_existing_member_topology(
+            config, adapter_config=adapters, openclaw_root=root, known_members={A, B}
+        )
+    assert config == original
+    assert not (root / "runtime/openclaw.json").exists()
