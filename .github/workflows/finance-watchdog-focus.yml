@@ -1,0 +1,51 @@
+name: Focused Finance watchdog contracts
+on:
+  push:
+    branches: ['codex/finance-watchdog-focus-9e3f4a50']
+permissions:
+  contents: read
+concurrency:
+  group: finance-watchdog-${{ github.ref }}-${{ github.sha }}
+  cancel-in-progress: false
+jobs:
+  watchdog-contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      ADMINME_TEST_MODE: '1'
+      PYTHONDONTWRITEBYTECODE: '1'
+      POETRY_VIRTUALENVS_IN_PROJECT: 'true'
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.14.7'
+      - run: pipx install poetry==2.4.1
+      - run: poetry sync --with dev --no-interaction
+      - name: Pin production and verify test-only source
+        run: |
+          git rev-parse HEAD HEAD:adminme HEAD:poetry.lock
+          git diff --exit-code 9e3f4a506bc06fd9a5bf733fe0cf268fcd4e860e HEAD -- adminme pyproject.toml poetry.lock scripts/release_scope.py tests/unit/test_ci_release_gates.py
+          .venv/bin/ruff check tests/fixtures/finance_watchdog.py tests/fixtures/finance_watchdog_controller.py tests/fixtures/finance_startup.py tests/acceptance/test_finance_watchdog.py tests/acceptance/test_finance_storage_measurement.py tests/acceptance/test_finance_storage_isolation.py
+          .venv/bin/ruff format --check tests/fixtures/finance_watchdog.py tests/fixtures/finance_watchdog_controller.py tests/fixtures/finance_startup.py tests/acceptance/test_finance_watchdog.py tests/acceptance/test_finance_storage_measurement.py tests/acceptance/test_finance_storage_isolation.py
+      - name: Predeclared watchdog and phased-startup contracts only
+        timeout-minutes: 10
+        env:
+          FINANCE_WATCHDOG_ARTIFACT_DIR: ${{ runner.temp }}/finance-watchdog-focus
+        run: |
+          mkdir -p "$FINANCE_WATCHDOG_ARTIFACT_DIR"
+          for case in contracts contract-normal contract-hang contract-orphan contract-alarm contract-protocol setup-stop-before setup-stop-packets setup-stop-released setup; do
+            mkdir "$FINANCE_WATCHDOG_ARTIFACT_DIR/$case"
+            .venv/bin/python -I -B tests/fixtures/finance_watchdog.py "$case" "$FINANCE_WATCHDOG_ARTIFACT_DIR/$case"
+          done
+      - name: Preserve every terminal or incomplete receipt
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: finance-watchdog-focus
+          path: ${{ runner.temp }}/finance-watchdog-focus
+          if-no-files-found: error
+          retention-days: 7
