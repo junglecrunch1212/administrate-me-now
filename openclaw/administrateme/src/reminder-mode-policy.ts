@@ -23,6 +23,8 @@ export function modePrompt(title: string, due: string, notes: unknown): string {
 export function validateReminderMode(raw: unknown, input: { source_message_event_id: string; instruction_text: string; provenance: Provenance }, secret: string, requestedTaskId?: unknown): void {
   const t = object(raw), c = object(t.continuation), o = object(c.offered), a = object(t.action), shown = object(c.presentation);
   const due = Date.parse(o.due_at), issued = Date.parse(t.issued_at), expiry = Date.parse(t.expires_at), offeredAt = Date.parse(o.offered_at), submitted = Date.parse(o.original_submitted_at), presented = Date.parse(shown.presented_at);
+  // Intake retains whole seconds; strict event order below still proves the answer came later.
+  const presentedSecond = Math.floor(presented / 1000) * 1000;
   const original = c.original_instruction;
   const origin = object(o.origin);
   const selected = taskAnswer(c.selection, input, o, c.offered_event_id, issued).trim();
@@ -40,7 +42,7 @@ export function validateReminderMode(raw: unknown, input: { source_message_event
       t.member_id !== o.member_id || requestedTaskId !== undefined && requestedTaskId !== o.task_id ||
       selected !== "1" || canonical(modeOrigin(input.provenance)) !== canonical(origin) && !input.instruction_text.trim().startsWith(o.task_id + ":") ||
       ![due, issued, expiry, offeredAt, submitted, presented].every(Number.isFinite) ||
-      submitted > offeredAt || offeredAt > presented || presented > Date.parse(c.selection.answer_submitted_at) ||
+      submitted > offeredAt || offeredAt > presented || presentedSecond > Date.parse(c.selection.answer_submitted_at) ||
       issued < presented || expiry <= Date.now() || expiry > due || expiry - issued > 600_000 || due !== Date.parse(o.pending_expires_at) ||
       !(c.offered_event_id < c.presentation_event_id && c.presentation_event_id < t.source_event_id) ||
       shown.member_id !== t.member_id || shown.task_id !== o.task_id || shown.offered_event_id !== c.offered_event_id || shown.source_event_id !== o.original_source_event_id ||

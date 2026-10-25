@@ -50,6 +50,18 @@ describe("actual numbered reminder presentation", () => {
     expect(() => validateReminderMode(f.ticket, f.input, secret, "fixture-task")).not.toThrow();
     expect(() => validateReminderMode(f.ticket, f.input, "wrong-secret")).toThrow();
   });
+  it.each(["imessage", "gmail", "administrateme-portal"])("preserves event order for a whole-second %s answer", (channel) => {
+    const f = fixture(channel), c = f.ticket.continuation;
+    c.presentation.presented_at = new Date(now - 10000 + 375).toISOString();
+    c.selection.answer_submitted_at = new Date(now - 10000).toISOString();
+    expect(() => validateReminderMode(f.ticket, f.input, secret)).not.toThrow();
+    // The same timestamp second cannot authorize an answer retained before presentation.
+    c.presentation_event_id = "ev5";
+    expect(() => validateReminderMode(f.ticket, f.input, secret)).toThrow(/actually presented/);
+    c.presentation_event_id = "ev3";
+    c.selection.answer_submitted_at = new Date(now - 11000).toISOString();
+    expect(() => validateReminderMode(f.ticket, f.input, secret)).toThrow(/actually presented/);
+  });
   it.each(["mapping", "title", "due", "owner", "send", "extra-send", "unsigned", "conversation", "member", "stale", "original", "before-offer", "unshown", "ambiguous", "email"])("rejects %s without converting the number into broader authority", (failure) => {
     const f = fixture(), t = f.ticket, c = t.continuation;
     if (failure === "mapping") c.offered.prompt = c.offered.prompt.replace("1. Create", "2. Create");

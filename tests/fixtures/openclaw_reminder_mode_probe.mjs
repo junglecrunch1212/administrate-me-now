@@ -36,7 +36,7 @@ export async function proveReminderMode({ pluginDirectory, nativeRegistration, p
         provider: "apple_reminders", operation: "create_reminder", resource_owner: action.resource_owner, provider_account_id: action.provider_account_id,
         ...draft, offered_at: new Date(now - 1000).toISOString(), pending_expires_at: due, expiry_reason: "requested_reminder_due_time", provider_effect_count: 0,
         clarification_kind: "reminder_only_or_email", action, origin, prompt: modePrompt(draft.title, due, null) };
-      let presentation, tamper = true;
+      let presentation, tamper = true, answerTiming = "same-second";
       const runtime = { trackedSessions: new Map(), transport: { config: readPluginConfig({ sharedSecretEnv: secretName, memberAgentIds: [agent],
         standingSelfReplyBindings: channel === "imessage" ? [sha(JSON.stringify(["cos-self-reply-v1", agent, channel, account, actor]))] : [],
         scheduledSelfReminderBindings: [], forwardIntakeAccounts: [{ channelId: "imessage", accountId: "fixture-service-account" }] }),
@@ -53,7 +53,7 @@ export async function proveReminderMode({ pluginDirectory, nativeRegistration, p
             assert.equal(signature, createHmac("sha256", secret).update("cos-reminder-presentation-v1|" + canonical({ ...proof, origin })).digest("hex"));
             assert.equal(proof.response_result_event_id, channel === "administrateme-portal" ? null : "ev-mode-2-reply");
             presentation = { member_id: member, task_id: offered.task_id, offered_event_id: "ev-mode-2", source_event_id: "ev-mode-1", origin,
-              prompt_sha256: sha(proof.body), run_id: proof.run_id, presented_at: new Date().toISOString(),
+              prompt_sha256: sha(proof.body), run_id: proof.run_id, presented_at: new Date(proof.issued_at_ms).toISOString(),
               issued_at_ms: proof.issued_at_ms, expires_at_ms: proof.expires_at_ms, host_signature: signature,
               response_result_event_id: proof.response_result_event_id, presentation_kind: channel === "administrateme-portal" ? "native_portal_final" : "sent_reply", provider_effect_count: 0 };
             return { state: "presented", presentation_event_id: "ev-mode-3" };
@@ -62,12 +62,14 @@ export async function proveReminderMode({ pluginDirectory, nativeRegistration, p
             if (body.action === "offer") return { state: "mode_choice_required", task_id: offered.task_id, choice_event_id: "ev-mode-2", presentation_prompt: offered.prompt, pending_expires_at: due };
             assert.equal(body.source_message_event_id, "ev-mode-4"); assert.equal(body.action, "answer"); assert.ok(presentation);
             const current = Date.now();
+            // Derive intake precision from the retained presentation, independent of callback timing.
+            const answerSecond = Math.floor(Date.parse(presentation.presented_at) / 1000) * 1000;
             const conversation = channel === "gmail" ? { channel_id: channel, account_id: account, actor_id: actor, thread_id: thread } : null;
             const ticket = { contract: "authenticated-request-v1", member_id: member, domain_approval_event_id: "fixture-mode-domain", grounding_event_id: "fixture-mode-grounding",
               source_event_id: "ev-mode-4", action_fingerprint: hash(action), action, rule_id: rule, issued_at: new Date(current).toISOString(), expires_at: new Date(current + 600000).toISOString(), evidence: span("1"),
               continuation: { offered_event_id: "ev-mode-2", offered: { ...offered, prompt: tamper ? "2. Create the reminder instead" : offered.prompt },
-                original_instruction: original, original_evidence: span(original), presentation_event_id: "ev-mode-3", presentation,
-                selection: { answer_source_event_id: "ev-mode-4", answer_submitted_at: new Date(current).toISOString(), answer_conversation: conversation,
+                original_instruction: original, original_evidence: span(original), presentation_event_id: answerTiming === "earlier-event" ? "ev-mode-5" : "ev-mode-3", presentation,
+                selection: { answer_source_event_id: "ev-mode-4", answer_submitted_at: new Date(answerSecond - (answerTiming === "previous-second" ? 1000 : 0)).toISOString().replace(".000Z", "Z"), answer_conversation: conversation,
                   eligible_tasks: [{ offered_event_id: "ev-mode-2", task_id: offered.task_id, title_fingerprint: hash(offered.title.toLowerCase()), pending_expires_at: due, conversation }] } } };
             return { request_authorization: { ...ticket, signature: createHmac("sha256", secret).update("authenticated-request-v1|" + canonical(ticket)).digest("hex") } };
           }
@@ -115,6 +117,13 @@ export async function proveReminderMode({ pluginDirectory, nativeRegistration, p
       await assert.rejects(() => tools.get(tool)(context).execute("wrong-mode-map", answer), /actually presented/);
       assert.equal(calls.filter((row) => row.endpoint.endsWith("/approvals/authenticated-request")).length, 0);
       tamper = false;
+      for (answerTiming of ["earlier-event", "previous-second"]) {
+        await runner.runBeforeToolCall({ toolName: tool, toolCallId: answerTiming, params: answer }, context);
+        await assert.rejects(() => tools.get(tool)(context).execute(answerTiming, answer), /actually presented/);
+        assert.equal(calls.filter((row) => row.endpoint.endsWith("/approvals/authenticated-request")).length, 0);
+        assert.equal(calls.filter((row) => row.endpoint.endsWith("/execute-pending-provider-action")).length, 0);
+      }
+      answerTiming = "same-second";
       await runner.runBeforeToolCall({ toolName: tool, toolCallId: "answer-mode", params: answer }, context);
       await tools.get(tool)(context).execute("answer-mode", answer);
       const params = { domain_approval_event_id: "fixture-mode-domain" };
