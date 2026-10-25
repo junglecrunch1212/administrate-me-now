@@ -99,6 +99,7 @@ async def inspect(runtime, storage):
         "active_executor": storage.process is not None,
         "guards": storage.guards,
         "boundaries": storage.boundaries,
+        "preparation_diagnostics": storage.preparation_diagnostics,
     }
 
 

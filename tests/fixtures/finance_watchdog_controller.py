@@ -80,6 +80,8 @@ def main():
     if mode == "full":
         os.environ["ADMINME_SYNTHETIC_STORAGE_MEASUREMENT"] = "1"
         selection = "tests/acceptance/test_finance_storage_measurement.py::test_fixed_schedule_representative_storage_measurement"
+    elif mode == "focused-import":
+        selection = "tests/acceptance/test_finance_import_correction.py::test_focused_import_cancellation_replay_and_late_shutdown"
     elif mode.startswith("setup"):
         selection = "tests/acceptance/test_finance_watchdog.py::test_phased_setup_under_watchdog"
     else:

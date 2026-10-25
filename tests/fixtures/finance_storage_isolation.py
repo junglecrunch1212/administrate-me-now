@@ -100,6 +100,7 @@ class SyntheticStorage:
         self.guards = []
         self.applied = []
         self.boundaries = []
+        self.preparation_diagnostics = []
         self.quarantined = False
 
     def settings(self):
@@ -296,6 +297,9 @@ class SyntheticStorage:
                     message.get("reason", "synthetic_prepare_invalid")
                 )
             result = message["result"]
+            self.preparation_diagnostics.append(result["diagnostics"])
+            if len(self.preparation_diagnostics) > 8:
+                raise PublicationError("synthetic_diagnostic_limit")
             refs = [EventReference(**value) for value in result["references"]]
             if (
                 not refs
@@ -652,12 +656,19 @@ async def executor():
                         event = replace(event, _receipt=event._signature())
                         event.verify()
                         stored.append(event)
+                        diagnostics.emitted(len(raw))
                         info = None
 
+                    from tests.fixtures.finance_import_diagnostics import (
+                        PreparationDiagnostics,
+                    )
+
+                    diagnostics = PreparationDiagnostics()
                     worker_child.MoneyConnection = LocalMoney
                     worker_child.write_json = collect_json
                     worker_child.write_frame = collect_frame
-                    worker_child.prepare(command)
+                    with diagnostics.instrument(), diagnostics.stage("prepare"):
+                        worker_child.prepare(command)
                     if metadata is None or not stored or info is not None:
                         raise ValueError("synthetic_preparation_incomplete")
 
@@ -686,7 +697,14 @@ async def executor():
                         ).wire()
                         for e in stored
                     ]
-                    reply("result", result={"metadata": metadata, "references": refs})
+                    reply(
+                        "result",
+                        result={
+                            "metadata": metadata,
+                            "references": refs,
+                            "diagnostics": diagnostics.snapshot(),
+                        },
+                    )
                 elif op == "commit":
                     if (
                         not stored

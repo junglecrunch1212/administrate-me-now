@@ -853,13 +853,13 @@ def test_closed_decoder_releases_owned_wire_before_dated_validation(
     manifest, packet = packet_for(p, d, package)
     wire = json.dumps(packet).encode()
     owned = bytearray(wire)
-    validate = closed_import.validate_projection
+    validate = closed_import._validate_owned_projection
 
     def observed(value):
         assert not owned
         return validate(value)
 
-    monkeypatch.setattr(closed_import, "validate_projection", observed)
+    monkeypatch.setattr(closed_import, "_validate_owned_projection", observed)
     decoded, dated, proof = closed_import.decode_package(
         owned, FinanceImportManifest.model_validate(manifest)
     )
