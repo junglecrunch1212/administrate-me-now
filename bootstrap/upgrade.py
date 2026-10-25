@@ -3123,6 +3123,31 @@ class UpgradeManager:
                 openclaw_migration.run_doctor(
                     self.paths, release, journal, publish=publish_native_doctor
                 )
+                config_digest = openclaw_migration.record_configuration(
+                    self.paths, release, journal
+                )
+                journal = self.activation_journal.transition(
+                    journal,
+                    "native_doctor_settled",
+                    openclaw_migration={
+                        **journal["openclaw_migration"],
+                        "configuration_sha256": config_digest,
+                    },
+                )
+                # Rebind only the wrapper after the native output was classified.
+                # Keeping the pre-Doctor whole-config snapshot would erase migration.
+                if journal.get("cos_imessage_rebind") is not None:
+                    rebound = self._prepare_cos_guard_rebind(
+                        adapter_config=selected_adapter_config,
+                        source_release=active_root,
+                        target_release=release,
+                    )
+                    journal = self.activation_journal.transition(
+                        journal, "native_doctor_settled", cos_imessage_rebind=rebound
+                    )
+                journal = self.activation_journal.transition(
+                    journal, "openclaw_selected"
+                )
 
             if binding_transition is not None:
                 current_adapter_payload, current_adapter_config = (
@@ -3252,6 +3277,7 @@ class UpgradeManager:
                     openclaw_migration={
                         **journal["openclaw_migration"],
                         "state": "candidate_admitted",
+                        "candidate_admitted": True,
                     },
                 )
             started = self.services.start()
@@ -3343,7 +3369,10 @@ class UpgradeManager:
             if journal.get("openclaw_migration")
             else "compatible-predecessor",
             "rollback_eligibility": {
-                "eligible": True,
+                "eligible": journal.get("openclaw_migration") is None,
+                "scope": "pre-admission-unchanged-native-state"
+                if journal.get("openclaw_migration")
+                else "compatible-retained-state",
                 "sha256": journal["rollback_eligibility"]["sha256"],
             },
             "source_assessment_repair": source_repair_evidence,
@@ -3635,6 +3664,10 @@ class UpgradeManager:
             raise UpgradeError("rollback release coordinate is invalid")
         ensure_within(release, self.paths.app_dir / "releases")
         self._require_bounded_target(release)
+        if openclaw_migration.required(release, current_release):
+            raise UpgradeError(
+                "native runtime migration is forward-only after admission; public rollback cannot select the old native format"
+            )
         self._validate_instance_candidate(
             release,
             active_root=current_release,

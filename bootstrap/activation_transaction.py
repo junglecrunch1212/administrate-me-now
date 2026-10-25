@@ -969,6 +969,19 @@ class ActivationJournal:
                 "phase": phase,
                 "updated_at_ns": max(time.time_ns(), current["updated_at_ns"]),
             }
+            prior_native = current.get("openclaw_migration")
+            next_native = next_value.get("openclaw_migration")
+            if (
+                isinstance(prior_native, dict)
+                and prior_native.get("candidate_admitted") is True
+                and (
+                    not isinstance(next_native, dict)
+                    or next_native.get("candidate_admitted") is not True
+                )
+            ):
+                raise ActivationJournalError(
+                    "native candidate admission evidence cannot be cleared"
+                )
             validate_journal(next_value)
             _write_private_at(
                 directory_descriptor,

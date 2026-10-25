@@ -1548,6 +1548,7 @@ def test_native_migration_recovery_never_selects_old_source_after_uncertain_writ
         settled = state == "candidate_admitted"
         receipt.update(
             state="candidate_admitted" if settled else "doctor_starting",
+            candidate_admitted=settled,
             doctor={
                 "settled": settled,
                 "result_path": "/tmp/openclaw/openclaw-update-doctor-1-00000000-0000-4000-8000-000000000001.json",
@@ -1579,3 +1580,61 @@ def test_native_migration_recovery_never_selects_old_source_after_uncertain_writ
     assert calls == ["stop"]
     if state == "changed":
         assert (native / "foreign.sqlite").read_bytes() == b"foreign native generation"
+
+
+def test_native_admission_receipt_is_monotonic_even_when_contained(
+    tmp_path: Path,
+) -> None:
+    from bootstrap import openclaw_migration
+
+    paths = _paths(tmp_path)
+    native = paths.instance_dir / "openclaw/runtime"
+    atomic_write(native / "openclaw.json", b'{"agents":{"list":[{"id":"main"}]}}')
+    owner = ActivationJournal(paths)
+    journal = owner.create(_journal_value(paths))
+    receipt = openclaw_migration.capture(paths, journal)
+    receipt.update(state="contained", candidate_admitted=True)
+    journal = owner.transition(
+        journal, "native_forward_repair_required", openclaw_migration=receipt
+    )
+    with pytest.raises(
+        ActivationJournalError, match="admission evidence cannot be cleared"
+    ):
+        owner.transition(
+            journal,
+            "native_forward_repair_required",
+            openclaw_migration={**receipt, "candidate_admitted": False},
+        )
+    assert owner.load()["openclaw_migration"]["candidate_admitted"] is True
+
+
+def test_public_rollback_rejects_native_format_reversal_before_selecting_or_stopping(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    paths = _paths(tmp_path)
+    journal = _journal_value(paths)
+    previous = {"commit": PREDECESSOR_COMMIT, "path": journal["predecessor_path"]}
+    current = {
+        "commit": CANDIDATE_COMMIT,
+        "path": journal["target_path"],
+        "previous": previous,
+    }
+    manager = UpgradeManager(paths, root=tmp_path, test_mode=True)
+    monkeypatch.setattr(
+        manager,
+        "_release_pointer_state",
+        lambda: (current, Path(journal["target_path"]), set(), "digest", []),
+    )
+    monkeypatch.setattr(
+        "bootstrap.upgrade.openclaw_migration.required", lambda *_: True
+    )
+    calls: list[str] = []
+    manager.services = SimpleNamespace(stop=lambda: calls.append("stop"))
+    monkeypatch.setattr(
+        manager,
+        "_validate_instance_candidate",
+        lambda *_args, **_kwargs: calls.append("compatibility"),
+    )
+    with pytest.raises(UpgradeError, match="public rollback cannot select"):
+        manager._rollback_transactional_locked()  # noqa: SLF001
+    assert calls == []

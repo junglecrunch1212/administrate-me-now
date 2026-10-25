@@ -275,9 +275,17 @@ def inspect_runtime_topology(
         Path(workspace).is_dir() and not Path(workspace).is_symlink()
         for workspace in actual_agent_workspaces.values()
     )
+    from adminme.openclaw_roster_migration import retained_fallbacks
+
+    try:
+        preserved = retained_fallbacks(path)
+    except (OSError, ValueError, TypeError):
+        return {"state": "blocked", "reason": "native_migration_receipt_invalid"}
     actual_bindings: list[tuple[str, str, str, str]] = []
     malformed_member_binding = False
     for row in raw_bindings:
+        if row in preserved:
+            continue
         if not isinstance(row, dict):
             continue
         agent_id = row.get("agentId")
@@ -315,6 +323,11 @@ def inspect_runtime_topology(
             len(set(actual_agent_workspaces.values())) == len(expected_workspaces),
             workspace_directories_ready,
             not malformed_member_binding,
+            all(
+                raw_bindings.count(row) == 1
+                and row["agentId"] in {entry["id"] for entry in raw_agents}
+                for row in preserved
+            ),
             len(actual_bindings) == len(set(actual_bindings)),
             set(actual_bindings) == expected_bindings,
             dm_scope == "per-account-channel-peer",

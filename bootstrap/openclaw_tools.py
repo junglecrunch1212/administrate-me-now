@@ -15,6 +15,7 @@ from typing import Any
 from bootstrap.contracts import DeploymentPaths, atomic_write, load_versions
 from bootstrap.openclaw_activation import (
     reconcile_service_topology,
+    prepare_native_roster_expansion,
     reconcile_member_topology,
     remove_unsupported_member_topology,
 )
@@ -41,6 +42,8 @@ def _environment(paths: DeploymentPaths) -> dict[str, str]:
     environment = os.environ.copy()
     state_dir = paths.instance_dir / "openclaw" / "runtime"
     environment["OPENCLAW_STATE_DIR"] = str(state_dir)
+    environment["OPENCLAW_SUPERVISOR_MODE"] = "external"
+    environment["OPENCLAW_SERVICE_REPAIR_POLICY"] = "external"
     environment["OPENCLAW_CONFIG_PATH"] = str(state_dir / "openclaw.json")
     return environment
 
@@ -298,6 +301,7 @@ def reconcile_administrateme_plugin(
                 json.dumps(current, indent=2, sort_keys=True).encode(),
                 mode=original_mode,
             )
+        prepare_native_roster_expansion(paths, release)
         topology = (
             reconcile_member_topology(paths)
             if supports_member_topology

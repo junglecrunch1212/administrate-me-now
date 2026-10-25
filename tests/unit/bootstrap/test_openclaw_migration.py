@@ -258,6 +258,7 @@ def test_classified_settled_doctor_preserves_original_generation_recovery(
     ]
     assert migration.may_restore_predecessor(paths, journal)
     journal["openclaw_migration"]["state"] = "candidate_admitted"
+    journal["openclaw_migration"]["candidate_admitted"] = True
     assert not migration.may_restore_predecessor(paths, journal)
 
 
@@ -383,3 +384,71 @@ def test_classified_ok_with_refusal_is_not_migration_success(
         migration.run_doctor(paths, tmp_path, journal, publish=publish_into(journal))
     # Only genuinely unchanged state may recover the old source, despite exit 0.
     assert migration.may_restore_predecessor(paths, journal)
+
+
+@pytest.mark.parametrize("authored_entries", [False, True])
+def test_public_roster_expansion_uses_exact_native_cas_and_readback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, authored_entries: bool
+) -> None:
+    paths, _ = fixture(tmp_path)
+    runtime = paths.instance_dir / "openclaw/runtime"
+    original: dict[str, Any] = {
+        "agents": {
+            "defaults": {"workspace": str(paths.instance_dir / "openclaw/workspace")}
+        }
+    }
+    if authored_entries:
+        original["agents"]["entries"] = {"main": {}}
+    atomic_write(runtime / "openclaw.json", json.dumps(original).encode())
+    requested = {
+        "main": {},
+        "staff": {
+            "workspace": str(paths.instance_dir / "openclaw/staff"),
+            "tools": {"allow": ["typed"]},
+        },
+    }
+    selected = json.loads(json.dumps(original))
+    selected["agents"]["entries"] = json.loads(json.dumps(requested))
+    selected["agents"]["entries"]["main"]["workspace"] = original["agents"]["defaults"][
+        "workspace"
+    ]
+    selected["agents"]["ownership"] = "explicit"
+    selected["agents"]["defaults"]["systemAgent"] = {"agentId": "main"}
+    selected["talk"] = {"agentId": "main"}
+    monkeypatch.setattr(
+        migration,
+        "_target_command",
+        lambda *_: (Path("/exact/node"), Path("/exact/openclaw.mjs")),
+    )
+    monkeypatch.setattr(
+        migration, "load_versions", lambda *_: {"openclaw": {"commit": "1" * 40}}
+    )
+    calls = []
+
+    def write(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess:
+        calls.append(argv)
+        assert argv[:5] == [
+            "/exact/node",
+            "/exact/openclaw.mjs",
+            "config",
+            "set",
+            "agents.entries",
+        ]
+        assert json.loads(argv[5]) == requested
+        assert argv[6:8] == ["--strict-json", "--replace"]
+        assert kwargs["env"]["OPENCLAW_SUPERVISOR_MODE"] == "external"
+        assert not any(key.startswith("OPENCLAW_UPDATE_") for key in kwargs["env"])
+        atomic_write(runtime / "openclaw.json", json.dumps(selected).encode())
+        return subprocess.CompletedProcess(argv, 0, b"", b"")
+
+    monkeypatch.setattr(migration.subprocess, "run", write)
+    assert migration.expand_sole_roster(paths, tmp_path, requested) == selected
+    assert calls[0][8:] == (
+        ["--expect-current-json", '{"main":{}}']
+        if authored_entries
+        else ["--expect-current-absent"]
+    )
+    receipt = json.loads((runtime.parent / "native-roster-expansion.json").read_text())
+    assert receipt["source"] == original
+    assert receipt["result"] == selected
+    assert receipt["kind"] == "sole-agent-expansion"

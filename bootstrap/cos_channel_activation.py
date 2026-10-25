@@ -1070,7 +1070,10 @@ class CoSChannelActivator:
                 from bootstrap.openclaw_activation import prepare_service_topology
 
                 expected_gateway = prepare_service_topology(
-                    gateway, self.paths, self.repository
+                    gateway,
+                    self.paths,
+                    self.repository,
+                    legacy_preparation="list" in gateway.get("agents", {}),
                 )
             plan = MaintenanceRestorationPlan(
                 **request.model_dump(mode="json", exclude={"sender_proofs"}),
@@ -1229,7 +1232,12 @@ class CoSChannelActivator:
                 != plan.gateway_sha256
                 or (
                     _maintenance_gateway_fingerprint(
-                        prepare_service_topology(gateway, self.paths, self.repository),
+                        prepare_service_topology(
+                            gateway,
+                            self.paths,
+                            self.repository,
+                            legacy_preparation="list" in gateway.get("agents", {}),
+                        ),
                         release,
                     )
                     if gateway is not None
@@ -1346,6 +1354,42 @@ class CoSChannelActivator:
                 expected_guard.update(
                     wrapper_path=str(wrapper), wrapper_sha256=_sha(wrapper.read_bytes())
                 )
+            expected_gateway_fingerprint = plan.gateway_compatibility_sha256
+            if deployment.get("openclaw_migration") is not None:
+                from bootstrap.openclaw_activation import prepare_service_topology
+                from bootstrap.openclaw_migration import (
+                    NativeMigrationError,
+                    configuration_transition,
+                )
+
+                try:
+                    transition = configuration_transition(self.paths, deployment)
+                except (OSError, ValueError, NativeMigrationError) as exc:
+                    raise CoSActivationError(
+                        "native migration receipt is unavailable or changed"
+                    ) from exc
+                prior_release = Path(deployment["predecessor_path"])
+                prepared_source = prepare_service_topology(
+                    transition["source"],
+                    self.paths,
+                    release,
+                    legacy_preparation="list" in transition["source"].get("agents", {}),
+                )
+                if (
+                    _maintenance_gateway_fingerprint(prepared_source, prior_release)
+                    != plan.gateway_compatibility_sha256
+                ):
+                    raise CoSActivationError(
+                        "native migration source does not match the maintenance plan"
+                    )
+                # The original plan remains immutable. Only its exact recorded
+                # native transition can explain the new roster/default fields.
+                prepared_native = prepare_service_topology(
+                    transition["result"], self.paths, release
+                )
+                expected_gateway_fingerprint = _maintenance_gateway_fingerprint(
+                    prepared_native, prior_release
+                )
             if (
                 controls["guard"] != expected_guard
                 or (
@@ -1353,7 +1397,7 @@ class CoSChannelActivator:
                     if gateway is not None
                     else None
                 )
-                != plan.gateway_compatibility_sha256
+                != expected_gateway_fingerprint
             ):
                 raise CoSActivationError(
                     "maintenance gateway routing or configuration drifted"

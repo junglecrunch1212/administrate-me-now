@@ -18,6 +18,7 @@ from adminme.openclaw_roster import (
     canonical_agent_rows,
     replace_agent_rows,
 )
+from adminme.openclaw_roster_migration import retained_fallbacks
 from adminme.openclaw_topology import (
     SERVICE_PRIVATE_TOOLS,
     binding_fingerprints,
@@ -69,9 +70,15 @@ def model_provider_configured(paths: DeploymentPaths) -> bool:
     )
 
 
-def _require_member_peer_bindings(bindings: list[Any]) -> None:
+def _require_member_peer_bindings(
+    bindings: list[Any], preserved: list[dict[str, Any]] | None = None
+) -> None:
     """Do not erase native-migrated ownership outside our exact peer routes."""
+    if any(bindings.count(row) != 1 for row in (preserved or [])):
+        raise RuntimeError("OpenClaw retained native fallback routing changed")
     for binding in bindings:
+        if binding in (preserved or []):
+            continue
         if not isinstance(binding, dict) or not str(
             binding.get("agentId", "")
         ).startswith("adminme-"):
@@ -166,12 +173,13 @@ def prepare_existing_member_topology(
         isinstance(row, dict) for row in existing_bindings
     ):
         raise RuntimeError("OpenClaw prepared bindings are invalid")
+    preserved = retained_fallbacks(openclaw_root / "runtime/openclaw.json")
     if "entries" in result.get("agents", {}):
-        _require_member_peer_bindings(existing_bindings)
+        _require_member_peer_bindings(existing_bindings, preserved)
     bindings = [
         row
         for row in existing_bindings
-        if not str(row.get("agentId", "")).startswith("adminme-")
+        if not str(row.get("agentId", "")).startswith("adminme-") or row in preserved
     ]
     accounts: dict[tuple[str, str], tuple[str, str, str]] = {}
     for route, member in sorted(actors.items()):
@@ -276,7 +284,8 @@ def reconcile_member_topology(paths: DeploymentPaths) -> dict[str, Any]:
     existing_bindings = config.get("bindings") or []
     if not isinstance(existing_bindings, list):
         raise RuntimeError("OpenClaw bindings are invalid")
-    _require_member_peer_bindings(existing_bindings)
+    preserved = retained_fallbacks(config_path)
+    _require_member_peer_bindings(existing_bindings, preserved)
     replace_agent_rows(
         copy.deepcopy(config),
         retained_agents
@@ -322,6 +331,7 @@ def reconcile_member_topology(paths: DeploymentPaths) -> dict[str, Any]:
         if not (
             isinstance(row, dict)
             and str(row.get("agentId") or "").startswith("adminme-")
+            and row not in preserved
         )
     ]
     member_bindings: list[dict[str, Any]] = []
@@ -495,11 +505,15 @@ def _prepare_service_topology(
     paths: DeploymentPaths,
     files: dict[str, bytes] | None,
     native_tools: list[str] | None = None,
+    *,
+    legacy_preparation: bool = False,
 ) -> dict[str, Any]:
     config = copy.deepcopy(gateway)
     try:
         agents = (
-            canonical_agent_rows(config) if files is not None else agent_rows(config)
+            canonical_agent_rows(config)
+            if files is not None and not legacy_preparation
+            else agent_rows(config)
         )
     except ValueError as exc:
         raise RuntimeError(
@@ -514,10 +528,14 @@ def _prepare_service_topology(
         for row in agents
         if not (isinstance(row, dict) and row.get("id") == expected_agent)
     ]
+    preserved = retained_fallbacks(
+        paths.instance_dir / "openclaw/runtime/openclaw.json"
+    )
     retained_bindings = [
         row
         for row in bindings
         if not (isinstance(row, dict) and row.get("agentId") == expected_agent)
+        or row in preserved
     ]
     if files is not None:
         adapter_config = json.loads(
@@ -573,7 +591,9 @@ def _prepare_service_topology(
                 "tools": {"allow": [*SERVICE_PRIVATE_TOOLS, *(native_tools or [])]},
             }
         )
-    replace_agent_rows(config, retained, canonical=files is not None)
+    replace_agent_rows(
+        config, retained, canonical=files is not None and not legacy_preparation
+    )
     config["bindings"] = retained_bindings
     return config
 
@@ -603,7 +623,11 @@ def _prepare_workstation_hook(config: dict[str, Any], release: Path) -> dict[str
 
 
 def prepare_service_topology(
-    gateway: dict[str, Any], paths: DeploymentPaths, release: Path
+    gateway: dict[str, Any],
+    paths: DeploymentPaths,
+    release: Path,
+    *,
+    legacy_preparation: bool = False,
 ) -> dict[str, Any]:
     """Derive the exact reviewed target topology without writing any live state.
 
@@ -615,10 +639,80 @@ def prepare_service_topology(
     prepared = _prepare_workstation_hook(copy.deepcopy(gateway), release)
     return prepare_native_account_policy(
         _prepare_service_topology(
-            prepared, paths, files, native_service_tools(prepared, paths, release)
+            prepared,
+            paths,
+            files,
+            native_service_tools(prepared, paths, release),
+            legacy_preparation=legacy_preparation,
         ),
         release,
     )
+
+
+def prepare_native_roster_expansion(paths: DeploymentPaths, release: Path) -> None:
+    """Use native CAS for the first expansion; Python does not choose role owners."""
+    from bootstrap.openclaw_migration import expand_sole_roster
+
+    config_path = paths.instance_dir / "openclaw/runtime/openclaw.json"
+    config = json.loads(config_path.read_text())
+    agents = config.get("agents", {})
+    if "list" in agents:
+        raise RuntimeError("legacy roster must pass native Doctor before expansion")
+    existing = agent_rows(config) or [{"id": "main"}]
+    if agents.get("ownership") == "explicit":
+        return
+    if len(existing) != 1:
+        raise RuntimeError("native roster has no unique implicit owner")
+    adapter = json.loads((paths.instance_dir / "config/adapters.json").read_text())
+    actors = adapter.get("openclaw_actor_identities") or {}
+    chat = adapter.get("member_chat_enabled_members") or []
+    if (
+        not isinstance(actors, dict)
+        or not all(
+            isinstance(key, str) and isinstance(value, str) and value
+            for key, value in actors.items()
+        )
+        or not isinstance(chat, list)
+        or not all(isinstance(value, str) and value for value in chat)
+    ):
+        raise RuntimeError("native roster expansion has an invalid member map")
+    members = set(actors.values()) | set(chat)
+    expected_members = {member_agent_id(member) for member in members}
+    if any(
+        row["id"].startswith("adminme-") and row["id"] not in expected_members
+        for row in existing
+    ):
+        raise RuntimeError(
+            "native roster expansion would remove the retained member owner"
+        )
+    requested = {
+        row["id"]: {key: value for key, value in row.items() if key != "id"}
+        for row in existing
+    }
+    for member in sorted(members):
+        identifier = member_agent_id(member)
+        workspace = str(member_workspace_path(paths.instance_dir / "openclaw", member))
+        if (
+            identifier in requested
+            and requested[identifier].get("workspace") != workspace
+        ):
+            raise RuntimeError(
+                "native roster expansion would move a retained member workspace"
+            )
+        row = requested.setdefault(identifier, {})
+        row.setdefault("workspace", workspace)
+        if isinstance(adapter.get("cos_channel_acquisition"), dict):
+            from bootstrap.cos_imessage import MEMBER_TOOLS
+
+            row["tools"] = {"allow": list(MEMBER_TOOLS)}
+    # A detached planning copy only derives the requested service workspace/tools;
+    # native config-set alone persists ownership, defaults and ambient bindings.
+    planned = copy.deepcopy(config)
+    planned["agents"] = {**agents, "ownership": "explicit", "entries": requested}
+    planned = prepare_service_topology(planned, paths, release)
+    requested = planned["agents"]["entries"]
+    if len(requested) > 1 or "entries" not in agents:
+        expand_sole_roster(paths, release, requested)
 
 
 def reconcile_service_topology(paths: DeploymentPaths, release: Path) -> dict[str, Any]:
@@ -723,6 +817,7 @@ def activate(
         check=True,
         env=environment,
     )
+    prepare_native_roster_expansion(paths, root or repository_root())
     topology = reconcile_member_topology(paths)
     reconcile_service_topology(paths, root or repository_root())
     subprocess.run([executable, "config", "validate"], check=True, env=environment)

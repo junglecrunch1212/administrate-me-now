@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from adminme.openclaw_roster import agent_rows
+
 import asyncio
 import copy
 import hashlib
@@ -1024,7 +1026,19 @@ def _maintenance_controller(
             f"imessage|{guard['account_id']}|{phone}": MEMBER_A
         }
         gateway = {
-            "agents": {"list": [{"id": member_agent_id(MEMBER_A)}]},
+            "agents": {
+                "ownership": "explicit",
+                "entries": {
+                    member_agent_id(MEMBER_A): {
+                        "workspace": str(
+                            controller.paths.instance_dir
+                            / "openclaw/member-workspaces"
+                            / member_agent_id(MEMBER_A)
+                        )
+                    }
+                },
+                "defaults": {"systemAgent": {"agentId": member_agent_id(MEMBER_A)}},
+            },
             "models": {"retained": "fixture"},
         }
         _write(
@@ -1547,9 +1561,7 @@ def test_successor_reconciliation_recovers_lost_default_before_ordinary_activati
     gateway_path = paths.instance_dir / "openclaw/runtime/openclaw.json"
     gateway = json.loads(gateway_path.read_bytes())
     member = next(
-        row
-        for row in gateway["agents"]["list"]
-        if row["id"] == member_agent_id(MEMBER_A)
+        row for row in agent_rows(gateway) if row["id"] == member_agent_id(MEMBER_A)
     )
     assert member.pop("default") is True
     _write(gateway_path, gateway)
@@ -1561,9 +1573,7 @@ def test_successor_reconciliation_recovers_lost_default_before_ordinary_activati
     current = json.loads(gateway_path.read_bytes())
     assert (
         next(
-            row
-            for row in current["agents"]["list"]
-            if row["id"] == member_agent_id(MEMBER_A)
+            row for row in agent_rows(current) if row["id"] == member_agent_id(MEMBER_A)
         )["default"]
         is True
     )
@@ -1672,17 +1682,13 @@ def test_real_plugin_replacement_preserves_maintenance_restoration(
     assert reconcile_administrateme_plugin(paths, candidate)["ok"] is True
     assert any(command[1:3] == ["plugins", "uninstall"] for command in commands)
     installed = json.loads(gateway_path.read_bytes())
-    assert (
-        next(
-            row
-            for row in installed["agents"]["list"]
-            if row["id"] == member_agent_id(MEMBER_A)
-        )["default"]
-        is True
+    assert installed["agents"]["defaults"]["systemAgent"]["agentId"] == member_agent_id(
+        MEMBER_A
     )
+    assert all("default" not in row for row in agent_rows(installed))
     service = next(
         row
-        for row in installed["agents"]["list"]
+        for row in agent_rows(installed)
         if row["id"] == service_agent_id(COS_SERVICE_PRINCIPAL_ID)
     )
     assert service["tools"] == {"allow": list(SERVICE_PRIVATE_TOOLS)}
@@ -1697,7 +1703,7 @@ def test_real_plugin_replacement_preserves_maintenance_restoration(
         else:
             member = next(
                 row
-                for row in installed["agents"]["list"]
+                for row in agent_rows(installed)
                 if row["id"] == member_agent_id(MEMBER_A)
             )
             member.setdefault("tools", {}).setdefault("allow", []).append(

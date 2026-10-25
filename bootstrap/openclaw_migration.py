@@ -61,9 +61,19 @@ def validate_receipt(value: Any, journal: dict[str, Any]) -> None:
             "source_commit",
             "target_commit",
             "snapshot_sha256",
+            "candidate_admitted",
+            "configuration_sha256",
             "state",
             "doctor",
         }
+        or type(value.get("candidate_admitted")) is not bool
+        or (
+            value.get("configuration_sha256") is not None
+            and (
+                not isinstance(value["configuration_sha256"], str)
+                or _HEX.fullmatch(value["configuration_sha256"]) is None
+            )
+        )
         or value.get("contract") != CONTRACT
         or value.get("source_commit") != journal["predecessor_commit"]
         or value.get("target_commit") != journal["target_commit"]
@@ -74,6 +84,11 @@ def validate_receipt(value: Any, journal: dict[str, Any]) -> None:
         or (value.get("doctor") is not None and not isinstance(value["doctor"], dict))
     ):
         raise NativeMigrationError("native migration journal binding is invalid")
+    if (
+        value["state"] == "candidate_admitted"
+        and value["candidate_admitted"] is not True
+    ):
+        raise NativeMigrationError("native candidate admission evidence is missing")
     doctor = value["doctor"]
     if value["state"] == "captured" and doctor is not None:
         raise NativeMigrationError("unstarted native migration has a process receipt")
@@ -218,7 +233,11 @@ def _inventory(paths: DeploymentPaths) -> dict[str, Any]:
             path = parent / name
             relative = path.relative_to(root).as_posix()
             # The source installer owns this exact artifact selector receipt.
-            if relative == "source-install.json":
+            if relative in {
+                "source-install.json",
+                "native-roster-migration.json",
+                "native-roster-expansion.json",
+            }:
                 continue
             info = path.lstat()
             if info.st_uid != os.getuid() or (
@@ -397,6 +416,8 @@ def capture(paths: DeploymentPaths, journal: dict[str, Any]) -> dict[str, Any]:
         "target_commit": journal["target_commit"],
         "snapshot_sha256": hashlib.sha256(payload).hexdigest(),
         "state": "captured",
+        "candidate_admitted": False,
+        "configuration_sha256": None,
         "doctor": None,
     }
 
@@ -415,7 +436,10 @@ def unchanged(paths: DeploymentPaths, journal: dict[str, Any]) -> bool:
 def may_restore_predecessor(paths: DeploymentPaths, journal: dict[str, Any]) -> bool:
     receipt = journal["openclaw_migration"]
     validate_receipt(receipt, journal)
-    if receipt["state"] in {"candidate_admitted", "contained"}:
+    if receipt["candidate_admitted"] or receipt["state"] in {
+        "candidate_admitted",
+        "contained",
+    }:
         return False
     doctor = receipt["doctor"]
     if receipt["state"] != "captured" and (
@@ -611,3 +635,180 @@ def run_doctor(
         raise NativeMigrationError(
             "native Doctor result or custody is unavailable"
         ) from exc
+
+
+def record_configuration(
+    paths: DeploymentPaths, release: Path, journal: dict[str, Any]
+) -> str:
+    """Bind exact native output before any application-owned config selection."""
+    from adminme.openclaw_roster_migration import CONTRACT as ROSTER_CONTRACT
+    from adminme.openclaw_roster_migration import (
+        canonical,
+        classify,
+        digest,
+        validate_record,
+    )
+
+    migration = journal["openclaw_migration"]
+    validate_receipt(migration, journal)
+    doctor = migration["doctor"]
+    if (
+        doctor is None
+        or doctor.get("settled") is not True
+        or doctor.get("classification") not in {"ok", "advisory"}
+    ):
+        raise NativeMigrationError("native config transition has no classified process")
+    directory = _directory(paths, journal)
+    result_bytes = _read(directory / "doctor-result.json")
+    if hashlib.sha256(result_bytes).hexdigest() != doctor["result_sha256"]:
+        raise NativeMigrationError("native Doctor classification receipt changed")
+    source = _json(
+        _read(directory / "state/runtime/openclaw.json", limit=16 * 1024 * 1024)
+    )
+    runtime = paths.instance_dir / "openclaw/runtime"
+    result = _json(_read(runtime / "openclaw.json", limit=16 * 1024 * 1024))
+    record = {
+        "contract": ROSTER_CONTRACT,
+        "kind": "doctor",
+        "source": source,
+        "result": result,
+        "source_sha256": digest(source),
+        "result_sha256": digest(result),
+        "fallbacks": classify(source, result, runtime=runtime),
+        "requested_entries": None,
+        "native_commit": load_versions(release)["openclaw"]["commit"],
+        "process_receipt_sha256": doctor["result_sha256"],
+    }
+    validate_record(record, runtime=runtime)
+    payload = canonical(record)
+    atomic_write(directory / "config-transition.json", payload, mode=0o600)
+    destination = runtime.parent / "native-roster-migration.json"
+    if destination.exists() and _read(destination, limit=32 * 1024 * 1024) != payload:
+        raise NativeMigrationError(
+            "a different native roster migration is already retained"
+        )
+    atomic_write(destination, payload, mode=0o600)
+    return hashlib.sha256(payload).hexdigest()
+
+
+def configuration_transition(
+    paths: DeploymentPaths, journal: dict[str, Any]
+) -> dict[str, Any]:
+    from adminme.openclaw_roster_migration import validate_record
+
+    receipt = journal["openclaw_migration"]
+    validate_receipt(receipt, journal)
+    payload = _read(
+        _directory(paths, journal) / "config-transition.json", limit=32 * 1024 * 1024
+    )
+    if hashlib.sha256(payload).hexdigest() != receipt["configuration_sha256"]:
+        raise NativeMigrationError(
+            "native configuration transition does not match transaction"
+        )
+    result = validate_record(
+        _json(payload), runtime=paths.instance_dir / "openclaw/runtime"
+    )
+    original = _json(
+        _read(
+            _directory(paths, journal) / "state/runtime/openclaw.json",
+            limit=16 * 1024 * 1024,
+        )
+    )
+    if (
+        json.dumps(result["source"], sort_keys=True)
+        != json.dumps(original, sort_keys=True)
+        or result["native_commit"]
+        != load_versions(Path(journal["target_path"]))["openclaw"]["commit"]
+        or not isinstance(receipt["doctor"], dict)
+        or result["process_receipt_sha256"] != receipt["doctor"].get("result_sha256")
+    ):
+        raise NativeMigrationError(
+            "native config transition source or process binding changed"
+        )
+    return result
+
+
+def expand_sole_roster(
+    paths: DeploymentPaths, release: Path, entries: dict[str, Any]
+) -> dict[str, Any]:
+    """Let the public native CAS writer materialize sole-agent ownership."""
+    from adminme.openclaw_roster_migration import CONTRACT as ROSTER_CONTRACT
+    from adminme.openclaw_roster_migration import (
+        canonical,
+        classify,
+        digest,
+        validate_record,
+    )
+
+    runtime = paths.instance_dir / "openclaw/runtime"
+    config_path = runtime / "openclaw.json"
+    source_bytes = _read(config_path, limit=16 * 1024 * 1024)
+    source = _json(source_bytes)
+    node, entry = _target_command(paths, release)
+    expected = source.get("agents", {}).get("entries")
+    expectation = (
+        ["--expect-current-absent"]
+        if expected is None
+        else ["--expect-current-json", canonical(expected).decode()]
+    )
+    environment = doctor_environment(paths, Path("/tmp/openclaw/unused"), node)
+    environment = {
+        key: value
+        for key, value in environment.items()
+        if not key.startswith("OPENCLAW_UPDATE_")
+    }
+    command = [
+        str(node),
+        str(entry),
+        "config",
+        "set",
+        "agents.entries",
+        canonical(entries).decode(),
+        "--strict-json",
+        "--replace",
+        *expectation,
+    ]
+    result = subprocess.run(
+        command,
+        cwd=entry.parent,
+        env=environment,
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        timeout=60,
+        check=False,
+    )
+    if result.returncode:
+        raise NativeMigrationError("public native roster write did not complete")
+    selected = _json(_read(config_path, limit=16 * 1024 * 1024))
+    # Exit zero is not the state proof: classify exact read-back against the CAS
+    # input and requested entries. This command receipt grants no rewind right.
+    receipt = {
+        "contract": ROSTER_CONTRACT,
+        "kind": "sole-agent-expansion",
+        "source": source,
+        "result": selected,
+        "source_sha256": digest(source),
+        "result_sha256": digest(selected),
+        "fallbacks": classify(
+            source, selected, runtime=runtime, requested_entries=entries
+        ),
+        "requested_entries": entries,
+        "native_commit": load_versions(release)["openclaw"]["commit"],
+        "process_receipt_sha256": digest(
+            {
+                "command": "config-set-agents.entries",
+                "returncode": 0,
+                "source": digest(source),
+                "result": digest(selected),
+            }
+        ),
+    }
+    validate_record(receipt, runtime=runtime)
+    destination = runtime.parent / "native-roster-expansion.json"
+    payload = canonical(receipt)
+    if destination.exists() and _read(destination, limit=32 * 1024 * 1024) != payload:
+        raise NativeMigrationError(
+            "a different native roster expansion is already retained"
+        )
+    atomic_write(destination, payload, mode=0o600)
+    return selected
