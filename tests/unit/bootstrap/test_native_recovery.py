@@ -414,3 +414,104 @@ def test_pending_readiness_requires_same_explicit_recovery_plan(
             now=NOW,
             native_recovery_plan=plan_path,
         )
+
+
+@pytest.mark.parametrize("retained_wal", [False, True])
+def test_audit_copy_preserves_only_encrypted_database_and_committed_wal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, retained_wal: bool
+) -> None:
+    paths, _candidate, _parent = fixture(tmp_path, monkeypatch)
+    database = paths.instance_dir / "events/events.db"
+    atomic_write(database, b"synthetic encrypted database")
+    if retained_wal:
+        atomic_write(database.with_name("events.db-wal"), b"committed encrypted WAL")
+    atomic_write(database.with_name("events.db-shm"), b"disposable coordination")
+    before = recovery.generations(paths)
+    with recovery.audit_event_log_copy(paths) as copied:
+        directory = copied.parent
+        assert directory.stat().st_mode & 0o777 == 0o700
+        assert {path.name for path in directory.iterdir()} == (
+            {"events.db", "events.db-wal"} if retained_wal else {"events.db"}
+        )
+        assert copied.read_bytes() == database.read_bytes()
+        assert copied.stat().st_mode & 0o777 == 0o600
+        if retained_wal:
+            assert (
+                copied.with_name("events.db-wal").read_bytes()
+                == b"committed encrypted WAL"
+            )
+        copied.with_name("events.db-shm").write_bytes(b"copy-only SQLite housekeeping")
+    assert not directory.exists()
+    assert recovery.generations(paths) == before
+
+
+@pytest.mark.parametrize("mutation", ["database", "wal", "new_wal", "same_bytes"])
+def test_audit_copy_rejects_original_drift_and_only_removes_its_own_copy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mutation: str
+) -> None:
+    paths, _candidate, _parent = fixture(tmp_path, monkeypatch)
+    database = paths.instance_dir / "events/events.db"
+    wal = database.with_name("events.db-wal")
+    atomic_write(database, b"synthetic encrypted database")
+    if mutation != "new_wal":
+        atomic_write(wal, b"retained encrypted WAL")
+    with pytest.raises(
+        recovery.NativeRecoveryError, match="contained audit source changed: events.db"
+    ):
+        with recovery.audit_event_log_copy(paths) as copied:
+            directory = copied.parent
+            target = wal if mutation in {"wal", "new_wal"} else database
+            changed = (
+                target.read_bytes() if mutation == "same_bytes" else b"foreign write"
+            )
+            atomic_write(target, changed)
+    assert target.read_bytes() == changed
+    assert not directory.exists()
+    assert database.exists()  # Recovery never deletes or rewrites an original.
+
+
+@pytest.mark.parametrize("unsafe", ["symlink", "writable"])
+def test_audit_copy_refuses_unsafe_original_before_copy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, unsafe: str
+) -> None:
+    paths, _candidate, _parent = fixture(tmp_path, monkeypatch)
+    database = paths.instance_dir / "events/events.db"
+    atomic_write(database, b"encrypted fixture")
+    if unsafe == "symlink":
+        outside = tmp_path / "outside.db"
+        database.rename(outside)
+        database.symlink_to(outside)
+    else:
+        database.chmod(0o666)
+    with pytest.raises(recovery.NativeRecoveryError, match="unsafe"):
+        with recovery.audit_event_log_copy(paths):
+            pytest.fail("unsafe source admitted")
+    assert not list(paths.backup_dir.glob(".native-audit-*"))
+
+
+@pytest.mark.parametrize("changed_name", ["events.db", "events.db-wal"])
+def test_audit_copy_rejects_source_replacement_during_copy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, changed_name: str
+) -> None:
+    paths, _candidate, _parent = fixture(tmp_path, monkeypatch)
+    database = paths.instance_dir / "events/events.db"
+    atomic_write(database, b"encrypted database")
+    atomic_write(database.with_name("events.db-wal"), b"retained encrypted WAL")
+    original_open = recovery.os.open
+    replaced = False
+
+    def replacing_open(path, flags, *args, **kwargs):
+        nonlocal replaced
+        descriptor = original_open(path, flags, *args, **kwargs)
+        if path == database and not replaced:
+            replaced = True
+            atomic_write(database.with_name(changed_name), b"foreign generation")
+        return descriptor
+
+    monkeypatch.setattr(recovery.os, "open", replacing_open)
+    with pytest.raises(recovery.NativeRecoveryError, match="source changed"):
+        with recovery.audit_event_log_copy(paths):
+            pytest.fail("concurrent source replacement admitted")
+    assert replaced
+    assert database.with_name(changed_name).read_bytes() == b"foreign generation"
+    assert not list(paths.backup_dir.glob(".native-audit-*"))

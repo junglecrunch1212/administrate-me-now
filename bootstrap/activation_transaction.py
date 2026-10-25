@@ -1001,7 +1001,8 @@ class ActivationJournal:
                 current = self._load_at(directory_descriptor)
                 link = fixed.get("native_recovery") or {}
                 if (
-                    current != contained_parent
+                    current is None
+                    or current != contained_parent
                     or current["phase"] != "native_forward_repair_required"
                     or link.get("parent_transaction_id") != current["transaction_id"]
                     or link.get("parent_journal_sha256") != sha256_json(current)

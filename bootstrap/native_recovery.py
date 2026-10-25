@@ -14,6 +14,9 @@ import json
 import os
 import re
 import stat
+import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 
 import yaml
 from datetime import datetime, timedelta, timezone
@@ -139,6 +142,70 @@ def _file_generation(path: Path) -> dict[str, Any]:
     ):
         raise NativeRecoveryError("contained state changed while inspecting it")
     return {"generation": coordinate(info), "sha256": digest.hexdigest()}
+
+
+def _event_log_generations(paths: DeploymentPaths) -> dict[str, Any]:
+    root = paths.instance_dir / "events"
+    native._private(root, directory=True)
+    result = {"events.db": _file_generation(root / "events.db")}
+    wal = root / "events.db-wal"
+    if os.path.lexists(wal):
+        result[wal.name] = _file_generation(wal)
+    return result
+
+
+@contextmanager
+def audit_event_log_copy(paths: DeploymentPaths) -> Iterator[Path]:
+    """Audit retained encrypted DB/WAL bytes without SQLite touching originals.
+
+    The contained HTR caller validates the full recovery plan before and after
+    this context. SQLite may create/clean sidecars even for mode=ro; those writes
+    belong only to this private disposable copy. Never ignore committed WAL data.
+    """
+    before = _event_log_generations(paths)
+    native._private(paths.backup_dir, directory=True)
+    with tempfile.TemporaryDirectory(
+        prefix=".native-audit-", dir=paths.backup_dir
+    ) as temporary:
+        target = Path(temporary)
+        native._private(target, directory=True)
+        for name, identity in before.items():
+            descriptor = os.open(
+                paths.instance_dir / "events" / name, os.O_RDONLY | os.O_NOFOLLOW
+            )
+            digest = hashlib.sha256()
+            expected_size = identity["generation"][3]
+            remaining = expected_size + 1
+            with (
+                os.fdopen(descriptor, "rb") as source,
+                (target / name).open("xb") as copy,
+            ):
+                os.fchmod(copy.fileno(), 0o600)
+                while remaining and (chunk := source.read(min(remaining, 1024 * 1024))):
+                    copy.write(chunk)
+                    digest.update(chunk)
+                    remaining -= len(chunk)
+            if (
+                remaining != 1
+                or digest.hexdigest() != identity["sha256"]
+                or _file_generation(target / name)["sha256"] != identity["sha256"]
+            ):
+                raise NativeRecoveryError(f"contained audit source changed: {name}")
+        if _event_log_generations(paths) != before:
+            raise NativeRecoveryError("contained audit source changed during copy")
+        try:
+            yield target / "events.db"
+        finally:
+            after = _event_log_generations(paths)
+            changed = sorted(
+                name
+                for name in before.keys() | after.keys()
+                if before.get(name) != after.get(name)
+            )
+            if changed:
+                raise NativeRecoveryError(
+                    "contained audit source changed: " + ", ".join(changed)
+                )
 
 
 def generations(paths: DeploymentPaths) -> dict[str, Any]:

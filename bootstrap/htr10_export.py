@@ -13,6 +13,7 @@ import asyncio
 import hashlib
 import json
 import os
+from contextlib import nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -261,6 +262,11 @@ async def export_htr10_audits(
     native_recovery_plan: Path | None = None,
     test_mode: bool = False,
 ) -> dict[str, Any]:
+    from bootstrap.native_recovery import (
+        audit_event_log_copy,
+        load as load_native_recovery,
+    )
+
     if ownership_reviewed is not True:
         raise HTR10ExportError("provider-binding transition approval is required")
     historical_output = ensure_within(historical_output, paths.backup_dir)
@@ -315,8 +321,6 @@ async def export_htr10_audits(
     native_plan = None
     repair = None
     if native_recovery_plan is not None:
-        from bootstrap.native_recovery import load as load_native_recovery
-
         if (
             effect_context_repair_plan is not None
             or submission_repair_manifest is not None
@@ -405,67 +409,76 @@ async def export_htr10_audits(
     if not isinstance(event_reference, str) or not event_reference:
         raise HTR10ExportError("event-log credential reference is unavailable")
     event_key = secret_store(paths, test_mode=test_mode).get(event_reference)
-    event_log = EventLog(
-        paths.instance_dir / "events" / "events.db",
-        event_key,
-        read_only=True,
+    source_database = paths.instance_dir / "events" / "events.db"
+    audit_context = (
+        audit_event_log_copy(paths)
+        if native_plan is not None
+        else nullcontext(source_database)
     )
-    try:
-        watermark = await event_log.latest_event_id()
-        historical = await audit_historical_attribution(
-            event_log,
-            repository_root=repository_root,
-            provider_bindings=bindings,
-            hash_key=hashlib.sha256(
-                b"administrateme-htr10-attribution-v1\0" + event_key
-            ).digest(),
-            through_event_id=watermark,
+    with audit_context as audit_path:
+        event_log = EventLog(
+            audit_path,
+            event_key,
+            read_only=True,
         )
-        assurance = await audit_source_assurance(
-            event_log,
-            repository_root=repository_root,
-            capabilities=capabilities,
-            through_event_id=watermark,
-            provider_effect_window_started_at=window["started_at"],
-            provider_effect_window_ended_at=window.get("ended_at"),
-        )
-        prior_audits = []
-        for prior in window_evidence["prior_provider_effect_windows"]:
-            prior_assurance = await audit_source_assurance(
+        try:
+            watermark = await event_log.latest_event_id()
+            historical = await audit_historical_attribution(
+                event_log,
+                repository_root=repository_root,
+                provider_bindings=bindings,
+                hash_key=hashlib.sha256(
+                    b"administrateme-htr10-attribution-v1\0" + event_key
+                ).digest(),
+                through_event_id=watermark,
+            )
+            assurance = await audit_source_assurance(
                 event_log,
                 repository_root=repository_root,
                 capabilities=capabilities,
                 through_event_id=watermark,
-                provider_effect_window_started_at=prior["started_at"],
-                provider_effect_window_ended_at=prior["ended_at"],
+                provider_effect_window_started_at=window["started_at"],
+                provider_effect_window_ended_at=window.get("ended_at"),
             )
-            prior_audits.append(
-                prior_assurance["provider_effects"]["observation_window"]
-            )
-        if prior_audits:
-            assurance["provider_effects"]["prior_observation_windows"] = prior_audits
-        assurance["provider_effect_windows"] = window_evidence
-        if repair is not None:
-            from bootstrap.submission_repair import (
-                audit_submission_repair,
-                repair_binding,
-                validate_submission_repair_audit,
-            )
+            prior_audits = []
+            for prior in window_evidence["prior_provider_effect_windows"]:
+                prior_assurance = await audit_source_assurance(
+                    event_log,
+                    repository_root=repository_root,
+                    capabilities=capabilities,
+                    through_event_id=watermark,
+                    provider_effect_window_started_at=prior["started_at"],
+                    provider_effect_window_ended_at=prior["ended_at"],
+                )
+                prior_audits.append(
+                    prior_assurance["provider_effects"]["observation_window"]
+                )
+            if prior_audits:
+                assurance["provider_effects"]["prior_observation_windows"] = (
+                    prior_audits
+                )
+            assurance["provider_effect_windows"] = window_evidence
+            if repair is not None:
+                from bootstrap.submission_repair import (
+                    audit_submission_repair,
+                    repair_binding,
+                    validate_submission_repair_audit,
+                )
 
-            # This is evidence for an exact repair, never a healthy-source
-            # attestation. Keep the failed audit and all interval counts intact.
-            repair_audit = await audit_submission_repair(
-                event_log,
-                repair,
-                repository_root=repository_root,
-                through_event_id=watermark,
-            )
-            validate_submission_repair_audit(repair, assurance)
-            assurance["submission_repair"] = repair_binding(repair)
-            assurance["submission_repair_audit"] = repair_audit
-            historical["submission_repair"] = repair_binding(repair)
-    finally:
-        await event_log.close()
+                # This is evidence for an exact repair, never a healthy-source
+                # attestation. Keep the failed audit and all interval counts intact.
+                repair_audit = await audit_submission_repair(
+                    event_log,
+                    repair,
+                    repository_root=repository_root,
+                    through_event_id=watermark,
+                )
+                validate_submission_repair_audit(repair, assurance)
+                assurance["submission_repair"] = repair_binding(repair)
+                assurance["submission_repair_audit"] = repair_audit
+                historical["submission_repair"] = repair_binding(repair)
+        finally:
+            await event_log.close()
     transition_sha256 = (
         hashlib.sha256(
             json.dumps(
