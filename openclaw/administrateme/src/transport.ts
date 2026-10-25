@@ -27,7 +27,7 @@ const REQUEST_FAILURES = {
 } as const;
 
 async function safeRequestFailure(response: Response, path: string): Promise<string | undefined> {
-  if (response.status !== 409 || !["/api/openclaw/v1/tools/confirm-apple-reminder", "/api/openclaw/v1/tools/cos-apple-reminders/confirm"].includes(path)) return undefined;
+  if (response.status !== 409 || !["/api/openclaw/v1/tools/confirm-apple-reminder", "/api/openclaw/v1/tools/cos-apple-reminders/confirm", "/api/openclaw/v1/tools/confirm-requested-email"].includes(path)) return undefined;
   try {
     const body: unknown = await response.json();
     if (!body || typeof body !== "object" || !("detail" in body)) return undefined;
@@ -75,7 +75,7 @@ export class AdministrateMeTransport {
     const controller = new AbortController();
     // One explicit source-grounding model invocation has a 30s deadline plus
     // the existing 2s completion allowance. Other calls keep their bounded limit.
-    const timeoutMs = (path === "/api/openclaw/v1/tools/confirm-apple-reminder" || path === "/api/openclaw/v1/tools/cos-apple-reminders/confirm")
+    const timeoutMs = (path === "/api/openclaw/v1/tools/confirm-apple-reminder" || path === "/api/openclaw/v1/tools/cos-apple-reminders/confirm" || path === "/api/openclaw/v1/tools/confirm-requested-email")
       ? Math.max(this.config.timeoutMs, 35_000) : this.config.timeoutMs;
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
     try {

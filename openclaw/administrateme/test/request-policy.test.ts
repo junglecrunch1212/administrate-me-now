@@ -83,6 +83,7 @@ describe("host request policy independently binds precise evidence", () => {
 it.each(["request_authorization_unavailable", "request_clarification_required"].flatMap((code) => [
   { code, path: "/api/openclaw/v1/tools/confirm-apple-reminder" },
   { code, path: "/api/openclaw/v1/tools/cos-apple-reminders/confirm" },
+  { code, path: "/api/openclaw/v1/tools/confirm-requested-email" },
 ]))("exposes only the fixed safe $code diagnostic for $path", async ({ code, path }) => {
   fixture();
   const fetcher = vi.fn(async () => new Response(JSON.stringify({ detail: { code, reason: "PRIVATE provider token and source text", debug: "PRIVATE" } }), { status: 409 }));

@@ -26,6 +26,7 @@ CONTEXT_TYPES = {
     "cos.reply.openclaw_authorized",
     "cos.conversation.reply_authorized",
     "cos.conversation.instruction",
+    "cos.action.request_grounded",
     "cos.reply.reminder_requested",
     "cos.reply.reminder_bound",
     "cos.reply.reminder_cancelled",
@@ -237,6 +238,8 @@ def _reminder_valid(
 
 
 def _approval_valid(approved: dict[str, Any], by_id: dict[str, dict[str, Any]]) -> bool:
+    from adminme.requested_email_assurance import requested_email_approval_valid
+
     payload = approved.get("payload") or {}
     policy = by_id.get(str(payload.get("policy_event_id")), {})
     policy_payload = policy.get("payload") or {}
@@ -247,7 +250,9 @@ def _approval_valid(approved: dict[str, Any], by_id: dict[str, dict[str, Any]]) 
             approved.get("type") == APPROVED
             and payload.get("contract") == RESPONSE_CONTRACT
             and (
-                _conversation_valid(approved, by_id)
+                requested_email_approval_valid(approved, by_id)
+                if payload.get("authorization_method") == "requested_email"
+                else _conversation_valid(approved, by_id)
                 if payload.get("authorization_method") == "authenticated_conversation"
                 else _standing_valid(approved, by_id)
                 if payload.get("authorization_method")
@@ -421,6 +426,8 @@ def _attempt_valid(
             < str(openclaw["event_id"])
             < str(attempt["event_id"])
         )
+    from adminme.requested_email_assurance import requested_email_host_valid
+
     fingerprint = receipt.get("request_fingerprint")
     return bool(
         _private(attempt, approved)
@@ -438,7 +445,11 @@ def _attempt_valid(
         and receipt.get("tool_name") == "administrateme_cos_response"
         and receipt.get("action") == "cos.response.send"
         and receipt.get("single_use") is True
-        and receipt.get("approval_method") == "allow_once"
+        and (
+            requested_email_host_valid(openclaw, approved, by_id)
+            if approval.get("authorization_method") == "requested_email"
+            else receipt.get("approval_method") == "allow_once"
+        )
         and isinstance(fingerprint, str)
         and re.fullmatch(r"[0-9a-f]{64}", fingerprint)
         and receipt.get("resource_fingerprint") == fingerprint
