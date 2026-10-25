@@ -13580,14 +13580,14 @@
         "action_id",
         "request_fingerprint",
         "action_fingerprint",
-        "rule_id",
         "source_fingerprint",
         "skill_event_id",
         "action",
         "evidence",
         "issued_at",
         "expires_at",
-        "continuation"
+        "continuation",
+        "rule_id"
       ],
       "schema_version": 1
     },
@@ -13823,14 +13823,14 @@
         "action_id",
         "request_fingerprint",
         "action_fingerprint",
-        "rule_id",
         "source_fingerprint",
         "skill_event_id",
         "action",
         "evidence",
         "issued_at",
         "expires_at",
-        "continuation"
+        "continuation",
+        "rule_id"
       ],
       "schema_version": 1
     },

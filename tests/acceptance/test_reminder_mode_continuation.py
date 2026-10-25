@@ -271,7 +271,24 @@ def test_presented_number_continues_original_request_once(
         shown = presentation(client, source, offered)
         assert shown.status_code == 200, shown.text
         before_replies = client.portal.call(_events, runtime, "cos.response.approved")
-        answer = instruction(client, channel, "mode-fresh-answer", "1")
+        shown_event = client.portal.call(
+            runtime.event_log.get, shown.json()["presentation_event_id"]
+        )
+        # Reproduce a genuine same-second answer deterministically: intake's
+        # second-precision timestamp must not be compared as microsecond-exact.
+        submitted = datetime.fromisoformat(
+            shown_event["payload"]["presented_at"]
+        ).strftime("%Y-%m-%dT%H:%M:%SZ")
+        with monkeypatch.context() as answer_clock:
+            answer_clock.setattr(
+                EventEnvelope, "now_utc_iso", staticmethod(lambda: submitted)
+            )
+            answer = instruction(client, channel, "mode-fresh-answer", "1")
+        answer_event = client.portal.call(
+            runtime.event_log.get, answer["source_message_event_id"]
+        )
+        assert answer_event["payload"]["submitted_at"] == submitted
+        assert shown_event["event_id"] < answer_event["event_id"]
         request = {**answer, "action": "answer", "task_id": offered["task_id"]}
         confirmed = client.post(PATH, headers=AUTH, json=request)
         assert confirmed.status_code == 200, confirmed.text

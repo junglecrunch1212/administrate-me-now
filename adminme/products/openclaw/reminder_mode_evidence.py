@@ -226,7 +226,12 @@ async def current_mode(
     now = datetime.now(timezone.utc)
     if not (
         shown["event_id"] < answer["event_id"]
-        and datetime.fromisoformat(shown["payload"]["presented_at"])
+        # Authenticated intake stores submitted_at at whole-second precision.
+        # Strict retained event order above still rejects an earlier answer,
+        # including one recorded in the same second as the presentation.
+        and datetime.fromisoformat(shown["payload"]["presented_at"]).replace(
+            microsecond=0
+        )
         <= datetime.fromisoformat(answer["payload"]["submitted_at"])
         < p.pending_expires_at
         and now < p.pending_expires_at

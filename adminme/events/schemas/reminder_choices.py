@@ -155,7 +155,6 @@ class ReminderChoiceGroundedBase(BaseModel):
     action_id: str = Field(min_length=1, max_length=240)
     request_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
     action_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
-    rule_id: str
     source_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
     skill_event_id: str = Field(min_length=1, max_length=240)
     action: dict[str, object]
