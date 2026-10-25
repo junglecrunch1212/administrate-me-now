@@ -67,7 +67,7 @@ jobs:
                   files.append({'path':str(path.relative_to(evidence)), 'bytes':path.stat().st_size, 'sha256':sha})
               summary={'failure':'Artifact cap exceeded; full evidence remains on runner only','evidence_bytes':size,'files':files[:256],'omitted_file_records':max(0,len(files)-256)}
               (upload/'artifact-cap-failure.json').write_text(json.dumps(summary)+'\n')
-              for relative in ('preparation.json','measurement/verdict.json','measurement/processes.json','lifecycle/lifecycle.json'):
+              for relative in ('cleanup.json','preparation.json','measurement/verdict.json','measurement/processes.json','lifecycle/lifecycle.json'):
                   path=evidence/relative
                   if path.exists() and path.stat().st_size<=256*1024:
                       shutil.copyfile(path,upload/relative.replace('/','-'))
