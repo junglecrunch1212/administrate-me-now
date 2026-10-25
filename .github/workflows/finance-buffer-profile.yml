@@ -1,0 +1,66 @@
+name: Bounded Finance helper buffer comparison
+on:
+  push:
+    branches: ['codex/finance-buffer-profile']
+permissions:
+  contents: read
+jobs:
+  helper-comparison:
+    runs-on: ubuntu-latest
+    timeout-minutes: 9
+    env:
+      ADMINME_TEST_MODE: '1'
+      PYTHONDONTWRITEBYTECODE: '1'
+      POETRY_VIRTUALENVS_IN_PROJECT: 'true'
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.14.7'
+      - run: pipx install poetry==2.4.1
+      - run: poetry sync --with dev --no-interaction
+      - name: Check measurement source and prepare exact inputs
+        timeout-minutes: 1
+        run: |
+          git diff --exit-code 49331292a06ce7cab9eb0504ad197a55684fae88 HEAD -- adminme bootstrap pyproject.toml poetry.lock scripts/release_scope.py tests/unit/test_ci_release_gates.py tests/unit/test_finance_validation_buffer_lifetime.py
+          .venv/bin/ruff check tests/fixtures/finance_buffer_profile.py tests/fixtures/finance_buffer_profile_prepare.py tests/unit/test_finance_buffer_profile_harness.py
+          .venv/bin/ruff format --check tests/fixtures/finance_buffer_profile.py tests/fixtures/finance_buffer_profile_prepare.py tests/unit/test_finance_buffer_profile_harness.py
+          .venv/bin/python -I -B tests/fixtures/finance_buffer_profile_prepare.py "$GITHUB_WORKSPACE" "$RUNNER_TEMP/finance-buffer-sources" "$RUNNER_TEMP/finance-buffer-evidence"
+      - name: Seven sequential synthetic stubs and cleanup checks gate comparison
+        timeout-minutes: 1
+        run: |
+          .venv/bin/python -I -B tests/unit/test_finance_buffer_profile_harness.py --output "$RUNNER_TEMP/finance-buffer-evidence/lifecycle"
+      - name: One before and one after helper process
+        timeout-minutes: 5
+        run: |
+          .venv/bin/python -I -B tests/fixtures/finance_buffer_profile.py compare "$RUNNER_TEMP/finance-buffer-sources/before" "$RUNNER_TEMP/finance-buffer-sources/after" "$RUNNER_TEMP/finance-buffer-evidence/measurement"
+      - name: Preserve bounded evidence and remove source scratch
+        if: always()
+        timeout-minutes: 1
+        run: |
+          .venv/bin/python -I -B - <<'PY_CLEANUP'
+          import json, os, pathlib, shutil
+          root=pathlib.Path(os.environ['RUNNER_TEMP'])
+          source=root/'finance-buffer-sources'
+          evidence=root/'finance-buffer-evidence'
+          evidence.mkdir(exist_ok=True)
+          if source.exists():
+              for path in source.rglob('*'):
+                  if path.is_dir(): path.chmod(0o755)
+              shutil.rmtree(source)
+          record={'source_scratch_removed':not source.exists(),'scope':'Source scratch only; process reaping is recorded by the supervisor; runner loss cannot confirm cleanup'}
+          (evidence/'cleanup.json').write_text(json.dumps(record)+'\n')
+          size=sum(p.stat().st_size for p in evidence.rglob('*') if p.is_file())
+          assert size<=2*1024*1024, f'Artifact cap exceeded: {size}'
+          PY_CLEANUP
+      - name: Retain comparison and failure receipts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: finance-buffer-profile
+          path: ${{ runner.temp }}/finance-buffer-evidence
+          if-no-files-found: error
+          retention-days: 7
