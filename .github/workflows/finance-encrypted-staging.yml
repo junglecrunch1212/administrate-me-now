@@ -17,8 +17,9 @@ jobs:
       PYTHONDONTWRITEBYTECODE: '1'
       PYTHONPATH: bridge
       POETRY_VIRTUALENVS_IN_PROJECT: 'true'
-      FINANCE_STORAGE_ARTIFACT_DIR: ${{ runner.temp }}/finance-encrypted-staging-evidence
     steps:
+      - name: Bind the runner scratch directory
+        run: printf 'FINANCE_STORAGE_ARTIFACT_DIR=%s/finance-encrypted-staging-evidence\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           persist-credentials: false
