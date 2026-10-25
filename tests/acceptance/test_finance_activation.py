@@ -794,3 +794,85 @@ def test_closed_decoder_releases_owned_wire_before_dated_validation(
         == p
     )
     assert wire == json.dumps(packet).encode()
+
+
+@pytest.mark.parametrize("boundary", ["head_read", "writer_admission"])
+@pytest.mark.parametrize("change", ["role", "expiry"])
+def test_import_rechecks_authority_after_head_or_writer_wait(
+    tmp_path, monkeypatch, boundary, change
+):
+    from datetime import timedelta
+    from adminme.products.member import finance_import
+
+    settings = configured(tmp_path)
+    p, d, package = fixture(settings.instance.tenant_id)
+    manifest, packet = packet_for(p, d, package)
+    with TestClient(create_application(settings)) as client:
+        runtime = client.app.state.runtime
+        control(client, manifest["binding"])
+        approval = approve(client, manifest)
+
+        async def scenario():
+            entered, release = asyncio.Event(), asyncio.Event()
+            if boundary == "head_read":
+                original = runtime.projections.read
+
+                async def delayed(name, callback):
+                    if name == "money" and callback.__name__ == "heads":
+                        entered.set()
+                        await release.wait()
+                    return await original(name, callback)
+
+                monkeypatch.setattr(runtime.projections, "read", delayed)
+            else:
+                original = runtime.events._write_finance_batch
+                await runtime.events._write_lock.acquire()
+
+                async def delayed(*args, **kwargs):
+                    entered.set()
+                    return await original(*args, **kwargs)
+
+                monkeypatch.setattr(runtime.events, "_write_finance_batch", delayed)
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=client.app),
+                base_url="http://synthetic",
+            ) as http:
+                importing = asyncio.create_task(
+                    http.post(IMPORTS + approval, headers=DEMO_HEADERS, json=packet)
+                )
+                try:
+                    await asyncio.wait_for(entered.wait(), 10)
+                    if change == "role":
+                        runtime.settings = replace(
+                            runtime.settings,
+                            member_roles={
+                                **runtime.settings.member_roles,
+                                PRINCIPAL: "child",
+                            },
+                        )
+                    else:
+                        real_datetime = finance_import.datetime
+
+                        class Later(real_datetime):
+                            @classmethod
+                            def now(cls, tz=None):
+                                return real_datetime.now(tz) + timedelta(minutes=31)
+
+                        monkeypatch.setattr(finance_import, "datetime", Later)
+                finally:
+                    release.set()
+                    if boundary == "writer_admission":
+                        runtime.events._write_lock.release()
+                response = await asyncio.wait_for(importing, 10)
+                assert response.status_code in {403, 409}, response.text
+
+        client.portal.call(scenario)
+        assert not client.portal.call(
+            events,
+            runtime,
+            [
+                "finance.provenance_archived",
+                "finance.publication_accepted",
+                "finance.projection_verified",
+            ],
+        )
