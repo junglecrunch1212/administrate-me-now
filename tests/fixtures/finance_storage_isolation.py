@@ -509,7 +509,9 @@ class SyntheticStorage:
 
         monkeypatch.setattr(self.runtime, "start", started)
         monkeypatch.setattr(finance_import, "prepare_import", self.prepare)
+        self.install_import_ownership(app)
 
+    def install_import_ownership(self, app):
         @app.middleware("http")
         async def owned_import(request, call_next):
             if not request.url.path.startswith("/api/member/v1/finance/imports/"):

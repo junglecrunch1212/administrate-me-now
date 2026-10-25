@@ -138,11 +138,40 @@ def upload_interruption(name, root):
 
             async def exercise():
                 entered, release = asyncio.Event(), asyncio.Event()
+                store.response = {
+                    "cancellation_observed": False,
+                    "same_request_task": False,
+                    "cancellation_at_upload": False,
+                    "operation_lock_held": False,
+                    "storage_lock_held": False,
+                    "import_owned": False,
+                    "executor_and_stage_owned": False,
+                    "preparation_returned": False,
+                }
 
                 async def hook(stage):
                     if stage == "upload_pause":
+                        store.response["same_request_task"] = (
+                            asyncio.current_task() is task
+                        )
                         entered.set()
-                        await release.wait()
+                        try:
+                            await release.wait()
+                        except asyncio.CancelledError:
+                            store.response.update(
+                                cancellation_at_upload=True,
+                                operation_lock_held=app.state.runtime.settings_command_locks[
+                                    "finance-closed-package-import"
+                                ].locked(),
+                                storage_lock_held=store.lock.locked(),
+                                import_owned=store.imports == 1,
+                                executor_and_stage_owned=(
+                                    store.process is not None
+                                    and store.stage_descriptor is not None
+                                ),
+                                preparation_returned=store.preparation_complete,
+                            )
+                            raise
 
                 store.hook = hook
                 async with httpx.AsyncClient(
@@ -167,15 +196,26 @@ def upload_interruption(name, root):
                                 "finance-closed-package-import"
                             ].locked()
                         )
+                        assert store.response["same_request_task"]
                         task.cancel()
-                        release.set()
                         cancelled = False
                         try:
                             await task
                         except asyncio.CancelledError:
                             cancelled = True
-                        store.response = {"cancellation_observed": cancelled}
+                        store.response["cancellation_observed"] = cancelled
                         assert cancelled
+                        assert all(
+                            value
+                            for key, value in store.response.items()
+                            if key != "preparation_returned"
+                        )
+                        assert not store.response["preparation_returned"]
+                        assert (
+                            not store.refs
+                            and not store.preparation_diagnostics
+                            and not store.guards
+                        )
                     finally:
                         release.set()
                         if not task.done():
@@ -234,6 +274,8 @@ def upload_interruption(name, root):
                     "provider_effects_false": True,
                 }
             ]
+            assert not store.executor_errors
+            assert len(store.lifetimes) == 1
         return {
             "case": name,
             "state": "passed",

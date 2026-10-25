@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from adminme.events.envelope import EventEnvelope
 from adminme.events.invariants import validate_envelope_invariants
-from adminme.finance.import_work import run_cpu
+from adminme.finance.import_work import await_settled, run_cpu
 from adminme.finance.publication import PublicationError
 from tests.fixtures.finance_storage_isolation import (
     SyntheticStorage,
@@ -33,6 +33,26 @@ from tests.fixtures.finance_staging_store import (
 )
 
 
+class StagedImportOwnership:
+    """Own the actual ASGI request task through cancellation and terminal audit."""
+
+    def __init__(self, app, storage):
+        self.app, self.storage = app, storage
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http" or not scope["path"].startswith(
+            "/api/member/v1/finance/imports/"
+        ):
+            return await self.app(scope, receive, send)
+        self.storage.imports += 1
+        try:
+            return await self.app(scope, receive, send)
+        finally:
+            self.storage.imports -= 1
+            if not self.storage.imports:
+                await await_settled(self.storage.close())
+
+
 class StagedStorage(SyntheticStorage):
     executor_script = Path(__file__).resolve()
 
@@ -41,6 +61,17 @@ class StagedStorage(SyntheticStorage):
         self.stage_descriptor = None
         self.staging_source = artifact_digest()
         self.stage_lifetimes = []
+        self.preparation_complete = False
+
+    def install_import_ownership(self, app):
+        # BaseHTTPMiddleware.call_next owns a separate domain task. Its outer
+        # dispatch finally can close storage before that child is cancelled.
+        app.add_middleware(StagedImportOwnership, storage=self)
+
+    async def prepare(self, request, *args):
+        result = await super().prepare(request, *args)
+        self.preparation_complete = True
+        return result
 
     def _spawn(self):
         if artifact_digest() != self.staging_source:
@@ -61,6 +92,7 @@ class StagedStorage(SyntheticStorage):
         if command["op"] == "prepare":
             if self.stage_descriptor is not None:
                 raise PublicationError("synthetic_stage_busy")
+            self.preparation_complete = False
             self.stage_descriptor = {
                 "operation": command["operation"],
                 "encryption_key": secrets.token_bytes(32).hex(),
@@ -75,6 +107,11 @@ class StagedStorage(SyntheticStorage):
     def _reap(self, graceful=True):
         # If wait fails, super quarantines. No cleanup/key release or new owner.
         pid = self.process.pid if self.process is not None else None
+        if self.stage_descriptor is not None and not self.preparation_complete:
+            # The child may still be reading upload frames. A close control
+            # frame is not valid input there. Use the existing bounded abort
+            # and confirmed wait before deleting this unpublished stage.
+            graceful = False
         super()._reap(graceful)
         if self.quarantined:
             return
