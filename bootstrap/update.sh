@@ -47,6 +47,7 @@ if [[ "${ADMINME_UPDATE_SUPERVISED:-}" != "1" ]]; then
   pending_attestation=""
   test_reset_manifest=""
   submission_repair_manifest=""
+  effect_context_repair_plan=""
   for argument in "${requested_args[@]}"; do
     case "$argument" in
       --approve-runtime-migration | --approve-declared-source-assessment-repair | --approve-provider-binding-migration) ;;
@@ -56,6 +57,12 @@ if [[ "${ADMINME_UPDATE_SUPERVISED:-}" != "1" ]]; then
         pending_attestation="${argument#*=}"
         [[ "$pending_attestation" =~ ^[0-9a-f]{32}$ ]] \
           || die "pending-attestation identifier must be 32 lowercase hex"
+        ;;
+      --effect-context-repair-plan=*)
+        [[ -z "$effect_context_repair_plan" ]] || die "effect-context repair plan was repeated"
+        effect_context_repair_plan="${argument#*=}"
+        [[ "$effect_context_repair_plan" == /* && -f "$effect_context_repair_plan" ]] \
+          || die "effect-context repair plan must name an absolute private file"
         ;;
       --submission-repair-manifest=*)
         [[ -z "$submission_repair_manifest" ]] || die "submission-repair manifest was repeated"
@@ -135,6 +142,7 @@ provider_binding_flag=""
 pending_flag=""
 test_reset_flag=""
 submission_repair_flag=""
+effect_context_repair_flag=""
 while [[ "${1:-}" == --* ]]; do
   case "$1" in
     --approve-runtime-migration)
@@ -156,6 +164,10 @@ while [[ "${1:-}" == --* ]]; do
       [[ "$pending_value" =~ ^[0-9a-f]{32}$ ]] \
         || fail "pending-attestation identifier must be 32 lowercase hex"
       pending_flag="$1"
+      ;;
+    --effect-context-repair-plan=*)
+      [[ -z "$effect_context_repair_flag" ]] || fail "effect-context repair plan was repeated"
+      effect_context_repair_flag="$1"
       ;;
     --submission-repair-manifest=*)
       [[ -z "$submission_repair_flag" ]] || fail "submission-repair manifest was repeated"
@@ -353,6 +365,9 @@ if [[ -n "$approve_flag" ]]; then
 fi
 
 upgrade_args=(upgrade "$candidate")
+if [[ -n "$effect_context_repair_flag" ]]; then
+  upgrade_args+=("$effect_context_repair_flag")
+fi
 if [[ -n "$submission_repair_flag" ]]; then
   upgrade_args+=("$submission_repair_flag")
 fi

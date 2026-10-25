@@ -113,6 +113,16 @@ from bootstrap.submission_repair import (
 )
 
 
+from bootstrap.effect_context_repair import (
+    EffectContextRepairRequest,
+    EffectContextProof,
+    prepare_proof,
+    verify_proof,
+    wait_contained,
+    require_disabled,
+)
+
+
 class CoSActivationError(RuntimeError):
     pass
 
@@ -195,6 +205,7 @@ class MaintenancePreparationRequest(BaseModel):
     owner_authorization_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     operator_principal_id: str = Field(pattern=r"^operator:.+", max_length=240)
     owner_member_id: str = Field(min_length=1, max_length=240)
+    effect_context_repair: EffectContextRepairRequest | None = None
     sender_proofs: list[SenderProof] | None = Field(
         default=None, min_length=1, max_length=2
     )
@@ -206,6 +217,7 @@ class MaintenanceRestorationPlan(MaintenancePreparationRequest):
     contract: Literal["cos-maintenance-restoration-v1"] = (
         "cos-maintenance-restoration-v1"
     )
+    effect_context_proof: EffectContextProof | None = None
     plan_id: str = Field(pattern=r"^[0-9a-f]{32}$")
     prepared_at: str
     expires_at: str
@@ -1019,7 +1031,18 @@ class CoSChannelActivator:
                 raise CoSActivationError("maintenance target is already selected")
             snapshot = self._bound_snapshot(commit)
             before = self.services.runtime_diagnostics() or {}
-            if (
+            effect_proof = None
+            if request.effect_context_repair is not None:
+                effect_proof = prepare_proof(
+                    self.paths,
+                    self.repository,
+                    request.effect_context_repair,
+                    before,
+                    predecessor=commit,
+                    candidate=target,
+                    test_mode=self.test_mode,
+                )
+            elif (
                 before.get("ready") is not True
                 or before.get("observation_active") is not False
             ):
@@ -1049,6 +1072,7 @@ class CoSChannelActivator:
             plan = MaintenanceRestorationPlan(
                 **request.model_dump(mode="json", exclude={"sender_proofs"}),
                 sender_proofs=proofs,
+                effect_context_proof=effect_proof,
                 plan_id=uuid.uuid4().hex,
                 prepared_at=datetime.now(timezone.utc).isoformat(),
                 expires_at=expires.isoformat(),
@@ -1084,6 +1108,27 @@ class CoSChannelActivator:
         restoring: bool,
     ) -> dict[str, Any]:
         controls = self._maintenance_controls()
+        proof = plan.effect_context_proof
+        if (plan.effect_context_repair is None) != (proof is None) or (
+            proof is not None
+            and (
+                proof.request != plan.effect_context_repair
+                or proof.predecessor_commit != plan.predecessor_commit
+                or proof.candidate_commit != plan.target_commit
+            )
+        ):
+            raise CoSActivationError("maintenance effect-context proof differs")
+        if proof is not None:
+            require_disabled(self.paths, proof.request_actions_sha256)
+        if proof is not None and not restoring:
+            verify_proof(
+                self.paths,
+                self.repository,
+                proof,
+                test_mode=self.test_mode,
+                diagnostics=self.services.runtime_diagnostics() or {},
+                observation=False,
+            )
         prepared = aware_time(plan.prepared_at)
         expires = aware_time(plan.expires_at)
         now = datetime.now(timezone.utc)
@@ -1417,6 +1462,18 @@ class CoSChannelActivator:
                     test_mode=self.test_mode,
                 )
             elif (
+                maintenance_plan is not None
+                and maintenance_plan.effect_context_proof is not None
+            ):
+                verify_proof(
+                    self.paths,
+                    self.repository,
+                    maintenance_plan.effect_context_proof,
+                    diagnostics=before,
+                    observation=False,
+                    test_mode=self.test_mode,
+                )
+            elif (
                 before.get("ready") is not True
                 or before.get("observation_active") is not False
             ):
@@ -1489,6 +1546,10 @@ class CoSChannelActivator:
             }
             if maintenance_plan is not None:
                 journal["maintenance_plan_sha256"] = maintenance_plan.digest()
+                if maintenance_plan.effect_context_proof is not None:
+                    journal["effect_context_proof"] = (
+                        maintenance_plan.effect_context_proof.model_dump(mode="json")
+                    )
             if repair is not None:
                 journal["submission_repair_manifest"] = repair.model_dump(mode="json")
                 journal["submission_repair"] = repair_binding(repair)
@@ -1552,6 +1613,22 @@ class CoSChannelActivator:
                     repository_root=self.repository,
                     candidate_commit=journal["controller_commit"],
                     test_mode=self.test_mode,
+                )
+            effect_proof = (
+                EffectContextProof.model_validate(journal["effect_context_proof"])
+                if "effect_context_proof" in journal
+                else None
+            )
+            if effect_proof is not None:
+                if (
+                    effect_proof.predecessor_commit != journal["release_commit"]
+                    or effect_proof.candidate_commit != journal["controller_commit"]
+                ):
+                    raise CoSActivationError(
+                        "effect-context repair journal binding differs"
+                    )
+                journal["effect_context_quiesced"] = verify_proof(
+                    self.paths, self.repository, effect_proof, test_mode=self.test_mode
                 )
             effects = asyncio.run(self._effect_count())
             if "prior_provider_calls" not in journal:
@@ -1643,6 +1720,21 @@ class CoSChannelActivator:
                     deadline=deployment_clock() + 600,
                 )
                 if repair is not None
+                else wait_contained(
+                    self.paths,
+                    self.repository,
+                    effect_proof,
+                    diagnostics=self.services.runtime_diagnostics,
+                    doctor=lambda: run_release_doctor(
+                        self.paths,
+                        release,
+                        test_mode=self.test_mode,
+                        include_synthetic_proof=True,
+                    ),
+                    deadline=deployment_clock() + 600,
+                    test_mode=self.test_mode,
+                )
+                if effect_proof is not None
                 else self._settle(release)
             )
             after = self.services.runtime_diagnostics() or {}
@@ -1655,6 +1747,15 @@ class CoSChannelActivator:
                     repair,
                     repository_root=self.repository,
                     candidate_commit=journal["controller_commit"],
+                    test_mode=self.test_mode,
+                )
+            elif effect_proof is not None:
+                verify_proof(
+                    self.paths,
+                    self.repository,
+                    effect_proof,
+                    diagnostics=after,
+                    doctor=journal["doctor"],
                     test_mode=self.test_mode,
                 )
             elif (
@@ -1710,7 +1811,7 @@ class CoSChannelActivator:
                 self._finish(journal, "committed")
             return {
                 "status": "contained_degraded"
-                if repair is not None
+                if repair is not None or effect_proof is not None
                 else "observation_entered",
                 "observation_active": True,
                 **(

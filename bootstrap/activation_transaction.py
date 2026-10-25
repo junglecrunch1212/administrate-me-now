@@ -424,6 +424,8 @@ def validate_journal(value: object) -> dict[str, Any]:
             "submission_repair_manifest",
             "submission_repair",
             "submission_repair_request_event_ids",
+            "effect_context_proof",
+            "effect_context_plan_sha256",
         }
     )
     has_config_transition = transition_fields <= keys
@@ -607,6 +609,29 @@ def validate_journal(value: object) -> dict[str, Any]:
             raise ActivationJournalError(
                 "activation submission repair binding is invalid"
             )
+    if "effect_context_proof" in value or "effect_context_plan_sha256" in value:
+        from bootstrap.effect_context_repair import EffectContextProof
+
+        try:
+            effect_proof = EffectContextProof.model_validate(
+                value.get("effect_context_proof")
+            )
+        except ValueError as exc:
+            raise ActivationJournalError(
+                "activation effect-context proof is invalid"
+            ) from exc
+        if (
+            effect_proof.candidate_commit != value["candidate_commit"]
+            or effect_proof.predecessor_commit != value["predecessor_commit"]
+            or value["operation"] != "activate"
+            or value["was_running"] is not True
+            or value.get("initial_readiness_baseline") is not None
+            or "submission_repair_manifest" in value
+            or _HEX_64.fullmatch(str(value.get("effect_context_plan_sha256"))) is None
+        ):
+            raise ActivationJournalError(
+                "activation effect-context proof binding is invalid"
+            )
     baseline = value.get("initial_readiness_baseline")
     if baseline is not None:
         try:
@@ -633,9 +658,10 @@ def validate_journal(value: object) -> dict[str, Any]:
     if (
         value.get("restored_readiness") == "contained_degraded"
         and "submission_repair_manifest" not in value
+        and "effect_context_proof" not in value
     ):
         raise ActivationJournalError(
-            "contained recovery requires exact submission authority"
+            "contained recovery requires exact repair authority"
         )
     if has_config_transition:
         decoded_configs: dict[str, bytes] = {}
