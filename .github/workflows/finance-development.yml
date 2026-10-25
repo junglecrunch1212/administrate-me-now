@@ -112,6 +112,7 @@ jobs:
           --junitxml="${{ runner.temp }}/finance-functional-results.xml"
           tests/unit/test_event_log.py
           tests/unit/test_event_bus.py
+          tests/unit/test_pipeline_runner.py
           tests/unit/events/test_event_writer.py
           tests/unit/test_governance.py
           tests/unit/test_observation.py
@@ -142,6 +143,7 @@ jobs:
           tests/unit/test_xlsx_finance_workbook.py
           tests/unit/test_xlsx_reverse_finance.py
           tests/acceptance/test_finance_activation.py
+          tests/acceptance/test_bounded_member_readiness.py
           tests/acceptance/test_finance_publications.py
           tests/acceptance/test_finance_metadata.py
           tests/acceptance/test_finance_metadata_capability.py
@@ -355,6 +357,10 @@ jobs:
           tests/unit/test_event_log.py::test_metadata_open_queries_and_close_share_owner_thread
           tests/unit/test_event_log.py::test_cancelled_metadata_query_and_close_drain_native_work
           tests/unit/test_event_log.py::test_metadata_initialization_failure_closes_both_workers
+          tests/unit/test_event_log.py::test_metadata_batch_uses_one_dispatch_with_fresh_committed_filtered_queries
+          tests/unit/test_event_bus.py::test_subscriber_status_pairs_one_count_with_its_captured_checkpoint
+          tests/unit/test_event_bus.py::test_subscriber_status_batch_preserves_filters_and_missing_contract
+          tests/unit/test_event_bus.py::test_projection_status_preserves_fields_with_one_metadata_dispatch
           tests/unit/test_event_log.py::test_metadata_only_payload_reads_preserve_pages_filters_and_history
           tests/unit/test_finance_worker.py::test_chunked_text_frame_and_hash_preserve_every_utf8_byte
           tests/unit/test_finance_worker.py::test_text_frame_rejects_invalid_or_oversize_before_writing_header

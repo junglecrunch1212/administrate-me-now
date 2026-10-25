@@ -1515,6 +1515,20 @@ class EventLog:
             tuple(types) if types else None,
         )
 
+    async def count_since_many(
+        self, queries: list[tuple[str | None, list[str] | None]]
+    ) -> list[int]:
+        self._ensure_open()
+        captured = tuple(
+            (cursor, tuple(types) if types else None) for cursor, types in queries
+        )
+        if self._metadata_reader is not None:
+            return await self._metadata_reader.count_since_many(captured)
+        # Read-only backup inspection retains its existing connection boundary.
+        return await self._run_locked(
+            lambda: [self._count_since(cursor, types) for cursor, types in captured]
+        )
+
     def _count_since(
         self,
         cursor: str | None,

@@ -1338,8 +1338,9 @@ async def test_metadata_open_queries_and_close_share_owner_thread(
     assert observed["open"] not in {thread.ident for thread in threading.enumerate()}
 
 
+@pytest.mark.parametrize("batched", [False, True])
 async def test_cancelled_metadata_query_and_close_drain_native_work(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, batched: bool
 ) -> None:
     log = EventLog(tmp_path / "metadata-cancel.db", TEST_KEY)
     reader = log._metadata_reader  # noqa: SLF001 - native cancellation boundary
@@ -1367,7 +1368,11 @@ async def test_cancelled_metadata_query_and_close_drain_native_work(
 
     monkeypatch.setattr(reader, "_query", held_query)
     monkeypatch.setattr(reader, "submit_close", tracked_close)
-    reading = asyncio.create_task(log.count_since(None))
+    reading = asyncio.create_task(
+        log.count_since_many([(None, None), (None, ["foo"])])
+        if batched
+        else log.count_since(None)
+    )
     timer = threading.Timer(0.05, release.set)
     try:
         assert await asyncio.to_thread(started.wait, 2)
@@ -1380,6 +1385,8 @@ async def test_cancelled_metadata_query_and_close_drain_native_work(
             await log.latest_event_id()
         with pytest.raises(EventLogError, match="closed"):
             await log.count_since(None)
+        with pytest.raises(EventLogError, match="closed"):
+            await log.count_since_many([(None, None)])
         closing.cancel()
         # Shutdown joins the native owner; release from outside the event loop.
         timer.start()
@@ -1478,3 +1485,55 @@ async def test_metadata_only_payload_reads_preserve_pages_filters_and_history(
     assert all("_payload_omitted" not in event for event in complete)
     with pytest.raises(CursorNotFound):
         await _collect(log, cursor="missing", metadata_only_types=frozenset({"foo"}))
+
+
+async def test_metadata_batch_uses_one_dispatch_with_fresh_committed_filtered_queries(
+    log: EventLog, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    first = await log.append(_event(1, type="foo"))
+    await log.append(_event(2, type="bar"))
+    reader = log._metadata_reader
+    assert reader is not None
+    query = reader._query
+    submit = reader._executor.submit
+    first_read = threading.Event()
+    release = threading.Event()
+    submissions = 0
+    native_queries = 0
+    threads = set()
+
+    def counted_submit(*args, **kwargs):
+        nonlocal submissions
+        submissions += 1
+        return submit(*args, **kwargs)
+
+    def held_query(sql, params):
+        nonlocal native_queries
+        result = query(sql, params)
+        native_queries += 1
+        threads.add(threading.get_ident())
+        assert not reader._conn.in_transaction
+        if native_queries == 1:
+            first_read.set()
+            if not release.wait(5):
+                raise RuntimeError("test did not release first metadata count")
+        return result
+
+    monkeypatch.setattr(reader._executor, "submit", counted_submit)
+    monkeypatch.setattr(reader, "_query", held_query)
+    counting = asyncio.create_task(
+        log.count_since_many([(None, ["foo"]), (first, ["bar"]), (None, None)])
+    )
+    try:
+        assert await asyncio.to_thread(first_read.wait, 2)
+        # The next native query must see a commit made after the first query,
+        # without another executor dispatch or a batch-held read transaction.
+        await log.append(_event(3, type="bar"))
+    finally:
+        release.set()
+    assert await counting == [1, 2, 3]
+    assert submissions == 1
+    assert native_queries == 3
+    assert len(threads) == 1 and threading.get_ident() not in threads
+    assert await log.count_since_many([(None, ["bar"])]) == [2]
+    assert await log.count_since_many([]) == []

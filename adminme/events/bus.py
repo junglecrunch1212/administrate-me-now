@@ -359,6 +359,39 @@ class EventBus:
         # an older progress observation cannot conceal a new delivery failure.
         checkpoint = state.checkpoint
         lag = await self._log.count_since(checkpoint, types=state.types_filter)
+        return self._status_with_count(state, checkpoint, lag)
+
+    async def subscriber_statuses(
+        self, subscriber_ids: list[str], *, ignore_missing: bool = False
+    ) -> dict[str, dict[str, Any]]:
+        captured = {}
+        for subscriber_id in subscriber_ids:
+            state = self._subscribers.get(subscriber_id)
+            if state is None:
+                if ignore_missing:
+                    continue
+                raise KeyError(subscriber_id)
+            captured[subscriber_id] = (state, state.checkpoint)
+        if not captured:
+            return {}
+        counts = await self._log.count_since_many(
+            [
+                (checkpoint, state.types_filter)
+                for state, checkpoint in captured.values()
+            ]
+        )
+        return {
+            subscriber_id: self._status_with_count(state, checkpoint, lag)
+            for (subscriber_id, (state, checkpoint)), lag in zip(
+                captured.items(), counts, strict=True
+            )
+        }
+
+    def _status_with_count(
+        self, state: _SubscriberState, checkpoint: str | None, lag: int
+    ) -> dict[str, Any]:
+        # Pair each count with its captured checkpoint, while reporting failure
+        # and poison state as it stands after the native reads settle.
         return {
             "checkpoint_event_id": checkpoint,
             "lag_count": lag,

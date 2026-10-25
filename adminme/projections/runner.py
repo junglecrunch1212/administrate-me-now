@@ -927,9 +927,20 @@ class ProjectionRunner:
         """Per-projection dict: name, version, row_counts, checkpoint,
         lag_count, last_event_applied. Omit uncollected row counts when requested."""
         out: dict[str, dict[str, Any]] = {}
+        statuses = (
+            await self._bus.subscriber_statuses(
+                [f"projection:{name}" for name in self._projections]
+            )
+            if not include_row_counts
+            else None
+        )
         for name, projection in self._projections.items():
             subscriber_id = f"projection:{name}"
-            bus_status = await self._bus.subscriber_status(subscriber_id)
+            bus_status = (
+                statuses[subscriber_id]
+                if statuses is not None
+                else await self._bus.subscriber_status(subscriber_id)
+            )
             out[name] = {
                 "name": name,
                 "version": projection.version,

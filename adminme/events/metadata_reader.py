@@ -113,6 +113,30 @@ class EventMetadataReader:
     async def count_since(
         self, cursor: str | None, types: tuple[str, ...] | None
     ) -> int:
+        sql, params = self._count_query(cursor, types)
+        return int((await self._run(sql, params))[0])
+
+    async def count_since_many(
+        self, queries: tuple[tuple[str | None, tuple[str, ...] | None], ...]
+    ) -> list[int]:
+        if self._close_call is not None:
+            raise RuntimeError("event metadata reader is closed")
+        if not queries:
+            return []
+        # One dispatch for this registered subscriber group. Every query still
+        # opens/closes its own cursor in autocommit and sees committed WAL state.
+        call = self._executor.submit(self._count_many, queries)
+        return await asyncio.wrap_future(call)
+
+    def _count_many(
+        self, queries: tuple[tuple[str | None, tuple[str, ...] | None], ...]
+    ) -> list[int]:
+        return [int(self._query(*self._count_query(*query))[0]) for query in queries]
+
+    @staticmethod
+    def _count_query(
+        cursor: str | None, types: tuple[str, ...] | None
+    ) -> tuple[str, tuple[str, ...]]:
         where: list[str] = []
         params: tuple[str, ...] = ()
         if cursor is not None:
@@ -127,7 +151,7 @@ class EventMetadataReader:
         sql = "SELECT count(*) FROM main.events"
         if where:
             sql += " WHERE " + " AND ".join(where)
-        return int((await self._run(sql, params))[0])
+        return sql, params
 
     def submit_close(self) -> concurrent.futures.Future[None]:
         if self._close_call is None:

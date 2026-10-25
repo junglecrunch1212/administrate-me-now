@@ -290,3 +290,25 @@ denied disclosure. Keep accepted history, shared workbooks and existing generic
 grants intact. An older binary lacking these event schemas is not an automatic
 rollback target. Qualified activation must name its concrete supported updater
 recovery command and preserve compatible encrypted state.
+
+
+The current-head native attribution separated the remaining import memory from
+status-read scheduling. With Python allocation tracing disabled, the parent
+retained 19.90 MiB after drain; allocator free space grew 11.78 MiB while in-use
+arena bytes grew 3.45 MiB. The fixed EventLog/Money caches together accounted for
+about 1 MiB. These are diagnostic observations, not a resource-policy pass or
+a reason to add allocator trimming. The normal 87f8746a observation remains
+20.22 MiB retained against 8 MiB and 143.15 MiB added peak against 128 MiB.
+
+The same trace showed 24 metadata dispatches per core request; one 28.11 ms
+request spent 19.23 ms awaiting counts but only 0.88 ms executing their SQL.
+Readiness now batches each existing projection/pipeline status group, replacing
+23 status dispatches with two. The separate latest-event-ID lookup is unchanged,
+so the core request uses three metadata dispatches in total. Every individual
+count retains its captured
+checkpoint/type filter, opens and closes its cursor in autocommit, and sees
+committed WAL state. There is no retained status cache or batch-held read
+transaction. Failure and poison fields are read after the batch settles; single
+subscriber waits and detailed row-count collection retain their prior behavior.
+This correction targets the measured scheduling cost. The separate retained
+memory and combined-process peak boundaries remain unqualified.

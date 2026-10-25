@@ -915,3 +915,12 @@ async def test_runner_parties_conn_factory_is_same_object_per_dispatch(
         await runner.stop()
         await bus.stop()
         await log.close()
+
+
+async def test_status_before_start_preserves_missing_subscriber_entry(rig):
+    runner = rig["runner"]
+    pack = rig["pack"]
+    runner.register(pack)
+    entry = (await runner.status())[pack.pack_id]
+    assert entry["subscriber_status"] == {}
+    assert entry["subscriber_id"] == f"pipeline:{pack.pack_id}"
