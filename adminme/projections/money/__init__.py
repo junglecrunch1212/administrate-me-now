@@ -47,6 +47,11 @@ class MoneyProjection(Projection):
     def __init__(self) -> None:
         self._calculation: MoneyCalculation | None = None
 
+    def on_connection_opened(self, conn: Any) -> None:
+        # EventLog and Money together target 1 MiB of cached pages, leaving
+        # room for other retained state. SQLite may spill dirty pages normally.
+        conn.execute("PRAGMA cache_size=-512").close()
+
     def apply(self, envelope: dict[str, Any], conn: Any) -> None:
         if "_payload_json" not in envelope:
             self.finish_delivery()

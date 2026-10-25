@@ -249,6 +249,16 @@ including cancellation. Read-only backup inspection keeps its original single
 connection. This removes demonstrated count-query waits behind Finance commits;
 it does not claim to repair allocator retention or qualify the native workload.
 
+The writable EventLog and Money page caches each target 512 KiB from connection
+creation. The current-head allocation diagnostic found roughly 16.12 MiB of
+live native cache pages at the prior defaults, already exceeding the 8 MiB
+retained-growth budget. A combined 1 MiB page-cache target leaves room for other
+retained state; it is a soft SQLite cache target, not a process RSS limit.
+Normal transaction spill, encryption, atomic commits and replay are preserved.
+Read-only backup inspection retains its existing cache behavior. This fixed
+budget needs uninstrumented memory and query-latency measurement; it does not
+force allocator release or treat post-measurement trimming as acceptance.
+
 Dated structural validation retains at most 32 successful receipts containing
 only the pinned-schema and complete canonical-payload hashes. Every reuse hashes
 all supplied bytes and returns a newly detached value; changed bytes or schema

@@ -281,6 +281,10 @@ class EventLog:
             if self._read_only:
                 conn.execute("PRAGMA query_only=ON")
             else:
+                # Bulk Finance payloads fill the default 8 MiB page cache.
+                # Reserve a 512 KiB target within the shared retention budget;
+                # transaction spill, authorization and durability stay intact.
+                conn.execute("PRAGMA cache_size=-512").close()
                 conn.execute("PRAGMA journal_mode=WAL")
                 conn.execute("PRAGMA synchronous=NORMAL")
             conn.execute("PRAGMA foreign_keys=ON")
