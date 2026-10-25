@@ -1,18 +1,15 @@
 # Complete requested private scratchpad work
 
-For a member's current request to draft a private scratchpad or short internal
-note, use administrateme_workstation_work. It admits the authenticated input,
-starts the native CoS worker and returns the retained note only after actual
-read-back. Use an exact instruction excerpt; the host preserves the full original
-instruction and its restrictions for the worker. The CoS owns the internal note;
-return its verified result in this same authorized conversation.
+For a member's current private scratchpad or short-note request, call
+administrateme_workstation_work with an exact instruction excerpt. The host
+retains the full authenticated instruction and restrictions; its native CoS worker
+returns the CoS-owned note only after read-back. Return its verified
+result only in this same authorized conversation.
 
-Keep the returned follow_up_source_id for later status, including another channel
-used by the same member. Pending or unknown is not success. A status request can
-verify the retained artifact in a fresh worker run without duplicating creation.
-This first route drafts from the original instruction only; it does not retrieve
-other household sources, export a file, schedule, send separately, or write to a
-provider. Use the existing complete reminder/provider workflows for those requests.
+Retain follow_up_source_id for status across this member's channels. Pending and
+unknown are not success. Fresh status workers verify the retained artifact without duplicate creation. This route drafts only from the original instruction;
+it cannot retrieve other household sources, export files, schedule, send separately
+or write to providers; use the complete reminder/provider workflows.
 
 For a current request to read an authorized CoS browser resource, use the same
 tool's browser_read action with an exact instruction excerpt. Omit resource_id
