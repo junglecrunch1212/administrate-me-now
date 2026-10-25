@@ -1,4 +1,4 @@
-name: Bounded synthetic staged Finance measurement
+name: Focused synthetic Finance integrity and comparability
 on:
   push:
     branches: ['codex/finance-encrypted-staging']
@@ -8,19 +8,18 @@ concurrency:
   group: finance-encrypted-staging-correctness
   cancel-in-progress: false
 jobs:
-  staged-measurement:
+  streaming-correctness:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 12
     env:
       ADMINME_TEST_MODE: '1'
+      ADMINME_SYNTHETIC_STAGING_CORRECTNESS: '1'
       PYTHONDONTWRITEBYTECODE: '1'
       PYTHONPATH: bridge
       POETRY_VIRTUALENVS_IN_PROJECT: 'true'
     steps:
-      - name: Bind isolated evidence directories
-        run: |
-          printf 'FINANCE_STORAGE_ARTIFACT_DIR=%s/finance-staged-measurement\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
-          printf 'FINANCE_MEASUREMENT_PINS=%s/finance-staged-pins\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+      - name: Bind isolated evidence directory
+        run: printf 'FINANCE_STORAGE_ARTIFACT_DIR=%s/finance-streaming-evidence\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           persist-credentials: false
@@ -30,75 +29,89 @@ jobs:
           python-version: '3.14.7'
       - run: pipx install poetry==2.4.1
       - run: poetry sync --with dev --no-interaction
-      - name: Bind exact source and production boundaries
+      - name: Bind exact source and unchanged production
         run: |
-          mkdir -p "$FINANCE_MEASUREMENT_PINS"
-          git rev-parse HEAD HEAD:adminme HEAD:poetry.lock > "$FINANCE_MEASUREMENT_PINS/source-pins.txt"
-          git diff --exit-code 0dd6dc4978bad9fe298186eca649d9e5994c4e9f HEAD -- adminme bootstrap pyproject.toml poetry.lock tests/fixtures/finance_staging.py tests/fixtures/finance_staging_store.py tests/fixtures/finance_staging_prepare.py tests/fixtures/finance_storage_isolation.py tests/fixtures/finance_staging_cases.py tests/fixtures/finance_staging_evidence.py tests/fixtures/finance_staging_contract.json
+          mkdir "$FINANCE_STORAGE_ARTIFACT_DIR"
+          git rev-parse HEAD HEAD:adminme HEAD:poetry.lock > "$FINANCE_STORAGE_ARTIFACT_DIR/source-pins.txt"
+          git diff --exit-code 931df951e8dfba097f65908ece989e83ea7f172b HEAD -- adminme bootstrap pyproject.toml poetry.lock tests/fixtures/finance_staging.py tests/fixtures/finance_staging_prepare.py tests/fixtures/finance_storage_isolation.py tests/fixtures/finance_staging_cases.py tests/fixtures/finance_staging_evidence.py tests/fixtures/finance_staging_contract.json tests/fixtures/finance_watchdog.py tests/fixtures/finance_watchdog_controller.py tests/fixtures/finance_staging_measurement.py
           .venv/bin/python - <<'PY_CHECK'
           import ast, hashlib, json, os, pathlib, subprocess
-          correction={
+          expected={
               '.github/workflows/finance-encrypted-staging.yml',
-              'tests/fixtures/finance_watchdog.py',
-              'tests/fixtures/finance_watchdog_controller.py',
-              'tests/fixtures/finance_staging_measurement.py',
+              'tests/fixtures/finance_staging_store.py',
               'tests/fixtures/finance_staging_measurement_report.py',
               'tests/acceptance/test_finance_staging_measurement.py',
-              'tests/unit/test_finance_staging_measurement_report.py',
+              'tests/unit/test_finance_staging_streaming.py',
+              'tests/unit/test_finance_staging_comparability.py',
           }
-          actual=set(subprocess.check_output(['git','diff','--name-only','0dd6dc4978bad9fe298186eca649d9e5994c4e9f','HEAD'],text=True).splitlines())
-          assert actual==correction,actual
+          actual=set(subprocess.check_output(['git','diff','--name-only','931df951e8dfba097f65908ece989e83ea7f172b','HEAD'],text=True).splitlines())
+          assert actual==expected,actual
           assert subprocess.check_output(['git','rev-parse','HEAD:adminme'],text=True).strip()=='1873e65d8a36d8af74ed5608b49b62dac6934d73'
           assert subprocess.check_output(['git','rev-parse','HEAD:poetry.lock'],text=True).strip()=='cc2102f6e9dd2fd029bd636566806493c1df91dc'
           paths=subprocess.check_output(['git','diff','--name-only','35b4f0615c4ece0bc4fc0ed927b39507ea9774b2','HEAD'],text=True).splitlines()
-          assert len(paths)==18
-          for path in paths:
-              if path.endswith('.py'): ast.parse(pathlib.Path(path).read_text())
-          out=pathlib.Path(os.environ['FINANCE_MEASUREMENT_PINS'])
+          assert len(paths)==20
+          for p in paths:
+              if p.endswith('.py'):ast.parse(pathlib.Path(p).read_text())
+          out=pathlib.Path(os.environ['FINANCE_STORAGE_ARTIFACT_DIR'])
           (out/'source-sha256.json').write_text(json.dumps({p:hashlib.sha256(pathlib.Path(p).read_bytes()).hexdigest() for p in paths},indent=2)+'\n')
           PY_CHECK
-          .venv/bin/ruff check tests/fixtures/finance_staging_measurement*.py tests/fixtures/finance_watchdog*.py tests/acceptance/test_finance_staging_measurement.py tests/unit/test_finance_staging_measurement_report.py
-          .venv/bin/ruff format --check tests/fixtures/finance_staging_measurement*.py tests/fixtures/finance_watchdog*.py tests/acceptance/test_finance_staging_measurement.py tests/unit/test_finance_staging_measurement_report.py
-      - name: Bounded budget schedule and failure-reporting preflight
+          .venv/bin/ruff check tests/fixtures/finance_staging_store.py tests/fixtures/finance_staging_measurement_report.py tests/acceptance/test_finance_staging_measurement.py tests/unit/test_finance_staging_streaming.py tests/unit/test_finance_staging_comparability.py
+          .venv/bin/ruff format --check tests/fixtures/finance_staging_store.py tests/fixtures/finance_staging_measurement_report.py tests/acceptance/test_finance_staging_measurement.py tests/unit/test_finance_staging_streaming.py tests/unit/test_finance_staging_comparability.py
+      - name: Focused integrity comparability and allocation checks
+        id: unit
         timeout-minutes: 2
-        run: >-
-          .venv/bin/python -m pytest -p no:cacheprovider -q --runxfail --maxfail=1
-          --junitxml="$FINANCE_MEASUREMENT_PINS/preflight.xml"
-          tests/unit/test_finance_staging_measurement_report.py
-      - name: One synthetic staged import replay and planning measurement
-        id: measurement
-        timeout-minutes: 7
         run: |
-          mkdir "$FINANCE_STORAGE_ARTIFACT_DIR"
-          .venv/bin/python -I -B tests/fixtures/finance_watchdog.py staged-bounded "$FINANCE_STORAGE_ARTIFACT_DIR"
-      - name: Preserve measured failures and inconclusive comparisons
-        if: always() && steps.measurement.outcome != 'skipped'
-        run: .venv/bin/python -I -B tests/fixtures/finance_staging_measurement_report.py "$FINANCE_STORAGE_ARTIFACT_DIR"
-      - name: Bound retained evidence including failures
+          ulimit -t 90
+          ulimit -v 1048576
+          timeout --signal=TERM --kill-after=5s 90s .venv/bin/python -m pytest -p no:cacheprovider -q --runxfail --maxfail=1 \
+            --basetemp="$RUNNER_TEMP/finance-streaming-unit" \
+            --junitxml="$FINANCE_STORAGE_ARTIFACT_DIR/unit.xml" \
+            tests/unit/test_finance_staging_streaming.py \
+            tests/unit/test_finance_staging_comparability.py \
+            tests/unit/test_finance_encrypted_staging.py::test_complete_inventory_and_after_seal_corruption_reject \
+            tests/unit/test_finance_encrypted_staging.py::test_seal_requires_exact_component_and_event_contract \
+            tests/unit/test_finance_encrypted_staging.py::test_streamed_atomic_append_guards_and_mid_append_corruption
+      - name: Small atomic handoff and cancellation composition
+        id: integration
+        timeout-minutes: 8
+        run: |
+          .venv/bin/python -m pytest -p no:cacheprovider -q --runxfail --maxfail=1 \
+            --basetemp="$RUNNER_TEMP/finance-streaming-integration" \
+            --junitxml="$FINANCE_STORAGE_ARTIFACT_DIR/integration.xml" \
+            'tests/acceptance/test_finance_encrypted_staging.py::test_staged_small_lifecycle_atomicity_authority_and_isolation[atomic_proof]' \
+            'tests/acceptance/test_finance_encrypted_staging.py::test_staged_small_lifecycle_atomicity_authority_and_isolation[cancel_commit]'
+      - name: Retain truthful counts and bounded evidence
         if: always()
         run: |
           python - <<'PY_CHECK'
-          import hashlib, json, os, pathlib, shutil, sys
-          roots=[pathlib.Path(os.environ[k]) for k in ('FINANCE_MEASUREMENT_PINS','FINANCE_STORAGE_ARTIFACT_DIR')]
-          output=pathlib.Path(os.environ['RUNNER_TEMP'])/'finance-staged-upload'
-          output.mkdir(exist_ok=True)
-          files=sorted((p for root in roots if root.exists() for p in root.glob('*') if p.is_file()),key=lambda p:p.name)
-          assert len({p.name for p in files})==len(files)
-          def digest(path):
-              with path.open('rb') as stream: return hashlib.file_digest(stream,'sha256').hexdigest()
-          records=[{'name':p.name,'bytes':p.stat().st_size,'sha256':digest(p)} for p in files]
-          bounded=sum(r['bytes'] for r in records)<=32*1024*1024-65536 and len(files)<=64
-          (output/'artifact-manifest.json').write_text(json.dumps({'bounded':bounded,'files':records,'resource_qualified':False,'production_qualified':False},indent=2)+'\n')
+          import hashlib, json, os, pathlib, shutil, sys, xml.etree.ElementTree as E
+          root=pathlib.Path(os.environ['FINANCE_STORAGE_ARTIFACT_DIR'])
+          root.mkdir(exist_ok=True)
+          results={}
+          for name,expected in [('unit',78),('integration',2)]:
+              path=root/(name+'.xml')
+              cases=E.parse(path).findall('.//testcase') if path.exists() else []
+              results[name]={'expected':expected,'executed':len(cases),'passed':sum(not any(c.find(k) is not None for k in ('failure','error','skipped')) for c in cases),'failed':sum(any(c.find(k) is not None for k in ('failure','error')) for c in cases),'skipped':sum(c.find('skipped') is not None for c in cases)}
+          unit_scratch=pathlib.Path(os.environ['RUNNER_TEMP'])/'finance-streaming-unit'
+          if unit_scratch.exists():shutil.rmtree(unit_scratch)
+          (root/'selection-result.json').write_text(json.dumps({'results':results,'unit_scratch_removed':not unit_scratch.exists(),'allocation_is_python_diagnostic_only':True,'resource_qualified':False,'production_qualified':False},indent=2)+'\n')
+          files=sorted(p for p in root.glob('*') if p.is_file())
+          records=[{'name':p.name,'bytes':p.stat().st_size,'sha256':hashlib.sha256(p.read_bytes()).hexdigest()} for p in files]
+          bounded=len(files)<=63 and sum(r['bytes'] for r in records)<=8*1024*1024-65536
+          output=pathlib.Path(os.environ['RUNNER_TEMP'])/'finance-streaming-upload'
+          output.mkdir()
+          (output/'artifact-manifest.json').write_text(json.dumps({'bounded':bounded,'files':records},indent=2)+'\n')
           if bounded:
-              for p in files: shutil.copyfile(p,output/p.name)
-          if not bounded: sys.exit('evidence ceiling exceeded; manifest retained, measurement not qualified')
+              for p in files:shutil.copyfile(p,output/p.name)
+          complete=all(r['passed']==r['expected'] and not r['failed'] and not r['skipped'] for r in results.values())
+          if not bounded or not complete:sys.exit('bounded focused cohort incomplete or failed; receipts retained')
           PY_CHECK
-      - name: Retain synthetic measurement evidence
+      - name: Upload focused synthetic receipts
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: finance-staged-bounded-measurement
-          path: ${{ runner.temp }}/finance-staged-upload
+          name: finance-streaming-integrity-correctness
+          path: ${{ runner.temp }}/finance-streaming-upload
           if-no-files-found: error
           retention-days: 7
           compression-level: 9

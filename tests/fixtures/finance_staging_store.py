@@ -294,10 +294,18 @@ class StageStore:
         # Each object's exact ordinal/length/hash check below accounts for every
         # row. The count equality therefore also excludes orphan/extra chunks.
         for row in rows:
-            self.read(row[0], row[1], conn)
+            self.verify(row[0], row[1], conn)
         return rows
 
     def read(self, kind, name, conn=None):
+        return self._verified_object(kind, name, conn, materialize=True)
+
+    def verify(self, kind, name, conn=None):
+        """Authenticate every byte without retaining a discarded object body."""
+        _, metadata = self._verified_object(kind, name, conn, materialize=False)
+        return metadata
+
+    def _verified_object(self, kind, name, conn, *, materialize):
         conn = conn or self.conn
         if conn is None:
             raise StageError("stage_closed")
@@ -305,7 +313,8 @@ class StageStore:
         if len(rows) != 1:
             raise StageError("stage_object_authentication")
         row = rows[0]
-        raw, digest, expected = bytearray(), hashlib.sha256(), 0
+        raw = bytearray() if materialize else None
+        digest, expected, consumed = hashlib.sha256(), 0, 0
         cursor = conn.execute(
             "SELECT ordinal,length(body),substr(body,1,?) FROM chunks WHERE kind=? AND name=? ORDER BY ordinal",
             (CHUNK + 1, kind, name),
@@ -314,20 +323,22 @@ class StageStore:
             for ordinal, size, body in cursor:
                 if (
                     ordinal != expected
-                    or size != min(CHUNK, row[2] - len(raw))
+                    or size != min(CHUNK, row[2] - consumed)
                     or not 0 < size <= CHUNK
                     or len(body) != size
-                    or len(raw) + size > row[2]
+                    or consumed + size > row[2]
                 ):
                     raise StageError("stage_chunk_limit")
-                raw.extend(body)
+                if raw is not None:
+                    raw.extend(body)
                 digest.update(body)
                 expected += 1
+                consumed += size
         finally:
             cursor.close()
-        if len(raw) != row[2] or digest.hexdigest() != row[3]:
+        if consumed != row[2] or digest.hexdigest() != row[3]:
             raise StageError("stage_content_changed")
-        return bytes(raw), json.loads(row[4])
+        return bytes(raw) if raw is not None else None, json.loads(row[4])
 
     def seal(self, metadata, component_names, event_types):
         if self.sealed is not None or not self.counts["event"]:

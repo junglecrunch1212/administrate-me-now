@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta
+import hashlib
 import json
 import math
 from pathlib import Path
@@ -35,6 +37,54 @@ FIXED_PHASES = {
     "loaded_planning_probe",
     "loaded_core_baseline_after",
 }
+
+
+def core_response_fingerprint(body):
+    """Preserve raw evidence; exclude only two validated observation clocks."""
+
+    def unique(pairs):
+        value = {}
+        for key, item in pairs:
+            if key in value:
+                raise ValueError("synthetic_core_duplicate_key")
+            value[key] = item
+        return value
+
+    def nonfinite(value):
+        raise ValueError("synthetic_core_nonfinite")
+
+    value = json.loads(body, object_pairs_hook=unique, parse_constant=nonfinite)
+    try:
+        if (
+            value["surface"] != "reminders"
+            or value["cockpit"]["version"] != "deterministic-reminders-cockpit-v2"
+            or value["freshness"]["contract"] != "surface-freshness-v1"
+        ):
+            raise ValueError("synthetic_core_contract")
+        clocks = {
+            path + ".generated_at": value[path]["generated_at"]
+            for path in ("cockpit", "freshness")
+        }
+        for clock in clocks.values():
+            if not isinstance(clock, str) or not 1 <= len(clock) <= 64:
+                raise ValueError("synthetic_core_clock")
+            parsed = datetime.fromisoformat(clock)
+            if parsed.tzinfo is None or parsed.utcoffset() != timedelta(0):
+                raise ValueError("synthetic_core_clock")
+        if clocks["cockpit.generated_at"] != clocks["freshness.generated_at"]:
+            raise ValueError("synthetic_core_clock_mismatch")
+        for path in ("cockpit", "freshness"):
+            del value[path]["generated_at"]
+    except (KeyError, TypeError) as exc:
+        raise ValueError("synthetic_core_contract") from exc
+    stable = json.dumps(
+        value, sort_keys=True, separators=(",", ":"), allow_nan=False
+    ).encode()
+    return {
+        "body_sha256": hashlib.sha256(body).hexdigest(),
+        "semantic_sha256": hashlib.sha256(stable).hexdigest(),
+        "observed_clocks": clocks,
+    }
 
 
 def deadline(start, cap, work_start):

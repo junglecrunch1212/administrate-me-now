@@ -34,6 +34,7 @@ from tests.fixtures.finance_import_load import sized_package
 from tests.fixtures.finance_staging_measurement_report import (
     abort_pending,
     close_completed_slots,
+    core_response_fingerprint,
     deadline,
     slot_plan,
 )
@@ -347,6 +348,8 @@ async def test_one_staged_import_replay_and_loaded_queries(tmp_path):
                         row["body_sha256"] = hashlib.sha256(body).hexdigest()
                         if response.status_code != 200:
                             row["error"] = "http_status"
+                        elif row["kind"] == "core":
+                            row.update(core_response_fingerprint(body))
                         elif row["kind"] == "planning":
                             value = json.loads(body)
                             row["qualified"] = (
@@ -633,7 +636,13 @@ def comparisons(report):
             and r["kind"] == "core"
             and r["admission"] != "outside_completed_operation"
         ]
-        summary = window_summary(rows, len(rows))
+        fixed_window = name in {
+            "preimport_core_baseline",
+            "loaded_core_baseline_before",
+            "loaded_planning_probe",
+            "loaded_core_baseline_after",
+        }
+        summary = window_summary(rows, 200 if fixed_window else len(rows))
         seconds = phase["ended"] - phase["started"]
         summary["cpu_cores"] = (
             phase["end_resources"]["runtime_executor_cpu_seconds"]
@@ -642,7 +651,20 @@ def comparisons(report):
         summary["body_hashes"] = sorted(
             {r["body_sha256"] for r in rows if "body_sha256" in r}
         )
+        summary["semantic_hashes"] = sorted(
+            {r["semantic_sha256"] for r in rows if "semantic_sha256" in r}
+        )
+        summary["validated_core_responses"] = sum(
+            all(
+                key in r
+                for key in ("body_sha256", "semantic_sha256", "observed_clocks")
+            )
+            for r in rows
+        )
         summary["valid"] = summary["valid"] and bool(rows)
+        summary["valid"] = summary["valid"] and summary[
+            "validated_core_responses"
+        ] == len(rows)
         summaries[name] = summary
     loaded_names = (
         "loaded_core_baseline_before",
@@ -659,11 +681,14 @@ def comparisons(report):
         state_equal = all(s and s.get("state") == "read" for s in states) and all(
             native_identity(s) == native_identity(states[0]) for s in states[1:]
         )
-        hashes = [summaries[n]["body_hashes"] for n in loaded_names]
+        hashes = [summaries[n]["semantic_hashes"] for n in loaded_names]
         loaded = compare_pair(
             *(summaries[n] for n in loaded_names),
             comparable=bool(
-                state_equal and hashes[0] and hashes[0] == hashes[1] == hashes[2]
+                state_equal
+                and all(summaries[n]["valid"] for n in loaded_names)
+                and len(hashes[0]) == 1
+                and hashes[0] == hashes[1] == hashes[2]
             ),
         )
     baseline = summaries.get("preimport_core_baseline", {})
