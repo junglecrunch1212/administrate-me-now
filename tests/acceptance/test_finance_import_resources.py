@@ -239,6 +239,76 @@ def _server(root, listener, channel, telemetry, allocation_profile=False):
                                     ],
                                     "native_allocations_and_allocator_free_pages": "not attributed by tracemalloc",
                                 }
+                                # A separate causal probe, after every original
+                                # retention observation. Never use these values
+                                # to qualify the unmodified production workload.
+                                assert all(
+                                    not value["lag_count"]
+                                    and not value["draining"]
+                                    and not value["degraded"]
+                                    for value in latest.values()
+                                )
+                                assert worker_usage()["active"] is None
+
+                                def release_owned_cache(conn, name):
+                                    if conn.in_transaction:
+                                        raise AssertionError(
+                                            "cache probe needs a settled connection"
+                                        )
+
+                                    def query(sql):
+                                        cursor = conn.execute(sql)
+                                        try:
+                                            return cursor.fetchall()
+                                        finally:
+                                            cursor.close()
+
+                                    assert "shrink_memory" in {
+                                        row[0] for row in query("PRAGMA pragma_list")
+                                    }
+                                    settings = {
+                                        key: query("PRAGMA " + key)[0][0]
+                                        for key in (
+                                            "cache_size",
+                                            "page_size",
+                                            "cache_spill",
+                                        )
+                                    }
+                                    before_release = sample(
+                                        "diagnostic",
+                                        "cache_release_" + name + "_before",
+                                    )
+                                    query("PRAGMA shrink_memory")
+                                    after_release = sample(
+                                        "diagnostic", "cache_release_" + name + "_after"
+                                    )
+                                    assert settings == {
+                                        key: query("PRAGMA " + key)[0][0]
+                                        for key in settings
+                                    }
+                                    return {
+                                        "connection": name,
+                                        "settings": settings,
+                                        "before": before_release,
+                                        "after": after_release,
+                                    }
+
+                                native_cache = [
+                                    await runtime.event_log._run_locked(
+                                        lambda: release_owned_cache(
+                                            runtime.event_log._conn, "event_log"
+                                        )
+                                    ),
+                                    await runtime.projections._read_native(
+                                        "money",
+                                        lambda conn: release_owned_cache(conn, "money"),
+                                    ),
+                                ]
+                                retained["native_cache_diagnostic"] = {
+                                    "diagnostic_only": True,
+                                    "after_original_retention_observations": True,
+                                    "connections": native_cache,
+                                }
                             channel.send({"snapshot": retained})
                     await asyncio.sleep(0.02)
 
