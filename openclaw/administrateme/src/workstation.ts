@@ -23,7 +23,7 @@ export function registerWorkstationInventory(api: OpenClawPluginApi, runtime: Pl
     async execute(_id, params) {
       const provenance = context.agentId === serviceAgentId()
         ? provenanceFromServiceTool(context, runtime.transport.config.sharedSecretEnv, runtime.transport.config.serviceWorkEnabled)
-        : provenanceFromTool(context, "tool", runtime.transport.config.sharedSecretEnv);
+        : provenanceFromTool(context, "tool", runtime.transport.config.sharedSecretEnv, runtime);
       const result = toolResult(await runtime.transport.request("/api/openclaw/v1/tools/workstation-inventory", { ...params, provenance }));
       if (Buffer.byteLength(JSON.stringify(result), "utf8") >= 9500) {
         throw new Error("Inventory exceeded its native output budget; no partial map was returned.");
