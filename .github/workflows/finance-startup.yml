@@ -1,0 +1,51 @@
+name: Focused synthetic Finance startup
+on:
+  push:
+    branches: ['codex/finance-startup-1c018b5b']
+permissions:
+  contents: read
+concurrency:
+  group: finance-startup-${{ github.ref }}-${{ github.sha }}
+  cancel-in-progress: false
+jobs:
+  startup-only:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      ADMINME_TEST_MODE: '1'
+      ADMINME_SYNTHETIC_STORAGE_SETUP: '1'
+      PYTHONPATH: bridge
+      PYTHONDONTWRITEBYTECODE: '1'
+      POETRY_VIRTUALENVS_IN_PROJECT: 'true'
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.14.7'
+      - run: pipx install poetry==2.4.1
+      - run: poetry sync --with dev --no-interaction
+      - name: Verify unchanged production and focused syntax
+        run: |
+          git rev-parse HEAD HEAD:adminme HEAD:poetry.lock
+          git diff --exit-code 7f3186c35068b6ce2f3dfeb6e751f36423d360d6 HEAD -- adminme pyproject.toml poetry.lock
+          .venv/bin/ruff check tests/fixtures/finance_startup.py tests/fixtures/finance_storage_measurement.py tests/fixtures/finance_storage_isolation.py tests/fixtures/finance_storage_cases.py tests/acceptance/test_finance_startup.py tests/acceptance/test_finance_storage_measurement.py tests/acceptance/test_finance_storage_isolation.py
+          .venv/bin/ruff format --check tests/fixtures/finance_startup.py tests/fixtures/finance_storage_measurement.py tests/fixtures/finance_storage_isolation.py tests/fixtures/finance_storage_cases.py tests/acceptance/test_finance_startup.py tests/acceptance/test_finance_storage_measurement.py tests/acceptance/test_finance_storage_isolation.py
+      - name: One setup-only cohort, three margins and eight cancellation boundaries
+        timeout-minutes: 8
+        env:
+          FINANCE_STORAGE_ARTIFACT_DIR: ${{ runner.temp }}/finance-startup
+        run: >-
+          exec .venv/bin/python -m pytest -q --runxfail
+          --junitxml="${{ runner.temp }}/finance-startup/results.xml"
+          tests/acceptance/test_finance_startup.py
+      - name: Preserve every case and cleanup trace
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: finance-startup
+          path: ${{ runner.temp }}/finance-startup
+          if-no-files-found: error
+          retention-days: 7
