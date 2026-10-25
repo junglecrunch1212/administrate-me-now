@@ -87,7 +87,9 @@ try {
   assert.equal(hello.type, "hello-ok");
   let proof;
   if (mode === "seed") {
-    proof = { sessions: [], timer: null };
+    // Native cron bounds one-shot timestamps to ten years. Retain one actual
+    // seed value; reads must never replace it with a newly calculated date.
+    proof = { sessions: [], timer: null, timerAt: new Date(Date.now() + 24 * 60 * 60 * 1_000).toISOString() };
     for (const agentId of agents) {
       const key = `agent:${agentId}:retained-upgrade`;
       await rpc("sessions.create", { key, agentId, label: `${label} ${agentId}` });
@@ -97,7 +99,7 @@ try {
       proof.sessions.push({ key, agentId, sessionId: history.sessionId });
     }
     const created = await rpc("cron.add", { name: label, agentId: agents[0], enabled: false,
-      schedule: { kind: "at", at: "2099-01-01T00:00:00.000Z" }, sessionTarget: "main", wakeMode: "next-heartbeat",
+      schedule: { kind: "at", at: proof.timerAt }, sessionTarget: "main", wakeMode: "next-heartbeat",
       payload: { kind: "systemEvent", text: timerText }, deleteAfterRun: false, failureAlert: false });
     proof.timer = (created.job ?? created).id;
     assert.equal(typeof proof.timer, "string");
@@ -117,7 +119,9 @@ try {
   assert.equal(timer.enabled, false);
   assert.equal(timer.payload.kind, "systemEvent");
   assert.equal(timer.payload.text, timerText);
-  assert.equal(timer.schedule.at, "2099-01-01T00:00:00.000Z");
+  assert.equal(typeof proof.timerAt, "string");
+  assert.equal(new Date(proof.timerAt).toISOString(), proof.timerAt);
+  assert.equal(timer.schedule.at, proof.timerAt);
   assert.equal(timer.state?.lastRunAtMs, undefined, "disabled fixture timer never ran");
   await stop();
   console.log(`Native retained ${mode}: two agent/session identities, exact transcripts and disabled timer verified; no model/provider calls.`);
