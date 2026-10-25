@@ -3942,3 +3942,20 @@ def test_new_effect_context_repair_requires_its_complete_proof(
         select_scope(path, _event(base, head), checkout_sha=head)["scope"]
         == "system-wide"
     )
+
+
+@pytest.mark.parametrize("shared", sorted(UPDATER_EFFECT_CONTEXT_SHARED_PATHS))
+def test_effect_context_scope_preserves_each_shared_entrypoint_mode(
+    repository: tuple[Path, str], shared: str
+) -> None:
+    path, _ = repository
+    base, _ = _effect_context_candidate(path)
+    target = path / shared
+    target.chmod(0o644 if _updater_mode(shared) == "100755" else 0o755)
+    _git(path, "add", "--", shared)
+    _git(path, "commit", "-m", "Changed shared entrypoint mode")
+    head = _git(path, "rev-parse", "HEAD")
+    assert (
+        select_scope(path, _event(base, head), checkout_sha=head)["scope"]
+        == "system-wide"
+    )
