@@ -99,6 +99,7 @@ from bootstrap.service_settlement import run_release_doctor, wait_for_settled_do
 from bootstrap.services import ServiceManager
 from bootstrap.source_identity import (
     _run_git,
+    load_git_tree,
     reviewed_candidate_commit,
     verify_release_source_identity,
 )
@@ -1567,7 +1568,11 @@ class CoSChannelActivator:
             return self._complete_enter_observation(journal, release=release)
 
     def _complete_enter_observation(
-        self, journal: dict[str, Any], *, release: Path
+        self,
+        journal: dict[str, Any],
+        *,
+        release: Path,
+        recovery_controller: str | None = None,
     ) -> dict[str, Any]:
         """Complete containment after interruption; never restore live writes."""
         try:
@@ -1576,7 +1581,7 @@ class CoSChannelActivator:
             if selected != (
                 journal["release_commit"],
                 release,
-                journal["controller_commit"],
+                recovery_controller or journal["controller_commit"],
             ):
                 raise CoSActivationError(
                     "observation operation source or selection changed"
@@ -2650,6 +2655,108 @@ class CoSChannelActivator:
             "all_polling_paused": True,
         }
 
+    def recover_effect_context_controller(
+        self, plan: MaintenanceRestorationPlan
+    ) -> dict[str, Any]:
+        """Continue this exact paused repair with a protected successor controller.
+
+        The original candidate, plan and proof remain immutable. This does not
+        admit a different deployment or restore write authority.
+        """
+        updater = UpgradeManager(
+            self.paths, root=self.repository, test_mode=self.test_mode
+        )
+        with updater._operation_lock():
+            if updater.activation_journal.path.exists():
+                raise CoSActivationError("release activation must complete first")
+            journal = _json(self.journal_path)
+            commit, release, successor = self._observation_selection()
+            proof = plan.effect_context_proof
+            prepared, expires = (
+                aware_time(plan.prepared_at),
+                aware_time(plan.expires_at),
+            )
+            if (
+                proof is None
+                or plan.effect_context_repair != proof.request
+                or proof.candidate_commit != plan.target_commit
+                or proof.predecessor_commit != plan.predecessor_commit
+                or commit != plan.predecessor_commit
+                or successor == plan.target_commit
+                or journal.get("contract") != "cos-channel-operation-journal-v1"
+                or journal.get("operation") != "enter_observation"
+                or journal.get("phase") != "verifying"
+                or journal.get("activation_id") != plan.plan_id
+                or journal.get("controller_commit") != plan.target_commit
+                or journal.get("release_commit") != plan.predecessor_commit
+                or journal.get("maintenance_plan_sha256") != plan.digest()
+                or journal.get("effect_context_proof") != proof.model_dump(mode="json")
+                or journal.get("request")
+                != plan.observation_request().model_dump(mode="json")
+                or journal.get("prior_activation_id") != plan.prior_activation_id
+                or journal.get("operator_principal_id") != plan.operator_principal_id
+                or journal.get("owner_member_id") != plan.owner_member_id
+                or journal.get("owner_authorization_sha256")
+                != plan.owner_authorization_sha256
+                or journal.get("initial_snapshot") != plan.deployment_snapshot
+                or not journal.get("observation_started_at")
+                or "submission_repair_manifest" in journal
+                or prepared is None
+                or expires is None
+                or not prepared <= datetime.now(timezone.utc) < expires
+            ):
+                raise CoSActivationError(
+                    "successor recovery requires the exact unexpired paused effect repair"
+                )
+            # This also rejects replacement refs and non-ancestor controllers.
+            load_git_tree(
+                self.repository, plan.target_commit, retained_by_commit=successor
+            )
+            controls = self._maintenance_controls()
+            if (
+                plan.sender_proofs is None
+                or self._maintenance_proof_expiry(
+                    plan.sender_proofs, controls["activation"]
+                )
+                != expires
+                or any(
+                    expected != _sha(_payload(value))
+                    for expected, value in (
+                        (plan.adapter_sha256, controls["adapters"]),
+                        (plan.receipt_sha256, controls["receipt"]),
+                        (plan.member_mapping_sha256, controls["members"]),
+                        (plan.recipient_policy_sha256, controls["policy"]),
+                    )
+                )
+            ):
+                raise CoSActivationError(
+                    "successor recovery authority or configuration changed"
+                )
+            observation = _json(self.config_dir / "observation.json")
+            window = _json(self.config_dir / "deployment-readiness.json").get(
+                "provider_effect_window"
+            )
+            if observation.get("active") is not True or window != {
+                "started_at": journal["observation_started_at"],
+                "reason": "cos_enter_observation",
+            }:
+                raise CoSActivationError(
+                    "successor recovery requires the original observation boundary"
+                )
+            verify_proof(self.paths, self.repository, proof, test_mode=self.test_mode)
+            receipt = {
+                "controller_commit": successor,
+                "original_controller_commit": plan.target_commit,
+                "maintenance_plan_sha256": plan.digest(),
+            }
+            if journal.get("effect_context_recovery_controller", receipt) != receipt:
+                raise CoSActivationError("successor recovery controller changed")
+            journal["effect_context_recovery_controller"] = receipt
+            self._write_journal(journal, "verifying")
+            return self._complete_enter_observation(
+                journal, release=release, recovery_controller=successor
+            )
+
     def recover(self) -> dict[str, Any]:
         updater = UpgradeManager(
             self.paths, root=self.repository, test_mode=self.test_mode
@@ -2688,6 +2795,7 @@ def main() -> None:
     mode.add_argument("--enter-observation", action="store_true")
     mode.add_argument("--repair-recovery-history", action="store_true")
     mode.add_argument("--recover", action="store_true")
+    mode.add_argument("--recover-effect-context-controller", action="store_true")
     mode.add_argument("--prepare-maintenance", action="store_true")
     mode.add_argument("--pause-maintenance", action="store_true")
     mode.add_argument("--restore-maintenance", action="store_true")
@@ -2723,7 +2831,9 @@ def main() -> None:
         and not arguments.enter_observation
     ):
         parser.error("submission repair manifest is only for entering observation")
-    if arguments.recover and arguments.enable_live:
+    if (
+        arguments.recover or arguments.recover_effect_context_controller
+    ) and arguments.enable_live:
         parser.error("recovery cannot enable live operation")
     controller = CoSChannelActivator(
         DeploymentPaths.from_root(arguments.instance_root, production=True),
@@ -2757,6 +2867,10 @@ def main() -> None:
         result = controller.activate(
             MaintenanceRestorationPlan.model_validate(_json(arguments.request)),
             enable_live=True,
+        )
+    elif arguments.recover_effect_context_controller:
+        result = controller.recover_effect_context_controller(
+            MaintenanceRestorationPlan.model_validate(_json(arguments.request))
         )
     elif arguments.recover:
         result = controller.recover()
