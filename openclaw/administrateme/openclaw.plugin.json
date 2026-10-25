@@ -30,6 +30,7 @@
   ],
   "contracts": {
     "agentToolResultMiddleware": ["openclaw", "codex"],
+    "nativeAccountApps": "disabled",
     "serviceWorkspaceFiles": ["AGENTS.md", "IDENTITY.md"],
     "tools": [
       "administrateme_state",

@@ -387,6 +387,7 @@ COS_SERVICE_WORK_NATIVE_INSTALL = "scripts/acceptance/openclaw-source-install.sh
 COS_SERVICE_WORK_COMPONENT_PATHS = frozenset(
     {
         COS_SERVICE_WORK_APPLICATION,
+        "bootstrap/native_account_policy.py",
         COS_SERVICE_WORK_MEMBER,
         COS_SERVICE_WORK_INGEST,
         COS_SERVICE_WORK_OBSERVATION,
@@ -513,6 +514,8 @@ COS_SERVICE_WORK_COMPONENT_PATHS = frozenset(
 COS_SERVICE_WORK_TEST_PATHS = frozenset(
     {
         "tests/unit/test_service_work_principal.py",
+        "tests/unit/bootstrap/test_native_account_policy.py",
+        "openclaw/administrateme/scripts/check-cos-native-account-policy.mjs",
         "tests/acceptance/test_cos_owned_apple_reminder.py",
         "tests/unit/adapters/reminders/test_cos_reminders_write.py",
         "tests/unit/adapters/reminders/test_cos_reminders_write_policy.py",

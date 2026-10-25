@@ -35,6 +35,7 @@ from bootstrap.contracts import (
     load_versions,
     repository_root,
 )
+from bootstrap.native_account_policy import prepare_native_account_policy
 from bootstrap.openclaw_cron import OpenClawCronReconciler
 from bootstrap.openclaw_install import resolve_reviewed_openclaw
 from bootstrap.secrets import secret_store
@@ -564,8 +565,11 @@ def prepare_service_topology(
     """
     files = _service_release_workspace(release)
     prepared = _prepare_workstation_hook(copy.deepcopy(gateway), release)
-    return _prepare_service_topology(
-        prepared, paths, files, native_service_tools(prepared, paths, release)
+    return prepare_native_account_policy(
+        _prepare_service_topology(
+            prepared, paths, files, native_service_tools(prepared, paths, release)
+        ),
+        release,
     )
 
 
@@ -578,7 +582,9 @@ def reconcile_service_topology(paths: DeploymentPaths, release: Path) -> dict[st
     previous = json.loads(config_path.read_text("utf-8"))
     prepared = _prepare_workstation_hook(copy.deepcopy(previous), release)
     native_tools = native_service_tools(prepared, paths, release)
-    config = _prepare_service_topology(prepared, paths, files, native_tools)
+    config = prepare_native_account_policy(
+        _prepare_service_topology(prepared, paths, files, native_tools), release
+    )
     if files is not None:
         workspace = service_workspace_path(
             paths.instance_dir / "openclaw",
