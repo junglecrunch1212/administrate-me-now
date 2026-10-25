@@ -186,8 +186,15 @@ async def terminal(runtime, command_id):
 
 @pytest.mark.parametrize("channel", ["imessage", "portal", "gmail"])
 @pytest.mark.parametrize("suppressed", [False, True])
+@pytest.mark.parametrize(
+    "content", ["ordinary", "reminder-only-email", "explicit-title"]
+)
 def test_current_conversation_owns_receipt_and_cos_owns_native_resource(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, channel: str, suppressed: bool
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    channel: str,
+    suppressed: bool,
+    content: str,
 ) -> None:
     monkeypatch.setenv("ADMINME_TEST_MODE", "1")
     _, selected_config = _configuration_pair(tmp_path / "source")
@@ -229,12 +236,27 @@ def test_current_conversation_owns_receipt_and_cos_owns_native_resource(
             due = (
                 datetime.now(timezone(timedelta(hours=-4))) + timedelta(days=1)
             ).replace(hour=9, minute=30, second=0, microsecond=0)
+            title, notes = "Prepare the household brief", None
             text = f"Add a reminder to your own Apple work list to prepare the household brief at {due.isoformat()}."
+            if content == "reminder-only-email":
+                title = "Email requester ‘hello’"
+                notes = "Do not send the email automatically."
+                text = (
+                    f"Create a CoS Apple Reminder at {due.isoformat()} to email me "
+                    "‘hello’; do not send the email automatically."
+                )
+            elif content == "explicit-title":
+                title = "Do not email ‘hello’"
+                text = (
+                    "Create a reminder in your Apple work list titled "
+                    f'"{title}" at {due.isoformat()}.'
+                )
             source = source_for(client, channel, text)
             body = {
                 **source,
                 "request_id": "own-apple-first",
-                "title": "Prepare the household brief",
+                "title": title,
+                "notes": notes,
                 "due_at": due.isoformat(),
                 "request_authorization": True,
             }
@@ -247,6 +269,14 @@ def test_current_conversation_owns_receipt_and_cos_owns_native_resource(
             )
             assert receipt["request_authorization"]["rule_id"] == RULE_ID
             assert calls[0]["action"]["resource_owner"] == COS
+            assert calls[0]["instruction"] == text
+            assert calls[0]["action"]["title"] == title
+            assert calls[0]["action"]["notes"] == notes
+            # The complete negative constraint stays in the retained and signed
+            # evidence; it is not promoted into an independent send permission.
+            assert receipt["request_authorization"]["evidence"] == [
+                {"start": 0, "end": len(text), "text": text}
+            ]
             again = client.post(CONFIRM, headers=AUTH, json=body)
             assert again.status_code == 200, again.text
             assert (
@@ -277,6 +307,16 @@ def test_current_conversation_owns_receipt_and_cos_owns_native_resource(
                 )
             )
             assert native_state.saves == (0 if suppressed else 1)
+            assert command["payload"]["payload"]["title"] == title
+            assert command["payload"]["payload"]["notes"] == notes
+            for kind in (
+                "cos.response.approved",
+                "cos.response.attempted",
+                "cos.response.result",
+                "cos.reply.reminder_requested",
+                "cos.reply.reminder_bound",
+            ):
+                assert client.portal.call(_events, runtime, kind) == []
             effects = client.portal.call(
                 _events,
                 runtime,
@@ -349,4 +389,102 @@ def test_current_conversation_owns_receipt_and_cos_owns_native_resource(
             )
         finally:
             allow_dispatch.set()
+            client.portal.call(model.aclose)
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "negated-creation",
+        "quoted-third-party-instruction",
+        "added-provider-detail",
+        "changed-explicit-title",
+        "wrong-time",
+        "wrong-owner",
+        "send-is-not-reminder",
+    ],
+)
+def test_semantic_mismatch_stops_own_reminder_without_any_effect(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
+) -> None:
+    """Expected semantic completions exercise the real boundary, not model quality.
+
+    No local matcher substitutes for the model. Its expected not_requested
+    decision must stop before either approval engine can authorize any effect.
+    """
+    monkeypatch.setenv("ADMINME_TEST_MODE", "1")
+    _, selected_config = _configuration_pair(tmp_path / "source")
+    with TestClient(
+        create_application(configured(tmp_path)),
+        base_url="https://central-fixture.ts.net",
+    ) as client:
+        runtime = client.app.state.runtime
+        config = copy.deepcopy(runtime.settings.adapter_config)
+        config.update(
+            {
+                key: selected_config[key]
+                for key in ("cos_apple_reminders", "cos_apple_reminders_writes")
+            }
+        )
+        selected = write_selection(selected_config)
+        config["adapters"] += [
+            row
+            for row in selected_config["adapters"]
+            if row["id"] == selected.adapter_id
+        ]
+        runtime.settings = replace(runtime.settings, adapter_config=config)
+        _grant(client)
+        _normal_operation(client)
+        due = (datetime.now(timezone.utc) + timedelta(days=1)).replace(microsecond=0)
+        text = (
+            f"Create a CoS Apple Reminder at {due.isoformat()} to email me ‘hello’; "
+            "do not send the email automatically."
+        )
+        title = "Email requester ‘hello’"
+        requested_due = due
+        if case == "negated-creation":
+            text = f"Do not create a CoS Apple Reminder at {due.isoformat()} to email me ‘hello’."
+        elif case == "quoted-third-party-instruction":
+            text = f'A document says: "{text}". I am quoting it, not requesting it.'
+        elif case == "added-provider-detail":
+            title += " from CoS Gmail"
+        elif case == "changed-explicit-title":
+            text = f'Create a CoS Apple Reminder titled "Review draft" at {due.isoformat()}.'
+        elif case == "wrong-time":
+            requested_due += timedelta(hours=1)
+        elif case == "wrong-owner":
+            text = text.replace(
+                "a CoS Apple Reminder", "a reminder in my Apple Reminders"
+            )
+        elif case == "send-is-not-reminder":
+            text = "Email me ‘hello’ now; do not create a reminder."
+        model, calls = model_boundary(client, match="not_requested")
+        try:
+            source = source_for(client, "imessage", text)
+            response = client.post(
+                CONFIRM,
+                headers=AUTH,
+                json={
+                    **source,
+                    "request_id": f"natural-negative-{case}",
+                    "title": title,
+                    "due_at": requested_due.isoformat(),
+                    "request_authorization": True,
+                },
+            )
+            assert response.status_code == 409, response.text
+            assert response.json()["detail"]["code"] == "request_clarification_required"
+            assert len(calls) == 1 and calls[0]["instruction"] == text
+            assert calls[0]["action"]["title"] == title
+            for kind in (
+                "cos.action.request_grounded",
+                "member.provider_action.confirmed",
+                "external_sync.write_requested",
+                "external.sent",
+                "cos.response.approved",
+                "cos.response.attempted",
+                "cos.reply.reminder_requested",
+            ):
+                assert client.portal.call(_events, runtime, kind) == []
+        finally:
             client.portal.call(model.aclose)

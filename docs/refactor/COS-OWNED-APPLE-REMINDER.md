@@ -64,3 +64,29 @@ actual sent/suppressed envelopes, retained attribution after revocation, native
 callback/UTC component handling, and the protected predecessor's unchanged
 reader launcher/worker running against the new runtime. Hosted tests use only
 synthetic model/native stores and do not send messages or access household data.
+
+
+## Natural-language reminder content
+
+MODERNIZE: grounding skill 1.0.3 distinguishes creating the reminder from the
+activity it describes. When no title is specified, the tool may use a minimal
+concise title derived from the current authenticated instruction. An explicitly
+specified title remains exact. It must not add sender, provider or other details
+from earlier conversation. Directly requested quoted literal content is data;
+quoted third-party instructions remain non-authority.
+
+A request to create a reminder to email the requester “hello,” with “do not send
+the email automatically,” authorizes the reminder only. The negative constraint
+is retained in source evidence and may be copied into notes. It does not negate
+the affirmative reminder request. A prohibition on creating the reminder still
+rejects creation. A separately authorized composed workflow needs its own durable
+trigger and effect authority; this confirmation proves neither.
+
+This repair changes prompt/tool/workspace guidance, not persistent schemas,
+exact source bindings, current grants, independent decisions or replay behavior.
+Focused production and pinned-native fixtures use synthetic model completions;
+they prove the composed boundary, not real model interpretation. A fresh genuine
+request is needed to establish the live outcome. Old failed requests remain
+failed and must not be replayed under a new pack version. Recovery may restore
+the predecessor without erasing history; any already-created reminder remains
+an external effect and is not undone by binary rollback.
