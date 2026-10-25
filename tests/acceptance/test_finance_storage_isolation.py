@@ -249,6 +249,8 @@ class OwnedRun:
             self.process.stdin.close()
             self.process.stdout.close()
             self.error_file.close()
+            for trace in self.root.glob("measurement-*.jsonl"):
+                shutil.copyfile(trace, self.output / trace.name)
             shutil.rmtree(self.root)
             self.record["cleanup"]["scratch_removed"] = not self.root.exists()
             self.record["maxima"] = {

@@ -552,7 +552,13 @@ if __name__ == "__main__":
     name, root_arg = sys.argv[1:]
     root = Path(root_arg).resolve(strict=True)
     try:
-        if name == "large_lifetime":
+        if name == "measured_lifetime":
+            from tests.fixtures.finance_storage_measurement import (
+                serve as measured_serve,
+            )
+
+            asyncio.run(measured_serve(root))
+        elif name == "large_lifetime":
             asyncio.run(serve(root))
         elif name in CASES:
             write_json(sys.stdout.buffer, small_case(name, root))
