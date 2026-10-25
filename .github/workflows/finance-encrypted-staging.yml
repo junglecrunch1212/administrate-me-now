@@ -1,4 +1,4 @@
-name: Focused synthetic Finance staging expiry and cancellation
+name: Focused synthetic Finance staged lifecycle integration
 on:
   push:
     branches: ['codex/finance-encrypted-staging']
@@ -55,12 +55,8 @@ jobs:
           assert set(paths)==allowed, paths
           correction={
               '.github/workflows/finance-encrypted-staging.yml',
-              'tests/fixtures/finance_storage_isolation.py',
-              'tests/fixtures/finance_staging.py',
-              'tests/fixtures/finance_staging_cases.py',
-              'tests/unit/test_finance_staging_ownership.py',
           }
-          assert set(subprocess.check_output(['git','diff','--name-only','ffd1fe547d43642a801ea31e78d26b6e04ace633','HEAD'],text=True).splitlines())==correction
+          assert set(subprocess.check_output(['git','diff','--name-only','6aa5ee1f9b04dca091f6eddc478fe24eeff1404a','HEAD'],text=True).splitlines())==correction
           assert subprocess.check_output(['git','rev-parse','HEAD:adminme'],text=True).strip()=='1873e65d8a36d8af74ed5608b49b62dac6934d73'
           for p in paths:
               if p.endswith('.py'): ast.parse(pathlib.Path(p).read_text())
@@ -69,25 +65,32 @@ jobs:
           PY_CHECK
           .venv/bin/ruff check tests/fixtures/finance_staging*.py tests/fixtures/finance_storage_isolation.py tests/unit/test_finance_staging_ownership.py tests/acceptance/test_finance_encrypted_staging.py
           .venv/bin/ruff format --check tests/fixtures/finance_staging*.py tests/fixtures/finance_storage_isolation.py tests/unit/test_finance_staging_ownership.py tests/acceptance/test_finance_encrypted_staging.py
-      - name: Same-task request ownership and unfinished-upload cleanup
-        timeout-minutes: 2
-        run: .venv/bin/python -m pytest -p no:cacheprovider -q --runxfail --maxfail=1 --junitxml="$FINANCE_STORAGE_ARTIFACT_DIR/stage-ownership.xml" tests/unit/test_finance_staging_ownership.py
-      - name: Cancel upload in its owning task and check expiry dependency
+      - name: Affected publication recovery cancellation and authority paths
         timeout-minutes: 5
         run: >-
           .venv/bin/python -m pytest -p no:cacheprovider -q --runxfail --maxfail=1
-          --junitxml="$FINANCE_STORAGE_ARTIFACT_DIR/stage-interruption.xml"
-          'tests/acceptance/test_finance_encrypted_staging.py::test_staged_small_lifecycle_atomicity_authority_and_isolation[expiry_upload]'
-          'tests/acceptance/test_finance_encrypted_staging.py::test_staged_small_lifecycle_atomicity_authority_and_isolation[cancel_upload]'
-      - name: Require exact interruption evidence without resource qualification
+          --junitxml="$FINANCE_STORAGE_ARTIFACT_DIR/stage-integration.xml"
+          'tests/acceptance/test_finance_encrypted_staging.py::test_staged_small_lifecycle_atomicity_authority_and_isolation[atomic_proof]'
+          'tests/acceptance/test_finance_encrypted_staging.py::test_staged_small_lifecycle_atomicity_authority_and_isolation[event_after_commit]'
+          'tests/acceptance/test_finance_encrypted_staging.py::test_staged_small_lifecycle_atomicity_authority_and_isolation[cancel_commit]'
+          'tests/acceptance/test_finance_encrypted_staging.py::test_staged_small_lifecycle_atomicity_authority_and_isolation[role_before_commit]'
+          'tests/acceptance/test_finance_encrypted_staging.py::test_staged_small_lifecycle_atomicity_authority_and_isolation[revoke_upload]'
+      - name: Require exact integration evidence without resource qualification
         run: |
           .venv/bin/python - <<'PY_CHECK'
           import json, os, pathlib, xml.etree.ElementTree as ET
           root=pathlib.Path(os.environ['FINANCE_STORAGE_ARTIFACT_DIR'])
-          for name, expected in [('stage-ownership.xml',7),('stage-interruption.xml',2)]:
-              doc=ET.parse(root/name).getroot()
-              assert sum(int(s.attrib['tests']) for s in doc.iter('testsuite'))==expected
-              assert not any(list(doc.iter(k)) for k in ('failure','error','skipped'))
+          doc=ET.parse(root/'stage-integration.xml').getroot()
+          assert sum(int(s.attrib['tests']) for s in doc.iter('testsuite'))==5
+          assert not any(list(doc.iter(k)) for k in ('failure','error','skipped'))
+          expected={
+              'atomic_proof': (6,2,1,9,['accepted','accepted','incomplete','accepted']),
+              'event_after_commit': (6,1,1,8,['accepted']),
+              'cancel_commit': (6,1,1,8,['incomplete']),
+              'role_before_commit': (0,0,0,0,['incomplete']),
+              'revoke_upload': (0,0,0,0,['rejected']),
+          }
+          assert {case.attrib['name'].rsplit('[',1)[1][:-1] for case in doc.iter('testcase')}==set(expected)
           receipts=[]
           for path in root.glob('*.json'):
               if path.name=='source-sha256.json': continue
@@ -101,22 +104,18 @@ jobs:
                   assert result['state']=='passed' and not result['failures']
                   durable=result['final_durable_state']
                   assert durable['state']=='read' and durable['money_checkpoint_verified']
-                  assert durable['finance_event_count']==0 and all(v==0 for v in durable['counts'].values())
-                  assert durable['audit']==[{'outcome':'rejected','reason':'synthetic_approval_expired' if row['case']=='expiry_upload' else 'finance_import_request_cancelled','provider_effects_false':True}]
+                  blobs,publications,projections,events,outcomes=expected[row['case']]
+                  assert durable['counts']=={'finance_provenance_blobs':blobs,'finance_publications':publications,'finance_dated_projections':projections,'money_flows':0}
+                  assert durable['finance_event_count']==events
+                  assert [a['outcome'] for a in durable['audit']]==outcomes
+                  assert all(a['provider_effects_false'] for a in durable['audit'])
                   cleanup=result['cleanup']
                   assert cleanup['runtime_shutdown_completed'] and cleanup['executors_reaped'] and cleanup['stages_reaped_removed']
-                  assert cleanup['executor_lifetimes']>=1 and cleanup['stage_lifetimes']==1
+                  assert cleanup['executor_lifetimes']>=1 and cleanup['stage_lifetimes']>=1
                   assert not any(cleanup[k] for k in ('executor_active','quarantined','stage_descriptor_present','stage_paths_remaining'))
-                  if row['case']=='expiry_upload':
-                      assert result['response']=={'status':422,'state':'rejected','reason':'synthetic_approval_expired'}
-                      assert result['executor_errors']==[{'reason':'synthetic_approval_expired','stage':'prepare_after_upload'}]
-                  else:
-                      assert result['response']=={'cancellation_observed':True,'same_request_task':True,'cancellation_at_upload':True,'operation_lock_held':True,'storage_lock_held':True,'import_owned':True,'executor_and_stage_owned':True,'preparation_returned':False}
-                      assert result['executor_errors']==[]
-                      assert cleanup['executor_lifetimes']==1
                   receipts.append(path.name)
-          assert sorted(receipts)==['cancel_upload.json','expiry_upload.json'], receipts
-          (root/'verdict.json').write_text(json.dumps({'correctness_cases':9,'ownership_cases':7,'interruption_cases':2,'prior_61_unit_17_lifecycle_19_reporting_cases_not_rerun':True,'resource_qualified':False,'production_qualified':False,'new_live_authority':False,'receipts':sorted(receipts)},indent=2)+'\n')
+          assert sorted(receipts)==sorted(name+'.json' for name in expected), receipts
+          (root/'verdict.json').write_text(json.dumps({'correctness_cases':5,'risk_selected_integration_cases':sorted(expected),'all80_on_one_revision':False,'resource_qualified':False,'production_qualified':False,'new_live_authority':False,'receipts':sorted(receipts)},indent=2)+'\n')
           PY_CHECK
       - name: Bound retained evidence including failures
         if: always()
