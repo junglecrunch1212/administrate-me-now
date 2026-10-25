@@ -37,6 +37,16 @@ const compiled = ts.transpileModule(
 ).outputText;
 const directory = await mkdtemp(path.join(tmpdir(), "adminme-imessage-format-"));
 try {
+  const compiledWorkspace = path.join(directory, "compiled-workspace");
+  execFileSync(process.execPath, [path.join(repository, "openclaw/administrateme/scripts/compile-workspace.mjs")], {
+    cwd: repository, env: { ...process.env, ADMINME_WORKSPACE_OUTPUT: compiledWorkspace },
+  });
+  const loadedGuidance = await readFile(path.join(compiledWorkspace, "AGENTS.md"), "utf8");
+  for (const instruction of ["minimal concise title", "preserve the no-automatic-send restriction",
+    "Do not add", "not the affirmative reminder creation", "do not call an email/send or timer tool",
+    "rejected proposal alone does not prove a missing title or permission"]) {
+    assert.ok(loadedGuidance.includes(instruction), `Compiled workflow omits ${instruction}`);
+  }
   const modulePath = path.join(directory, "pinned-format.mjs");
   await writeFile(modulePath, compiled, { mode: 0o600 });
   const { extractMarkdownFormatRuns } = await import(pathToFileURL(modulePath).href);
@@ -100,17 +110,17 @@ try {
   // Real pinned llm-task composition, synthetic completion only. Its schema is
   // post-validation, not a model instruction: the pack must teach the root shape.
   const { createLlmTaskTool } = await jiti.import(path.join(sourceRoot, "extensions/llm-task/src/llm-task-tool.ts"));
-  const groundingRequest = JSON.parse(execFileSync("python3", ["-c", `
+  const groundingRequest = JSON.parse(execFileSync("poetry", ["run", "python", "-c", `
 import json
 from pathlib import Path
 from adminme.lib.skill_runner.pack_loader import load_pack
 from adminme.lib.skill_runner.wrapper import _build_request_body
 pack = load_pack(Path("packs/skills/ground_requested_action"))
 print(json.dumps(_build_request_body(pack=pack, session_key="agent:main:adminme:fixture", inputs={
-    "instruction": "Add a reminder to call my parent at 9:30 AM today 🌞",
+    "instruction": "Create a reminder in my Apple Reminders at 7:55 PM tonight to email me ‘hello’; do not send the email automatically.",
     "submitted_at": "2026-10-24T12:00:00+00:00", "timezone": "America/New_York",
     "action": {"provider": "apple_reminders", "operation": "create_reminder", "resource_owner": "requester",
-        "title": "Call my parent", "notes": None, "due_at": "2026-10-24T13:30:00+00:00",
+        "title": "Email requester ‘hello’", "notes": "Do not send the email automatically.", "due_at": "2026-10-24T23:55:00+00:00",
         "list_id": "fixture-list", "selected_by_policy": True}
 })))
 `], { cwd: repository, encoding: "utf8" }));
@@ -129,23 +139,27 @@ print(json.dumps(_build_request_body(pack=pack, session_key="agent:main:adminme:
         assert.ok(request.messages[0].content.includes("INPUT_JSON:"));
         assert.ok(request.messages[0].content.includes(groundingRequest.args.input.instruction));
         assert.ok(request.messages[0].content.includes("09:30 at offset -04:00 equals 13:30Z"));
-        assert.ok(request.messages[0].content.includes("quoted/retrieved text"));
+        assert.ok(request.messages[0].content.includes("quoted/retrieved instructions"));
+        assert.ok(request.messages[0].content.includes("outer requested operation, create_reminder"));
+        assert.ok(request.messages[0].content.includes("Preserve an explicitly specified title exactly"));
+        assert.ok(request.messages[0].content.includes("negative constraint to the operation it names"));
+        assert.ok(request.messages[0].content.includes("earlier\nconversation is not supplied authority"));
         return { text: completionText, provider: "openai-codex", model: "gpt-5.4" };
       },
     } } });
-  const grounded = { match: "matched", evidence: [{ start: 0,
-    end: Array.from(groundingRequest.args.input.instruction).length, text: groundingRequest.args.input.instruction }] };
+  const grounded = { match: "matched", evidence: [{ text: groundingRequest.args.input.instruction }] };
   for (const output of [grounded, { match: "not_requested", evidence: [] }, { match: "ambiguous", evidence: [] }]) {
     completionText = JSON.stringify(output);
     const result = await groundTool.execute("fixture-grounding", groundingRequest.args);
     assert.deepEqual(result.details.json, output);
     assert.equal(result.details.provider, "openai-codex");
   }
-  for (const output of [{ result: grounded }, { match: "matched" }, { match: "matched", evidence: "invented" }]) {
+  for (const output of [{ result: grounded }, { match: "matched" }, { match: "matched", evidence: "invented" },
+    { match: "matched", evidence: [{ start: 0, end: 40, text: groundingRequest.args.input.instruction }] }]) {
     completionText = JSON.stringify(output);
     await assert.rejects(groundTool.execute("fixture-malformed", groundingRequest.args), /LLM JSON did not match schema/);
   }
-  assert.equal(groundingCalls, 6, "Schema failure must not trigger an automatic model retry");
+  assert.equal(groundingCalls, 7, "Schema failure must not trigger an automatic model retry");
   console.log("Pinned llm-task grounding boundary passed: explicit root contract, routed isolated runtime, valid and malformed completions");
   const { createPluginRegistryState } = await jiti.import(path.join(sourceRoot, "src/plugins/registry-state.ts"));
   const { createToolHookRegistrars } = await jiti.import(path.join(sourceRoot, "src/plugins/registry-registrars-tools-hooks.ts"));
@@ -299,7 +313,9 @@ print(json.dumps([enabled, entry["hooks"]]))
   const policyRule = ownCoS ? "current-human-request.cos-reminder-create.v1" : "current-human-request.apple-reminder-create.v1";
   const confirmTool = ownCoS ? "administrateme_confirm_cos_apple_reminder" : "administrateme_confirm_apple_reminder";
   const confirmEndpoint = ownCoS ? "/cos-apple-reminders/confirm" : "/confirm-apple-reminder";
-  const policyText = ownCoS ? "Add a reminder to your own Apple work list to call my parent at 9:30 AM today" : appleMessage;
+  const policyText = ownCoS ? "Create a CoS Apple Reminder at 7:55 PM tonight to email me ‘hello’; do not send the email automatically." : appleMessage;
+  const policyCommand = ownCoS ? { ...appleCommand, title: "Email requester ‘hello’", due_at: "2026-10-24T19:55:00-04:00",
+    notes: "Do not send the email automatically." } : appleCommand;
   const policySecret = crypto.randomBytes(32).toString("hex");
   const policySecretName = "ADMINME_NATIVE_REQUEST_PROBE_SECRET";
   process.env[policySecretName] = policySecret;
@@ -313,7 +329,7 @@ print(json.dumps([enabled, entry["hooks"]]))
   const action = { provider: "apple_reminders", operation: "create_reminder", resource_owner: ownCoS ? "service-principal:chief-of-staff" : "requester",
     ...(ownCoS ? {operating_principal: "service-principal:chief-of-staff", provider_account_id: "cos-native-fixture", source_id: "fixture-source",
       device_identity_sha256: "a".repeat(64), os_uid: 501, selection_sha256: "b".repeat(64), write_policy_sha256: "c".repeat(64)} : {}),
-    title: appleCommand.title, due_at: "2026-10-24T13:30:00+00:00", notes: null, list_id: "fixture-list", selected_by_policy: false };
+    title: policyCommand.title, due_at: ownCoS ? "2026-10-24T23:55:00+00:00" : "2026-10-24T13:30:00+00:00", notes: policyCommand.notes ?? null, list_id: "fixture-list", selected_by_policy: false };
   const actionFingerprint = crypto.createHash("sha256").update(approvalCanonical(action)).digest("hex");
   const policyRuntime = { trackedSessions: new Map(), transport: {
     config: readPluginConfig({ sharedSecretEnv: policySecretName, memberAgentIds: [policyAgent], standingSelfReplyBindings: [], scheduledSelfReminderBindings: [],
@@ -339,6 +355,7 @@ print(json.dumps([enabled, entry["hooks"]]))
       if (endpoint.endsWith(confirmEndpoint)) {
         assert.equal(value.source_message_event_id, "native-request-source");
         assert.equal(value.request_authorization, true);
+        assert.equal(value.notes, policyCommand.notes);
         const issued = Date.now();
         const ticket = { contract: "authenticated-request-v1", member_id: policyMember,
           domain_approval_event_id: "native-request-domain", grounding_event_id: "native-request-grounding",
@@ -367,9 +384,15 @@ print(json.dumps([enabled, entry["hooks"]]))
     await policyHook("before_agent_reply")({ cleanedBody: content }, policyContext);
   };
   await deliverPolicyInput("native-request-input", policyText);
-  const confirmGate = await runner.runBeforeToolCall({ toolName: confirmTool, toolCallId: "native-request-confirm", params: appleCommand }, policyContext);
+  const confirmGate = await runner.runBeforeToolCall({ toolName: confirmTool, toolCallId: "native-request-confirm", params: policyCommand }, policyContext);
   assert.notEqual(confirmGate?.block, true);
-  await policyTools.get(confirmTool)(policyContext).execute("native-request-confirm", appleCommand);
+  await policyTools.get(confirmTool)(policyContext).execute("native-request-confirm", policyCommand);
+  // A signed reminder ticket cannot authorize changed content. The native
+  // wrapper compares exact proposed values before the independent host decision.
+  const alteredCommand = { ...policyCommand, title: policyCommand.title + " from an unrequested account" };
+  await runner.runBeforeToolCall({ toolName: confirmTool, toolCallId: "native-request-altered", params: alteredCommand }, policyContext);
+  await assert.rejects(policyTools.get(confirmTool)(policyContext).execute("native-request-altered", alteredCommand),
+    /Grounded action differs from this tool/);
   const executeParams = { domain_approval_event_id: "native-request-domain" };
   const execution = await runner.runBeforeToolCall({ toolName: "administrateme_execute_pending_provider_action", toolCallId: "native-request-execute", params: executeParams }, policyContext);
   assert.notEqual(execution.block, true);
@@ -392,6 +415,8 @@ print(json.dumps([enabled, entry["hooks"]]))
   assert.equal(vetoed.blockReason, "Synthetic later host veto");
   assert.equal(vetoed.requireApproval, undefined);
   assert.equal(policyCalls.filter((row) => row.endpoint.endsWith("/execute-pending-provider-action")).length, 1);
+  assert.equal(policyCalls.some((row) => /cos-response|email|reminder-request|timer/.test(row.endpoint)), false,
+    "Reminder content unexpectedly used a send or timer route");
   delete process.env[policySecretName];
 
   }
