@@ -1,0 +1,8 @@
+pack:
+  id: skill:ground_reminder_choice
+  name: Ground reminder list choice
+  version: 1.0.0
+  kind: skill
+  author: built-in
+  license: Apache-2.0
+  min_platform: 0.4.0

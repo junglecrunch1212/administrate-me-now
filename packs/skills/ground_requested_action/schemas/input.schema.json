@@ -139,6 +139,74 @@
               "minimum": 0
             }
           }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "provider",
+            "operation",
+            "resource_owner",
+            "operating_principal",
+            "recipient_member_id",
+            "service_channel_id",
+            "provider_account_id",
+            "recipient",
+            "subject",
+            "body",
+            "sender_selected_by_policy",
+            "recipient_selected_by_policy",
+            "content_fingerprint"
+          ],
+          "properties": {
+            "provider": {
+              "const": "gmail"
+            },
+            "operation": {
+              "const": "send_email"
+            },
+            "resource_owner": {
+              "const": "service-principal:chief-of-staff"
+            },
+            "operating_principal": {
+              "const": "service-principal:chief-of-staff"
+            },
+            "recipient_member_id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "service_channel_id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "provider_account_id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "recipient": {
+              "type": "string",
+              "minLength": 1
+            },
+            "subject": {
+              "type": "string",
+              "maxLength": 300
+            },
+            "body": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 8000
+            },
+            "sender_selected_by_policy": {
+              "type": "boolean"
+            },
+            "recipient_selected_by_policy": {
+              "type": "boolean"
+            },
+            "content_fingerprint": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            }
+          }
         }
       ]
     }

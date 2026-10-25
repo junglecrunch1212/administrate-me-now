@@ -402,6 +402,17 @@ COS_SERVICE_WORK_COMPONENT_PATHS = frozenset(
         "bootstrap/native/cos_reminders_launcher.m",
         "openclaw/administrateme/src/cos-reminders.ts",
         "adminme/products/openclaw/apple_reminders.py",
+        "adminme/reminder_choices.py",
+        "adminme/events/schemas/reminder_choices.py",
+        "adminme/products/openclaw/reminder_choice_work.py",
+        "adminme/products/openclaw/reminder_choice_tools.py",
+        "adminme/products/openclaw/reminder_choice_authorization.py",
+        "openclaw/administrateme/src/reminder-choice-policy.ts",
+        "packs/skills/ground_reminder_choice/SKILL.md",
+        "packs/skills/ground_reminder_choice/pack.yaml",
+        "packs/skills/ground_reminder_choice/prompt.jinja2",
+        "packs/skills/ground_reminder_choice/schemas/input.schema.json",
+        "packs/skills/ground_reminder_choice/schemas/output.schema.json",
         "adminme/apple_service_history.py",
         "adminme/conversation_instructions.py",
         "adminme/conversation_intake.py",
@@ -415,6 +426,10 @@ COS_SERVICE_WORK_COMPONENT_PATHS = frozenset(
         "adminme/products/openclaw/cos_responses.py",
         "adminme/products/openclaw/main.py",
         "adminme/products/openclaw/request_authorization.py",
+        "adminme/products/openclaw/requested_email.py",
+        "adminme/events/schemas/requested_email.py",
+        "adminme/requested_email_assurance.py",
+        "openclaw/administrateme/src/requested-email.ts",
         "adminme/request_actions_control.py",
         "adminme/lifecycle_catalog.py",
         "bootstrap/request_actions.py",
@@ -479,6 +494,9 @@ COS_SERVICE_WORK_COMPONENT_PATHS = frozenset(
 COS_SERVICE_WORK_TEST_PATHS = frozenset(
     {
         "tests/unit/test_service_work_principal.py",
+        "tests/unit/test_reminder_choices.py",
+        "tests/acceptance/test_reminder_choice_continuation.py",
+        "openclaw/administrateme/test/reminder-choice-policy.test.ts",
         "tests/acceptance/test_cos_owned_apple_reminder.py",
         "tests/unit/adapters/reminders/test_cos_reminders_write.py",
         "tests/unit/adapters/reminders/test_cos_reminders_write_policy.py",
@@ -509,6 +527,10 @@ COS_SERVICE_WORK_TEST_PATHS = frozenset(
         "tests/unit/test_openclaw_approvals.py",
         "tests/unit/test_request_actions_control.py",
         "openclaw/administrateme/test/request-policy.test.ts",
+        "openclaw/administrateme/test/requested-email.test.ts",
+        "openclaw/administrateme/scripts/requested-email-policy-probe.mjs",
+        "tests/acceptance/test_requested_email_action.py",
+        "tests/unit/products/openclaw/test_requested_email.py",
         "openclaw/administrateme/test/conversation-input.test.ts",
         "tests/acceptance/test_workstation_inventory.py",
         "tests/unit/test_workstation_inventory.py",
@@ -537,6 +559,7 @@ COS_SERVICE_WORK_TEST_PATHS = frozenset(
         "openclaw/administrateme/test/fixtures/openclaw-2026.7.2/plugin-entry.d.ts",
         "openclaw/administrateme/scripts/check-service-work-gateway.mjs",
         "tests/fixtures/openclaw_service_work_probe.mjs",
+        "tests/fixtures/openclaw_reminder_choice_probe.mjs",
         "tests/unit/bootstrap/test_cos_service_topology.py",
     }
 )
@@ -1346,10 +1369,44 @@ def _service_work_application(source: str) -> tuple[str, bool] | None:
         workstation_shapes[0]
     ) > body_shapes.index(workstation_shapes[1]):
         return None
+    choice_shapes = [
+        ast.dump(node, include_attributes=False)
+        for node in ast.parse(
+            "from adminme.products.openclaw.reminder_choice_tools import router as reminder_choice_router\n"
+            "app.include_router(reminder_choice_router)\n"
+        ).body
+    ]
+    choice_counts = [body_shapes.count(shape) for shape in choice_shapes]
+    if choice_counts not in ([0, 0], [1, 1]):
+        return None
+    if choice_counts == [1, 1] and body_shapes.index(
+        choice_shapes[0]
+    ) > body_shapes.index(choice_shapes[1]):
+        return None
+    email_shapes = [
+        ast.dump(node, include_attributes=False)
+        for node in ast.parse(
+            "from adminme.products.openclaw.requested_email import router as requested_email_router\n"
+            "app.include_router(requested_email_router)\n"
+        ).body
+    ]
+    email_counts = [body_shapes.count(shape) for shape in email_shapes]
+    if email_counts not in ([0, 0], [1, 1]):
+        return None
+    if (
+        email_counts == [1, 1]
+        and body_shapes.index(email_shapes[1]) != body_shapes.index(email_shapes[0]) + 1
+    ):
+        return None
     application.body = [
         node
         for node, shape in zip(application.body, body_shapes, strict=True)
-        if shape not in shapes + reminder_shapes + workstation_shapes
+        if shape
+        not in shapes
+        + reminder_shapes
+        + workstation_shapes
+        + choice_shapes
+        + email_shapes
     ]
     digest = hashlib.sha256(
         ast.dump(module, include_attributes=False).encode()

@@ -25,7 +25,7 @@ from adminme.projections.parties.queries import (
 from adminme.service_identities import COS_PARTY_ID, COS_SERVICE_PRINCIPAL_ID
 
 
-CATALOG_VERSION = "1.4.0"
+CATALOG_VERSION = "1.5.0"
 CATALOG_CONTRACT = "administrateme-capability-catalog-v1"
 VERBS = ("read", "observe", "draft", "prepare", "hold", "execute")
 
@@ -54,6 +54,9 @@ _TOOL_PERMISSION_OPTIONS: dict[str, frozenset[str]] = {
         {"prepare_external_actions"}
     ),
     "administrateme_cos_apple_reminder_status": frozenset({"read_context"}),
+    "administrateme_confirm_requested_email": frozenset({"prepare_external_actions"}),
+    "administrateme_requested_email_status": frozenset({"read_context"}),
+    "administrateme_cos_response": frozenset({"prepare_external_actions"}),
     "administrateme_prepare_delegated_action": frozenset({"prepare_external_actions"}),
     "administrateme_execute_delegated_action": frozenset({"execute_fixture_actions"}),
     "administrateme_observe_delegated_action": frozenset({"execute_fixture_actions"}),
@@ -73,15 +76,37 @@ _APPLE_REMINDER_TOOLS = {
     "administrateme_confirm_apple_reminder": "domain_confirmation",
     "administrateme_execute_pending_provider_action": "independent_execution_approval",
     "administrateme_apple_reminder_status": "terminal_readback",
+    "administrateme_apple_reminder_choice": "durable_list_choice_status_or_answer",
 }
 _APPLE_REMINDER_TOOL_PERMISSIONS = {
     "administrateme_confirm_apple_reminder": frozenset({"prepare_external_actions"}),
     "administrateme_execute_pending_provider_action": frozenset({"read_context"}),
     "administrateme_apple_reminder_status": frozenset({"read_context"}),
+    "administrateme_apple_reminder_choice": frozenset({"read_context"}),
 }
 
 
 _DOMAIN_DEFINITIONS: tuple[dict[str, Any], ...] = (
+    {
+        "capability_id": "domain.cos_requested_email",
+        "category": "communications",
+        "label": "CoS email to the requesting member",
+        "outcome": "Send one exact email the current member requests to their own enrolled address.",
+        "source": "product:cos-requested-email",
+        "owner_kinds": ["service_principal"],
+        "verbs": {
+            "read": "supported",
+            "prepare": "supported",
+            "execute": "current_authenticated_request",
+        },
+        "openclaw_tools": [
+            "administrateme_confirm_requested_email",
+            "administrateme_cos_response",
+            "administrateme_requested_email_status",
+        ],
+        "terminal_result_support": True,
+        "later_observation_support": False,
+    },
     {
         "capability_id": "domain.cos_owned_apple_reminders",
         "category": "tasks",
@@ -244,6 +269,7 @@ _DOMAIN_DEFINITIONS: tuple[dict[str, Any], ...] = (
 
 
 _DOMAIN_IMPLEMENTATION_PATHS = {
+    "product:cos-requested-email": "adminme/products/openclaw/requested_email.py",
     "product:cos-owned-apple-reminders": "adminme/products/openclaw/cos_apple_reminders.py",
     "product:member-chat": "adminme/member_chat.py",
     "product:member-surfaces": "adminme/products/member/surfaces.py",
@@ -1262,7 +1288,10 @@ def compose_member_catalog(
         if native_reminders:
             for tool in declared_tools:
                 permission = next(iter(_APPLE_REMINDER_TOOL_PERMISSIONS[tool]))
-                status_read = tool == "administrateme_apple_reminder_status"
+                status_read = tool in {
+                    "administrateme_apple_reminder_status",
+                    "administrateme_apple_reminder_choice",
+                }
                 available = bool(
                     not viewing_as
                     and openclaw_state == "healthy"
@@ -1279,6 +1308,24 @@ def compose_member_catalog(
                     == "administrateme_execute_pending_provider_action",
                     "available": available,
                 }
+                if tool == "administrateme_apple_reminder_choice":
+                    native_tool_authority[tool]["operations"] = {
+                        "status": available,
+                        "cancel_unconfirmed": available
+                        and not runtime._observation_active,
+                        "answer": bool(
+                            available
+                            and "prepare_external_actions" in permissions
+                            and apple_write_grant
+                            and execute_authorized
+                        ),
+                    }
+                    native_tool_authority[tool]["answer_rule"] = (
+                        "current-human-request.apple-reminder-list-choice.v1"
+                    )
+                    native_tool_authority[tool][
+                        "answer_preserves_original_due_and_expiry"
+                    ] = True
                 if available:
                     effective_tools.append(tool)
             effective_tools.sort()
@@ -1510,6 +1557,64 @@ def compose_member_catalog(
                 if eligible
                 else "CoS writer policy is absent, paused, or unavailable; inspect the exact writer without changing member bridge grants."
             )
+        if capability_id == "domain.cos_requested_email":
+            from adminme.products.openclaw.requested_email import _accounts, RULE
+
+            accounts = _accounts(runtime) if not viewing_as else []
+            eligible = bool(
+                accounts
+                and not runtime._observation_active
+                and openclaw_state == "healthy"
+                and not viewing_as
+                and not paused
+            )
+            email_tools = [
+                tool
+                for tool in declared_tools
+                if bool(_TOOL_PERMISSION_OPTIONS.get(tool, frozenset()) & permissions)
+                and openclaw_state == "healthy"
+                and not viewing_as
+                and (tool == "administrateme_requested_email_status" or eligible)
+            ]
+            row["openclaw"].update(
+                effective_tools=email_tools,
+                current_request_rule=RULE,
+                execution_authority_modes=["authenticated_current_request_policy"],
+                policy_receipt_is_human_approval=False,
+                historical_pending_auto_resume=False,
+                approval_required_for_side_effects=True,
+                tool_availability_basis="plugin_contract_and_sender_configuration_not_action_authorization",
+            )
+            row["administrateme_authority"].update(
+                state="evaluate_exact_current_request"
+                if eligible
+                else "sender_unavailable_or_paused",
+                execute_authorized=False,
+            )
+            row["effective"].update(
+                read_available="administrateme_requested_email_status" in email_tools,
+                prepare_available="administrateme_confirm_requested_email"
+                in email_tools,
+                execute_available=None if eligible else False,
+                execution_basis="current_request_recipient_policy_and_final_send_guard_not_evaluated_by_catalog",
+            )
+            row["verification"].update(
+                status_tool="administrateme_requested_email_status",
+                success_requires="exact_unsuppressed_send_terminal_and_approval_chain",
+                accepted_is_success=False,
+            )
+            row["service_sender"] = {
+                "resource_owner": COS_SERVICE_PRINCIPAL_ID,
+                "accounts": accounts,
+                "recipient_scope": "current_requesting_member_only",
+                "current_recipient_policy_evaluated": False,
+            }
+            row["unavailable_reason"] = (
+                None
+                if eligible
+                else "No current writable CoS Gmail sender is available; inspect its configured account and route."
+            )
+            row["prohibited_reason"] = None
         rows.append(row)
     attention = [
         {

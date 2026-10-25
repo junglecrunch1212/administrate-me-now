@@ -3075,6 +3075,13 @@ async def _execute_pending_provider_action(
         request_authorization = await validate_request_authorization(
             request, session, provenance, domain_event, grounding_id
         )
+    from adminme.products.openclaw.reminder_choice_authorization import (
+        require_choice_ticket_for_domain,
+    )
+
+    await require_choice_ticket_for_domain(
+        runtime, session, domain_event, request_authorization
+    )
     canceled = await runtime.event_log.get_by_idempotency(
         session.tenant_id,
         f"messages-reply-cancel:{session.auth_member_id}:{domain_event['payload']['action_id']}",

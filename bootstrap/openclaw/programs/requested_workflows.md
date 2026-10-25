@@ -21,6 +21,23 @@ when the date/time or choice between authorized lists is ambiguous; the tool
 can select a destination only when exactly one is eligible. The current member
 and provider account come from authenticated context, never a guessed account.
 
+When confirmation returns `list_choice_required`, retain its `task_id`, original
+request identifier, exact due time and offered labels. Present those actual
+choices. On the member's fresh answer, use `administrateme_apple_reminder_choice`
+with `action=answer` and that task ID; do not reconstruct the original create call
+against the new answer. An exact offered label or ID selects a list. "Yes" only
+selects a list if exactly one was actually offered, and never chooses among
+multiple lists or accounts. The original reminder draft and its due time remain
+unchanged; relative dates remain anchored to the original request time. The
+pending choice expires at that original due time. A separate short execution
+ticket is issued only after a valid fresh answer and is never renewed on replay.
+The same task supports `status` from another authenticated private conversation
+and `cancel` before confirmation; cancellation cannot reverse a provider write.
+If multiple pending tasks exist, identify the task instead of guessing. Retain
+its task/domain receipt through timeouts and inspect that same result. These
+receipts apply only to newly offered tasks; earlier failed requests or old
+pending confirmations are not automatically staged or released.
+
 Keep the returned `domain_approval_event_id`, selected list and normalized due
 time. State that exact local date/time and list when presenting the action.
 Call `administrateme_execute_pending_provider_action` with that domain receipt
@@ -64,6 +81,28 @@ Only `succeeded` with native read-back proves this outcome; an unknown save must
 not be retried with a new identifier. Existing reader access does not imply that
 the separate writer component has its one-time native consent.
 
+For a current explicit request to email the requesting member now, use
+`administrateme_confirm_requested_email` with a stable request identifier and
+exact requested subject and plain text body. Inspect fresh workstation/capability
+state when the sender is uncertain. The tool selects the currently writable CoS
+Gmail sender and that member's currently authorized email address only when each
+has one eligible choice. If there are several, ask only for the missing choice.
+Do not substitute another member, outside contact, ambient account or source.
+An omitted subject may be empty; do not invent content or a different audience.
+
+Keep `approval_event_id`, then call `administrateme_cos_response` with that ID
+and a stable execution request identifier. Both policy engines independently
+bind the exact current instruction, action and account; do not ask for a redundant
+allow-once. Only terminal `sent` proves the email was sent. Read
+`administrateme_requested_email_status` with the same approval ID after a timeout
+or later question. Unknown delivery must never be retried with a new identifier.
+A same-member private conversation can read its original receipt on another
+channel. Ordinary Gmail final answers remain in their original thread; a
+requested new email uses this separate workflow. This route sends now, not later:
+never turn a request for future email into an immediate send or claim that a
+saved record registered a timer. Future email needs its own complete durable
+timer/action workflow. Requests to text later keep the self-reminder route.
+
 For an explicit private request to text the requesting member at a future time,
 use `administrateme_self_reminder` when enabled. Resolve relative dates using
 the member's timezone and the current date; ask only if the requested time is
@@ -89,3 +128,5 @@ step in ordinary language. Keep internal catalog, permission and recovery
 terminology out of the member's reply unless they ask for technical details.
 Do not claim scheduling or delivery from a saved record, a proposed workflow,
 or a timer whose registration was not confirmed.
+
+When several reminder choices are pending, a bare answer selects a task only through one pending offer in the actual authenticated email thread. Across channels, ask for the exact reminder title followed by a colon and list choice; duplicate titles require the task ID. A tool argument alone cannot choose for the member. Status remains available without treating a question as execution authority.

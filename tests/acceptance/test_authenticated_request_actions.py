@@ -523,7 +523,7 @@ def test_malformed_grounding_keeps_original_failure_without_provider_or_retry(
                 if event["payload"]["skill_name"] == "skill:ground_requested_action"
             ]
             assert len(failed) == 1
-            assert failed[0]["payload"]["skill_version"] == "1.0.2"
+            assert failed[0]["payload"]["skill_version"] == "1.1.1"
             assert failed[0]["payload"]["failure_class"] == "openclaw_unreachable"
             for kind in (
                 "cos.action.request_grounded",

@@ -1,3 +1,4 @@
+import { registerRequestedEmailTools } from "./requested-email.js";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { readPluginConfig } from "./config.js";
 import { PLUGIN_ID } from "./contract.js";
@@ -44,6 +45,7 @@ export default definePluginEntry({
     registerMemberWorkTool(api, runtime);
     registerAppleReminderTools(api, runtime);
     registerCoSReminderTools(api, runtime);
+    registerRequestedEmailTools(api, runtime);
     registerSelfReminderTools(api, runtime);
     registerServicePrivateTools(api, runtime);
     registerWorkstationInventory(api, runtime);

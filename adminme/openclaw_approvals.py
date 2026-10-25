@@ -193,11 +193,24 @@ class OpenClawApprovalStore:
                 "rule_id",
             }
             or any(not isinstance(v, str) or not v for v in authorization.values())
-            or tool_name != "administrateme_execute_pending_provider_action"
-            or authorization["rule_id"]
+            or (tool_name, authorization["rule_id"])
             not in {
-                "current-human-request.apple-reminder-create.v1",
-                "current-human-request.cos-reminder-create.v1",
+                (
+                    "administrateme_execute_pending_provider_action",
+                    "current-human-request.apple-reminder-create.v1",
+                ),
+                (
+                    "administrateme_execute_pending_provider_action",
+                    "current-human-request.cos-reminder-create.v1",
+                ),
+                (
+                    "administrateme_execute_pending_provider_action",
+                    "current-human-request.apple-reminder-list-choice.v1",
+                ),
+                (
+                    "administrateme_cos_response",
+                    "current-human-request.cos-email-to-requester.v1",
+                ),
             }
         ):
             raise ApprovalReceiptError("request authorization binding is invalid")

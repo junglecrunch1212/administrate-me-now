@@ -191,6 +191,7 @@ class RequestedActionGroundedV1(BaseModel):
     rule_id: Literal[
         "current-human-request.apple-reminder-create.v1",
         "current-human-request.cos-reminder-create.v1",
+        "current-human-request.cos-email-to-requester.v1",
     ]
     source_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
     skill_event_id: str
@@ -211,7 +212,9 @@ class OpenClawApprovalReceivedV2(OpenClawApprovalReceivedV1):
     rule_id: (
         Literal[
             "current-human-request.apple-reminder-create.v1",
+            "current-human-request.apple-reminder-list-choice.v1",
             "current-human-request.cos-reminder-create.v1",
+            "current-human-request.cos-email-to-requester.v1",
         ]
         | None
     ) = None
