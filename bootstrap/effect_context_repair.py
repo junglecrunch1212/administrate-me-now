@@ -11,6 +11,7 @@ import asyncio
 import hashlib
 import json
 import time
+import uuid
 from collections.abc import Callable
 from pathlib import Path
 from datetime import datetime, timezone
@@ -20,7 +21,7 @@ from pydantic import BaseModel, Field, model_validator
 
 from adminme.cos_response_assurance import AUDIT_TYPES, cos_provider_effect_counts
 from adminme.events.log import EventLog
-from bootstrap.contracts import DeploymentPaths
+from bootstrap.contracts import DeploymentPaths, atomic_write
 from bootstrap.deployment_budget import deployment_clock
 from bootstrap.secrets import secret_store
 
@@ -274,10 +275,13 @@ def validate_diagnostics(
     if doctor is not None:
         rows = doctor.get("checks")
         if (
-            doctor.get("status") != "degraded"
+            doctor.get("status") != "failed"
             or not isinstance(rows, list)
             or any(
-                not isinstance(r, dict) or type(r.get("ok")) is not bool for r in rows
+                not isinstance(r, dict)
+                or not isinstance(r.get("name"), str)
+                or type(r.get("ok")) is not bool
+                for r in rows
             )
             or len({r.get("name") for r in rows}) != len(rows)
             or not REPAIR_DOCTOR_CHECKS <= {r.get("name") for r in rows}
@@ -693,6 +697,35 @@ def load_plan(
     return plan
 
 
+def retain_doctor_receipt(paths: DeploymentPaths, report: dict[str, Any]) -> Path:
+    """Retain only closed diagnostic metadata, including on validation failure."""
+    from bootstrap.submission_repair import REPAIR_DOCTOR_CHECKS
+
+    names = REPAIR_DOCTOR_CHECKS | {"canonical_synthetic_round_trip"}
+    rows = report.get("checks")
+    checks = (
+        [
+            {"name": row["name"], "ok": row["ok"]}
+            for row in rows
+            if isinstance(row, dict)
+            and isinstance(row.get("name"), str)
+            and row.get("name") in names
+            and type(row.get("ok")) is bool
+        ]
+        if isinstance(rows, list)
+        else []
+    )
+    receipt = {
+        "status": report.get("status")
+        if report.get("status") in ("healthy", "failed")
+        else "invalid",
+        "checks": checks,
+    }
+    path = paths.app_dir / "effect-context-repair" / f"doctor-{uuid.uuid4().hex}.json"
+    atomic_write(path, json.dumps(receipt, sort_keys=True).encode())
+    return path
+
+
 def wait_contained(
     paths: DeploymentPaths,
     repository: Path,
@@ -716,6 +749,7 @@ def wait_contained(
             continue
         verify_proof(paths, repository, proof, diagnostics=before, test_mode=test_mode)
         report = doctor()
+        retain_doctor_receipt(paths, report)
         verify_proof(
             paths,
             repository,
