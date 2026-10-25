@@ -1099,72 +1099,102 @@ def test_source_assurance_refresh_never_blocks_readiness(
 ) -> None:
     app = create_application(_settings(tmp_path))
     with TestClient(app) as client:
+        # The refresh below owns one settled revision. Startup checkpoint
+        # movement may legitimately request another audit and is not its delay.
+        _wait_for_settled_source_assurance(client)
         runtime: AdministrateMeRuntime = app.state.runtime
         assert runtime._source_assurance_cache is not None
+        assert runtime._source_assurance_refresh_task is None
+        settled_revision = runtime._source_assurance_revision
         cached = dict(runtime._source_assurance_cache)
         runtime._source_assurance_revision = ("ev_outdated", ())
         runtime._source_assurance_refreshed_monotonic = (
             time.monotonic() - runtime.SOURCE_ASSURANCE_REFRESH_SECONDS - 1
         )
         refresh_calls = 0
+        refresh_entered = asyncio.Event()
+        refresh_release = asyncio.Event()
 
-        async def slow_refresh(*_args: object, **_kwargs: object) -> dict[str, object]:
+        async def held_refresh(*_args: object, **_kwargs: object) -> dict[str, object]:
             nonlocal refresh_calls
             refresh_calls += 1
-            await asyncio.sleep(0.5)
+            refresh_entered.set()
+            await asyncio.wait_for(refresh_release.wait(), timeout=5)
             return cached
 
+        async def wait_for_held_refresh() -> None:
+            await asyncio.wait_for(refresh_entered.wait(), timeout=5)
+            task = runtime._source_assurance_refresh_task
+            assert task is not None and not task.done()
+
+        async def release_and_join_refresh() -> None:
+            task = runtime._source_assurance_refresh_task
+            assert task is not None and not task.done()
+            refresh_release.set()
+            # Join the real generation, including its finally cleanup; elapsed
+            # wall time alone is not evidence that a background task completed.
+            await asyncio.wait_for(asyncio.shield(task), timeout=5)
+            assert task.done() and not task.cancelled()
+            assert runtime._source_assurance_refresh_task is None
+            assert runtime._source_assurance_revision == settled_revision
+
         monkeypatch.setattr(
-            "adminme.runtime.application.audit_source_assurance", slow_refresh
+            "adminme.runtime.application.audit_source_assurance", held_refresh
         )
 
-        started = time.perf_counter()
-        first = client.get("/api/system/ready")
-        elapsed = time.perf_counter() - started
-        second = client.get("/api/system/ready")
+        try:
+            started = time.perf_counter()
+            first = client.get("/api/system/ready")
+            elapsed = time.perf_counter() - started
+            client.portal.call(wait_for_held_refresh)
+            second = client.get("/api/system/ready")
 
-        assert elapsed < 0.2
-        assert (
-            first.json()["capabilities"]["policy:source-assurance"]["details"][
-                "freshness"
-            ]["state"]
-            == "fresh"
-        )
-        assert (
-            first.json()["capabilities"]["policy:source-assurance"]["details"][
-                "freshness"
-            ]["refresh_in_progress"]
-            is True
-        )
-        assert (
-            first.json()["capabilities"]["policy:source-assurance"]["details"][
-                "freshness"
-            ]["revision_current"]
-            is False
-        )
-        assert second.status_code == first.status_code
-        assert refresh_calls == 1
+            assert elapsed < 0.2
+            assert (
+                first.json()["capabilities"]["policy:source-assurance"]["details"][
+                    "freshness"
+                ]["state"]
+                == "fresh"
+            )
+            assert (
+                first.json()["capabilities"]["policy:source-assurance"]["details"][
+                    "freshness"
+                ]["refresh_in_progress"]
+                is True
+            )
+            assert (
+                first.json()["capabilities"]["policy:source-assurance"]["details"][
+                    "freshness"
+                ]["revision_current"]
+                is False
+            )
+            assert second.status_code == first.status_code
+            assert refresh_calls == 1
+            assert runtime._source_assurance_revision == ("ev_outdated", ())
 
-        client.portal.call(asyncio.sleep, 0.55)
-        refreshed = client.get("/api/system/ready").json()
-        assert (
-            refreshed["capabilities"]["policy:source-assurance"]["details"][
-                "freshness"
-            ]["state"]
-            == "fresh"
-        )
-        assert (
-            refreshed["capabilities"]["policy:source-assurance"]["details"][
-                "freshness"
-            ]["refresh_in_progress"]
-            is False
-        )
-        assert (
-            refreshed["capabilities"]["policy:source-assurance"]["details"][
-                "freshness"
-            ]["revision_current"]
-            is True
-        )
+            client.portal.call(release_and_join_refresh)
+            refreshed = client.get("/api/system/ready").json()
+            assert (
+                refreshed["capabilities"]["policy:source-assurance"]["details"][
+                    "freshness"
+                ]["state"]
+                == "fresh"
+            )
+            assert (
+                refreshed["capabilities"]["policy:source-assurance"]["details"][
+                    "freshness"
+                ]["refresh_in_progress"]
+                is False
+            )
+            assert (
+                refreshed["capabilities"]["policy:source-assurance"]["details"][
+                    "freshness"
+                ]["revision_current"]
+                is True
+            )
+            assert refresh_calls == 1
+        finally:
+            client.portal.call(refresh_release.set)
 
 
 def test_settled_current_source_assurance_proof_does_not_rescan_on_age(

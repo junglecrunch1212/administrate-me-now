@@ -97,6 +97,7 @@ jobs:
           tests/acceptance/test_finance_money_worker.py
           tests/acceptance/test_finance_activation.py::test_persisted_activation_import_disclosure_restart_and_disable
           tests/acceptance/test_finance_activation.py::test_partial_dated_import_and_conflicting_accounting_preserve_last_good_head
+          tests/integration/test_runtime_application.py::test_source_assurance_refresh_never_blocks_readiness
       - name: Retain worker and boundary smoke results
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -365,6 +366,7 @@ jobs:
           tests/unit/test_finance_worker.py::test_chunked_text_frame_and_hash_preserve_every_utf8_byte
           tests/unit/test_finance_worker.py::test_text_frame_rejects_invalid_or_oversize_before_writing_header
           tests/unit/test_finance_worker.py::test_receipt_hash_checks_changes_after_multiple_utf8_chunks
+          tests/integration/test_runtime_application.py::test_source_assurance_refresh_never_blocks_readiness
       - name: Verify self counters, registered lifecycle and short production composition
         timeout-minutes: 5
         env:
