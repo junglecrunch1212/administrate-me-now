@@ -847,8 +847,8 @@ FINANCE_METADATA_TEST_PATHS = frozenset(
 )
 # Exact reviewed additive wiring: existing EventLog methods, runtime startup
 # and adjacent Settings code cannot drift under a metadata-only release.
-# Each tuple is (protected predecessor, metadata wiring); both are full-file
-# SHA256 values. Any new neighboring change requires a fresh reviewed boundary.
+# Each tuple contains the protected predecessor followed by explicitly reviewed
+# wired variants, all full-file SHA256 values. Neighboring changes need review.
 FINANCE_METADATA_SHARED = {
     "adminme/events/log.py": (
         "a0cf622784c33d84fad36fc476142d6eaca3d1c3d25ce55139e1634ae55c4c5a",
@@ -857,6 +857,7 @@ FINANCE_METADATA_SHARED = {
     "adminme/runtime/application.py": (
         "e18879b1016ecfdd808fc608dc7e24a92339e60fe857f3ae9d28e72aed15c299",
         "1d43d21c2d17712b95b1172ca1108a83cd0a048fe2a5f3c30e67ba2c25084a06",
+        "4729519f51d395929a02346a880a68ebe7b33ef5249ab4228c1dfb6f7cfbfae9",
     ),
     "adminme/products/member/assets/member.js": (
         "8c5a7344a4e73d99b5321cdb782ecf5c1edf446af3cd8876b9ec588cbe4d2573",
@@ -1390,7 +1391,7 @@ def _finance_metadata_dependency_fingerprint(
         ).hexdigest()
         if digest not in permitted:
             return None
-        if digest == permitted[1]:
+        if digest in permitted[1:]:
             wired.add(path)
         coordinates.append((path, entry.mode, "reviewed-finance-metadata-wiring-v1"))
     allowed = FINANCE_METADATA_REQUIRED_PATHS | POLICY_PATHS

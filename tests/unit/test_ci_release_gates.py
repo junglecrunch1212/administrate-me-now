@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import os
 import shlex
@@ -4119,19 +4120,50 @@ def test_historical_repair_and_successor_stay_in_closed_updater_lane(
     )
 
 
-def _finance_metadata_candidate(path: Path) -> tuple[str, str]:
+def _finance_metadata_candidate(
+    path: Path, *, application_source: str | None = None
+) -> tuple[str, str]:
     # Use the actual reviewed shared files; all surrounding bytes are pinned.
     for name in FINANCE_METADATA_SHARED:
-        _commit(path, name, (ROOT / name).read_text())
+        source = (ROOT / name).read_text()
+        if name == "adminme/runtime/application.py" and application_source is not None:
+            source = application_source
+        _commit(path, name, source)
     base = _git(path, "rev-parse", "HEAD")
     for name in sorted(FINANCE_METADATA_REQUIRED_PATHS - set(FINANCE_METADATA_SHARED)):
         head = _commit(path, name, (ROOT / name).read_text())
     return base, head
 
 
-def test_finance_metadata_selects_only_complete_immutable_scope(repository):
+@pytest.mark.parametrize(
+    ("reminder_routes", "expected_hash"),
+    [
+        (False, "1d43d21c2d17712b95b1172ca1108a83cd0a048fe2a5f3c30e67ba2c25084a06"),
+        (True, "4729519f51d395929a02346a880a68ebe7b33ef5249ab4228c1dfb6f7cfbfae9"),
+    ],
+)
+def test_finance_metadata_selects_only_complete_immutable_scope(
+    repository, reminder_routes, expected_hash
+):
     path, _ = repository
-    base, head = _finance_metadata_candidate(path)
+    application = "adminme/runtime/application.py"
+    source = (ROOT / application).read_text()
+    if not reminder_routes:
+        added_routers = (
+            "    from adminme.products.openclaw.reminder_choice_tools import (\n"
+            "        router as reminder_choice_router,\n"
+            "    )\n\n"
+            "    app.include_router(reminder_choice_router)\n"
+            "    from adminme.products.openclaw.reminder_mode_tools import (\n"
+            "        router as reminder_mode_router,\n"
+            "    )\n\n"
+            "    app.include_router(reminder_mode_router)\n"
+        )
+        assert source.count(added_routers) == 1
+        source = source.replace(added_routers, "")
+    assert hashlib.sha256(source.encode()).hexdigest() == expected_hash
+    assert expected_hash in FINANCE_METADATA_SHARED[application][1:]
+    base, head = _finance_metadata_candidate(path, application_source=source)
     (path / "adminme/runtime.py").write_text("UNCOMMITTED = True\n")
     proof = select_scope(path, _event(base, head), checkout_sha=head)
     assert proof["scope"] == "finance-metadata"
