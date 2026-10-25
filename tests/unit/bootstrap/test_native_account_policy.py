@@ -121,3 +121,97 @@ def test_failed_plugin_reconciliation_restores_exact_account_app_policy(
     assert observed
     assert config_path.read_bytes() == before
     assert config_path.stat().st_mode & 0o777 == 0o600
+
+
+@pytest.mark.parametrize("browser_enabled", [False, True])
+def test_browser_topology_and_account_exclusion_compose_in_both_activation_paths(
+    tmp_path, browser_enabled
+):
+    from datetime import datetime, timezone
+
+    from adminme.openclaw_topology import SERVICE_PRIVATE_TOOLS, service_agent_id
+    from adminme.service_identities import COS_SERVICE_PRINCIPAL_ID
+    from adminme.workstation_browser import BROWSER_POLICY_FILE, prepare_browser_gateway
+    from adminme.workstation_inventory import INVENTORY_FILE
+    from tests.unit.bootstrap.test_workstation_browser import private_file
+    from tests.unit.test_workstation_inventory import document
+
+    paths, release, config_path, original = _fixture(tmp_path)
+    manifest_path = release / "openclaw/administrateme/openclaw.plugin.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["contracts"].update(
+        {
+            "nativeAccountApps": "disabled",
+            "agentToolResultMiddleware": ["openclaw", "codex"],
+        }
+    )
+    manifest["contracts"]["tools"].append("administrateme_workstation_work")
+    manifest_path.write_text(json.dumps(manifest))
+    config_directory = paths.instance_dir / "config"
+    config_directory.chmod(0o700)
+    private_file(
+        config_directory / INVENTORY_FILE, document(datetime.now(timezone.utc))
+    )
+    private_file(
+        config_directory / BROWSER_POLICY_FILE,
+        {
+            "revision": 1,
+            "enabled": browser_enabled,
+            "resources": [
+                {
+                    "resource_id": "planning",
+                    "inventory_binding_id": "cos-browser",
+                    "inventory_binding_revision": 1,
+                    "native_target_id": "observed-tab",
+                    "target_evidence_reference": "fixture:profile-tab",
+                    "url": "https://work.example.invalid/planning",
+                    "authorized_url_prefix": "https://work.example.invalid/",
+                    "identity_probes": {
+                        key: {"selector": f"#{key}"}
+                        for key in ("account", "workspace", "role")
+                    },
+                    "audience_member_ids": ["member-a"],
+                }
+            ],
+        },
+    )
+    original = prepare_browser_gateway(original)
+    plugin = original["plugins"]["entries"]["administrateme"]
+    plugin.update({"enabled": True, "hooks": {"allowConversationAccess": True}})
+    plugin["config"].update(
+        {
+            "serviceWorkEnabled": True,
+            "standingSelfReplyBindings": ["retained-reply"],
+            "scheduledSelfReminderBindings": ["retained-reminder"],
+        }
+    )
+    original["plugins"]["entries"]["codex"] = {
+        "enabled": True,
+        "config": {"codexPlugins": {"enabled": True}},
+    }
+    config_path.write_text(json.dumps(original))
+    before = config_path.read_bytes()
+    prepared = prepare_service_topology(original, paths, release)
+    assert config_path.read_bytes() == before
+    assert prepared["plugins"]["entries"]["codex"]["config"]["codexPlugins"] == {
+        "enabled": False
+    }
+    assert prepared["plugins"]["entries"]["administrateme"]["hooks"] == {
+        "allowConversationAccess": True,
+        "allowPromptInjection": True,
+    }
+    assert (
+        prepared["plugins"]["entries"]["administrateme"]["config"] == plugin["config"]
+    )
+    assert prepared["browser"] == original["browser"]
+    assert prepared["agents"]["list"][:-1] == original["agents"]["list"]
+    assert prepared["bindings"] == original["bindings"]
+    service = prepared["agents"]["list"][-1]
+    assert service["id"] == service_agent_id(COS_SERVICE_PRINCIPAL_ID)
+    allowed = [*SERVICE_PRIVATE_TOOLS, *(["browser"] if browser_enabled else [])]
+    assert service["tools"] == {"allow": allowed}
+    assert reconcile_service_topology(paths, release)["service_tool_count"] == len(
+        allowed
+    )
+    assert json.loads(config_path.read_text()) == prepared
+    assert prepare_service_topology(prepared, paths, release) == prepared

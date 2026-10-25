@@ -362,6 +362,7 @@ def test_full_legacy_member_files_keep_workflow_guidance_inside_native_budget(
             b"Current authority and workstation identity",
             b"minimal concise title",
             b"administrateme_confirm_cos_apple_reminder",
+            b"administrateme_confirm_requested_email",
             b"preserve the no-automatic-send restriction",
             b"For a current request to read an authorized CoS browser resource",
         ):
