@@ -307,6 +307,70 @@ def test_updater_covers_workspaces_selected_by_production_member_topology(
         )
 
 
+def test_full_legacy_member_files_keep_workflow_guidance_inside_native_budget(
+    tmp_path: Path,
+) -> None:
+    from bootstrap.openclaw_activation import reconcile_member_topology
+
+    paths, source, _, files = fixture_workspace(tmp_path)
+    programs = source / "bootstrap/openclaw/programs"
+    (programs / "fixture.md").unlink()
+    for program in (REPO / "bootstrap/openclaw/programs").glob("*.md"):
+        (programs / program.name).write_bytes(program.read_bytes())
+    # A predecessor without the layout marker injects every complete program.
+    legacy = compile_instructions(source)
+    assert len(legacy) > 20000
+    files[0].write_bytes(b"Private template policy.\n" + legacy)
+    adapters = {**ADAPTERS, "member_chat_enabled_members": ["portal-fixture-member"]}
+    configuration = paths.instance_dir / "config"
+    configuration.mkdir(mode=0o700)
+    (configuration / "adapters.json").write_text(json.dumps(adapters))
+    assert reconcile_member_topology(paths)["member_agent_count"] == 2
+    gateway = json.loads(
+        (paths.instance_dir / "openclaw/runtime/openclaw.json").read_text()
+    )
+    # Exercise the paths the native agent actually loads, with distinct private
+    # layers and the entire six-kilobyte reserved overlay budget in each file.
+    overlays = {}
+    for row in gateway["agents"]["list"]:
+        file = Path(row["workspace"]) / "AGENTS.md"
+        marker = f"Private policy for {row['id']}.\n".encode()
+        prefix = marker + b"p" * (3000 - len(marker))
+        suffix = b"\nPrivate retained suffix.\n".ljust(3000, b"s")
+        file.write_bytes(prefix + legacy + suffix)
+        overlays[file] = (prefix, suffix)
+        assert file.read_bytes().index(b"minimal concise title") > 20000
+    all_files = [files[0], *overlays]
+    originals = {file: file.read_bytes() for file in all_files}
+    personas = {
+        file.parent / name: (file.parent / name).read_bytes()
+        for file in all_files
+        for name in ("SOUL.md", "USER.md")
+    }
+    transition = prepare_transition(
+        paths, source_release=source, target_release=REPO, adapter_config=adapters
+    )
+    assert {file: file.read_bytes() for file in all_files} == originals
+    apply_transition(paths, transition)
+    compact = compile_instructions(REPO)
+    for file, (prefix, suffix) in overlays.items():
+        rendered = file.read_bytes()
+        assert rendered == prefix + compact + suffix
+        assert len(rendered) <= 20000
+        assert legacy not in rendered
+        for guidance in (
+            b"Current authority and workstation identity",
+            b"minimal concise title",
+            b"administrateme_confirm_cos_apple_reminder",
+            b"preserve the no-automatic-send restriction",
+            b"For a current request to read an authorized CoS browser resource",
+        ):
+            assert guidance in rendered[:20000]
+    assert all(file.read_bytes() == content for file, content in personas.items())
+    apply_transition(paths, transition, recover=True)
+    assert {file: file.read_bytes() for file in all_files} == originals
+
+
 def modern_target(target: Path) -> None:
     (target / "bootstrap/openclaw/workspace-layout.json").write_text(
         json.dumps(
