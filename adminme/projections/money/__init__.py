@@ -7,7 +7,10 @@ Per ADMINISTRATEME_BUILD.md §3.9 and SYSTEM_INVARIANTS.md §2, §12.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from adminme.finance.worker import MoneyCalculation
 
 from adminme.projections.base import Projection
 from adminme.projections.money import handlers
@@ -41,13 +44,41 @@ class MoneyProjection(Projection):
     ]
     schema_path = Path(__file__).parent / "schema.sql"
 
-    def apply(self, envelope: dict[str, Any], conn: Any) -> None:
-        if "_payload_json" in envelope:
-            from adminme.finance.worker import apply_committed
+    def __init__(self) -> None:
+        self._calculation: MoneyCalculation | None = None
 
-            apply_committed(envelope, conn)
-        else:
+    def apply(self, envelope: dict[str, Any], conn: Any) -> None:
+        if "_payload_json" not in envelope:
+            self.finish_delivery()
             handlers.apply_event(envelope, conn)
+            return
+        from adminme.finance.worker import MoneyCalculation
+
+        scope = (
+            envelope["tenant_id"],
+            envelope["owner_scope"].removeprefix("private:"),
+            envelope["source_account_id"],
+        )
+        if self._calculation is not None and (
+            self._calculation.scope != scope or self._calculation.count >= 131
+        ):
+            self.finish_delivery()
+        if self._calculation is None:
+            self._calculation = MoneyCalculation(scope)
+        try:
+            self._calculation.apply(envelope, conn)
+        except BaseException:
+            calculation, self._calculation = self._calculation, None
+            calculation.close(failed=True)
+            raise
+
+    def finish_delivery(self):
+        calculation, self._calculation = self._calculation, None
+        if calculation is not None:
+            calculation.close()
+
+    def after_replay(self, conn, *, succeeded):
+        self.finish_delivery()
 
     def migrate_schema(self, conn: Any) -> None:
         additions = {

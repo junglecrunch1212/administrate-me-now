@@ -671,6 +671,7 @@ class ProjectionRunner:
                         types,
                         self._make_callback(name, projection),
                         raw_payload_types=self._raw_payload_types(name),
+                        on_drain_end=self._delivery_settler(name, projection),
                     )
                     if replay_version_change:
                         replay_required.append(name)
@@ -905,6 +906,7 @@ class ProjectionRunner:
                 )
             succeeded = True
         finally:
+            await self._run_on_worker(self._finish_delivery, name, projection)
             if not (staged and succeeded):
                 await self._run_on_worker(
                     self._after_replay,
@@ -952,10 +954,32 @@ class ProjectionRunner:
     @staticmethod
     def _raw_payload_types(name):
         return (
-            frozenset({"finance.publication_accepted", "finance.projection_verified"})
+            frozenset(
+                {
+                    "finance.provenance_archived",
+                    "finance.publication_accepted",
+                    "finance.projection_verified",
+                }
+            )
             if name == "money"
             else frozenset()
         )
+
+    def _delivery_settler(self, name, projection):
+        finish = getattr(projection, "finish_delivery", None)
+        if finish is None:
+            return None
+
+        async def settle():
+            async with self._write_locks[name]:
+                await self._run_on_worker(self._finish_delivery, name, projection)
+
+        return settle
+
+    def _finish_delivery(self, name, projection):
+        finish = getattr(projection, "finish_delivery", None)
+        if finish is not None:
+            finish()
 
     def _make_callback(self, name: str, projection: Projection):
         write_locks = self._write_locks
@@ -1426,6 +1450,7 @@ class ProjectionRunner:
         staged: bool,
     ) -> None:
         conn = self._staged_conns[name] if staged else self._require_connection(name)
+        self._finish_delivery(name, projection)
         projection.before_replay(conn)
 
     def _after_replay(
@@ -1542,19 +1567,36 @@ class ProjectionRunner:
         self._remove_if_exists(tracked)
 
     def _close_money_connections(self) -> None:
-        stage = self._staged_conns.pop("money", None)
-        if stage is not None:
-            stage.close()
+        first_failure = None
+        projection = self._projections.get("money")
+        if projection is not None:
+            try:
+                self._finish_delivery("money", projection)
+            except Exception as exc:
+                first_failure = exc
+        for connections in (self._staged_conns, self._conns):
+            conn = connections.pop("money", None)
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception as exc:
+                    first_failure = first_failure or exc
         path = self._staged_paths.pop("money", None)
         if path is not None:
-            self._remove_if_exists(path)
-        conn = self._conns.pop("money", None)
-        if conn is not None:
-            conn.close()
+            try:
+                self._remove_if_exists(path)
+            except Exception as exc:
+                first_failure = first_failure or exc
+        if first_failure is not None:
+            raise first_failure
 
     def _close_all_connections(self) -> None:
         # Admission is closed; settle and close Money on its lifetime owner.
-        self._money_executor.submit(self._close_money_connections).result()
+        money_failure = None
+        try:
+            self._money_executor.submit(self._close_money_connections).result()
+        except Exception as exc:
+            money_failure = exc
         try:
             self._close_parties_reader()
         except Exception:
@@ -1577,6 +1619,8 @@ class ProjectionRunner:
             except Exception:
                 _log.exception("error closing projection %s", name)
         self._conns.clear()
+        if money_failure is not None:
+            raise money_failure
 
     def _copy_projection_snapshots(
         self,

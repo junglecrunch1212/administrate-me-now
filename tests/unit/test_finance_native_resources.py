@@ -452,3 +452,109 @@ def test_synthetic_runtime_pins_tempfiles_and_release_without_host_lookup(
     )
     launch.assert_not_called()
     mime_setup.assert_called_once_with()
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        "none",
+        "executable",
+        "script",
+        "flags",
+        "cwd",
+        "env",
+        "admission",
+        "active",
+        "limit",
+        "client",
+    ],
+)
+def test_native_guard_allows_only_registered_runtime_calculation(
+    monkeypatch, tmp_path, change
+):
+    from adminme.finance import worker
+
+    executable = str(Path(native.sys.executable).absolute())
+    script = str(Path(worker.__file__).with_name("worker_child.py").resolve())
+    args = [
+        executable,
+        [executable, "-I", "-B", script],
+        "/",
+        {"LANG": "C.UTF-8", "LC_ALL": "C.UTF-8"},
+    ]
+    guard = native.FixtureGuard(tmp_path, 49152, [], finance_workers=change != "client")
+    monkeypatch.setattr(
+        worker, "_admission", SimpleNamespace(locked=lambda: change != "admission")
+    )
+    monkeypatch.setattr(
+        worker, "worker_usage", lambda: {"active": {} if change == "active" else None}
+    )
+    if change == "executable":
+        args[0] = "/usr/bin/python3"
+    if change == "script":
+        args[1][-1] = "/tmp/other.py"
+    if change == "flags":
+        args[1].remove("-I")
+    if change == "cwd":
+        args[2] = str(tmp_path)
+    if change == "env":
+        args[3]["HOME"] = str(tmp_path)
+    if change == "limit":
+        guard.finance_launches = native.MAX_FINANCE_WORKERS
+    if change == "none":
+        guard("subprocess.Popen", args)
+        assert guard.finance_launches == 1 and not guard.faults
+    else:
+        with pytest.raises(PermissionError):
+            guard("subprocess.Popen", args)
+        assert guard.faults
+
+
+def test_native_owned_metrics_include_child_cpu_rss_reaping_and_terminal(monkeypatch):
+    from adminme.finance import worker
+
+    ledger = {
+        "active": {
+            "user_cpu_seconds": 2.0,
+            "system_cpu_seconds": 1.0,
+            "rss_bytes": 100,
+            "peak_rss_bytes": 150,
+        },
+        "completed_user_cpu_seconds": 0.0,
+        "completed_system_cpu_seconds": 0.0,
+        "completed_count": 0,
+        "failed_count": 0,
+        "peak_child_rss_bytes": 0,
+        "lifetimes": [],
+    }
+    monkeypatch.setattr(worker, "worker_usage", lambda: ledger)
+    reaped = SimpleNamespace(ru_utime=0.0, ru_stime=0.0)
+    monkeypatch.setattr(native.resource, "getrusage", lambda _: reaped)
+    provider = native.OwnedFinanceMetrics(
+        SimpleNamespace(sample=lambda: sample(cpu=3.0, rss=1000, peak=2000)),
+        SimpleNamespace(finance_launches=1),
+    )
+    first = provider.sample()
+    assert first["cpu_seconds"] == 6 and first["rss_bytes"] == 1100
+    assert first["peak_rss_bytes"] == 2150
+    with pytest.raises(native.EvidenceError, match="terminal coverage"):
+        provider.terminal()
+    # Reaped CPU can arrive while the last active telemetry still exists.
+    reaped.ru_utime, reaped.ru_stime = 2.2, 1.1
+    second = provider.sample()
+    assert second["cpu_seconds"] == pytest.approx(6.3)
+    ledger.update(
+        active=None,
+        completed_count=1,
+        completed_user_cpu_seconds=2.0,
+        completed_system_cpu_seconds=1.0,
+        peak_child_rss_bytes=150,
+        lifetimes=[{"complete": True, "terminal_received": True, "exitcode": 0}],
+    )
+    third = provider.sample()
+    assert third["cpu_seconds"] == second["cpu_seconds"] and third["rss_bytes"] == 1000
+    provider.terminal()
+    ledger["lifetimes"][0]["complete"] = False
+    provider.sample()
+    with pytest.raises(native.EvidenceError, match="terminal coverage"):
+        provider.terminal()

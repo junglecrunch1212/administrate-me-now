@@ -15,7 +15,11 @@ from adminme.events.schemas.finance_import import (
     FinanceImportApprovedV1,
     FinanceImportManifest,
 )
-from adminme.finance.access_control import control_lock, policy_for_session
+from adminme.finance.access_control import (
+    FinanceAccessError,
+    control_lock,
+    policy_for_session,
+)
 from adminme.finance.closed_import import decode_package
 from adminme.finance.importer import _settled
 from adminme.finance.import_work import await_settled, run_cpu
@@ -51,6 +55,18 @@ def _check_policy(policy: Any, manifest: FinanceImportManifest, revision: int) -
         or policy.binding != manifest.binding
     ):
         raise HTTPException(409, "finance_import_policy_changed")
+
+
+def _final_disclosure(request, session, approval):
+    require_owner(request, session)
+    try:
+        _check_policy(
+            policy_for_session(request.app.state.runtime, session),
+            approval.manifest,
+            approval.policy_revision,
+        )
+    except FinanceAccessError:
+        raise HTTPException(503, "finance_control_unavailable") from None
 
 
 @router.post("/api/member/v1/finance/import-approvals")
@@ -131,6 +147,13 @@ async def _approval(
         row = await runtime.event_log.read_finance_import_approval(
             session.tenant_id, session.auth_member_id, event_id
         )
+        return _validate_approval(runtime, session, row)
+    except (ValueError, TypeError, KeyError, RuntimeError):
+        raise HTTPException(403, "finance_import_approval_unavailable") from None
+
+
+def _validate_approval(runtime, session, row) -> FinanceImportApprovedV1:
+    try:
         if row is None:
             raise ValueError("missing approval")
         value = FinanceImportApprovedV1.model_validate(row["payload"])
@@ -283,6 +306,13 @@ async def import_approved_package(
                         await _approval(runtime, session, approval_id)
                         require_owner(request, session)
 
+                    def commit_guard():
+                        row = runtime.event_log._read_finance_import_approval(
+                            session.tenant_id, session.auth_member_id, approval_id
+                        )
+                        _validate_approval(runtime, session, row)
+                        require_owner(request, session)
+
                     async def commit():
                         nonlocal accounting, dated
                         assert prepared is not None
@@ -292,6 +322,7 @@ async def import_approved_package(
                             approval.manifest.binding.book_id,
                             prepared.events,
                             before_commit=authorize_commit,
+                            commit_guard=commit_guard,
                             correlation_id=session.correlation_id,
                         )
                         for event, event_id in zip(prepared.events, ids, strict=True):
@@ -302,8 +333,9 @@ async def import_approved_package(
                                     "publication_id": prepared.metadata[
                                         "publication_id"
                                     ],
-                                    "idempotent": prepared.metadata["expected_heads"][0]
-                                    == prepared.metadata["publication_id"],
+                                    "idempotent": prepared.metadata[
+                                        "accounting_existing"
+                                    ],
                                     "provider_effect_count": 0,
                                 }
                             elif event.type == "finance.projection_verified":
@@ -311,8 +343,7 @@ async def import_approved_package(
                                     "state": "verified",
                                     "event_id": event_id,
                                     "projection_id": prepared.metadata["projection_id"],
-                                    "idempotent": prepared.metadata["expected_heads"][1]
-                                    == prepared.metadata["projection_id"],
+                                    "idempotent": prepared.metadata["dated_existing"],
                                     "provider_effect_count": 0,
                                 }
 
@@ -332,6 +363,7 @@ async def import_approved_package(
                     accounting,
                     dated,
                 )
+                _final_disclosure(request, session, approval)
                 return {
                     "state": "accepted",
                     "accounting": accounting,
@@ -356,6 +388,7 @@ async def import_approved_package(
                 accounting,
                 dated,
             )
+            _final_disclosure(request, session, approval)
             # An ambiguous append or rejected dated output cannot undo accepted
             # accounting. Preserve the last good heads and return explicit scope.
             raise HTTPException(

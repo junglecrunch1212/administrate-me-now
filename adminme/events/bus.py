@@ -57,6 +57,8 @@ class _SubscriberState:
     checkpoint: str | None
     degraded: bool
     raw_payload_types: frozenset[str] = frozenset()
+    on_drain_end: Callable[[], Awaitable[None]] | None = None
+    draining: bool = False
     consecutive_failures: int = 0
     last_success_at_ms: int | None = None
     last_failure_at_ms: int | None = None
@@ -139,6 +141,7 @@ class EventBus:
         replay_on_version_change: bool = False,
         delivery_concurrency: int = 1,
         raw_payload_types: frozenset[str] = frozenset(),
+        on_drain_end: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         if self._running:
             raise RuntimeError("subscribe() must be called before start()")
@@ -232,6 +235,7 @@ class EventBus:
             consumer_version=consumer_version,
             delivery_concurrency=delivery_concurrency,
             raw_payload_types=raw_payload_types,
+            on_drain_end=on_drain_end,
             checkpoint=checkpoint,
             degraded=degraded,
             consecutive_failures=failures,
@@ -359,6 +363,7 @@ class EventBus:
             "last_failure_at": state.last_failure_at_ms,
             "consecutive_failures": state.consecutive_failures,
             "degraded": state.degraded,
+            "draining": state.draining,
             "poison_event_id": state.poison_event_id,
             "consumer_version": state.consumer_version,
             "delivery_concurrency": state.delivery_concurrency,
@@ -386,6 +391,7 @@ class EventBus:
             return
 
     async def _drain_once(self, state: _SubscriberState) -> None:
+        state.draining = True
         try:
             batch: list[dict[str, Any]] = []
             async for event in self._log.read_since(
@@ -431,6 +437,24 @@ class EventBus:
             state.degraded = True
             state.poison_event_id = state.checkpoint
             await self._persist_state(state)
+
+        finally:
+            try:
+                if state.on_drain_end is not None:
+                    try:
+                        await state.on_drain_end()
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception:
+                        _log.exception(
+                            "subscriber %s failed resource settlement",
+                            state.subscriber_id,
+                        )
+                        state.degraded = True
+                        state.last_failure_at_ms = int(time.time() * 1000)
+                        await self._persist_state(state)
+            finally:
+                state.draining = False
 
     async def _deliver_batch(
         self,

@@ -26,9 +26,10 @@ FRAME_LIMIT = 8192
 WORK_LIMIT = 4 * 1024 * 1024
 SAMPLE_SECONDS = 0.1
 MAX_GAP_SECONDS = 2.0
-MAX_PROCESSES = (
-    3  # Plus the coordinator and standard spawn tracker: five expected live processes.
-)
+# Three direct fixture children plus coordinator/tracker and at most one owned
+# Finance calculation child: six expected live processes, not an OS process cap.
+MAX_PROCESSES = 3
+MAX_FINANCE_WORKERS = 8
 WALL_SECONDS = 180
 CPU_SECONDS = 60
 RSS_BYTES = 512 * 1024 * 1024
@@ -249,13 +250,15 @@ def prepare_synthetic_runtime(root, checkout):
 
 
 class FixtureGuard:
-    """Deny Python subprocess and nonfixture network/file accesses; not a sandbox.
+    """Deny unregistered process and nonfixture network/file accesses; not a sandbox.
 
     Native libraries can bypass Python audit hooks. No claim of OS confinement
     or arbitrary native-child discovery is made. Violations persist even caught.
     """
 
-    def __init__(self, root, port, faults):
+    def __init__(self, root, port, faults, *, finance_workers=False):
+        self.finance_workers = finance_workers
+        self.finance_launches = 0
         self.root = Path(root).resolve()
         self.port = port
         self.faults = faults
@@ -272,6 +275,24 @@ class FixtureGuard:
         raise PermissionError(reason)
 
     def __call__(self, event, args):
+        if event == "subprocess.Popen" and self.finance_workers:
+            from adminme.finance import worker
+
+            executable = str(Path(sys.executable).absolute())
+            script = str(Path(worker.__file__).with_name("worker_child.py").resolve())
+            if (
+                len(args) == 4
+                and args[0] == executable
+                and args[1] == [executable, "-I", "-B", script]
+                and args[2] == "/"
+                and args[3] == {"LANG": "C.UTF-8", "LC_ALL": "C.UTF-8"}
+                and worker._admission.locked()
+                and worker.worker_usage()["active"] is None
+                and self.finance_launches < MAX_FINANCE_WORKERS
+            ):
+                self.finance_launches += 1
+                return
+            self.deny("outside exact owned Finance worker launch")
         if event in {
             "subprocess.Popen",
             "os.fork",
@@ -313,6 +334,94 @@ class FixtureGuard:
             self.deny("outside fixture filesystem scope")
 
 
+class OwnedFinanceMetrics:
+    """Aggregate registered runtime and its one owned calculation child.
+
+    RUSAGE_CHILDREN supplies reaped CPU including exit; pipe reports supply live
+    CPU/RSS. Taking the larger cumulative CPU counter prevents a reap transition
+    from dropping or double-counting the same lifetime. Peak sums remain an
+    explicitly conservative upper bound, including pre-exec rusage peaks.
+    """
+
+    def __init__(self, provider, guard):
+        from adminme.finance.worker import worker_usage
+
+        self.provider, self.guard, self.worker_usage = provider, guard, worker_usage
+        self.last_ledger = None
+        self.own_metrics = None
+        self.user = self.system = self.peak = self.mach_peak = 0
+
+    def sample(self):
+        own = self.provider.sample()
+        ledger = self.worker_usage()
+        active = ledger["active"] or {}
+        if len(ledger["lifetimes"]) > MAX_FINANCE_WORKERS:
+            raise EvidenceError("owned Finance lifetime bound exceeded")
+        if ledger["failed_count"] or active.get("reap_uncertain"):
+            raise EvidenceError("owned Finance worker lifecycle incomplete")
+        reaped = resource.getrusage(resource.RUSAGE_CHILDREN)
+        self.user = max(
+            self.user,
+            own["user_cpu_seconds"]
+            + max(
+                reaped.ru_utime,
+                ledger["completed_user_cpu_seconds"]
+                + active.get("user_cpu_seconds", 0),
+            ),
+        )
+        self.system = max(
+            self.system,
+            own["system_cpu_seconds"]
+            + max(
+                reaped.ru_stime,
+                ledger["completed_system_cpu_seconds"]
+                + active.get("system_cpu_seconds", 0),
+            ),
+        )
+        rss = own["rss_bytes"] + active.get("rss_bytes", 0)
+        child_peak = max(
+            ledger["peak_child_rss_bytes"], active.get("peak_rss_bytes", 0)
+        )
+        self.peak = max(self.peak, own["peak_rss_bytes"] + child_peak, rss)
+        self.mach_peak = max(
+            self.mach_peak, own["mach_peak_rss_bytes"] + child_peak, rss
+        )
+        self.last_ledger = {**ledger, "launches": self.guard.finance_launches}
+        self.own_metrics = own
+        return {
+            **own,
+            "user_cpu_seconds": self.user,
+            "system_cpu_seconds": self.system,
+            "cpu_seconds": self.user + self.system,
+            "rss_bytes": rss,
+            "peak_rss_bytes": self.peak,
+            "mach_peak_rss_bytes": self.mach_peak,
+        }
+
+    def details(self):
+        return {
+            "finance_workers": self.last_ledger,
+            "runtime_self_metrics": self.own_metrics,
+            "rss_measurement": "runtime current plus Finance child lifetime-peak upper bound",
+        }
+
+    def terminal(self):
+        value = self.last_ledger
+        if (
+            value is None
+            or value["active"] is not None
+            or value["launches"] != value["completed_count"]
+            or value["completed_count"] != len(value["lifetimes"])
+            or any(
+                not row["complete"]
+                or row["exitcode"] != 0
+                or not row["terminal_received"]
+                for row in value["lifetimes"]
+            )
+        ):
+            raise EvidenceError("owned Finance terminal coverage incomplete")
+
+
 def _entry(
     target,
     arguments,
@@ -352,11 +461,22 @@ def _entry(
         ceiling = min([CPU_SECONDS, *(v for v in inherited if v >= 0)])
         resource.setrlimit(resource.RLIMIT_CPU, (ceiling, ceiling))
         resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+        guard = FixtureGuard(root, port, faults, finance_workers=target == "runtime")
         provider = DarwinSelfMetrics()
+        if target == "runtime":
+            provider = OwnedFinanceMetrics(provider, guard)
         metrics.send(
-            {"kind": "sample", "metrics": provider.sample(), "barrier": "startup"}
+            {
+                "kind": "sample",
+                "metrics": provider.sample(),
+                "barrier": "startup",
+                **(
+                    provider.details()
+                    if isinstance(provider, OwnedFinanceMetrics)
+                    else {}
+                ),
+            }
         )
-        guard = FixtureGuard(root, port, faults)
         sys.addaudithook(guard)
         prepare_synthetic_runtime(root, identity["checkout"])
 
@@ -373,7 +493,16 @@ def _entry(
                         barrier = command["snapshot"]
                     value = provider.sample()
                     metrics.send(
-                        {"kind": "sample", "metrics": value, "barrier": barrier}
+                        {
+                            "kind": "sample",
+                            "metrics": value,
+                            "barrier": barrier,
+                            **(
+                                provider.details()
+                                if isinstance(provider, OwnedFinanceMetrics)
+                                else {}
+                            ),
+                        }
                     )
                     if (
                         value["rss_bytes"] > RSS_BYTES
@@ -438,6 +567,8 @@ def _entry(
                 faults.append("sampler did not stop")
         try:
             final = provider.sample() if provider is not None else None
+            if isinstance(provider, OwnedFinanceMetrics):
+                provider.terminal()
         except BaseException as exc:
             final = None
             faults.append("terminal sampling: " + type(exc).__name__)
@@ -449,6 +580,11 @@ def _entry(
                 "metrics": final,
                 "pid": os.getpid(),
                 "birth": birth,
+                **(
+                    provider.details()
+                    if isinstance(provider, OwnedFinanceMetrics)
+                    else {}
+                ),
             }
         )
         metrics.close()
@@ -546,6 +682,34 @@ class Member:
                 raise EvidenceError("sampling counter/time regression")
             if value["at"] - previous["at"] > MAX_GAP_SECONDS:
                 self.errors.append("sampling gap")
+        if self.target == "runtime":
+            ledger = record.get("finance_workers")
+            if not isinstance(ledger, dict) or not isinstance(
+                ledger.get("lifetimes"), list
+            ):
+                raise EvidenceError("missing owned Finance worker ledger")
+            if any(
+                type(ledger.get(key)) is not int
+                or not 0 <= ledger[key] <= MAX_FINANCE_WORKERS
+                for key in ("launches", "completed_count", "failed_count")
+            ):
+                raise EvidenceError("invalid owned Finance lifetime count")
+            if (
+                ledger["failed_count"]
+                or len(ledger["lifetimes"]) != ledger["completed_count"]
+            ):
+                raise EvidenceError("incomplete owned Finance lifetimes")
+            if kind == "terminal" and (
+                ledger.get("active") is not None
+                or ledger["launches"] != ledger["completed_count"]
+                or any(
+                    not row.get("complete")
+                    or row.get("exitcode") != 0
+                    or not row.get("terminal_received")
+                    for row in ledger["lifetimes"]
+                )
+            ):
+                raise EvidenceError("owned Finance terminal coverage incomplete")
         self.samples.append(value)
         if kind == "sample" and record.get("barrier"):
             self.barriers.add(record["barrier"])
@@ -727,6 +891,7 @@ class Registry:
         return {
             "at": time.monotonic(),
             "phase": phase,
+            "rss_measurement": "runtime current plus Finance child lifetime-peak upper bound",
             "errors": errors,
             "cpu_seconds": sum(row["cpu_seconds"] for row in samples)
             if not errors
@@ -787,11 +952,24 @@ class Registry:
             and not self.errors
             and all(v["complete"] for v in verdicts),
             "whole_os_process_tree_coverage_proven": False,
-            "scope": "registered fixture processes and their threads only",
+            "scope": "registered fixture processes, their threads and exact owned Finance workers",
             "errors": self.errors,
             "members": verdicts,
             "all_registered_processes_stopped": all(
                 not m.process.is_alive() for m in self.members
+            ),
+            "all_owned_finance_workers_reaped": all(
+                m.terminal is not None
+                and isinstance(m.terminal.get("finance_workers"), dict)
+                and m.terminal["finance_workers"].get("active") is None
+                and m.terminal["finance_workers"].get("launches")
+                == m.terminal["finance_workers"].get("completed_count")
+                and all(
+                    row.get("complete") and row.get("exitcode") == 0
+                    for row in m.terminal["finance_workers"].get("lifetimes", [])
+                )
+                for m in self.members
+                if m.target == "runtime"
             ),
         }
         try:

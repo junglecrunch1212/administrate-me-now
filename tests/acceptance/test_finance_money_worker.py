@@ -209,3 +209,22 @@ async def test_shutdown_waits_for_owned_money_child_without_blocking_loop(tmp_pa
                 await stopping
         await runner.stop()
         await log.close()
+
+
+@pytest.mark.asyncio
+async def test_money_settlement_failure_still_closes_other_projection_handles(
+    tmp_path, monkeypatch
+):
+    runner, log = await start(tmp_path)
+
+    def failed():
+        raise RuntimeError("synthetic Money terminal failure")
+
+    monkeypatch.setattr(runner._projections["money"], "finish_delivery", failed)
+    try:
+        with pytest.raises(RuntimeError, match="Money terminal failure"):
+            await runner.stop()
+        assert runner._closed and not runner._conns and not runner._staged_conns
+        assert runner._money_thread_id not in {t.ident for t in threading.enumerate()}
+    finally:
+        await log.close()

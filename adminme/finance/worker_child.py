@@ -16,6 +16,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import re
+import os
 import json
 import resource
 import threading
@@ -55,7 +56,16 @@ def usage():
         "rss_bytes": current,
         "peak_rss_bytes": peak,
         "cpu_seconds": value.ru_utime + value.ru_stime,
+        "user_cpu_seconds": value.ru_utime,
+        "system_cpu_seconds": value.ru_stime,
     }
+
+
+def report(kind, **extra):
+    # Sample under the output lock so concurrent periodic/terminal records
+    # cannot reorder CPU observations from this one child.
+    with _output_lock:
+        write_json(_output, {"kind": kind, **extra, **usage()})
 
 
 class Cursor:
@@ -269,7 +279,10 @@ def prepare(header):
     validate_transition(prior, publication)
     prior_proof = verify_archived(conn, prior) if prior else None
     proof = verify_package(publication, package, prior_proof)
+    if existing:
+        verify_archived(conn, publication, prior_proof)
     dated_error = None
+    existing_projection = False
     if projection:
         try:
             if datetime.fromisoformat(projection["verified_at"]) > now + timedelta(
@@ -281,11 +294,12 @@ def prepare(header):
                 "SELECT content_sha256 FROM finance_dated_projections WHERE tenant_id=? AND owner_id=? AND book_id=? AND projection_id=?",
                 (*key, projection["projection_id"]),
             ).fetchone()
+            existing_projection = bool(old)
             if old and old[0] != projection["content_sha256"]:
                 raise ValueError("projection_identity_or_prior_conflict")
             if not old and expected[1] != projection["prior_projection_id"]:
                 raise ValueError("projection_prior_conflict")
-            if existing and expected[0] != publication["publication_id"]:
+            if existing and not old and expected[0] != publication["publication_id"]:
                 raise ValueError("projection_accounting_anchor_not_current")
         except (PublicationError, ValueError) as exc:
             dated_error = str(exc)
@@ -297,9 +311,14 @@ def prepare(header):
             "publication_id": publication["publication_id"],
             "projection_id": projection["projection_id"] if projection else None,
             "dated_error": dated_error,
+            "accounting_existing": bool(existing),
+            "dated_existing": existing_projection,
         }
     )
-    root = namespace_root(publication).removeprefix("hbprov1:")
+    namespace = namespace_root(publication)
+    if not isinstance(namespace, str):
+        raise ValueError("finance_worker_provenance_missing")
+    root = namespace.removeprefix("hbprov1:")
     chunks = {row["sha256"] for row in parse_blob(package.index, 262144)["chunks"]}
 
     def event(kind, payload, event_key, model, source="accepted_books"):
@@ -317,9 +336,18 @@ def prepare(header):
             write_json(_output, info)
             write_frame(_output, raw)
 
-    for digest in [*sorted(package.blobs), root]:
+    # Exact proof is complete. Release large source buffers as their immutable
+    # event bytes cross the pipe; do not retain a second whole package while
+    # the parent gathers its atomic append.
+    blobs, index, approved = (
+        dict(package.blobs),
+        package.index,
+        package.approved_evidence,
+    )
+    del package
+    for digest in [*sorted(blobs), root]:
         is_index = digest == root
-        raw = package.index if is_index else package.blobs[digest]
+        raw = index if is_index else blobs.pop(digest)
         event(
             "finance.provenance_archived",
             {
@@ -333,9 +361,7 @@ def prepare(header):
                 if digest in chunks
                 else "evidence",
                 "canonical_json": raw.decode(),
-                "approved_evidence": sorted(package.approved_evidence)
-                if is_index
-                else [],
+                "approved_evidence": sorted(approved) if is_index else [],
             },
             f"finance-proof:{owner}:{root}:{digest}",
             ProvenanceBlobArchivedV1,
@@ -407,11 +433,24 @@ def apply(header):
 def main():
     resource.setrlimit(resource.RLIMIT_CPU, (60, 60))
     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+    from adminme.finance.worker_guard import CalculationGuard
+
+    guard = CalculationGuard()
+    sys.addaudithook(guard)
+    parent_pid = os.getppid()
+    if parent_pid <= 1:
+        raise SystemExit(70)
     stop = threading.Event()
 
     def measure():
         while not stop.wait(0.05):
-            send({"kind": "usage", **usage()})
+            # Own parent coordinate only; never inspect or signal foreign PIDs.
+            if os.getppid() != parent_pid:
+                os._exit(70)
+            try:
+                report("usage")
+            except (BrokenPipeError, OSError):
+                os._exit(71)
 
     observer = threading.Thread(target=measure, name="finance-child-usage", daemon=True)
     observer.start()
@@ -419,11 +458,24 @@ def main():
         header = read_json(_input)
         if header.get("operation") == "prepare":
             prepare(header)
-        elif header.get("operation") == "apply":
-            apply(header)
+        elif header.get("operation") == "apply_stream":
+            count = 0
+            while True:
+                command = read_json(_input)
+                if command.get("operation") == "finish":
+                    break
+                if command.get("operation") != "apply" or count >= 131:
+                    raise ValueError("finance_worker_operation_invalid")
+                apply(command)
+                if guard.fault_count:
+                    raise ValueError("finance_worker_io_denied")
+                count += 1
+                send({"kind": "applied"})
         else:
             raise ValueError("finance_worker_operation_invalid")
-        send({"kind": "done", **usage()})
+        if guard.fault_count:
+            raise ValueError("finance_worker_io_denied")
+        report("done", guard_version=1, guard_fault_count=0)
     except BaseException as exc:
         # No exception messages from validators/SQL/private data reach logs.
         from adminme.finance.publication import PublicationError
@@ -435,7 +487,7 @@ def main():
             ("finance_", "publication_", "projection_")
         ):
             reason = str(exc)
-        send({"kind": "error", "reason": reason[:120], **usage()})
+        report("error", reason=reason[:120])
         raise SystemExit(1) from None
     finally:
         stop.set()

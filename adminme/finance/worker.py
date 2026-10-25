@@ -40,6 +40,8 @@ _admission = threading.Lock()
 _usage_lock = threading.Lock()
 _active: dict[str, Any] | None = None
 _completed_cpu = 0.0
+_completed_user_cpu = 0.0
+_completed_system_cpu = 0.0
 _completed_count = 0
 _failed_count = 0
 _peak_child_rss = 0
@@ -108,6 +110,8 @@ def worker_usage() -> dict[str, Any]:
         return {
             "active": active,
             "completed_cpu_seconds": _completed_cpu,
+            "completed_user_cpu_seconds": _completed_user_cpu,
+            "completed_system_cpu_seconds": _completed_system_cpu,
             "completed_count": _completed_count,
             "failed_count": _failed_count,
             "peak_child_rss_bytes": _peak_child_rss,
@@ -126,6 +130,10 @@ class FinanceWorker:
         self.timed_out = False
         self.stats: dict[str, Any] = {}
         self._process_lock = threading.Lock()
+        self._close_lock = threading.Lock()
+        self._reap_attempts = 0
+        self._quarantined = False
+        self._retry_timer: threading.Timer | None = None
         self.timer: threading.Timer | None = None
         try:
             self.process = subprocess.Popen(
@@ -137,7 +145,7 @@ class FinanceWorker:
                 ],
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
                 cwd="/",
                 env={"LANG": "C.UTF-8", "LC_ALL": "C.UTF-8"},
                 close_fds=True,
@@ -147,6 +155,9 @@ class FinanceWorker:
                     "pid": self.process.pid,
                     "operation": operation,
                     "rss_bytes": 0,
+                    "rss_measurement": "lifetime_peak_upper_bound"
+                    if sys.platform == "darwin"
+                    else "sampled_current",
                     "cpu_seconds": 0.0,
                     "started_at": time.monotonic(),
                 }
@@ -159,7 +170,14 @@ class FinanceWorker:
 
     def _timeout(self):
         self.timed_out = True
-        self.abort()
+        try:
+            self.abort()
+        except (OSError, subprocess.SubprocessError):
+            # close owns bounded retry and quarantine; never release admission
+            # merely because a signal or wait failed.
+            with _usage_lock:
+                if _active is not None:
+                    _active["reap_uncertain"] = True
 
     def abort(self):
         with self._process_lock:
@@ -188,17 +206,37 @@ class FinanceWorker:
                 raise PublicationError("finance_worker_message_invalid")
             kind = message.get("kind")
             if kind in {"usage", "done", "error"}:
-                self.stats = {
+                previous = getattr(self, "stats", {})
+                stats = {
                     k: message[k]
-                    for k in ("cpu_seconds", "rss_bytes", "peak_rss_bytes")
+                    for k in (
+                        "cpu_seconds",
+                        "user_cpu_seconds",
+                        "system_cpu_seconds",
+                        "rss_bytes",
+                        "peak_rss_bytes",
+                    )
                 }
                 if any(
                     type(v) not in (float, int)
                     or not math.isfinite(v)
                     or not 0 <= v <= 2**53
-                    for v in self.stats.values()
+                    for v in stats.values()
                 ):
                     raise PublicationError("finance_worker_usage_invalid")
+                if stats["cpu_seconds"] != (
+                    stats["user_cpu_seconds"] + stats["system_cpu_seconds"]
+                ) or any(
+                    stats[key] < previous.get(key, 0)
+                    for key in (
+                        "cpu_seconds",
+                        "user_cpu_seconds",
+                        "system_cpu_seconds",
+                        "peak_rss_bytes",
+                    )
+                ):
+                    raise PublicationError("finance_worker_usage_invalid")
+                self.stats = stats
                 with _usage_lock:
                     if _active is not None:
                         _active.update(self.stats)
@@ -208,6 +246,13 @@ class FinanceWorker:
                     raise PublicationError(
                         str(message.get("reason", "finance_worker_failed"))[:120]
                     )
+                if (
+                    type(message.get("guard_version")) is not int
+                    or message.get("guard_version") != 1
+                    or type(message.get("guard_fault_count")) is not int
+                    or message.get("guard_fault_count") != 0
+                ):
+                    raise PublicationError("finance_worker_guard_unverified")
                 self.done = True
             return message
 
@@ -215,33 +260,71 @@ class FinanceWorker:
         assert self.process is not None and self.process.stdout is not None
         return read_frame(self.process.stdout)
 
+    def _retry_reap(self):
+        try:
+            self.close()
+        except PublicationError:
+            pass  # Quarantine remains visible and blocks further admission.
+
     def close(self):
         global _active, _completed_count, _failed_count, _completed_cpu, _peak_child_rss
-        if self.closed:
-            return
-        self.closed = True
-        if self.timer is not None:
-            self.timer.cancel()
-        good = False
-        try:
+        global _completed_user_cpu, _completed_system_cpu
+        with self._close_lock:
+            if self.closed:
+                return
+            if self.timer is not None:
+                self.timer.cancel()
+            if self._retry_timer is not None:
+                self._retry_timer.cancel()
+            self._reap_attempts += 1
             process = self.process
-            if process is not None:
-                if self.done:
-                    try:
-                        process.wait(timeout=3)
-                    except subprocess.TimeoutExpired:
+            failure = None
+            try:
+                if process is not None:
+                    if self.done:
+                        try:
+                            process.wait(timeout=3)
+                        except subprocess.TimeoutExpired:
+                            self.abort()
+                    else:
                         self.abort()
-                else:
-                    self.abort()
-                good = self.done and process.returncode == 0 and not self.timed_out
-                for stream in (process.stdin, process.stdout):
+                    if process.returncode is None:
+                        raise PublicationError("finance_worker_reap_uncertain")
+            except (OSError, subprocess.SubprocessError, PublicationError) as exc:
+                failure = exc
+            if failure is not None:
+                self._quarantined = True
+                with _usage_lock:
+                    if _active is not None:
+                        _active["reap_uncertain"] = True
+                        _active["reap_attempts"] = self._reap_attempts
+                # At most three owned retries, each bounded by the existing
+                # terminate/kill waits. Exhaustion keeps admission quarantined
+                # until a later explicit close can confirm the child was reaped.
+                if self._reap_attempts < 4:
+                    self._retry_timer = threading.Timer(1, self._retry_reap)
+                    self._retry_timer.daemon = True
+                    self._retry_timer.start()
+                raise PublicationError("finance_worker_reap_uncertain") from failure
+            self.closed = True
+            good = bool(
+                process is not None
+                and self.done
+                and process.returncode == 0
+                and not self.timed_out
+                and not self._quarantined
+            )
+            if process is not None:
+                for stream in (process.stdin, process.stdout, process.stderr):
                     if stream is not None:
-                        stream.close()
-        finally:
+                        with suppress(OSError):
+                            stream.close()
             with _usage_lock:
                 _completed_count += 1
                 _failed_count += int(not good)
                 _completed_cpu += self.stats.get("cpu_seconds", 0.0)
+                _completed_user_cpu += self.stats.get("user_cpu_seconds", 0.0)
+                _completed_system_cpu += self.stats.get("system_cpu_seconds", 0.0)
                 _peak_child_rss = max(
                     _peak_child_rss, self.stats.get("peak_rss_bytes", 0)
                 )
@@ -249,9 +332,7 @@ class FinanceWorker:
                     {
                         **(_active or {}),
                         **self.stats,
-                        "exitcode": self.process.returncode
-                        if self.process is not None
-                        else None,
+                        "exitcode": process.returncode if process is not None else None,
                         "terminal_received": self.done,
                         "timed_out": self.timed_out,
                         "complete": good,
@@ -261,8 +342,8 @@ class FinanceWorker:
                 del _lifetimes[:-128]
                 _active = None
             _admission.release()
-        if self.done and not good:
-            raise PublicationError("finance_worker_exit_failed")
+            if self.done and not good:
+                raise PublicationError("finance_worker_exit_failed")
 
 
 async def _owned_call(worker: FinanceWorker, function, *args):
@@ -464,44 +545,77 @@ async def prepare_import(request, runtime, session, manifest) -> PreparedFinance
         ):
             raise PublicationError("finance_worker_output_invalid")
         return PreparedFinanceImport(metadata, events)
+    except PublicationError:
+        raise
     except (BrokenPipeError, EOFError, OSError, ValueError, KeyError) as exc:
         raise PublicationError("finance_worker_failed") from exc
     finally:
         await await_settled(asyncio.to_thread(worker.close))
 
 
-def apply_committed(envelope: dict[str, Any], conn: Any) -> None:
-    """Called within the existing Money transaction on its lifetime owner."""
-    worker = FinanceWorker("apply", timeout=30)
-    try:
+class MoneyCalculation:
+    """One bounded child for a contiguous, owner-bound Money delivery group."""
+
+    def __init__(self, scope):
+        self.scope = scope
+        self.count = 0
+        self.worker = FinanceWorker("apply", timeout=30)
+        try:
+            self.worker.send({"operation": "apply_stream"})
+        except BaseException:
+            self.worker.close()
+            raise
+
+    def apply(self, envelope, conn):
+        worker = self.worker
         metadata = {
             k: v for k, v in envelope.items() if k not in {"payload", "_payload_json"}
         }
-        raw = envelope.get("_payload_json")
-        if raw is None:
-            raw = json.dumps(envelope["payload"], separators=(",", ":"))
-        worker.send({"operation": "apply", "envelope": metadata})
-        worker.send_bytes(raw.encode())
-        while True:
-            message = worker.receive()
-            if message.get("kind") in {"sql", "sql_many"}:
-                worker.send(
-                    _sql(
-                        conn,
-                        message,
-                        read_only=False,
-                        scope=(
-                            envelope["tenant_id"],
-                            envelope["owner_scope"].removeprefix("private:"),
-                            envelope["source_account_id"],
-                        ),
-                    )
-                )
-            elif message.get("kind") == "done":
-                return
-            else:
-                raise PublicationError("finance_worker_message_invalid")
-    except (BrokenPipeError, EOFError, OSError, ValueError, KeyError) as exc:
-        raise PublicationError("finance_worker_failed") from exc
+        raw = envelope["_payload_json"]
+        try:
+            worker.send({"operation": "apply", "envelope": metadata})
+            worker.send_bytes(raw.encode())
+            while True:
+                message = worker.receive()
+                if message.get("kind") in {"sql", "sql_many"}:
+                    worker.send(_sql(conn, message, read_only=False, scope=self.scope))
+                elif message.get("kind") == "applied":
+                    self.count += 1
+                    return
+                else:
+                    raise PublicationError("finance_worker_message_invalid")
+        except PublicationError:
+            raise
+        except (BrokenPipeError, EOFError, OSError, ValueError, KeyError) as exc:
+            raise PublicationError("finance_worker_failed") from exc
+
+    def close(self, *, failed=False):
+        worker = self.worker
+        try:
+            if not failed:
+                worker.send({"operation": "finish"})
+                if worker.receive().get("kind") != "done":
+                    raise PublicationError("finance_worker_terminal_missing")
+        finally:
+            worker.close()
+
+
+def apply_committed(envelope: dict[str, Any], conn: Any) -> None:
+    """Standalone replay/application seam, with the same bounded ownership."""
+    scope = (
+        envelope["tenant_id"],
+        envelope["owner_scope"].removeprefix("private:"),
+        envelope["source_account_id"],
+    )
+    work = MoneyCalculation(scope)
+    failed = True
+    try:
+        if "_payload_json" not in envelope:
+            envelope = {
+                **envelope,
+                "_payload_json": json.dumps(envelope["payload"], separators=(",", ":")),
+            }
+        work.apply(envelope, conn)
+        failed = False
     finally:
-        worker.close()
+        work.close(failed=failed)

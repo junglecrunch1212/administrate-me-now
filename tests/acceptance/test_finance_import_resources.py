@@ -89,13 +89,10 @@ def _server(root, listener, channel, telemetry, allocation_profile=False):
         row["reaped_child_cpu_seconds"] = reaped.ru_utime + reaped.ru_stime
         child = row["finance_workers"]["active"] or {}
         row["aggregate_rss_bytes"] = row["VmRSS_bytes"] + child.get("rss_bytes", 0)
-        row["aggregate_cpu_seconds"] = (
-            row["cpu_seconds"]
-            + max(
-                row["finance_workers"]["completed_cpu_seconds"],
-                row["reaped_child_cpu_seconds"],
-            )
-            + child.get("cpu_seconds", 0)
+        row["aggregate_cpu_seconds"] = row["cpu_seconds"] + max(
+            row["finance_workers"]["completed_cpu_seconds"]
+            + child.get("cpu_seconds", 0),
+            row["reaped_child_cpu_seconds"],
         )
         with write_lock, telemetry.open("a") as stream:
             stream.write(json.dumps(row, sort_keys=True) + "\n")
@@ -792,7 +789,7 @@ async def _measure_import(tmp_path, *, allocation_profile):
                 >= report["stages"]["atomic_finance_commit"]["end"]["at"]
             )
             assert workers["active"] is None and workers["failed_count"] == 0
-            assert workers["completed_count"] == 3
+            assert workers["completed_count"] == 2
             assert all(
                 row["complete"] and row["exitcode"] == 0 for row in workers["lifetimes"]
             )

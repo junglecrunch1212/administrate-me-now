@@ -124,6 +124,7 @@ class EventWriter(EventSink):
         events,
         *,
         before_commit,
+        commit_guard,
         correlation_id=None,
     ):
         async with self._write_lock:
@@ -131,7 +132,12 @@ class EventWriter(EventSink):
                 raise EventWriterClosed("runtime is not accepting event writes")
             await before_commit()
             ids = await self._event_log._append_finance_batch(
-                tenant_id, owner_id, book_id, events, correlation_id=correlation_id
+                tenant_id,
+                owner_id,
+                book_id,
+                events,
+                commit_guard=commit_guard,
+                correlation_id=correlation_id,
             )
             if ids:
                 await self._bus.notify(

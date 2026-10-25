@@ -1199,3 +1199,28 @@ async def test_append_only_trigger_refuses_delete_and_update(log: EventLog) -> N
             "UPDATE events SET type = 'mutated'",
         )
     assert await log.count() == 1
+
+
+async def test_short_tail_does_not_follow_events_appended_while_consuming(log):
+    first = await log.append(_event(1))
+    seen = []
+    async for event in log.read_since(types=["test.event"]):
+        seen.append(event["event_id"])
+        if len(seen) < 5:
+            await log.append(_event(len(seen) + 1))
+    assert seen == [first]
+    assert len(await _collect(log, types=["test.event"])) == 2
+
+
+async def test_byte_capped_short_page_continues_through_actual_watermark(log):
+    class LargePayload(BaseModel):
+        content: str
+
+    registry.register("test.large_page", 1, LargePayload)
+    ids = []
+    for i in range(3):
+        envelope = _event(i, type="test.large_page")
+        envelope.payload = {"content": str(i) * 600000}
+        ids.append(await log.append(envelope))
+    rows = await _collect(log, types=["test.large_page"], through=ids[-1])
+    assert [row["event_id"] for row in rows] == ids

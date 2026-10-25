@@ -796,7 +796,16 @@ def test_closed_decoder_releases_owned_wire_before_dated_validation(
     assert wire == json.dumps(packet).encode()
 
 
-@pytest.mark.parametrize("boundary", ["head_read", "writer_admission"])
+@pytest.mark.parametrize(
+    "boundary",
+    [
+        "head_read",
+        "writer_admission",
+        "event_log_lock",
+        "connection_queue",
+        "transaction_commit",
+    ],
+)
 @pytest.mark.parametrize("change", ["role", "expiry"])
 def test_import_rechecks_authority_after_head_or_writer_wait(
     tmp_path, monkeypatch, boundary, change
@@ -813,7 +822,11 @@ def test_import_rechecks_authority_after_head_or_writer_wait(
         approval = approve(client, manifest)
 
         async def scenario():
+            import threading
+
             entered, release = asyncio.Event(), asyncio.Event()
+            native_release = threading.Event()
+            loop = asyncio.get_running_loop()
             if boundary == "head_read":
                 original = runtime.projections.read
 
@@ -824,7 +837,7 @@ def test_import_rechecks_authority_after_head_or_writer_wait(
                     return await original(name, callback)
 
                 monkeypatch.setattr(runtime.projections, "read", delayed)
-            else:
+            elif boundary == "writer_admission":
                 original = runtime.events._write_finance_batch
                 await runtime.events._write_lock.acquire()
 
@@ -833,6 +846,47 @@ def test_import_rechecks_authority_after_head_or_writer_wait(
                     return await original(*args, **kwargs)
 
                 monkeypatch.setattr(runtime.events, "_write_finance_batch", delayed)
+            elif boundary == "event_log_lock":
+                original = runtime.event_log._append_finance_batch
+
+                async def delayed(*args, **kwargs):
+                    await runtime.event_log._lock.acquire()
+                    entered.set()
+                    return await original(*args, **kwargs)
+
+                monkeypatch.setattr(runtime.event_log, "_append_finance_batch", delayed)
+            elif boundary == "connection_queue":
+                original = runtime.event_log._run_on_connection_thread
+
+                def held():
+                    loop.call_soon_threadsafe(entered.set)
+                    assert native_release.wait(10)
+
+                async def delayed(function, *args):
+                    if function.__name__ == "_insert_rows" and len(args) == 2:
+                        runtime.event_log._executor.submit(held)
+                    return await original(function, *args)
+
+                monkeypatch.setattr(
+                    runtime.event_log, "_run_on_connection_thread", delayed
+                )
+            else:
+                original = runtime.event_log._insert_rows
+
+                def delayed(rows, commit_guard=None):
+                    calls = 0
+
+                    def guarded():
+                        nonlocal calls
+                        calls += 1
+                        if calls == 2:
+                            loop.call_soon_threadsafe(entered.set)
+                            assert native_release.wait(10)
+                        commit_guard()
+
+                    return original(rows, guarded if commit_guard else None)
+
+                monkeypatch.setattr(runtime.event_log, "_insert_rows", delayed)
             async with httpx.AsyncClient(
                 transport=httpx.ASGITransport(app=client.app),
                 base_url="http://synthetic",
@@ -861,8 +915,11 @@ def test_import_rechecks_authority_after_head_or_writer_wait(
                         monkeypatch.setattr(finance_import, "datetime", Later)
                 finally:
                     release.set()
+                    native_release.set()
                     if boundary == "writer_admission":
                         runtime.events._write_lock.release()
+                    elif boundary == "event_log_lock":
+                        runtime.event_log._lock.release()
                 response = await asyncio.wait_for(importing, 10)
                 assert response.status_code in {403, 409}, response.text
 
@@ -875,4 +932,166 @@ def test_import_rechecks_authority_after_head_or_writer_wait(
                 "finance.publication_accepted",
                 "finance.projection_verified",
             ],
+        )
+
+
+@pytest.mark.parametrize("change", ["role", "blocked_control"])
+def test_import_does_not_disclose_receipt_after_owner_changes_during_audit(
+    tmp_path, monkeypatch, change
+):
+    from adminme.products.member import finance_import
+
+    settings = configured(tmp_path)
+    p, d, package = fixture(settings.instance.tenant_id)
+    manifest, packet = packet_for(p, d, package)
+    with TestClient(create_application(settings)) as client:
+        runtime = client.app.state.runtime
+        control(client, manifest["binding"])
+        approval = approve(client, manifest)
+        original = finance_import._audit
+
+        async def audit(*args, **kwargs):
+            value = await original(*args, **kwargs)
+            if change == "role":
+                runtime.settings = replace(
+                    runtime.settings,
+                    member_roles={**runtime.settings.member_roles, PRINCIPAL: "child"},
+                )
+            else:
+                runtime.finance_access.block(
+                    runtime.settings.instance.tenant_id, PRINCIPAL
+                )
+            return value
+
+        monkeypatch.setattr(finance_import, "_audit", audit)
+        response = upload(client, approval, packet)
+        assert response.status_code == (403 if change == "role" else 503), response.text
+        assert p["publication_id"] not in response.text
+        assert d["projection_id"] not in response.text
+        assert (
+            len(client.portal.call(events, runtime, ["finance.publication_accepted"]))
+            == 1
+        )
+
+
+def test_retry_requires_actual_archive_and_replay_restores_it(tmp_path):
+    settings = configured(tmp_path)
+    p, d, package = fixture(settings.instance.tenant_id)
+    manifest, packet = packet_for(p, d, package)
+    with TestClient(create_application(settings)) as client:
+        runtime = client.app.state.runtime
+        control(client, manifest["binding"])
+        approval = approve(client, manifest)
+        first = upload(client, approval, packet)
+        assert first.status_code == 200, first.text
+
+        async def remove_archive():
+            await runtime.projections._read_native(
+                "money",
+                lambda conn: conn.execute(
+                    "DELETE FROM finance_provenance_blobs WHERE kind='index'"
+                ).close(),
+            )
+
+        client.portal.call(remove_archive)
+        failed = upload(client, approval, packet)
+        assert failed.status_code == 422, failed.text
+        assert failed.json()["detail"]["reason"] == "provenance_recovery_hold"
+        assert (
+            len(client.portal.call(events, runtime, ["finance.publication_accepted"]))
+            == 1
+        )
+        client.portal.call(runtime.projections.rebuild, "money")
+        repaired = upload(client, approval, packet)
+        assert repaired.status_code == 200, repaired.text
+        assert repaired.json()["accounting"]["idempotent"]
+        assert (
+            repaired.json()["accounting"]["event_id"]
+            == first.json()["accounting"]["event_id"]
+        )
+
+
+def test_historical_idempotent_retry_preserves_newer_head(tmp_path):
+    settings = configured(tmp_path)
+    p, d, package = fixture(settings.instance.tenant_id)
+    manifest, packet = packet_for(p, d, package)
+    with TestClient(create_application(settings)) as client:
+        runtime = client.app.state.runtime
+        control(client, manifest["binding"])
+        approval = approve(client, manifest)
+        first = upload(client, approval, packet)
+        assert first.status_code == 200, first.text
+        later = deepcopy(p)
+        later["prior_publication_id"] = p["publication_id"]
+        seal_publication(later)
+        new_manifest, new_packet = packet_for(later, None, package)
+        newer = upload(client, approve(client, new_manifest), new_packet)
+        assert newer.status_code == 200, newer.text
+        repeated = upload(client, approval, packet)
+        assert repeated.status_code == 200, repeated.text
+        assert repeated.json()["accounting"]["idempotent"]
+        assert repeated.json()["dated"]["idempotent"]
+        assert (
+            client.get(SURFACE, headers=DEMO_HEADERS).json()["cockpit"][
+                "accepted_books"
+            ]["publication_id"]
+            == later["publication_id"]
+        )
+        assert (
+            len(client.portal.call(events, runtime, ["finance.publication_accepted"]))
+            == 2
+        )
+
+
+def test_money_delivery_reuses_one_child_and_waits_for_terminal_cleanup(
+    tmp_path, monkeypatch
+):
+    import threading
+    from adminme.finance.worker import MoneyCalculation, worker_usage
+
+    settings = configured(tmp_path)
+    p, d, package = fixture(settings.instance.tenant_id)
+    manifest, packet = packet_for(p, d, package)
+    with TestClient(create_application(settings)) as client:
+        runtime = client.app.state.runtime
+        control(client, manifest["binding"])
+        approval = approve(client, manifest)
+        entered, release = threading.Event(), threading.Event()
+        original = MoneyCalculation.close
+        counts = []
+
+        def held(self, *, failed=False):
+            counts.append(self.count)
+            entered.set()
+            assert release.wait(10)
+            return original(self, failed=failed)
+
+        monkeypatch.setattr(MoneyCalculation, "close", held)
+        before = worker_usage()["completed_count"]
+
+        async def scenario():
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=client.app),
+                base_url="http://synthetic",
+            ) as http:
+                importing = asyncio.create_task(
+                    http.post(IMPORTS + approval, headers=DEMO_HEADERS, json=packet)
+                )
+                try:
+                    assert await asyncio.to_thread(entered.wait, 10)
+                    state = await runtime.bus.subscriber_status("projection:money")
+                    assert state["lag_count"] == 0 and state["draining"]
+                    await asyncio.sleep(0.05)
+                    assert not importing.done()
+                finally:
+                    release.set()
+                response = await asyncio.wait_for(importing, 10)
+                assert response.status_code == 200, response.text
+
+        client.portal.call(scenario)
+        assert counts == [len(manifest["blobs"]) + 3]
+        usage = worker_usage()
+        assert usage["completed_count"] == before + 2
+        assert usage["active"] is None and all(
+            x["complete"] for x in usage["lifetimes"][-2:]
         )

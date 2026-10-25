@@ -522,7 +522,7 @@ class EventLog:
         return row, event_id
 
     async def _append_finance_batch(
-        self, tenant_id, owner_id, book_id, events, *, correlation_id=None
+        self, tenant_id, owner_id, book_id, events, *, commit_guard, correlation_id=None
     ):
         """Internal worker receipts only; ordinary append retains full validation.
 
@@ -565,9 +565,13 @@ class EventLog:
             rows.append(row)
         async with self._lock:
             self._ensure_open()
-            return await self._run_on_connection_thread(self._insert_rows, rows)
+            return await self._run_on_connection_thread(
+                self._insert_rows, rows, commit_guard
+            )
 
-    def _insert_rows(self, rows: list[tuple[Any, ...]]) -> list[str]:
+    def _insert_rows(self, rows: list[tuple[Any, ...]], commit_guard=None) -> list[str]:
+        if commit_guard is not None:
+            commit_guard()
         cur = self._conn.cursor()
         cur.execute("BEGIN IMMEDIATE")
         resolved_ids: list[str] = []
@@ -625,10 +629,14 @@ class EventLog:
                             "idempotency key already belongs to a different event identity"
                         ) from exc
                     resolved_ids.append(str(existing["event_id"]))
+            if commit_guard is not None:
+                commit_guard()
             cur.execute("COMMIT")
         except Exception:
             cur.execute("ROLLBACK")
             raise
+        finally:
+            cur.close()
         return resolved_ids
 
     # ------------------------------------------------------------------
@@ -666,14 +674,22 @@ class EventLog:
             if not rows:
                 return
             last = rows[-1]["event_id"]
+            exhausted = (
+                len(rows) < batch_size
+                and sum(len(row["payload"]) for row in rows) < 1024 * 1024
+            )
             for row in rows:
                 if row["type"] in raw_payload_types:
                     yield _row_to_event(row, raw_payload=True)
-                else:
+                elif len(row["payload"]) >= 65536:
                     yield await asyncio.to_thread(_row_to_event, row)
-            # A byte-limited page can be shorter than the row limit without
-            # being EOF. Resume by its actual final id, preserving filters.
+                else:
+                    yield _row_to_event(row)
+            # Only a byte-capped short page needs another fetch. Preserve the
+            # ordinary finite-tail read contract when the SQL page was exhausted.
             rows.clear()
+            if exhausted:
+                return
 
     async def read_metadata_since(
         self,

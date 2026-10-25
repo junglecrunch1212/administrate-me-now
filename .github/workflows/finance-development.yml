@@ -81,15 +81,32 @@ jobs:
         run: >-
           poetry run pytest -q
           'tests/acceptance/test_source_currentness_revision.py::test_currentness_interrupted_publication_retains_authority_and_attempts[unchanged-revision]'
+      - name: Source classifier and candidate continuity after shared scheduling changes
+        run: >-
+          poetry run pytest -q
+          tests/acceptance/test_disposable_test_acquisition.py::test_empty_selection_can_admit_new_ids_without_reimporting_old_sources
+          tests/acceptance/test_disposable_test_acquisition.py::test_legacy_source_aliases_preserve_classifier_and_candidate_continuity
       - name: Bounded Finance worker and owner import smoke
+        if: '!cancelled()'
         timeout-minutes: 3
         run: >-
           poetry run pytest -q
+          --junitxml="${{ runner.temp }}/finance-worker-results.xml"
           tests/unit/test_finance_worker.py
+          tests/unit/test_finance_native_resources.py
           tests/acceptance/test_finance_money_worker.py
           tests/acceptance/test_finance_activation.py::test_persisted_activation_import_disclosure_restart_and_disable
           tests/acceptance/test_finance_activation.py::test_partial_dated_import_and_conflicting_accounting_preserve_last_good_head
+      - name: Retain worker and boundary smoke results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: finance-worker-results
+          path: ${{ runner.temp }}/finance-worker-results.xml
+          if-no-files-found: error
+          retention-days: 7
       - name: Finance synthetic process and numerical checks
+        if: '!cancelled()'
         run: >-
           poetry run pytest -q --runxfail
           --junitxml="${{ runner.temp }}/finance-functional-results.xml"

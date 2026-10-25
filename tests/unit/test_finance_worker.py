@@ -31,7 +31,15 @@ def test_pipe_rejects_truncation_and_oversize_before_decoding(wire):
 def test_nonfinite_or_nonnumeric_child_usage_is_rejected(bad):
     pipe = io.BytesIO()
     write_json(
-        pipe, {"kind": "done", "cpu_seconds": bad, "rss_bytes": 1, "peak_rss_bytes": 1}
+        pipe,
+        {
+            "kind": "done",
+            "cpu_seconds": bad,
+            "user_cpu_seconds": 0,
+            "system_cpu_seconds": 0,
+            "rss_bytes": 1,
+            "peak_rss_bytes": 1,
+        },
     )
     pipe.seek(0)
     child = object.__new__(worker.FinanceWorker)
@@ -67,7 +75,10 @@ def test_child_cannot_escape_parent_transaction_or_money_scope(sql):
     try:
         with pytest.raises((sqlite3.DatabaseError, PublicationError)):
             worker._sql(
-                conn, {"kind": "sql", "sql": sql, "parameters": []}, read_only=False
+                conn,
+                {"kind": "sql", "sql": sql, "parameters": []},
+                read_only=False,
+                scope=("tenant", "owner", "book"),
             )
         assert conn.in_transaction
         conn.execute("ROLLBACK")
@@ -175,3 +186,129 @@ def test_untrusted_receipt_never_reaches_the_log():
     ):
         with pytest.raises(PublicationError, match="receipt_invalid"):
             changed.verify()
+
+
+@pytest.mark.parametrize("failure", ["terminate", "kill", "wait"])
+@pytest.mark.parametrize("exhaust", [False, True])
+def test_uncertain_reap_keeps_admission_quarantined_until_confirmed(
+    monkeypatch, failure, exhaust
+):
+    import subprocess
+
+    timers = []
+
+    class Timer:
+        def __init__(self, delay, callback):
+            self.callback = callback
+            self.cancelled = False
+            timers.append(self)
+
+        def start(self):
+            pass
+
+        def cancel(self):
+            self.cancelled = True
+
+    class Process:
+        pid = 123
+        returncode = None
+        reaped = False
+        stdin = io.BytesIO()
+        stdout = io.BytesIO()
+        stderr = io.BytesIO()
+
+        def poll(self):
+            if self.reaped:
+                self.returncode = -15
+            return self.returncode
+
+        def terminate(self):
+            if failure == "terminate":
+                raise OSError("synthetic signal failure")
+
+        def kill(self):
+            if failure == "kill":
+                raise OSError("synthetic kill failure")
+
+        def wait(self, timeout):
+            if not self.reaped:
+                raise subprocess.TimeoutExpired("owned synthetic child", timeout)
+            self.returncode = -15
+            return -15
+
+    process = Process()
+    monkeypatch.setattr(worker.subprocess, "Popen", lambda *a, **k: process)
+    monkeypatch.setattr(worker.threading, "Timer", Timer)
+    child = worker.FinanceWorker("synthetic-reap", timeout=10)
+    try:
+        with pytest.raises(PublicationError, match="reap_uncertain"):
+            child.close()
+        assert not child.closed and worker._admission.locked()
+        assert worker.worker_usage()["active"]["reap_uncertain"]
+        with pytest.raises(PublicationError, match="worker_busy"):
+            worker.FinanceWorker("must-not-launch", timeout=10)
+        if exhaust:
+            for _ in range(3):
+                timers[-1].callback()
+            assert child._reap_attempts == 4 and len(timers) == 4
+            assert worker._admission.locked() and not child.closed
+        process.reaped = True
+        # A bounded retry or later explicit cleanup confirms the owned exit.
+        timers[-1].callback() if not exhaust else child.close()
+        assert child.closed and not worker._admission.locked()
+        assert worker.worker_usage()["active"] is None
+        assert not worker.worker_usage()["lifetimes"][-1]["complete"]
+    finally:
+        process.reaped = True
+        child.close()
+
+
+@pytest.mark.parametrize(
+    "event,args",
+    [
+        ("open", ("/private/household/state.sqlite", "r", 0)),
+        ("open", ("/Library/Keychains/System.keychain", "r", 0)),
+        ("open", (__file__, "w", 1)),
+        ("socket.connect", (None, ("127.0.0.1", 49152))),
+        ("subprocess.Popen", ("anything",)),
+        ("os.fork", ()),
+        ("os.remove", ("anything",)),
+        ("os.putenv", ("HOME", "anything")),
+    ],
+)
+def test_calculation_guard_denies_private_io_network_and_descendants(event, args):
+    from adminme.finance.worker_guard import CalculationGuard
+
+    guard = CalculationGuard()
+    with pytest.raises(PermissionError, match="worker_io_denied"):
+        guard(event, args)  # Validation only; never perform the forbidden action.
+    assert guard.fault_count == 1
+
+
+def test_calculation_guard_allows_only_readonly_trusted_code():
+    from adminme.finance.worker_guard import CalculationGuard
+
+    guard = CalculationGuard()
+    guard("open", (__file__, "r", 0))
+    assert guard.fault_count == 0
+
+
+@pytest.mark.parametrize("mode", ["blocked_input", "blocked_output"])
+def test_owned_child_exits_after_abrupt_parent_death_in_hosted_linux(mode):
+    import json
+    from pathlib import Path
+    import subprocess
+    import sys
+
+    if sys.platform != "linux":
+        pytest.skip("owned Linux subreaper proof; not Darwin crash qualification")
+    script = Path(__file__).resolve().parents[1] / "fixtures" / "finance_parent_exit.py"
+    result = subprocess.run(
+        [sys.executable, "-I", "-B", str(script), "supervisor", mode],
+        capture_output=True,
+        timeout=18,
+        check=True,
+    )
+    receipt = json.loads(result.stdout)
+    assert receipt["mode"] == mode and receipt["reaped"]
+    assert receipt["seconds_after_parent_exit"] < 5

@@ -37,7 +37,9 @@ def _key(p: dict[str, Any]) -> str:
 async def _settled(runtime: Any) -> None:
     for _ in range(500):
         state = await runtime.bus.subscriber_status("projection:money")
-        if state["lag_count"] == 0:
+        if state.get("degraded"):
+            raise PublicationError("publication_projection_unavailable")
+        if state["lag_count"] == 0 and not state.get("draining", False):
             return
         await asyncio.sleep(0.02)
     raise PublicationError("publication_projection_pending")

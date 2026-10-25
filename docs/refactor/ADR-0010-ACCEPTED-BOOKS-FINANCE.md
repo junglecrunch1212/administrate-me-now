@@ -138,8 +138,13 @@ process-local receipts bound to type, tenant, owner, book, source, idempotency k
 and payload hash; its ordinary append API still validates payloads normally.
 One authorized atomic append publishes the accepted event batch. Parent-owned
 keys, handles, current authority, durable audit and event order never move to the
-child. Preparation and the two large Money applications use sequential child
-lifetimes; this is no new service, scheduler or provider capability.
+child. Preparation and a contiguous Money delivery group use sequential child
+lifetimes; each group is restricted to one tenant/owner/book and at most 131
+actual committed events, including provenance. The bus reports active draining
+until the final child receipt and reap complete. This is no new service,
+scheduler or provider capability. Authority is re-read on the parent-owned
+log connection after admission/queue waits and immediately before COMMIT.
+Final disclosure rechecks the current owner and policy after audit persistence.
 
 Money's existing encrypted writer has one dedicated serialized thread for open,
 reads, transactions, replay, snapshot, publication and close. Cross-projection
@@ -155,11 +160,25 @@ byte-bounded without treating a short page as EOF.
 Each child uses the same pinned Python with isolated import paths, a credential-free
 environment, private stdio pipes, CORE=0 and a 60-second CPU limit. Parent watchdogs
 bound preparation to 60 seconds and projection application to 30 seconds. Owned
-termination has a three-second grace followed by kill/reap; missing terminal or
-forced teardown is incomplete evidence. This is process separation, **not an OS
-sandbox or hard RAM/disk quota**. No child opens a database, plaintext staging file,
-provider or network connection. The changed Mini scope (one added Money thread,
-one temporary child with its usage thread, and sequential child lifetimes) must
+termination has a three-second grace followed by a three-second kill/reap wait.
+An uncertain reap retains exclusive admission and its active ownership record;
+up to three delayed owned retries are bounded, and exhaustion remains quarantined.
+Missing terminal or forced teardown is incomplete evidence. A child self-watch
+exits if its parent disappears or its telemetry pipe closes. Python audit guards
+deny writes, private file reads, sockets and descendants; only trusted code,
+dependencies and self metrics are readable. Terminal success attests no guard
+fault. These guards are **not an OS sandbox or hard RAM/disk quota**. No child
+opens a database, plaintext staging file, provider or network connection.
+The hosted native fixture allows only the exact isolated interpreter/script,
+clean locale environment and parent-owned admission, with at most eight lifetimes
+and one active child. Aggregate measurements include live and reaped child CPU,
+RSS and conservative lifetime peak bounds. On Darwin the child RSS is explicitly
+its lifetime peak, so that aggregate is an upper bound rather than instantaneous
+child RSS. A Linux subreaper fixture checks abrupt owned-parent exit with blocked
+input/output; it does not claim Darwin crash qualification. Terminal evidence requires
+all launches accounted for and all children reaped. The changed Mini scope
+(one added Money thread, one temporary child with its usage thread, parent
+watchdog/possible bounded cleanup timers, and sequential child lifetimes) must
 be reviewed before any native lab; the earlier scope is not reused.
 
 Accounting and dated projection remain independent immutable events. An accepted
