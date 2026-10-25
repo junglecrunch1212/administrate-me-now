@@ -74,7 +74,7 @@ class AllocationProfile:
         row = {"name": name, "at": started, **self.sample()}
         if roots:
             row["ownership"] = ownership(roots)
-        if top and self.top_snapshots < 8:
+        if top and self.top_snapshots < 12:
             snapshot = tracemalloc.take_snapshot()
             stats = snapshot.statistics("lineno")[:8]
             row["top_live_locations"] = []
@@ -141,6 +141,8 @@ class AllocationProfile:
             "records": self.records,
             "groups": self.groups,
             "dropped_records": self.dropped_records,
+            "top_snapshots": self.top_snapshots,
+            "serialization_marks": self.serialization_marks,
             "explicit_probe_overhead_seconds": self.overhead_seconds,
             "limitations": [
                 "Diagnostic overhead is not acceptance timing",
