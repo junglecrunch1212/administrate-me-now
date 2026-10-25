@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import os
 import shlex
@@ -3370,6 +3371,7 @@ def test_conversation_integration_uses_immutable_focused_scope(
     "module, name",
     [
         ("workstation", "workstation_router"),
+        ("reminder_choice_tools", "reminder_choice_router"),
         ("workstation_work", "workstation_work_router"),
         ("workstation_browser", "workstation_browser_router"),
         ("workstation_source_policy", "workstation_source_policy_router"),
@@ -3408,6 +3410,18 @@ def test_workstation_scope_requires_exact_complete_router_pair(
         "tests/acceptance/test_authenticated_conversation_channels.py",
         "tests/acceptance/test_authenticated_conversation_reply.py",
         "tests/acceptance/test_authenticated_request_actions.py",
+        "adminme/reminder_choices.py",
+        "adminme/products/openclaw/reminder_choice_tools.py",
+        "adminme/products/openclaw/reminder_choice_work.py",
+        "adminme/products/openclaw/reminder_choice_authorization.py",
+        "adminme/events/schemas/reminder_choices.py",
+        "openclaw/administrateme/src/reminder-choice-policy.ts",
+        "openclaw/administrateme/test/reminder-choice-policy.test.ts",
+        "packs/skills/ground_reminder_choice/schemas/input.schema.json",
+        "packs/skills/ground_reminder_choice/schemas/output.schema.json",
+        "tests/acceptance/test_reminder_choice_continuation.py",
+        "tests/unit/test_reminder_choices.py",
+        "tests/fixtures/openclaw_reminder_choice_probe.mjs",
     ],
 )
 def test_authenticated_action_paths_use_the_affected_lane(repository, relative) -> None:
@@ -3802,6 +3816,70 @@ def test_requested_email_closed_paths_use_existing_affected_lane(
     )
 
 
+_REMINDER_MODE_ROUTER = (
+    "    from adminme.products.openclaw.reminder_mode_tools import router as reminder_mode_router\n"
+    "    app.include_router(reminder_mode_router)\n"
+)
+
+
+def test_reminder_mode_router_scope_is_exact_adjacent_and_keeps_neighbors() -> None:
+    before = _SERVICE_WIRED_RUNTIME
+    after = before.replace(
+        "    return app\n", _REMINDER_MODE_ROUTER + "    return app\n"
+    )
+    assert _service_work_application(before) == _service_work_application(after)
+    for old, new in (
+        (_REMINDER_MODE_ROUTER, _REMINDER_MODE_ROUTER * 2),
+        ("    app.include_router(reminder_mode_router)\n", ""),
+        (
+            "    from adminme.products.openclaw.reminder_mode_tools import router as reminder_mode_router\n",
+            "",
+        ),
+        (
+            "app.include_router(reminder_mode_router)",
+            "app.include_router(other_router)",
+        ),
+        (
+            _REMINDER_MODE_ROUTER,
+            _REMINDER_MODE_ROUTER.replace(
+                "    app.include_router",
+                "    unrelated_effect()\n    app.include_router",
+            ),
+        ),
+        (
+            _REMINDER_MODE_ROUTER,
+            "    if enabled:\n"
+            + "\n".join("    " + line for line in _REMINDER_MODE_ROUTER.splitlines())
+            + "\n",
+        ),
+        ("    return app\n", "    return untrusted_app\n"),
+    ):
+        assert _service_work_application(
+            after.replace(old, new)
+        ) != _service_work_application(before)
+
+
+def test_reminder_mode_router_scope_reads_immutable_tree(
+    repository: tuple[Path, str],
+) -> None:
+    path, _ = repository
+    _, base = _service_work_candidate(path)
+    after = _SERVICE_WIRED_RUNTIME.replace(
+        "    return app\n", _REMINDER_MODE_ROUTER + "    return app\n"
+    )
+    head = _commit(path, COS_SERVICE_WORK_APPLICATION, after)
+    (path / COS_SERVICE_WORK_APPLICATION).write_text("UNCOMMITTED = True\n")
+    assert (
+        select_scope(path, _event(base, head), checkout_sha=head)["scope"]
+        == "cos-service-work"
+    )
+    bad = _commit(path, COS_SERVICE_WORK_APPLICATION, after + "\nUNRELATED = True\n")
+    assert (
+        select_scope(path, _event(base, bad), checkout_sha=bad)["scope"]
+        == "system-wide"
+    )
+
+
 def _email_audit_sources() -> tuple[str, str]:
     after = (ROOT / UPDATER_SOURCE_ASSURANCE).read_text()
     start = after.index("    # Hydrate only the retained instruction")
@@ -4042,19 +4120,50 @@ def test_historical_repair_and_successor_stay_in_closed_updater_lane(
     )
 
 
-def _finance_metadata_candidate(path: Path) -> tuple[str, str]:
+def _finance_metadata_candidate(
+    path: Path, *, application_source: str | None = None
+) -> tuple[str, str]:
     # Use the actual reviewed shared files; all surrounding bytes are pinned.
     for name in FINANCE_METADATA_SHARED:
-        _commit(path, name, (ROOT / name).read_text())
+        source = (ROOT / name).read_text()
+        if name == "adminme/runtime/application.py" and application_source is not None:
+            source = application_source
+        _commit(path, name, source)
     base = _git(path, "rev-parse", "HEAD")
     for name in sorted(FINANCE_METADATA_REQUIRED_PATHS - set(FINANCE_METADATA_SHARED)):
         head = _commit(path, name, (ROOT / name).read_text())
     return base, head
 
 
-def test_finance_metadata_selects_only_complete_immutable_scope(repository):
+@pytest.mark.parametrize(
+    ("reminder_routes", "expected_hash"),
+    [
+        (False, "1d43d21c2d17712b95b1172ca1108a83cd0a048fe2a5f3c30e67ba2c25084a06"),
+        (True, "4729519f51d395929a02346a880a68ebe7b33ef5249ab4228c1dfb6f7cfbfae9"),
+    ],
+)
+def test_finance_metadata_selects_only_complete_immutable_scope(
+    repository, reminder_routes, expected_hash
+):
     path, _ = repository
-    base, head = _finance_metadata_candidate(path)
+    application = "adminme/runtime/application.py"
+    source = (ROOT / application).read_text()
+    if not reminder_routes:
+        added_routers = (
+            "    from adminme.products.openclaw.reminder_choice_tools import (\n"
+            "        router as reminder_choice_router,\n"
+            "    )\n\n"
+            "    app.include_router(reminder_choice_router)\n"
+            "    from adminme.products.openclaw.reminder_mode_tools import (\n"
+            "        router as reminder_mode_router,\n"
+            "    )\n\n"
+            "    app.include_router(reminder_mode_router)\n"
+        )
+        assert source.count(added_routers) == 1
+        source = source.replace(added_routers, "")
+    assert hashlib.sha256(source.encode()).hexdigest() == expected_hash
+    assert expected_hash in FINANCE_METADATA_SHARED[application][1:]
+    base, head = _finance_metadata_candidate(path, application_source=source)
     (path / "adminme/runtime.py").write_text("UNCOMMITTED = True\n")
     proof = select_scope(path, _event(base, head), checkout_sha=head)
     assert proof["scope"] == "finance-metadata"

@@ -25,6 +25,9 @@
       ],
       "openclaw/plugin-sdk/plugin-entry": [
         "test/fixtures/openclaw-2026.7.2/plugin-entry.d.ts"
+      ],
+      "openclaw/plugin-sdk/global-singleton": [
+        "test/fixtures/openclaw-2026.7.2/global-singleton.d.ts"
       ]
     },
     "types": ["node", "vitest/globals"]

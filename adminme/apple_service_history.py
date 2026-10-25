@@ -130,7 +130,8 @@ async def apple_command_owner_matches(
         grounding = await event_log.get(str(grounding_id)) if grounding_id else None
         if (
             grounding is None
-            or grounding.get("type") != "cos.action.request_grounded"
+            or grounding.get("type")
+            not in {"cos.action.request_grounded", "cos.reminder.choice_grounded"}
             or grounding.get("schema_version") != 1
             or not _private(grounding, tenant=tenant, member=member)
             or grounding.get("actor_identity") != COS_SERVICE_PRINCIPAL_ID
@@ -148,9 +149,31 @@ async def apple_command_owner_matches(
             or approval.get("action_fingerprint") != grounded.get("action_fingerprint")
             or approval.get("rule_id") != grounded.get("rule_id")
             or approval.get("rule_id")
-            != "current-human-request.apple-reminder-create.v1"
+            != (
+                "current-human-request.apple-reminder-list-choice.v1"
+                if grounding["type"] == "cos.reminder.choice_grounded"
+                else "current-human-request.apple-reminder-create.v1"
+            )
         ):
             return False
+        if grounding["type"] == "cos.reminder.choice_grounded":
+            from adminme.products.openclaw.reminder_choice_authorization import (
+                historical_choice_domain_matches,
+            )
+
+            if not await historical_choice_domain_matches(event_log, domain, grounding):
+                return False
+            try:
+                if not (
+                    datetime.fromisoformat(grounded["issued_at"])
+                    <= datetime.fromisoformat(approval["issued_at"])
+                    <= datetime.fromisoformat(approval["consumed_at"])
+                    <= datetime.fromisoformat(approval["expires_at"])
+                    <= datetime.fromisoformat(grounded["expires_at"])
+                ):
+                    return False
+            except (KeyError, TypeError, ValueError):
+                return False
         native_parameters["request_authorization_event_id"] = grounding_id
     native_fingerprint = hashlib.sha256(
         json.dumps(

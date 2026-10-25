@@ -3862,8 +3862,8 @@
     "missing_source_candidate_cells": [],
     "object_lifecycles": 28,
     "source_candidate_cells": 143,
-    "technical_event_schemas": 389,
-    "technical_event_types": 306,
+    "technical_event_schemas": 395,
+    "technical_event_types": 312,
     "uncataloged_event_types": [],
     "unproved_exact_lifecycle_transitions": [],
     "unproved_supported_source_candidate_cells": []
@@ -13401,6 +13401,695 @@
         "effect_count"
       ],
       "schema_version": 2
+    },
+    {
+      "additional_properties": false,
+      "event_type": "cos.reminder.choice_finished",
+      "family": "cos_work",
+      "properties": {
+        "action_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Action Id",
+          "type": "string"
+        },
+        "answer_source_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Answer Source Event Id",
+          "type": "string"
+        },
+        "decided_at": {
+          "format": "date-time",
+          "title": "Decided At",
+          "type": "string"
+        },
+        "domain_approval_event_id": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Domain Approval Event Id"
+        },
+        "member_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Member Id",
+          "type": "string"
+        },
+        "offered_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Offered Event Id",
+          "type": "string"
+        },
+        "provider_effect_count": {
+          "const": 0,
+          "default": 0,
+          "title": "Provider Effect Count",
+          "type": "integer"
+        },
+        "selected_list_id": {
+          "anyOf": [
+            {
+              "maxLength": 1000,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Selected List Id"
+        },
+        "state": {
+          "enum": [
+            "confirmed",
+            "cancelled"
+          ],
+          "title": "State",
+          "type": "string"
+        },
+        "task_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Task Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "member_id",
+        "task_id",
+        "action_id",
+        "offered_event_id",
+        "answer_source_event_id",
+        "state",
+        "decided_at"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "cos.reminder.choice_grounded",
+      "family": "language_evidence",
+      "properties": {
+        "action": {
+          "additionalProperties": true,
+          "title": "Action",
+          "type": "object"
+        },
+        "action_fingerprint": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Action Fingerprint",
+          "type": "string"
+        },
+        "action_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Action Id",
+          "type": "string"
+        },
+        "continuation": {
+          "$ref": "#/$defs/ReminderChoiceContinuationV1"
+        },
+        "evidence": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "maxItems": 8,
+          "minItems": 1,
+          "title": "Evidence",
+          "type": "array"
+        },
+        "expires_at": {
+          "format": "date-time",
+          "title": "Expires At",
+          "type": "string"
+        },
+        "issued_at": {
+          "format": "date-time",
+          "title": "Issued At",
+          "type": "string"
+        },
+        "member_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Member Id",
+          "type": "string"
+        },
+        "request_fingerprint": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Request Fingerprint",
+          "type": "string"
+        },
+        "rule_id": {
+          "const": "current-human-request.apple-reminder-list-choice.v1",
+          "title": "Rule Id",
+          "type": "string"
+        },
+        "skill_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Skill Event Id",
+          "type": "string"
+        },
+        "source_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Source Event Id",
+          "type": "string"
+        },
+        "source_fingerprint": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Fingerprint",
+          "type": "string"
+        }
+      },
+      "required": [
+        "member_id",
+        "source_event_id",
+        "action_id",
+        "request_fingerprint",
+        "action_fingerprint",
+        "source_fingerprint",
+        "skill_event_id",
+        "action",
+        "evidence",
+        "issued_at",
+        "expires_at",
+        "continuation",
+        "rule_id"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "cos.reminder.choice_offered",
+      "family": "cos_work",
+      "properties": {
+        "action_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Action Id",
+          "type": "string"
+        },
+        "choices": {
+          "items": {
+            "$ref": "#/$defs/ReminderListChoice"
+          },
+          "maxItems": 100,
+          "minItems": 1,
+          "title": "Choices",
+          "type": "array"
+        },
+        "draft_fingerprint": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Draft Fingerprint",
+          "type": "string"
+        },
+        "due_at": {
+          "format": "date-time",
+          "title": "Due At",
+          "type": "string"
+        },
+        "expiry_reason": {
+          "const": "requested_reminder_due_time",
+          "title": "Expiry Reason",
+          "type": "string"
+        },
+        "member_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Member Id",
+          "type": "string"
+        },
+        "notes": {
+          "anyOf": [
+            {
+              "maxLength": 10000,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Notes"
+        },
+        "offered_at": {
+          "format": "date-time",
+          "title": "Offered At",
+          "type": "string"
+        },
+        "operation": {
+          "const": "create_reminder",
+          "title": "Operation",
+          "type": "string"
+        },
+        "original_source_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Original Source Event Id",
+          "type": "string"
+        },
+        "original_source_fingerprint": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Original Source Fingerprint",
+          "type": "string"
+        },
+        "original_submitted_at": {
+          "format": "date-time",
+          "title": "Original Submitted At",
+          "type": "string"
+        },
+        "pending_expires_at": {
+          "format": "date-time",
+          "title": "Pending Expires At",
+          "type": "string"
+        },
+        "provider": {
+          "const": "apple_reminders",
+          "title": "Provider",
+          "type": "string"
+        },
+        "provider_account_id": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Provider Account Id",
+          "type": "string"
+        },
+        "provider_effect_count": {
+          "const": 0,
+          "default": 0,
+          "title": "Provider Effect Count",
+          "type": "integer"
+        },
+        "request_id": {
+          "maxLength": 120,
+          "minLength": 8,
+          "title": "Request Id",
+          "type": "string"
+        },
+        "resource_owner": {
+          "const": "requester",
+          "title": "Resource Owner",
+          "type": "string"
+        },
+        "task_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Task Id",
+          "type": "string"
+        },
+        "title": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        }
+      },
+      "required": [
+        "member_id",
+        "task_id",
+        "action_id",
+        "request_id",
+        "original_source_event_id",
+        "original_source_fingerprint",
+        "original_submitted_at",
+        "draft_fingerprint",
+        "provider",
+        "operation",
+        "provider_account_id",
+        "title",
+        "due_at",
+        "offered_at",
+        "pending_expires_at",
+        "expiry_reason",
+        "resource_owner",
+        "choices"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "cos.reminder.mode_grounded",
+      "family": "language_evidence",
+      "properties": {
+        "action": {
+          "additionalProperties": true,
+          "title": "Action",
+          "type": "object"
+        },
+        "action_fingerprint": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Action Fingerprint",
+          "type": "string"
+        },
+        "action_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Action Id",
+          "type": "string"
+        },
+        "continuation": {
+          "$ref": "#/$defs/ReminderModeContinuationV1"
+        },
+        "evidence": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "maxItems": 8,
+          "minItems": 1,
+          "title": "Evidence",
+          "type": "array"
+        },
+        "expires_at": {
+          "format": "date-time",
+          "title": "Expires At",
+          "type": "string"
+        },
+        "issued_at": {
+          "format": "date-time",
+          "title": "Issued At",
+          "type": "string"
+        },
+        "member_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Member Id",
+          "type": "string"
+        },
+        "request_fingerprint": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Request Fingerprint",
+          "type": "string"
+        },
+        "rule_id": {
+          "const": "current-human-request.cos-reminder-mode-choice.v1",
+          "title": "Rule Id",
+          "type": "string"
+        },
+        "skill_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Skill Event Id",
+          "type": "string"
+        },
+        "source_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Source Event Id",
+          "type": "string"
+        },
+        "source_fingerprint": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Fingerprint",
+          "type": "string"
+        }
+      },
+      "required": [
+        "member_id",
+        "source_event_id",
+        "action_id",
+        "request_fingerprint",
+        "action_fingerprint",
+        "source_fingerprint",
+        "skill_event_id",
+        "action",
+        "evidence",
+        "issued_at",
+        "expires_at",
+        "continuation",
+        "rule_id"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "cos.reminder.mode_offered",
+      "family": "cos_work",
+      "properties": {
+        "action": {
+          "additionalProperties": true,
+          "title": "Action",
+          "type": "object"
+        },
+        "action_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Action Id",
+          "type": "string"
+        },
+        "clarification_kind": {
+          "const": "reminder_only_or_email",
+          "default": "reminder_only_or_email",
+          "title": "Clarification Kind",
+          "type": "string"
+        },
+        "draft_fingerprint": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Draft Fingerprint",
+          "type": "string"
+        },
+        "due_at": {
+          "format": "date-time",
+          "title": "Due At",
+          "type": "string"
+        },
+        "expiry_reason": {
+          "const": "requested_reminder_due_time",
+          "title": "Expiry Reason",
+          "type": "string"
+        },
+        "member_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Member Id",
+          "type": "string"
+        },
+        "notes": {
+          "anyOf": [
+            {
+              "maxLength": 10000,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Notes"
+        },
+        "offered_at": {
+          "format": "date-time",
+          "title": "Offered At",
+          "type": "string"
+        },
+        "operation": {
+          "const": "create_reminder",
+          "title": "Operation",
+          "type": "string"
+        },
+        "origin": {
+          "$ref": "#/$defs/ReminderModeOrigin"
+        },
+        "original_source_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Original Source Event Id",
+          "type": "string"
+        },
+        "original_source_fingerprint": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Original Source Fingerprint",
+          "type": "string"
+        },
+        "original_submitted_at": {
+          "format": "date-time",
+          "title": "Original Submitted At",
+          "type": "string"
+        },
+        "pending_expires_at": {
+          "format": "date-time",
+          "title": "Pending Expires At",
+          "type": "string"
+        },
+        "prompt": {
+          "maxLength": 3500,
+          "minLength": 1,
+          "title": "Prompt",
+          "type": "string"
+        },
+        "provider": {
+          "const": "apple_reminders",
+          "title": "Provider",
+          "type": "string"
+        },
+        "provider_account_id": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Provider Account Id",
+          "type": "string"
+        },
+        "provider_effect_count": {
+          "const": 0,
+          "default": 0,
+          "title": "Provider Effect Count",
+          "type": "integer"
+        },
+        "request_id": {
+          "maxLength": 120,
+          "minLength": 8,
+          "title": "Request Id",
+          "type": "string"
+        },
+        "resource_owner": {
+          "const": "service-principal:chief-of-staff",
+          "title": "Resource Owner",
+          "type": "string"
+        },
+        "task_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Task Id",
+          "type": "string"
+        },
+        "title": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        }
+      },
+      "required": [
+        "member_id",
+        "task_id",
+        "action_id",
+        "request_id",
+        "original_source_event_id",
+        "original_source_fingerprint",
+        "original_submitted_at",
+        "draft_fingerprint",
+        "provider",
+        "operation",
+        "provider_account_id",
+        "title",
+        "due_at",
+        "offered_at",
+        "pending_expires_at",
+        "expiry_reason",
+        "resource_owner",
+        "action",
+        "origin",
+        "prompt"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "cos.reminder.mode_presented",
+      "family": "cos_work",
+      "properties": {
+        "expires_at_ms": {
+          "title": "Expires At Ms",
+          "type": "integer"
+        },
+        "host_signature": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Host Signature",
+          "type": "string"
+        },
+        "issued_at_ms": {
+          "title": "Issued At Ms",
+          "type": "integer"
+        },
+        "member_id": {
+          "title": "Member Id",
+          "type": "string"
+        },
+        "offered_event_id": {
+          "title": "Offered Event Id",
+          "type": "string"
+        },
+        "origin": {
+          "$ref": "#/$defs/ReminderModeOrigin"
+        },
+        "presentation_kind": {
+          "enum": [
+            "sent_reply",
+            "native_portal_final"
+          ],
+          "title": "Presentation Kind",
+          "type": "string"
+        },
+        "presented_at": {
+          "format": "date-time",
+          "title": "Presented At",
+          "type": "string"
+        },
+        "prompt_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Prompt Sha256",
+          "type": "string"
+        },
+        "provider_effect_count": {
+          "const": 0,
+          "default": 0,
+          "title": "Provider Effect Count",
+          "type": "integer"
+        },
+        "response_result_event_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Response Result Event Id"
+        },
+        "run_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Run Id",
+          "type": "string"
+        },
+        "source_event_id": {
+          "title": "Source Event Id",
+          "type": "string"
+        },
+        "task_id": {
+          "title": "Task Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "member_id",
+        "task_id",
+        "offered_event_id",
+        "source_event_id",
+        "origin",
+        "prompt_sha256",
+        "run_id",
+        "presented_at",
+        "issued_at_ms",
+        "expires_at_ms",
+        "host_signature",
+        "presentation_kind"
+      ],
+      "schema_version": 1
     },
     {
       "additional_properties": false,
@@ -30795,6 +31484,8 @@
             {
               "enum": [
                 "current-human-request.apple-reminder-create.v1",
+                "current-human-request.apple-reminder-list-choice.v1",
+                "current-human-request.cos-reminder-mode-choice.v1",
                 "current-human-request.cos-reminder-create.v1",
                 "current-human-request.cos-email-to-requester.v1"
               ],

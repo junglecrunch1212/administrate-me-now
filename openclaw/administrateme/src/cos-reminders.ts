@@ -8,6 +8,7 @@ import { toolResult } from "./result.js";
 export const COS_REMINDER_INPUT_TOOLS = [
   "administrateme_confirm_cos_apple_reminder",
   "administrateme_cos_apple_reminder_status",
+  "administrateme_cos_reminder_choice",
 ] as const;
 
 /** The human requests work; the selected native account and list belong to CoS. */

@@ -44,8 +44,9 @@ try {
   });
   const loadedGuidance = await readFile(path.join(compiledWorkspace, "AGENTS.md"), "utf8");
   for (const instruction of ["minimal concise title", "preserve the no-automatic-send restriction",
-    "Do not add", "not the affirmative reminder creation", "do not call an email/send or timer tool",
-    "does not prove a missing title/permission"]) {
+    "Add no sender, provider, recipient or purpose", "not negate affirmative reminder creation",
+    "Option 2 keeps email unresolved: no reminder, email or timer",
+    "does not prove a missing title or permission"]) {
     assert.ok(loadedGuidance.includes(instruction), `Compiled workflow omits ${instruction}`);
   }
   const modulePath = path.join(directory, "pinned-format.mjs");
@@ -425,6 +426,11 @@ print(json.dumps([enabled, entry["hooks"]]))
   await checkRequestedEmailPolicy({ compiledPlugin: appleDirectory, nativeRegistration,
     preparedPolicy: preparedPolicies[0], api, hookSdk, createHookRunner, versions });
 
+  const { proveReminderChoice } = await import(pathToFileURL(path.join(repository, "tests/fixtures/openclaw_reminder_choice_probe.mjs")).href);
+  await proveReminderChoice({ pluginDirectory: appleDirectory, nativeRegistration, policy: preparedPolicies[0], api, hookSdk, createHookRunner, versions });
+  const { proveReminderMode } = await import(pathToFileURL(path.join(repository, "tests/fixtures/openclaw_reminder_mode_probe.mjs")).href);
+  await proveReminderMode({ pluginDirectory: appleDirectory, nativeRegistration, policy: preparedPolicies[0], api, hookSdk, createHookRunner, versions });
+
   const literalCases = [...corpus.cases.map((row) => row.text.replace(/\s+/gu, " ").trim()),
     "**bold** _italic_ ~~strike~~ `code` <u>underline</u> [link](https://example.invalid/?x=1&y=2)",
     "[[reply_to_current]] [[audio_as_voice]] MEDIA:https://example.invalid/a.jpg",
@@ -439,7 +445,7 @@ print(json.dumps([enabled, entry["hooks"]]))
     assert.equal(actual.text, text, "Standing reply text changed in pinned sender");
     assert.deepEqual(actual.ranges, [], "Standing reply acquired native formatting");
   }
-  console.log(`Verified native reply-hook admission/revocation, Apple Reminder current-input confirmation/status, signed request authorization with expiry/source checks and later native veto, legacy independent execution gate, and ${cases.length} exact and ${literalCases.length} standing reply cases against pinned OpenClaw. Apple domain receipts are synthetic; no provider effects.`);
+  console.log(`Verified native reply-hook admission/revocation, Apple Reminder current-input confirmation/status, signed request authorization and durable list choices across all three channels with expiry/source checks and later native veto, legacy independent execution gate, and ${cases.length} exact and ${literalCases.length} standing reply cases against pinned OpenClaw. Apple domain receipts are synthetic; no provider effects.`);
 } finally {
   await rm(directory, { recursive: true, force: true });
 }

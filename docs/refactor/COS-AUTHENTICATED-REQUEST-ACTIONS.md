@@ -51,3 +51,84 @@ It does not prove arbitrary model reasoning, live provider success, automatic
 completion of broader CoS work, or modify/cancel workflows for every provider.
 Other provider actions, recent-work discovery and durable multi-step execution
 remain subsequent usable slices.
+
+## Newly offered member reminder list choices
+
+MODERNIZE: when a current authenticated reminder request has multiple authorized
+lists, the native tool records one immutable `cos.reminder.choice_offered@1`
+receipt and an existing CoS-private `task.created@4`. The member-private receipt
+retains the original source, exact draft, account and offered choices. The work
+record holds a generic title, due time and source authority, not copied member
+message text. No domain confirmation, execution ticket or provider call is
+created at this stage. Existing manual confirmations keep their prior behavior.
+
+A fresh authenticated answer can select an exact offered label/ID through
+`administrateme_apple_reminder_choice` from iMessage, Gmail or dashboard chat.
+The task/action/request identity stays fixed. The dedicated pinned
+`ground_reminder_choice` skill compares separate original and answer messages,
+returns literal quotes from each, and resolves relative dates at the original
+submission time. The first successful answer receives a distinct
+`cos.reminder.choice_grounded@1` receipt; OpenClaw independently checks the signed
+original offer, unchanged draft, current answer and short ticket. The domain
+rechecks original and answer source authority, current account/list permission,
+observation mode and recovery revocation. A changed skill input never reuses the
+original invocation ID. No earlier failed request is automatically staged.
+
+The pending task expires at its immutable requested `due_at`. Past-due staging
+is refused. The first execution ticket expires at the earlier of ten minutes
+after successful answer grounding and that original due time; replay retains
+its exact issued/expiry values. A choice-created domain cannot fall back to
+legacy/manual approval if the ticket is missing or expired. The existing bridge
+ledger and final admission enforce one native effect and audited terminal state.
+Multiple pending offers or duplicate labels require a specific choice; yes only
+resolves exactly one actually offered destination.
+
+The same task ID supports status and cancellation across the three authenticated
+private conversations. Cancellation is allowed before domain confirmation only;
+status/cancel never grants fresh execution authority or claims provider reversal.
+The provider terminal remains authoritative. Explicit status reads reconcile a
+proven successful result into the existing internal work state; a saved task or
+domain confirmation is never described as a created reminder. Generic task
+modification, account choice and other provider continuations remain separate.
+
+Use the existing `bootstrap.request_actions disable` / `status` commands above
+for immediate recovery. Retain this schema-aware runtime after new choice
+history; revocation stops new answer authorization and final native dispatch,
+while status and safe pre-confirmation cancellation retain their own checks.
+No migration, grant change, timer, automatic pending drain or provider enrollment
+is introduced. Focused proof is `test_reminder_choice_continuation.py`, the choice
+unit tests and native request-policy tests; candidate execution belongs in CI.
+
+Pending-task selection uses the retained offer set at the fresh answer, not a model-provided task ID. One pending offer in the actual authenticated Gmail account/member/thread can disambiguate; otherwise require one pending offer overall or an exact unique title/ID prefix in the human answer. Duplicate titles require the ID. The signed candidate snapshot contains title hashes instead of copying other tasks’ titles into the current conversation; both policy engines compare literal human references. Historical replay verifies the snapshot against the original log cutoff, so later tasks or cancellations cannot change that answer’s meaning. Displayed choices still require current source authority.
+
+
+## Numbered CoS reminder clarification
+
+MODERNIZE: `administrateme_cos_reminder_choice` retains one new ambiguous
+CoS-reminder/email request using the existing private clarification task lifecycle.
+The typed offer fixes the original draft, due instant, CoS account/device/list and
+numbered meaning. The member receives its exact final prompt. Gmail and iMessage
+presentation requires the existing audited sent reply; portal presentation binds
+the signed native final answer to its authenticated run/session. Neither a tool
+result nor an assistant suggestion constitutes human authorization.
+
+A later authentic `1` selects only that actually presented unchanged reminder.
+Domain grounding uses separate original-human and answer evidence; native policy
+independently checks the signed presentation, task selection, fresh answer and
+exact action. Both sources and the current own-writer permission are rechecked
+before dispatch. `2` leaves an explicit unresolved email workflow: no reminder,
+email, timer or promised scheduled delivery is created. A number in another
+conversation requires an authored task reference; a model-supplied ID is not one.
+The original expiry and command identity never renew on replay or restart.
+
+The scoped proof is `test_reminder_mode_continuation.py`, the native hook fixture
+`openclaw_reminder_mode_probe.mjs`, and independent host-policy negatives. The
+isolated transport, model and EventKit boundaries are synthetic; they are not live
+member acceptance. The live affected check is one fresh genuine offered choice
+followed by the member's answer, one terminal own-reminder save/read-back and no
+new email/timer effect beyond the authorized conversation replies. Wrong mapping,
+missing presentation, wrong source, changed writer, observation mode or duplicate
+creation is a failure. After any new mode history, recover with the existing
+`bootstrap.request_actions disable` command above on the schema-aware runtime;
+do not roll back to a binary unaware of the retained mode event schemas. Existing
+acquisition, history and reply grants remain intact.

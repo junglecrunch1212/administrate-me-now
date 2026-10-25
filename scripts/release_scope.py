@@ -589,6 +589,30 @@ COS_SERVICE_WORK_COMPONENT_PATHS = frozenset(
         "bootstrap/native/cos_reminders_launcher.m",
         "openclaw/administrateme/src/cos-reminders.ts",
         "adminme/products/openclaw/apple_reminders.py",
+        "adminme/reminder_modes.py",
+        "adminme/events/schemas/reminder_modes.py",
+        "adminme/products/openclaw/reminder_mode_tools.py",
+        "adminme/products/openclaw/reminder_mode_evidence.py",
+        "openclaw/administrateme/src/reminder-mode.ts",
+        "openclaw/administrateme/src/reminder-mode-policy.ts",
+        "openclaw/administrateme/tsconfig.json",
+        "openclaw/administrateme/vitest.config.ts",
+        "packs/skills/ground_reminder_mode/SKILL.md",
+        "packs/skills/ground_reminder_mode/pack.yaml",
+        "packs/skills/ground_reminder_mode/prompt.jinja2",
+        "packs/skills/ground_reminder_mode/schemas/input.schema.json",
+        "packs/skills/ground_reminder_mode/schemas/output.schema.json",
+        "adminme/reminder_choices.py",
+        "adminme/events/schemas/reminder_choices.py",
+        "adminme/products/openclaw/reminder_choice_work.py",
+        "adminme/products/openclaw/reminder_choice_tools.py",
+        "adminme/products/openclaw/reminder_choice_authorization.py",
+        "openclaw/administrateme/src/reminder-choice-policy.ts",
+        "packs/skills/ground_reminder_choice/SKILL.md",
+        "packs/skills/ground_reminder_choice/pack.yaml",
+        "packs/skills/ground_reminder_choice/prompt.jinja2",
+        "packs/skills/ground_reminder_choice/schemas/input.schema.json",
+        "packs/skills/ground_reminder_choice/schemas/output.schema.json",
         "adminme/apple_service_history.py",
         "adminme/conversation_instructions.py",
         "adminme/conversation_intake.py",
@@ -697,6 +721,14 @@ COS_SERVICE_WORK_COMPONENT_PATHS = frozenset(
 COS_SERVICE_WORK_TEST_PATHS = frozenset(
     {
         "tests/unit/test_service_work_principal.py",
+        "tests/unit/test_reminder_choices.py",
+        "tests/acceptance/test_reminder_choice_continuation.py",
+        "tests/acceptance/test_reminder_mode_continuation.py",
+        "openclaw/administrateme/test/reminder-mode-policy.test.ts",
+        "openclaw/administrateme/test/fixtures/openclaw-2026.7.2/global-singleton.ts",
+        "openclaw/administrateme/test/fixtures/openclaw-2026.7.2/global-singleton.d.ts",
+        "tests/fixtures/openclaw_reminder_mode_probe.mjs",
+        "openclaw/administrateme/test/reminder-choice-policy.test.ts",
         "tests/unit/bootstrap/test_native_account_policy.py",
         "openclaw/administrateme/scripts/check-cos-native-account-policy.mjs",
         "tests/acceptance/test_cos_owned_apple_reminder.py",
@@ -774,6 +806,7 @@ COS_SERVICE_WORK_TEST_PATHS = frozenset(
         "openclaw/administrateme/test/fixtures/openclaw-2026.7.2/plugin-entry.d.ts",
         "openclaw/administrateme/scripts/check-service-work-gateway.mjs",
         "tests/fixtures/openclaw_service_work_probe.mjs",
+        "tests/fixtures/openclaw_reminder_choice_probe.mjs",
         "tests/unit/bootstrap/test_cos_service_topology.py",
     }
 )
@@ -814,8 +847,8 @@ FINANCE_METADATA_TEST_PATHS = frozenset(
 )
 # Exact reviewed additive wiring: existing EventLog methods, runtime startup
 # and adjacent Settings code cannot drift under a metadata-only release.
-# Each tuple is (protected predecessor, metadata wiring); both are full-file
-# SHA256 values. Any new neighboring change requires a fresh reviewed boundary.
+# Each tuple contains the protected predecessor followed by explicitly reviewed
+# wired variants, all full-file SHA256 values. Neighboring changes need review.
 FINANCE_METADATA_SHARED = {
     "adminme/events/log.py": (
         "a0cf622784c33d84fad36fc476142d6eaca3d1c3d25ce55139e1634ae55c4c5a",
@@ -824,6 +857,7 @@ FINANCE_METADATA_SHARED = {
     "adminme/runtime/application.py": (
         "e18879b1016ecfdd808fc608dc7e24a92339e60fe857f3ae9d28e72aed15c299",
         "1d43d21c2d17712b95b1172ca1108a83cd0a048fe2a5f3c30e67ba2c25084a06",
+        "4729519f51d395929a02346a880a68ebe7b33ef5249ab4228c1dfb6f7cfbfae9",
     ),
     "adminme/products/member/assets/member.js": (
         "8c5a7344a4e73d99b5321cdb782ecf5c1edf446af3cd8876b9ec588cbe4d2573",
@@ -1357,7 +1391,7 @@ def _finance_metadata_dependency_fingerprint(
         ).hexdigest()
         if digest not in permitted:
             return None
-        if digest == permitted[1]:
+        if digest in permitted[1:]:
             wired.add(path)
         coordinates.append((path, entry.mode, "reviewed-finance-metadata-wiring-v1"))
     allowed = FINANCE_METADATA_REQUIRED_PATHS | POLICY_PATHS
@@ -1816,6 +1850,35 @@ def _service_work_application(source: str) -> tuple[str, bool] | None:
         workstation_shapes[0]
     ) > body_shapes.index(workstation_shapes[1]):
         return None
+    choice_shapes = [
+        ast.dump(node, include_attributes=False)
+        for node in ast.parse(
+            "from adminme.products.openclaw.reminder_choice_tools import router as reminder_choice_router\n"
+            "app.include_router(reminder_choice_router)\n"
+        ).body
+    ]
+    choice_counts = [body_shapes.count(shape) for shape in choice_shapes]
+    if choice_counts not in ([0, 0], [1, 1]):
+        return None
+    if choice_counts == [1, 1] and body_shapes.index(
+        choice_shapes[0]
+    ) > body_shapes.index(choice_shapes[1]):
+        return None
+    mode_shapes = [
+        ast.dump(node, include_attributes=False)
+        for node in ast.parse(
+            "from adminme.products.openclaw.reminder_mode_tools import router as reminder_mode_router\n"
+            "app.include_router(reminder_mode_router)\n"
+        ).body
+    ]
+    mode_counts = [body_shapes.count(shape) for shape in mode_shapes]
+    if mode_counts not in ([0, 0], [1, 1]):
+        return None
+    if (
+        mode_counts == [1, 1]
+        and body_shapes.index(mode_shapes[1]) != body_shapes.index(mode_shapes[0]) + 1
+    ):
+        return None
     workstation_work_shapes = [
         ast.dump(node, include_attributes=False)
         for node in ast.parse(
@@ -1869,6 +1932,8 @@ def _service_work_application(source: str) -> tuple[str, bool] | None:
         not in shapes
         + reminder_shapes
         + workstation_shapes
+        + choice_shapes
+        + mode_shapes
         + workstation_work_shapes
         + browser_shapes
         + email_shapes

@@ -290,6 +290,7 @@ def test_native_reminder_tools_separate_confirmation_execution_and_readback(
             "administrateme_confirm_apple_reminder",
             "administrateme_execute_pending_provider_action",
             "administrateme_apple_reminder_status",
+            "administrateme_apple_reminder_choice",
         ]
     )
     confirm = tools["native_tool_authority"]["administrateme_confirm_apple_reminder"]
@@ -304,6 +305,13 @@ def test_native_reminder_tools_separate_confirmation_execution_and_readback(
     assert execute["stage"] == "independent_execution_approval"
     assert status["stage"] == "terminal_readback"
     assert status["provider_write_grant_required"] is False
+    choice = tools["native_tool_authority"]["administrateme_apple_reminder_choice"]
+    assert choice["operations"] == {
+        "status": True,
+        "cancel_unconfirmed": True,
+        "answer": True,
+    }
+    assert choice["answer_preserves_original_due_and_expiry"] is True
     assert tools["domain_confirmation_is_execution_approval"] is False
     assert tools["execution_authority_modes"] == [
         "authenticated_current_request_policy",
@@ -350,7 +358,8 @@ def test_native_reminder_status_survives_revocation_and_observation_mode(
                 0
             ]
             assert item["openclaw"]["effective_tools"] == [
-                "administrateme_apple_reminder_status"
+                "administrateme_apple_reminder_choice",
+                "administrateme_apple_reminder_status",
             ]
             assert item["effective"]["execute_available"] is False
 
@@ -365,6 +374,7 @@ def test_native_reminder_tools_do_not_infer_delegation_from_native_permission(
         (
             ("read_context",),
             [
+                "administrateme_apple_reminder_choice",
                 "administrateme_apple_reminder_status",
                 "administrateme_execute_pending_provider_action",
             ],
@@ -470,6 +480,11 @@ def test_cos_owned_reminder_catalog_is_distinct_from_member_permission(
         "administrateme_confirm_apple_reminder"
         not in item["openclaw"]["declared_tools"]
     )
+    assert (
+        item["openclaw"]["clarification_rule"]
+        == "current-human-request.cos-reminder-mode-choice.v1"
+    )
+    assert item["openclaw"]["clarification_tool"] in item["openclaw"]["effective_tools"]
     runtime.settings.adapter_config["cos_apple_reminders_writes"]["enabled"] = False
     disabled = catalog_module.compose_member_catalog(
         runtime, session, settings_state={}

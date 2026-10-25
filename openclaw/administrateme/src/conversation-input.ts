@@ -5,6 +5,7 @@ import { OPENCLAW_COMMIT, OPENCLAW_VERSION, type Provenance } from "./contract.j
 import type { PluginRuntime } from "./runtime.js";
 import { replyParts } from "./self-replies.js";
 import { canonical } from "./approval.js";
+import { recordModePresentation } from "./reminder-mode.js";
 import { TransportError } from "./transport.js";
 
 type Input = { provenance: Provenance; source_message_event_id: string; textSha256: string; capturedAt: number; instructionText?: string };
@@ -105,7 +106,7 @@ export function registerConversationInput(api: OpenClawPluginApi, runtime: Plugi
     const input = turns.get(runtime)?.get(runId);
     if (input) pending.get(runtime)?.delete(input.source_message_event_id);
     turns.get(runtime)?.delete(runId);
-    if (!input || !matches(input, context) || !event.success || input.provenance.channel_id !== "gmail") return;
+    if (!input || !matches(input, context) || !event.success) return;
     // Only the final answer in this same authenticated human turn is a reply.
     // Tool output, assistant analysis and historical text cannot authorize sends.
     const latestUser = [...event.messages].reverse().find((value: any) => value?.role === "user") as Record<string, any> | undefined;
@@ -116,6 +117,12 @@ export function registerConversationInput(api: OpenClawPluginApi, runtime: Plugi
         userText !== input.instructionText) return;
     const body = replyParts(event.messages).join("\n\n");
     if (!body || body.length > 8000) return;
+    if (input.provenance.channel_id === "administrateme-portal") {
+      try { await recordModePresentation(runtime, input, runId, body); }
+      catch { api.logger.warn("Reminder clarification presentation was not retained; no numbered answer can execute it."); }
+      return;
+    }
+    if (input.provenance.channel_id !== "gmail") return;
     const p = input.provenance;
     const decision = {
       contract: "authenticated-conversation-reply-v1", rule_id: "same_conversation_reply_v1",
@@ -134,6 +141,10 @@ export function registerConversationInput(api: OpenClawPluginApi, runtime: Plugi
         request_id: `gmail-reply:${sha(input.source_message_event_id + "|" + decision.body_sha256)}`,
         host_decision: { ...decision, signature: createHmac("sha256", secret).update(material).digest("hex") },
       });
+      if (result.status === "sent" && typeof result.event_id === "string") {
+        try { await recordModePresentation(runtime, input, runId, body, result.event_id); }
+        catch { api.logger.warn("Sent reminder clarification lacks retained presentation evidence; do not resend it automatically."); }
+      }
       if (result.status !== "sent") api.logger.warn("CoS email reply is not terminally proven sent; inspect its receipt, do not resend.");
     } catch (error) {
       // Only closed local classifications: never log response text, addresses,

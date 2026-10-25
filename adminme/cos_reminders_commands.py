@@ -178,6 +178,15 @@ async def _command_owner_matches(
     if grounded is None or not _private(grounded, tenant, member):
         return False
     p = grounded["payload"]
+    mode = grounded.get("type") == "cos.reminder.mode_grounded"
+    if mode:
+        from adminme.products.openclaw.reminder_choice_authorization import (
+            historical_choice_domain_matches,
+        )
+
+        if not await historical_choice_domain_matches(event_log, domain, grounded):
+            return False
+    rule = "current-human-request.cos-reminder-mode-choice.v1" if mode else RULE_ID
     action = intent.action()
     source_text = source["payload"]["text"]
     issued, consumed, expires = (
@@ -236,7 +245,8 @@ async def _command_owner_matches(
         and all(decision.get(key) == value for key, value in exact.items())
         and decision.get("action_id") == payload["command_id"]
         and decision.get("command_payload") == nested
-        and grounded.get("type") == "cos.action.request_grounded"
+        and grounded.get("type")
+        == ("cos.reminder.mode_grounded" if mode else "cos.action.request_grounded")
         and grounded.get("schema_version") == 1
         and grounded.get("actor_identity") == COS_SERVICE_PRINCIPAL_ID
         and intent.source_event_id < grounded_id < domain_id
@@ -247,7 +257,7 @@ async def _command_owner_matches(
         and p.get("source_fingerprint") == digest(source_text)
         and p.get("action_fingerprint") == digest(action)
         and p.get("action") == action
-        and p.get("rule_id") == RULE_ID
+        and p.get("rule_id") == rule
         and evidence_matches(source_text, p.get("evidence"))
         and host.get("type") == "openclaw.approval.received"
         and host.get("schema_version") == 2
@@ -265,6 +275,6 @@ async def _command_owner_matches(
         and approval.get("source_event_id") == intent.source_event_id
         and approval.get("domain_approval_event_id") == domain_id
         and approval.get("action_fingerprint") == digest(action)
-        and approval.get("rule_id") == RULE_ID
+        and approval.get("rule_id") == rule
         and timely
     )

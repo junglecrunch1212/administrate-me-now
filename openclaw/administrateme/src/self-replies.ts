@@ -1,3 +1,4 @@
+import { recordModePresentation } from "./reminder-mode.js";
 import { createHash } from "node:crypto";
 import type { OpenClawPluginApi, PluginHookAgentContext } from "openclaw/plugin-sdk/plugin-entry";
 import type { Provenance } from "./contract.js";
@@ -217,6 +218,10 @@ export function registerSelfReplies(api: OpenClawPluginApi, runtime: PluginRunti
         if (terminal.status !== "sent") {
           api.logger.error("CoS self reply was not proven sent; no automatic retry.");
           return;
+        }
+        if (parts.length === 1 && runId && typeof terminal.event_id === "string") {
+          try { await recordModePresentation(runtime, { source_message_event_id: sourceId, provenance: input.provenance }, runId, parts[index]!, terminal.event_id); }
+          catch { api.logger.warn("Sent reminder clarification lacks retained presentation evidence; do not resend it automatically."); }
         }
         api.logger.info("CoS self reply part delivered with an audited native receipt.");
       } catch {

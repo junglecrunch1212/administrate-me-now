@@ -1,0 +1,119 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "original_instruction",
+    "answer",
+    "original_submitted_at",
+    "answer_submitted_at",
+    "timezone",
+    "action",
+    "presented_prompt"
+  ],
+  "properties": {
+    "original_instruction": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 32000
+    },
+    "answer": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 32000
+    },
+    "original_submitted_at": {
+      "type": "string",
+      "minLength": 1
+    },
+    "answer_submitted_at": {
+      "type": "string",
+      "minLength": 1
+    },
+    "timezone": {
+      "type": "string",
+      "minLength": 1
+    },
+    "action": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "provider",
+        "operation",
+        "resource_owner",
+        "title",
+        "due_at",
+        "list_id",
+        "selected_by_policy",
+        "operating_principal",
+        "provider_account_id",
+        "source_id",
+        "device_identity_sha256",
+        "selection_sha256",
+        "write_policy_sha256",
+        "os_uid"
+      ],
+      "properties": {
+        "provider": {
+          "const": "apple_reminders"
+        },
+        "operation": {
+          "const": "create_reminder"
+        },
+        "resource_owner": {
+          "const": "service-principal:chief-of-staff"
+        },
+        "title": {
+          "type": "string"
+        },
+        "notes": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "due_at": {
+          "type": "string"
+        },
+        "list_id": {
+          "type": "string"
+        },
+        "selected_by_policy": {
+          "type": "boolean"
+        },
+        "operating_principal": {
+          "const": "service-principal:chief-of-staff"
+        },
+        "provider_account_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "device_identity_sha256": {
+          "type": "string",
+          "minLength": 1
+        },
+        "selection_sha256": {
+          "type": "string",
+          "minLength": 1
+        },
+        "write_policy_sha256": {
+          "type": "string",
+          "minLength": 1
+        },
+        "os_uid": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "presented_prompt": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 3500
+    }
+  }
+}

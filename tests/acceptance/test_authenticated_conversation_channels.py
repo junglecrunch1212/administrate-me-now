@@ -122,6 +122,7 @@ def gmail_observation(
     group: bool = False,
     old: bool = False,
     received_at: datetime | None = None,
+    thread_id: str = "fixture-real-email-thread",
     from_header: str = "member-a@example.invalid",
     reply_to: str | None = None,
 ) -> str:
@@ -174,7 +175,7 @@ def gmail_observation(
     payload, version, occurred = adapter._received_observation(
         {
             "id": native_id,
-            "threadId": "fixture-real-email-thread",
+            "threadId": thread_id,
             "internalDate": str(now_ms),
             "payload": {
                 "mimeType": "text/plain",

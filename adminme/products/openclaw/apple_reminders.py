@@ -316,6 +316,21 @@ async def confirm_apple_reminder(
                         runtime, session, prior, grounding
                     )
             return {**receipt, "duplicate": True, "event_id": prior["event_id"]}
+        from adminme.products.openclaw.reminder_choice_work import (
+            choice_summary,
+            offered_by_action,
+        )
+
+        pending = await offered_by_action(runtime, session, command_id)
+        if pending is not None:
+            # A new conversational answer must use the retained task; never rerun
+            # the original semantic invocation with different current input.
+            from adminme.products.openclaw.reminder_choice_tools import choice_status
+
+            return {
+                **await choice_status(runtime, session, pending),
+                "continuation_tool": "administrateme_apple_reminder_choice",
+            }
         if await runtime.observation.is_active():
             raise HTTPException(
                 409, "Observation mode suppresses Apple reminder confirmation"
@@ -334,14 +349,41 @@ async def confirm_apple_reminder(
                 choices = permission_options(
                     runtime, session.auth_member_id, "apple_reminders"
                 )
-                return {
-                    "state": "list_choice_required",
-                    "provider_effect_count": 0,
-                    "lists": [
-                        {"list_id": row["container_id"], "label": row["label"]}
+                if not body.request_authorization:
+                    # The legacy/manual route remains a one-shot confirmation.
+                    return {
+                        "state": "list_choice_required",
+                        "provider_effect_count": 0,
+                        "lists": [
+                            {"list_id": row["container_id"], "label": row["label"]}
+                            for row in choices["scopes"]
+                            if row["container_id"] in lists
+                        ],
+                    }
+                from adminme.events.schemas.reminder_choices import ReminderListChoice
+                from adminme.products.openclaw.reminder_choice_work import offer_choice
+
+                offered = await offer_choice(
+                    runtime,
+                    session,
+                    source,
+                    action_id=command_id,
+                    request_id=body.request_id,
+                    provider_account_id=permission["provider_account_id"],
+                    title=body.title,
+                    due_at=body.due_at,
+                    notes=body.notes,
+                    choices=[
+                        ReminderListChoice(
+                            list_id=row["container_id"], label=row["label"]
+                        )
                         for row in choices["scopes"]
                         if row["container_id"] in lists
                     ],
+                )
+                return {
+                    **choice_summary(offered),
+                    "continuation_tool": "administrateme_apple_reminder_choice",
                 }
             selected = lists[0]
         if selected not in lists:

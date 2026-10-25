@@ -54,6 +54,7 @@ _TOOL_PERMISSION_OPTIONS: dict[str, frozenset[str]] = {
         {"prepare_external_actions"}
     ),
     "administrateme_cos_apple_reminder_status": frozenset({"read_context"}),
+    "administrateme_cos_reminder_choice": frozenset({"read_context"}),
     "administrateme_confirm_requested_email": frozenset({"prepare_external_actions"}),
     "administrateme_requested_email_status": frozenset({"read_context"}),
     "administrateme_cos_response": frozenset({"prepare_external_actions"}),
@@ -76,11 +77,13 @@ _APPLE_REMINDER_TOOLS = {
     "administrateme_confirm_apple_reminder": "domain_confirmation",
     "administrateme_execute_pending_provider_action": "independent_execution_approval",
     "administrateme_apple_reminder_status": "terminal_readback",
+    "administrateme_apple_reminder_choice": "durable_list_choice_status_or_answer",
 }
 _APPLE_REMINDER_TOOL_PERMISSIONS = {
     "administrateme_confirm_apple_reminder": frozenset({"prepare_external_actions"}),
     "administrateme_execute_pending_provider_action": frozenset({"read_context"}),
     "administrateme_apple_reminder_status": frozenset({"read_context"}),
+    "administrateme_apple_reminder_choice": frozenset({"read_context"}),
 }
 
 
@@ -121,6 +124,7 @@ _DOMAIN_DEFINITIONS: tuple[dict[str, Any], ...] = (
             "administrateme_confirm_cos_apple_reminder",
             "administrateme_execute_pending_provider_action",
             "administrateme_cos_apple_reminder_status",
+            "administrateme_cos_reminder_choice",
         ],
         "terminal_result_support": True,
         "later_observation_support": True,
@@ -1286,7 +1290,10 @@ def compose_member_catalog(
         if native_reminders:
             for tool in declared_tools:
                 permission = next(iter(_APPLE_REMINDER_TOOL_PERMISSIONS[tool]))
-                status_read = tool == "administrateme_apple_reminder_status"
+                status_read = tool in {
+                    "administrateme_apple_reminder_status",
+                    "administrateme_apple_reminder_choice",
+                }
                 available = bool(
                     not viewing_as
                     and openclaw_state == "healthy"
@@ -1303,6 +1310,24 @@ def compose_member_catalog(
                     == "administrateme_execute_pending_provider_action",
                     "available": available,
                 }
+                if tool == "administrateme_apple_reminder_choice":
+                    native_tool_authority[tool]["operations"] = {
+                        "status": available,
+                        "cancel_unconfirmed": available
+                        and not runtime._observation_active,
+                        "answer": bool(
+                            available
+                            and "prepare_external_actions" in permissions
+                            and apple_write_grant
+                            and execute_authorized
+                        ),
+                    }
+                    native_tool_authority[tool]["answer_rule"] = (
+                        "current-human-request.apple-reminder-list-choice.v1"
+                    )
+                    native_tool_authority[tool][
+                        "answer_preserves_original_due_and_expiry"
+                    ] = True
                 if available:
                     effective_tools.append(tool)
             effective_tools.sort()
@@ -1492,6 +1517,8 @@ def compose_member_catalog(
             row["openclaw"].update(
                 effective_tools=own_reminder_tools,
                 current_request_rule=RULE_ID,
+                clarification_tool="administrateme_cos_reminder_choice",
+                clarification_rule="current-human-request.cos-reminder-mode-choice.v1",
                 execution_authority_modes=["authenticated_current_request_policy"],
                 policy_receipt_is_human_approval=False,
                 historical_pending_auto_resume=False,

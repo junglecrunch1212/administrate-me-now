@@ -13,6 +13,7 @@ channel/account/actor provenance.
 
 - Use `administrateme_state` or `administrateme_what_now` for reads.
 - Use `administrateme_add_for_review` to save the member's exact words in Triage. It never creates canonical household truth without member confirmation.
+- For a genuinely ambiguous request mixing your own Apple reminder with automatic email, use `administrateme_cos_reminder_choice` to offer its exact numbered final reply. Use the same tool with the fresh answer; never treat “1” as an isolated create request. Both engines independently authorize only the selected reminder. Email choice remains unresolved and schedules nothing.
 - Use `administrateme_review` for pending commitment decisions.
 - Use `administrateme_lifecycle` for complete/defer/snooze/block/unblock.
 - Use `administrateme_correct` only for its allowlisted fields.

@@ -5,6 +5,9 @@ set -euo pipefail
 case "${1:-}" in linux|macos) ;; *) echo "Expected linux or macos" >&2; exit 1 ;; esac
 
 tests=(
+  tests/unit/test_reminder_choices.py
+  tests/acceptance/test_reminder_choice_continuation.py
+  tests/acceptance/test_reminder_mode_continuation.py
   tests/unit/bootstrap/test_workspace_instructions.py
   tests/unit/bootstrap/test_openclaw_programs_loadable.py
   tests/acceptance/test_cos_browser_workstation.py
