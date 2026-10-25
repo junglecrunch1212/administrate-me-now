@@ -66,6 +66,7 @@ function fakeApi(
     ) {
       gateways.set(method, { handler, scope: opts?.scope });
     },
+    registerAgentToolResultMiddleware: vi.fn(),
     registerService(service: OpenClawPluginService) {
       services.push(service);
     },
@@ -187,7 +188,7 @@ describe("native OpenClaw contract fixture", () => {
     const runtime = fakeApi();
     expect(pkg.peerDependencies.openclaw).toBe(OPENCLAW_VERSION);
     expect(pkg.openclaw.build.openclawCommit).toBe(OPENCLAW_COMMIT);
-    expect([...runtime.tools]).toHaveLength(35);
+    expect([...runtime.tools]).toHaveLength(38);
     expect([...runtime.commands]).toHaveLength(9);
     expect([...runtime.gateways]).toHaveLength(19);
     expect(runtime.gateways.has("administrateme.conversation.prepare")).toBe(true);
@@ -273,7 +274,7 @@ describe("native OpenClaw contract fixture", () => {
   it("admits a sealed native service run without exposing the session or choosing a member", async () => {
     const runtime = fakeApi();
     const run = vi.fn(async (_params: { sessionKey: string; message: string; idempotencyKey?: string; deliver?: boolean }) => ({ runId: "fixture-native-run" }));
-    runtime.api.runtime = { subagent: { run }, channel: { outbound: { loadAdapter: vi.fn() } } };
+    runtime.api.runtime = { config: { current: () => runtime.api.config }, subagent: { run, waitForRun: async () => ({ status: "ok" as const }) }, channel: { outbound: { loadAdapter: vi.fn() } } };
     const registration = runtime.gateways.get("administrateme.service.run")!;
     const respond = vi.fn();
     expect(registration.scope).toBe("operator.admin");
@@ -358,6 +359,7 @@ describe("native OpenClaw contract fixture", () => {
     });
     runtime.api.config = { channels: { imessage: { accounts: { "cos-fixture": {} } } } };
     runtime.api.runtime = {
+      config: { current: () => runtime.api.config },
       channel: { outbound: { loadAdapter: vi.fn(async () => ({ sendText })) } },
     };
     fetchMock
@@ -462,7 +464,7 @@ describe("native OpenClaw contract fixture", () => {
   it("exposes tools without starting services during tool discovery", () => {
     const runtime = fakeApi({}, "tool-discovery");
     expect([...runtime.gateways]).toHaveLength(14);
-    expect([...runtime.tools]).toHaveLength(35);
+    expect([...runtime.tools]).toHaveLength(38);
     expect(runtime.services).toHaveLength(0);
   });
 

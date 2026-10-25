@@ -328,6 +328,10 @@ def source_authority(
     event: dict[str, Any],
     contexts: list[ServiceRequestContext],
 ) -> dict[str, Any] | None:
+    if event["type"] == "cos.workstation.source_observed":
+        from adminme.workstation_sources import observation_authority
+
+        return observation_authority(runtime, session, event)
     context = _context_for(event, session, contexts)
     own_source = _self_mail(event, session) or _self_planning(event, session)
     if context is None and not own_source:

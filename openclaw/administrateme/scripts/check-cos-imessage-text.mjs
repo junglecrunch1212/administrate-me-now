@@ -4,6 +4,7 @@
  * account configuration, Messages database or channel send is constructed.
  */
 import assert from "node:assert/strict";
+import { checkRequestedEmailPolicy } from "./requested-email-policy-probe.mjs";
 import { execFileSync } from "node:child_process";
 import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
@@ -44,7 +45,7 @@ try {
   const loadedGuidance = await readFile(path.join(compiledWorkspace, "AGENTS.md"), "utf8");
   for (const instruction of ["minimal concise title", "preserve the no-automatic-send restriction",
     "Do not add", "not the affirmative reminder creation", "do not call an email/send or timer tool",
-    "rejected proposal alone does not prove a missing title or permission"]) {
+    "does not prove a missing title/permission"]) {
     assert.ok(loadedGuidance.includes(instruction), `Compiled workflow omits ${instruction}`);
   }
   const modulePath = path.join(directory, "pinned-format.mjs");
@@ -420,6 +421,9 @@ print(json.dumps([enabled, entry["hooks"]]))
   delete process.env[policySecretName];
 
   }
+
+  await checkRequestedEmailPolicy({ compiledPlugin: appleDirectory, nativeRegistration,
+    preparedPolicy: preparedPolicies[0], api, hookSdk, createHookRunner, versions });
 
   const literalCases = [...corpus.cases.map((row) => row.text.replace(/\s+/gu, " ").trim()),
     "**bold** _italic_ ~~strike~~ `code` <u>underline</u> [link](https://example.invalid/?x=1&y=2)",

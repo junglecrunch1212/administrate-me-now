@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json
 import os
 import re
 import secrets
@@ -38,13 +39,62 @@ class WorkspaceInstructionsError(RuntimeError):
     pass
 
 
+def instruction_layout(release: Path) -> dict[str, Any] | None:
+    """A release-local marker preserves exact legacy compilation on recovery."""
+    path = release / "bootstrap/openclaw/workspace-layout.json"
+    if not path.exists():
+        return None
+    if path.is_symlink() or not path.is_file():
+        raise WorkspaceInstructionsError("release instruction layout is unsafe")
+    try:
+        layout = json.loads(path.read_text())
+    except (ValueError, OSError) as exc:
+        raise WorkspaceInstructionsError(
+            "release instruction layout is invalid"
+        ) from exc
+    if (
+        not isinstance(layout, dict)
+        or set(layout) != {"version", "max_composed_bytes", "priority", "background"}
+        or layout["version"] != 1
+        or type(layout["max_composed_bytes"]) is not int
+        or not 1000 <= layout["max_composed_bytes"] <= 20000
+        or any(not isinstance(layout[key], list) for key in ("priority", "background"))
+    ):
+        raise WorkspaceInstructionsError("release instruction layout is invalid")
+    names = layout["priority"] + layout["background"]
+    if (
+        not layout["priority"]
+        or any(
+            not isinstance(name, str)
+            or re.fullmatch(r"[a-z][a-z0-9_]*\.md", name) is None
+            for name in names
+        )
+        or len(set(names)) != len(names)
+        or set(names)
+        != {
+            path.name for path in (release / "bootstrap/openclaw/programs").glob("*.md")
+        }
+    ):
+        raise WorkspaceInstructionsError(
+            "release instruction layout omits or repeats a program"
+        )
+    return layout
+
+
 def compile_instructions(release: Path) -> bytes:
     """Match compile-workspace.mjs without running candidate code or Node."""
-    root = release / "bootstrap" / "openclaw" / "programs"
+    root = release / "bootstrap/openclaw/programs"
     if not root.is_dir() or root.is_symlink():
         raise WorkspaceInstructionsError("release instruction sources are unavailable")
+    layout = instruction_layout(release)
+    names = (
+        layout["priority"]
+        if layout
+        else sorted(path.name for path in root.glob("*.md"))
+    )
     programs = []
-    for path in sorted(root.glob("*.md")):
+    for name in names:
+        path = root / name
         if path.is_symlink() or not path.is_file():
             raise WorkspaceInstructionsError("release instruction source is unsafe")
         programs.append(
@@ -53,10 +103,30 @@ def compile_instructions(release: Path) -> bytes:
         )
     if not programs:
         raise WorkspaceInstructionsError("release instruction sources are empty")
-    payload = (_HEADER + "\n".join(programs).rstrip() + "\n").encode("utf-8")
-    if len(payload) > _MAX_BYTES:
+    content = _HEADER + "\n".join(programs).rstrip() + "\n"
+    if layout:
+        content += (
+            "\n# Background program references\n\n"
+            "On a matching standing-order trigger, read the exact program below in the "
+            "installed administrateme-household skill's programs/ directory (relative to "
+            "its SKILL.md). These retained programs govern their background workflows; "
+            "they do not replace the current-request authority above.\n\n"
+        )
+        content += "".join(f"- `programs/{name}`\n" for name in layout["background"])
+    payload = content.encode("utf-8")
+    if len(payload) > (layout["max_composed_bytes"] if layout else _MAX_BYTES):
         raise WorkspaceInstructionsError("release instructions exceed the bounded size")
     return payload
+
+
+def validate_composed_instructions(release: Path, payload: bytes) -> None:
+    """Measure the entire injected file, including retained private overlays."""
+    layout = instruction_layout(release)
+    if layout and len(payload) > layout["max_composed_bytes"]:
+        raise WorkspaceInstructionsError(
+            "composed workspace instructions exceed the native 20000-byte budget; "
+            "private overlays are preserved; reconcile their placement before maintenance"
+        )
 
 
 def _directory(parent: int | None, name: str | Path) -> int:
@@ -223,6 +293,7 @@ def prepare_transition(
                 "preserve and reconcile the custom instructions before maintenance"
             )
         selected = payload.replace(before_generated, after_generated, 1)
+        validate_composed_instructions(target_release, selected)
         files.append(
             {
                 "coordinate": coordinate,
