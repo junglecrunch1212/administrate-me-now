@@ -1427,3 +1427,54 @@ def test_metadata_initialization_failure_closes_both_workers(
     assert not any(
         thread.name.startswith("adminme-event-log") for thread in threading.enumerate()
     )
+
+
+async def test_metadata_only_payload_reads_preserve_pages_filters_and_history(
+    log: EventLog, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ids = await log.append_batch(
+        [_event(i, type="foo" if i % 2 == 0 else "bar") for i in range(503)]
+    )
+    original_page = log._read_page  # noqa: SLF001 - SQL result allocation boundary
+    omitted_rows = 0
+
+    def inspect_native_rows(*args):
+        nonlocal omitted_rows
+        rows = original_page(*args)
+        if len(args) == 6 and args[5]:
+            for row in rows:
+                if row["type"] == "foo":
+                    # The native result must omit the body, not just discard an
+                    # already allocated payload in the projection callback.
+                    assert row["payload"] is None
+                    omitted_rows += 1
+                else:
+                    assert isinstance(row["payload"], str)
+        return rows
+
+    monkeypatch.setattr(log, "_read_page", inspect_native_rows)
+    limited = await _collect(
+        log,
+        cursor=ids[0],
+        through=ids[-2],
+        limit=500,
+        types=["foo", "bar"],
+        owner_scope="shared:household",
+        metadata_only_types=frozenset({"foo"}),
+    )
+    assert [e["event_id"] for e in limited] == ids[1:-1]
+    assert len(limited) == 501  # crosses the native 500-row page boundary
+    assert omitted_rows == 250
+    for event in limited:
+        if event["type"] == "foo":
+            assert event["_payload_omitted"] is True
+            assert "payload" not in event and "_payload_json" not in event
+        else:
+            assert "_payload_omitted" not in event
+            assert isinstance(event["payload"]["i"], int)
+    # A subsequent ordinary reader still receives the exact durable bodies.
+    complete = await _collect(log)
+    assert [e["payload"]["i"] for e in complete] == list(range(503))
+    assert all("_payload_omitted" not in event for event in complete)
+    with pytest.raises(CursorNotFound):
+        await _collect(log, cursor="missing", metadata_only_types=frozenset({"foo"}))

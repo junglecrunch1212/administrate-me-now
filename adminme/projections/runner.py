@@ -671,6 +671,7 @@ class ProjectionRunner:
                         types,
                         self._make_callback(name, projection),
                         raw_payload_types=self._raw_payload_types(name),
+                        metadata_only_types=self._metadata_only_types(name),
                         on_drain_end=self._delivery_settler(name, projection),
                     )
                     if replay_version_change:
@@ -885,6 +886,7 @@ class ProjectionRunner:
                     types=types_filter,
                     limit=500,
                     raw_payload_types=self._raw_payload_types(name),
+                    metadata_only_types=self._metadata_only_types(name),
                 ):
                     batch.append(envelope)
                     if len(batch) >= (1 if name == "money" else 500):
@@ -961,10 +963,17 @@ class ProjectionRunner:
                     "finance.projection_verified",
                 }
             )
-            # Context Fabric indexes only envelope coordinates and lineage
-            # for these types; it never consumes their Finance bodies. Retain
-            # the raw log representation instead of decoding it in the parent.
-            if name in {"money", "context_fabric"}
+            if name == "money"
+            else frozenset()
+        )
+
+    @staticmethod
+    def _metadata_only_types(name):
+        # Context Fabric's complete Finance graph depends only on envelope
+        # coordinates and lineage. Do not retrieve unused bodies from SQL.
+        return (
+            ProjectionRunner._raw_payload_types("money")
+            if name == "context_fabric"
             else frozenset()
         )
 

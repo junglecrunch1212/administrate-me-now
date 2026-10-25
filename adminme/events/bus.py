@@ -57,6 +57,7 @@ class _SubscriberState:
     checkpoint: str | None
     degraded: bool
     raw_payload_types: frozenset[str] = frozenset()
+    metadata_only_types: frozenset[str] = frozenset()
     on_drain_end: Callable[[], Awaitable[None]] | None = None
     draining: bool = False
     consecutive_failures: int = 0
@@ -141,6 +142,7 @@ class EventBus:
         replay_on_version_change: bool = False,
         delivery_concurrency: int = 1,
         raw_payload_types: frozenset[str] = frozenset(),
+        metadata_only_types: frozenset[str] = frozenset(),
         on_drain_end: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         if self._running:
@@ -235,6 +237,7 @@ class EventBus:
             consumer_version=consumer_version,
             delivery_concurrency=delivery_concurrency,
             raw_payload_types=raw_payload_types,
+            metadata_only_types=metadata_only_types,
             on_drain_end=on_drain_end,
             checkpoint=checkpoint,
             degraded=degraded,
@@ -399,6 +402,7 @@ class EventBus:
                 types=state.types_filter,
                 limit=READ_BATCH_SIZE,
                 raw_payload_types=state.raw_payload_types,
+                metadata_only_types=state.metadata_only_types,
             ):
                 if self._stopping.is_set() or not self._running:
                     return

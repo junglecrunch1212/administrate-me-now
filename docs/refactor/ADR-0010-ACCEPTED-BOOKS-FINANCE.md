@@ -159,11 +159,13 @@ byte-bounded without treating a short page as EOF.
 
 **PRESERVE** Context Fabric's metadata-only graph contract from
 `ADR-0008-DETERMINISTIC-CONTEXT-FABRIC.md`: for the three closed Finance event
-types, delivery and replay retain encoded payloads and index only envelope
-coordinates and lineage. This avoids decoding unused large financial bodies in
-the parent. Node/edge values, owner and visibility scope, source coordinates and
-successful-prefix checkpoints remain identical to replaying decoded envelopes;
-the production import/rebuild regression compares every graph column.
+types, delivery and replay request only envelope coordinates and lineage. SQL
+omits these unused bodies before creating driver/Python payload values, while
+preserving full bodies for Money and ordinary history reads. Node/edge values,
+owner and visibility scope, source coordinates and successful-prefix checkpoints
+remain identical to replaying decoded envelopes; the production import/rebuild
+regression compares every graph column. Its effect on combined RSS and allocator
+retention must be measured, not inferred from the absence of live Python objects.
 
 Each child uses the same pinned Python with isolated import paths, a credential-free
 environment, private stdio pipes, CORE=0 and a 60-second CPU limit. Parent watchdogs

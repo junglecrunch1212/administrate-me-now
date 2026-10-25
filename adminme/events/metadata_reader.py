@@ -121,7 +121,10 @@ class EventMetadataReader:
         if types:
             where.append("type IN (" + ",".join("?" for _ in types) + ")")
             params += types
-        sql = "SELECT count(*) FROM events"
+        # An unfiltered COUNT(*) authorizes a table-only read. SQLite passes
+        # the FROM clause's database qualifier for that callback, so name main
+        # explicitly; do not broaden the authorizer to accept unknown schemas.
+        sql = "SELECT count(*) FROM main.events"
         if where:
             sql += " WHERE " + " AND ".join(where)
         return int((await self._run(sql, params))[0])

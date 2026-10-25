@@ -149,7 +149,8 @@ def test_context_fabric_finance_metadata_matches_decoded_history_and_replay(
     def observe(self, envelope, conn):
         if envelope["type"] in FINANCE_TYPES:
             assert "payload" not in envelope
-            assert isinstance(envelope["_payload_json"], str)
+            assert "_payload_json" not in envelope
+            assert envelope["_payload_omitted"] is True
             observed.append(envelope["event_id"])
         return original(self, envelope, conn)
 

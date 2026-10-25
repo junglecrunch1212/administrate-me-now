@@ -676,6 +676,7 @@ class EventLog:
         owner_scope: str | None = None,
         types: list[str] | None = None,
         raw_payload_types: frozenset[str] = frozenset(),
+        metadata_only_types: frozenset[str] = frozenset(),
     ) -> AsyncIterator[dict[str, Any]]:
         if limit <= 0:
             raise ValueError("limit must be positive")
@@ -686,14 +687,21 @@ class EventLog:
         # turn instead of waking the event loop between the two database reads.
         read_page = self._read_checked_page
         while True:
-            rows = await self._run_locked(
-                read_page,
+            page_args = (
                 last,
                 through,
                 batch_size,
                 owner_scope,
                 tuple(types) if types else None,
             )
+            # Omit unused bodies in SQL, before the driver allocates Python
+            # strings. Other consumers retain the complete durable payload.
+            if metadata_only_types:
+                rows = await self._run_locked(
+                    read_page, *page_args, tuple(sorted(metadata_only_types))
+                )
+            else:
+                rows = await self._run_locked(read_page, *page_args)
             # Later cursors came from this append-only log's previous page.
             read_page = self._read_page
             if not rows:
@@ -701,10 +709,12 @@ class EventLog:
             last = rows[-1]["event_id"]
             exhausted = (
                 len(rows) < batch_size
-                and sum(len(row["payload"]) for row in rows) < 1024 * 1024
+                and sum(len(row["payload"] or "") for row in rows) < 1024 * 1024
             )
             for row in rows:
-                if row["type"] in raw_payload_types:
+                if row["type"] in metadata_only_types:
+                    yield _row_to_event(row, metadata_only=True)
+                elif row["type"] in raw_payload_types:
                     yield _row_to_event(row, raw_payload=True)
                 elif len(row["payload"]) >= 65536:
                     yield await asyncio.to_thread(_row_to_event, row)
@@ -836,11 +846,16 @@ class EventLog:
         limit: int,
         owner_scope: str | None,
         types: tuple[str, ...] | None,
+        metadata_only_types: tuple[str, ...] = (),
     ) -> list[sqlcipher3.Row]:
         # Existence is independent of the requested filters/watermark: an
         # unknown checkpoint must still fail when the filtered page is empty.
         if after_id is not None and not self._event_exists(after_id):
             raise CursorNotFound(after_id)
+        if metadata_only_types:
+            return self._read_page(
+                after_id, through, limit, owner_scope, types, metadata_only_types
+            )
         return self._read_page(after_id, through, limit, owner_scope, types)
 
     def _read_page(
@@ -850,6 +865,7 @@ class EventLog:
         limit: int,
         owner_scope: str | None,
         types: tuple[str, ...] | None,
+        metadata_only_types: tuple[str, ...] = (),
     ) -> list[sqlcipher3.Row]:
         where: list[str] = []
         params: list[Any] = []
@@ -866,7 +882,17 @@ class EventLog:
             placeholders = ",".join("?" for _ in types)
             where.append(f"type IN ({placeholders})")
             params.extend(types)
-        sql = _SELECT_COLUMNS + " FROM events"
+        columns = _SELECT_COLUMNS
+        if metadata_only_types:
+            placeholders = ",".join("?" for _ in metadata_only_types)
+            columns = columns.replace(
+                "source, payload,",
+                "source, CASE WHEN type IN ("
+                + placeholders
+                + ") THEN NULL ELSE payload END AS payload,",
+            )
+            params = [*metadata_only_types, *params]
+        sql = columns + " FROM events"
         if where:
             sql += " WHERE " + " AND ".join(where)
         sql += " ORDER BY event_id ASC LIMIT ?"
@@ -877,7 +903,7 @@ class EventLog:
         try:
             for row in cur.execute(sql, params):
                 rows.append(row)
-                byte_count += len(row["payload"])
+                byte_count += len(row["payload"] or "")
                 if byte_count >= 1024 * 1024:
                     break
             return rows
@@ -1515,10 +1541,13 @@ _SELECT_COLUMNS = (
 )
 
 
-def _row_to_event(row: sqlcipher3.Row, *, raw_payload: bool = False) -> dict[str, Any]:
+def _row_to_event(
+    row: sqlcipher3.Row, *, raw_payload: bool = False, metadata_only: bool = False
+) -> dict[str, Any]:
     """Return the full 15-column envelope shape (plus the legacy `version`
     and `source` MVP fields for backwards compatibility during the prompt-04
-    transition). Prompt 05+ callers should read `schema_version` directly."""
+    transition). Internal metadata consumers explicitly mark omitted bodies;
+    ordinary history reads retain full payloads and use `schema_version`."""
     return {
         "event_id": row["event_id"],
         "event_at_ms": row["event_at_ms"],
@@ -1537,7 +1566,9 @@ def _row_to_event(row: sqlcipher3.Row, *, raw_payload: bool = False) -> dict[str
         "causation_id": row["causation_id"],
         "source": json.loads(row["source"]) if row["source"] is not None else None,
         **(
-            {"_payload_json": row["payload"]}
+            {"_payload_omitted": True}
+            if metadata_only
+            else {"_payload_json": row["payload"]}
             if raw_payload
             else {"payload": json.loads(row["payload"])}
         ),
