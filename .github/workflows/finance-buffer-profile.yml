@@ -38,11 +38,12 @@ jobs:
         run: |
           .venv/bin/python -I -B tests/fixtures/finance_buffer_profile.py compare "$RUNNER_TEMP/finance-buffer-sources/before" "$RUNNER_TEMP/finance-buffer-sources/after" "$RUNNER_TEMP/finance-buffer-evidence/measurement"
       - name: Preserve bounded evidence and remove source scratch
+        id: evidence
         if: always()
         timeout-minutes: 1
         run: |
           .venv/bin/python -I -B - <<'PY_CLEANUP'
-          import json, os, pathlib, shutil
+          import hashlib, json, os, pathlib, shutil
           root=pathlib.Path(os.environ['RUNNER_TEMP'])
           source=root/'finance-buffer-sources'
           evidence=root/'finance-buffer-evidence'
@@ -54,13 +55,32 @@ jobs:
           record={'source_scratch_removed':not source.exists(),'scope':'Source scratch only; process reaping is recorded by the supervisor; runner loss cannot confirm cleanup'}
           (evidence/'cleanup.json').write_text(json.dumps(record)+'\n')
           size=sum(p.stat().st_size for p in evidence.rglob('*') if p.is_file())
-          assert size<=2*1024*1024, f'Artifact cap exceeded: {size}'
+          upload=evidence
+          exceeded=size>2*1024*1024
+          if exceeded:
+              upload=root/'finance-buffer-overflow-receipt'
+              upload.mkdir(exist_ok=False)
+              files=[]
+              for path in sorted(p for p in evidence.rglob('*') if p.is_file()):
+                  with path.open('rb') as stream:
+                      sha=hashlib.file_digest(stream,'sha256').hexdigest()
+                  files.append({'path':str(path.relative_to(evidence)), 'bytes':path.stat().st_size, 'sha256':sha})
+              summary={'failure':'Artifact cap exceeded; full evidence remains on runner only','evidence_bytes':size,'files':files[:256],'omitted_file_records':max(0,len(files)-256)}
+              (upload/'artifact-cap-failure.json').write_text(json.dumps(summary)+'\n')
+              for relative in ('preparation.json','measurement/verdict.json','measurement/processes.json','lifecycle/lifecycle.json'):
+                  path=evidence/relative
+                  if path.exists() and path.stat().st_size<=256*1024:
+                      shutil.copyfile(path,upload/relative.replace('/','-'))
+              assert sum(p.stat().st_size for p in upload.iterdir())<=2*1024*1024
+          with open(os.environ['GITHUB_OUTPUT'],'a') as output:
+              output.write(f'artifact_path={upload}\n')
+          if exceeded: raise SystemExit('Evidence exceeded artifact limit; bounded failure receipt retained')
           PY_CLEANUP
       - name: Retain comparison and failure receipts
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: finance-buffer-profile
-          path: ${{ runner.temp }}/finance-buffer-evidence
+          path: ${{ steps.evidence.outputs.artifact_path }}
           if-no-files-found: error
           retention-days: 7
