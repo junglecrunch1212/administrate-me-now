@@ -27,9 +27,11 @@ from adminme.openclaw_topology import (
 from adminme.cos_self_replies import self_reply_session
 from adminme.products.openclaw import main as seam
 from adminme.products.openclaw.service_context import (
-    FACT_FIELDS,
     READ_RANK,
+    ContextSourceKind,
     active_contexts,
+    context_source_matches,
+    context_source_types,
     fact_for,
     retained_sources,
     source_facts,
@@ -119,8 +121,15 @@ class ReadPrivateWorkRequest(ServiceOnlyRequest):
 
 
 class ReadServiceContextRequest(SourceFactsRequest):
+    source_kind: ContextSourceKind | None = None
     after_event_id: str | None = Field(default=None, min_length=1, max_length=240)
     limit: int = Field(default=20, ge=1, le=50)
+
+    @model_validator(mode="after")
+    def select_discovery_or_exact_sources(self) -> ReadServiceContextRequest:
+        if self.source_kind is not None and self.source_event_ids:
+            raise ValueError("choose source_kind discovery or exact source_event_ids")
+        return self
 
 
 class MemberFollowUpRequest(ServiceOnlyRequest):
@@ -877,10 +886,16 @@ async def read_context(
             scanned = 0
             matched = 0
             async for event in runtime.event_log.read_since(
-                cursor=body.after_event_id, types=list(FACT_FIELDS), owner_scope=scope
+                cursor=body.after_event_id,
+                types=context_source_types(body.source_kind),
+                owner_scope=scope,
             ):
                 scanned += 1
-                fact = fact_for(runtime, session, event, contexts)
+                fact = (
+                    fact_for(runtime, session, event, contexts)
+                    if context_source_matches(event, body.source_kind)
+                    else None
+                )
                 if fact:
                     facts.append(fact)
                     matched += 1
@@ -911,6 +926,7 @@ async def read_context(
     )
     return {
         "principal_id": session.principal.principal_id,
+        **({"source_kind": body.source_kind} if body.source_kind is not None else {}),
         "facts": facts,
         "next_cursor": next_cursor,
         "standing_contexts": [context.audit_payload() for context in contexts],

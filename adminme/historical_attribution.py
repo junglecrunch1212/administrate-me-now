@@ -73,6 +73,28 @@ async def _cos_response_owner_matches(event_log: EventLog, event_id: str) -> boo
         "standing_self_reply",
         "requested_self_reminder",
     }
+    requested_email = approval.get("authorization_method") == "requested_email"
+    conversation = approval.get("authorization_method") == "authenticated_conversation"
+    if requested_email or conversation:
+        from adminme.cos_response_assurance import _conversation_valid
+        from adminme.requested_email_assurance import requested_email_approval_valid
+
+        references = [
+            await event_log.get(str(approval[key]))
+            for key in (
+                ("request_source_event_id", "request_authorization_event_id")
+                if requested_email
+                else ("conversation_source_event_id",)
+            )
+            if approval.get(key)
+        ]
+        retained = {row["event_id"]: row for row in references if row is not None}
+        if not (
+            requested_email_approval_valid(approved, retained)
+            if requested_email
+            else _conversation_valid(approved, retained)
+        ):
+            return False
     if standing:
         from adminme.cos_response_assurance import _standing_valid
 
@@ -98,7 +120,16 @@ async def _cos_response_owner_matches(event_log: EventLog, event_id: str) -> boo
             return False
     return bool(
         attempt.get("schema_version") == 1
-        and approved.get("schema_version") in ({2, 3} if standing else {1, 2, 3})
+        and approved.get("schema_version")
+        in (
+            {5}
+            if requested_email
+            else {4}
+            if conversation
+            else {2, 3}
+            if standing
+            else {1, 2, 3}
+        )
         and all(
             row.get("source_adapter") == "openclaw-plugin"
             and row.get("source_account_id") == "cos-response"
@@ -110,8 +141,17 @@ async def _cos_response_owner_matches(event_log: EventLog, event_id: str) -> boo
         and attempt.get("tenant_id")
         and attempt.get("tenant_id") == approved.get("tenant_id")
         and approved.get("actor_identity")
-        == (COS_SERVICE_PRINCIPAL_ID if standing else member)
-        and attempt.get("actor_identity") in {member, COS_SERVICE_PRINCIPAL_ID}
+        == (
+            COS_SERVICE_PRINCIPAL_ID
+            if standing or requested_email or conversation
+            else member
+        )
+        and attempt.get("actor_identity")
+        in (
+            {COS_SERVICE_PRINCIPAL_ID}
+            if requested_email or conversation
+            else {member, COS_SERVICE_PRINCIPAL_ID}
+        )
         and approval.get("member_id") == member
         and payload.get("automatic_retry_allowed") is False
         and payload.get("openclaw_approval_event_id")

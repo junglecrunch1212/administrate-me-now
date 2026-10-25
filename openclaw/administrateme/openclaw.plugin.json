@@ -71,6 +71,8 @@
       "administrateme_service_private_work_state",
       "administrateme_service_private_state",
       "administrateme_service_context",
+      "administrateme_workstation_source_policy",
+      "administrateme_provision_workstation_source_policy",
       "administrateme_workstation_inventory",
       "administrateme_workstation_work"
     ]
@@ -112,6 +114,8 @@
     "administrateme_service_private_work_state": { "optional": true },
     "administrateme_service_private_state": { "optional": true },
     "administrateme_service_context": { "optional": true },
+    "administrateme_workstation_source_policy": { "optional": true },
+    "administrateme_provision_workstation_source_policy": { "optional": true },
     "administrateme_workstation_inventory": { "optional": true },
     "administrateme_workstation_work": { "optional": true }
   },

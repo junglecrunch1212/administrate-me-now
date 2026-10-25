@@ -17,6 +17,10 @@ import yaml
 from bootstrap.source_identity import SourceIdentityError
 from scripts.release_scope import (
     CONTRACT,
+    FINANCE_METADATA_COMPONENT_PATHS,
+    FINANCE_METADATA_REQUIRED_PATHS,
+    FINANCE_METADATA_SHARED,
+    FINANCE_METADATA_CHECK_SCRIPT,
     COS_SERVICE_WORK_APPLICATION,
     COS_SERVICE_WORK_CHECK_SCRIPT,
     COS_SERVICE_WORK_NATIVE_INSTALL,
@@ -29,6 +33,15 @@ from scripts.release_scope import (
     _service_work_ingest,
     _service_work_observation,
     _service_work_history,
+    UPDATER_SOURCE_ASSURANCE,
+    UPDATER_EMAIL_ATTRIBUTION,
+    _updater_email_attribution,
+    UPDATER_EFFECT_CONTEXT_PATHS,
+    UPDATER_EFFECT_CONTEXT_SHARED_PATHS,
+    UPDATER_EFFECT_CONTEXT_SHARED_REPLACEMENTS,
+    _updater_effect_context_shared_source,
+    _updater_mode,
+    _updater_source_assurance,
     UPDATER_COMPONENT_PATHS,
     UPDATER_TEST_PATHS,
     UPDATER_REQUIRED_PATHS,
@@ -145,6 +158,7 @@ def _needs(proof: dict[str, Any], platform: str) -> dict[str, Any]:
         "cos-recovery-history",
         "cos-reminders",
         "updater-delivery",
+        "finance-metadata",
         "cos-service-work",
         "system-wide",
     ],
@@ -184,6 +198,7 @@ def test_scope_gate_requires_exact_corresponding_success(
         "cos-recovery-history",
         "cos-reminders",
         "updater-delivery",
+        "finance-metadata",
         "cos-service-work",
         "cos-google-workspace",
         "member-google-settings",
@@ -648,6 +663,7 @@ def test_stable_protected_job_recomputes_scope_and_requires_real_worker_results(
         "cos-recovery-history-validation",
         "cos-reminder-validation",
         "updater-delivery-validation",
+        "finance-metadata-validation",
         "cos-service-work-validation",
         system,
     }
@@ -1686,7 +1702,9 @@ def test_updater_scope_binds_closed_paths_and_optional_feature_proof(
     for module, test in UPDATER_OPTIONAL_MODULE_TESTS.items():
         _commit(path, module, "# Reviewed optional delivery feature\n")
         head = _commit(path, test, "# Required feature proof\n")
-    for allowed in sorted(UPDATER_COMPONENT_PATHS | UPDATER_TEST_PATHS):
+    for allowed in sorted(
+        (UPDATER_COMPONENT_PATHS | UPDATER_TEST_PATHS) - UPDATER_EFFECT_CONTEXT_PATHS
+    ):
         head = _commit(path, allowed, "# Reviewed updater behavior\n")
     (path / "adminme/runtime.py").write_text("UNCOMMITTED = True\n")
     proof = select_scope(path, _event(base, head), checkout_sha=head)
@@ -1850,8 +1868,8 @@ def test_updater_worker_requires_recovery_and_supported_process_checks(
         "test_ci_release_gates.py",
         "prepared_runtime workspace_instructions storage_headroom",
         'test -f "tests/unit/bootstrap/test_$module.py"',
-        "poetry run mypy bootstrap bridge/adminme_bridge scripts/release_scope.py",
-        "poetry run pyright bootstrap scripts/release_scope.py",
+        "poetry run mypy bootstrap bridge/adminme_bridge adminme/source_assurance.py adminme/historical_attribution.py scripts/release_scope.py",
+        "poetry run pyright bootstrap adminme/source_assurance.py adminme/historical_attribution.py scripts/release_scope.py",
         "scripts/verify_invariants.sh",
         "poetry run ruff check",
         "poetry run ruff format --check",
@@ -3859,3 +3877,364 @@ def test_reminder_mode_router_scope_reads_immutable_tree(
         select_scope(path, _event(base, bad), checkout_sha=bad)["scope"]
         == "system-wide"
     )
+
+
+def _email_audit_sources() -> tuple[str, str]:
+    after = (ROOT / UPDATER_SOURCE_ASSURANCE).read_text()
+    start = after.index("    # Hydrate only the retained instruction")
+    end = after.index("    cos_events: list[dict[str, Any]] = []", start)
+    before = after[:start] + after[end:]
+    before = before.replace(
+        'event["event_id"]\n            in cos_ids\n            | cos_openclaw_ids\n'
+        "            | cos_standing_references\n            | cos_instruction_references",
+        'event["event_id"] in cos_ids | cos_openclaw_ids | cos_standing_references',
+    )
+    assert before != after and "cos_instruction_references" not in before
+    return before, after
+
+
+def test_email_context_scope_normalizes_only_exact_reference_hydration() -> None:
+    before, after = _email_audit_sources()
+    assert _updater_source_assurance(before) == _updater_source_assurance(after)
+    for changed in (
+        after.replace('"request_source_event_id"', '"any_source_event_id"'),
+        after.replace('"conversation_source_event_id"', '"message_id"'),
+        after.replace('if event["type"] == COS_APPROVED', "if True"),
+        after.replace('"requested_email": (', '"exact": ('),
+        after.replace("| cos_instruction_references", "| all_private_sources"),
+        after.replace(
+            "include_payload_for=sorted(payload_types)",
+            "include_payload_for=sorted(interesting)",
+        ),
+        after.replace("full_event is None", "False"),
+        after + "\nUNRELATED = True\n",
+    ):
+        assert _updater_source_assurance(changed) != _updater_source_assurance(before)
+
+
+def _effect_context_shared_sources() -> dict[str, tuple[str, str]]:
+    sources = {UPDATER_SOURCE_ASSURANCE: _email_audit_sources()}
+    for path, replacements in UPDATER_EFFECT_CONTEXT_SHARED_REPLACEMENTS.items():
+        after = (ROOT / path).read_text()
+        before = after
+        for old, new in replacements:
+            assert before.count(new) == 1
+            before = before.replace(new, old)
+        sources[path] = before, after
+    return sources
+
+
+def _effect_context_candidate(
+    path: Path, missing: str | None = None
+) -> tuple[str, str]:
+    _updater_candidate(path)
+    sources = _effect_context_shared_sources()
+    for shared, (before, _after) in sources.items():
+        _commit(path, shared, before)
+        (path / shared).chmod(int(_updater_mode(shared)[-3:], 8))
+    _git(path, "add", "--all")
+    _git(path, "commit", "--allow-empty", "-m", "Existing shared entry points")
+    base = _git(path, "rev-parse", "HEAD")
+    for related in sorted(UPDATER_EFFECT_CONTEXT_PATHS - {missing}):
+        _commit(
+            path,
+            related,
+            sources[related][1]
+            if related in sources
+            else "# Reviewed repair and required proof\n",
+        )
+    return base, _git(path, "rev-parse", "HEAD")
+
+
+@pytest.mark.parametrize("shared", sorted(UPDATER_EFFECT_CONTEXT_SHARED_PATHS))
+def test_effect_context_entry_points_normalize_only_reviewed_hunks(shared: str) -> None:
+    before, after = _effect_context_shared_sources()[shared]
+    original = _updater_effect_context_shared_source(shared, before)
+    repaired = _updater_effect_context_shared_source(shared, after)
+    assert original is not None and repaired is not None
+    assert original == (repaired[0], False)
+    assert repaired[1] is True
+    # The precise optional proof argument is not a general exemption for these
+    # privacy/accounting, audit-export, or launcher entry points.
+    for changed in (
+        after + "\nUNRELATED = True\n",
+        after.replace("effect_context_repair_plan", "unreviewed_plan")
+        if shared != UPDATER_SOURCE_ASSURANCE
+        else after.replace("cos_instruction_references", "all_private_sources"),
+    ):
+        value = _updater_effect_context_shared_source(shared, changed)
+        assert value is None or value[0] != original[0]
+    if shared in UPDATER_EFFECT_CONTEXT_SHARED_REPLACEMENTS:
+        old, new = UPDATER_EFFECT_CONTEXT_SHARED_REPLACEMENTS[shared][0]
+        assert (
+            _updater_effect_context_shared_source(shared, after.replace(new, old))
+            is None
+        )
+
+
+@pytest.mark.parametrize("drift", ["none", "neighbor", "dependency", "mode"])
+def test_email_context_repair_uses_existing_updater_lane_with_closed_scope(
+    repository: tuple[Path, str], drift: str
+) -> None:
+    path, _ = repository
+    _commit(path, "poetry.lock", "# fixed dependency\n")
+    base, head = _effect_context_candidate(path)
+    if drift == "neighbor":
+        head = _commit(
+            path,
+            UPDATER_SOURCE_ASSURANCE,
+            (path / UPDATER_SOURCE_ASSURANCE).read_text() + "\nUNRELATED = True\n",
+        )
+    elif drift == "dependency":
+        head = _commit(path, "poetry.lock", "# changed dependency\n")
+    elif drift == "mode":
+        (path / UPDATER_SOURCE_ASSURANCE).chmod(0o755)
+        _git(path, "add", "--all")
+        _git(path, "commit", "-m", "Unsupported source mode")
+        head = _git(path, "rev-parse", "HEAD")
+    proof = select_scope(path, _event(base, head), checkout_sha=head)
+    assert proof["scope"] == ("updater-delivery" if drift == "none" else "system-wide")
+    script = (ROOT / UPDATER_CHECK_SCRIPT).read_text()
+    for test in (
+        "tests/acceptance/test_cos_email_audit_context.py",
+        "tests/unit/test_source_assurance.py",
+        "tests/unit/test_observation_readiness_window.py",
+        "tests/unit/bootstrap/test_effect_context_repair.py",
+        "tests/acceptance/test_effect_context_repair_operations.py",
+    ):
+        assert "  " + test in script.splitlines()
+
+
+@pytest.mark.parametrize("shared", sorted(UPDATER_EFFECT_CONTEXT_SHARED_PATHS))
+def test_effect_context_scope_rejects_unrelated_shared_entrypoint_edits(
+    repository: tuple[Path, str], shared: str
+) -> None:
+    path, _ = repository
+    base, _ = _effect_context_candidate(path)
+    head = _commit(path, shared, (path / shared).read_text() + "\nUNRELATED = True\n")
+    assert (
+        select_scope(path, _event(base, head), checkout_sha=head)["scope"]
+        == "system-wide"
+    )
+
+
+@pytest.mark.parametrize("missing", sorted(UPDATER_EFFECT_CONTEXT_PATHS))
+def test_new_effect_context_repair_requires_its_complete_proof(
+    repository: tuple[Path, str], missing: str
+) -> None:
+    path, _ = repository
+    base, head = _effect_context_candidate(path, missing)
+    assert (
+        select_scope(path, _event(base, head), checkout_sha=head)["scope"]
+        == "system-wide"
+    )
+
+
+@pytest.mark.parametrize("shared", sorted(UPDATER_EFFECT_CONTEXT_SHARED_PATHS))
+def test_effect_context_scope_preserves_each_shared_entrypoint_mode(
+    repository: tuple[Path, str], shared: str
+) -> None:
+    path, _ = repository
+    base, _ = _effect_context_candidate(path)
+    target = path / shared
+    target.chmod(0o644 if _updater_mode(shared) == "100755" else 0o755)
+    _git(path, "add", "--", shared)
+    _git(path, "commit", "-m", "Changed shared entrypoint mode")
+    head = _git(path, "rev-parse", "HEAD")
+    assert (
+        select_scope(path, _event(base, head), checkout_sha=head)["scope"]
+        == "system-wide"
+    )
+
+
+_HISTORICAL_LEGACY_OWNER = 'async def _cos_response_owner_matches(event_log: EventLog, event_id: str) -> bool:\n    """Attribute the exact internal command without inventing a provider binding.\n\n    These envelope checks establish only ownership. Source assurance separately\n    validates recipient policy, both approvals, fingerprints and terminal effects.\n    Private payloads used for correlation never enter the exported report.\n    """\n    attempt = await event_log.get(event_id)\n    if attempt is None or attempt.get("type") != ATTEMPTED:\n        return False\n    payload = attempt.get("payload") or {}\n    member = payload.get("member_id")\n    approval_id = payload.get("approval_event_id")\n    if (\n        not isinstance(member, str)\n        or not member\n        or not isinstance(approval_id, str)\n        or not approval_id\n        or approval_id >= event_id\n    ):\n        return False\n    approved = await event_log.get(approval_id)\n    if approved is None or approved.get("type") != APPROVED:\n        return False\n    approval = approved.get("payload") or {}\n    scope = f"private:{member}"\n    standing = approval.get("authorization_method") in {\n        "standing_self_reply",\n        "requested_self_reminder",\n    }\n    if standing:\n        from adminme.cos_response_assurance import _standing_valid\n\n        references = [\n            await event_log.get(approval.get(key, ""))\n            for key in (\n                "standing_authorization_event_id",\n                "source_message_event_id",\n                "reminder_event_id",\n                "reminder_binding_event_id",\n            )\n            if approval.get(key)\n        ]\n        if approval.get("reminder_event_id"):\n            reminder = await event_log.get(approval["reminder_event_id"])\n            if reminder is not None:\n                references.append(\n                    await event_log.get(reminder["payload"]["activation_event_id"])\n                )\n        if not _standing_valid(\n            approved, {row["event_id"]: row for row in references if row is not None}\n        ):\n            return False\n    return bool(\n        attempt.get("schema_version") == 1\n        and approved.get("schema_version") in ({2, 3} if standing else {1, 2, 3})\n        and all(\n            row.get("source_adapter") == "openclaw-plugin"\n            and row.get("source_account_id") == "cos-response"\n            and row.get("owner_scope") == scope\n            and row.get("visibility_scope") == scope\n            and row.get("payload", {}).get("contract") == RESPONSE_CONTRACT\n            for row in (attempt, approved)\n        )\n        and attempt.get("tenant_id")\n        and attempt.get("tenant_id") == approved.get("tenant_id")\n        and approved.get("actor_identity")\n        == (COS_SERVICE_PRINCIPAL_ID if standing else member)\n        and attempt.get("actor_identity") in {member, COS_SERVICE_PRINCIPAL_ID}\n        and approval.get("member_id") == member\n        and payload.get("automatic_retry_allowed") is False\n        and payload.get("openclaw_approval_event_id")\n        and attempt.get("causation_id") == payload["openclaw_approval_event_id"]\n        and payload.get("content_fingerprint")\n        and payload.get("content_fingerprint") == approval.get("content_fingerprint")\n        and payload.get("policy_event_id")\n        and payload.get("policy_event_id") == approval.get("policy_event_id")\n    )'
+
+
+def _historical_email_sources() -> tuple[str, str]:
+    import ast
+
+    after = (ROOT / UPDATER_EMAIL_ATTRIBUTION).read_text()
+    owner = next(
+        n
+        for n in ast.parse(after).body
+        if isinstance(n, ast.AsyncFunctionDef)
+        and n.name == "_cos_response_owner_matches"
+    )
+    lines = after.splitlines(keepends=True)
+    before = (
+        "".join(lines[: owner.lineno - 1])
+        + _HISTORICAL_LEGACY_OWNER
+        + "\n"
+        + "".join(lines[owner.end_lineno :])
+    )
+    return before, after
+
+
+def test_email_attribution_scope_accepts_only_exact_owner_predicate() -> None:
+    before, after = _historical_email_sources()
+    assert _updater_email_attribution(before) == _updater_email_attribution(after)
+    for altered in (
+        after.replace('"request_source_event_id"', '"unbound_source"'),
+        after.replace('"conversation_source_event_id"', '"unbound_source"'),
+        after.replace("if requested_email or conversation:", "if False:"),
+        after.replace('and approval.get("member_id") == member', "and True"),
+        after.replace(
+            'and attempt.get("tenant_id") == approved.get("tenant_id")', "and True"
+        ),
+        after.replace(
+            "{COS_SERVICE_PRINCIPAL_ID}\n            if requested_email",
+            "{member}\n            if requested_email",
+        ),
+        after + "\nUNRELATED = True\n",
+    ):
+        assert altered != after
+        assert _updater_email_attribution(altered) != _updater_email_attribution(before)
+
+
+@pytest.mark.parametrize("drift", ["none", "neighbor", "owner", "mode"])
+def test_historical_repair_and_successor_stay_in_closed_updater_lane(
+    repository: tuple[Path, str], drift: str
+) -> None:
+    path, _ = repository
+    before, after = _historical_email_sources()
+    _effect_context_candidate(path)
+    base = _commit(path, UPDATER_EMAIL_ATTRIBUTION, before)
+    _commit(
+        path,
+        "bootstrap/effect_context_repair.py",
+        "# Bounded successor plan admission\n",
+    )
+    if drift == "neighbor":
+        after += "\nUNRELATED = True\n"
+    elif drift == "owner":
+        after = after.replace('"request_source_event_id"', '"unbound_source"')
+    head = _commit(path, UPDATER_EMAIL_ATTRIBUTION, after)
+    if drift == "mode":
+        (path / UPDATER_EMAIL_ATTRIBUTION).chmod(0o755)
+        _git(path, "add", "--all")
+        _git(path, "commit", "-m", "Unsupported history mode")
+        head = _git(path, "rev-parse", "HEAD")
+    assert select_scope(path, _event(base, head), checkout_sha=head)["scope"] == (
+        "updater-delivery" if drift == "none" else "system-wide"
+    )
+
+
+def _finance_metadata_candidate(path: Path) -> tuple[str, str]:
+    # Use the actual reviewed shared files; all surrounding bytes are pinned.
+    for name in FINANCE_METADATA_SHARED:
+        _commit(path, name, (ROOT / name).read_text())
+    base = _git(path, "rev-parse", "HEAD")
+    for name in sorted(FINANCE_METADATA_REQUIRED_PATHS - set(FINANCE_METADATA_SHARED)):
+        head = _commit(path, name, (ROOT / name).read_text())
+    return base, head
+
+
+def test_finance_metadata_selects_only_complete_immutable_scope(repository):
+    path, _ = repository
+    base, head = _finance_metadata_candidate(path)
+    (path / "adminme/runtime.py").write_text("UNCOMMITTED = True\n")
+    proof = select_scope(path, _event(base, head), checkout_sha=head)
+    assert proof["scope"] == "finance-metadata"
+    assert len(proof["finance_metadata_dependency_sha256"]) == 64
+    for platform in ("linux", "macos"):
+        assert required_workers("finance-metadata", platform) == (
+            "release-scope",
+            "finance-metadata-validation",
+        )
+        verify_gate(proof, _needs(proof, platform), platform=platform)
+
+
+@pytest.mark.parametrize(
+    "other",
+    [
+        *FINANCE_METADATA_SHARED,
+        "adminme/events/bus.py",
+        "adminme/products/member/main.py",
+        "adminme/finance/importer.py",
+        "adminme/settings_control.py",
+        "bootstrap/cos_channel_activation.py",
+        "poetry.lock",
+        "tests/unreviewed.py",
+    ],
+)
+def test_finance_metadata_rejects_neighbor_drift_and_forged_claims(repository, other):
+    path, _ = repository
+    base, _ = _finance_metadata_candidate(path)
+    head = _commit(path, other, "UNREVIEWED = True\n")
+    event = _event(base, head)
+    event.update(finance_metadata_interfaces_equal=True, changed_paths=[])
+    assert select_scope(path, event, checkout_sha=head)["scope"] == "system-wide"
+
+
+@pytest.mark.parametrize("drift", ["none", "shared", "missing-test", "mode", "unknown"])
+def test_finance_metadata_checks_candidate_and_actual_merge_dependencies(
+    repository, drift
+):
+    path, _ = repository
+    base, head = _finance_metadata_candidate(path)
+    if drift == "shared":
+        (path / "adminme/events/log.py").write_text("UNREVIEWED = True\n")
+    elif drift == "missing-test":
+        (path / "tests/acceptance/test_finance_metadata_history.py").unlink()
+    elif drift == "mode":
+        (path / "adminme/finance/metadata.py").chmod(0o755)
+    elif drift == "unknown":
+        (path / "adminme/finance/worker.py").write_text("UNREVIEWED = True\n")
+    _git(path, "add", "-A")
+    merge = _git(
+        path,
+        "commit-tree",
+        _git(path, "write-tree"),
+        "-p",
+        base,
+        "-p",
+        head,
+        "-m",
+        "Synthetic exact-parent metadata merge",
+    )
+    _git(path, "checkout", "--detach", merge)
+    proof = select_scope(path, _event(base, head), checkout_sha=merge)
+    assert proof["scope"] == ("finance-metadata" if drift == "none" else "system-wide")
+
+
+@pytest.mark.parametrize("status", ["D", "T", "U"])
+def test_finance_metadata_rejects_removed_or_retyped_component(status):
+    for path in FINANCE_METADATA_COMPONENT_PATHS:
+        assert (
+            choose_scope(
+                [(status, path)],
+                interfaces_equal=False,
+                finance_metadata_interfaces_equal=True,
+                path_modes={path: {"100644"}},
+            )
+            == "system-wide"
+        )
+
+
+@pytest.mark.parametrize(("filename", "protected", "platform", "system"), RELEASE_JOBS)
+def test_finance_metadata_worker_requires_native_owner_and_history_proof(
+    filename, protected, platform, system
+):
+    job = _workflow(filename)["jobs"]["finance-metadata-validation"]
+    assert job["if"] == "${{ needs.release-scope.outputs.scope == 'finance-metadata' }}"
+    assert job["steps"][-1]["id"] == "validated" and "if" not in job["steps"][-1]
+    commands = "\n".join(step.get("run", "") for step in job["steps"])
+    assert f"bash {FINANCE_METADATA_CHECK_SCRIPT} {platform}" in commands
+    script = (ROOT / FINANCE_METADATA_CHECK_SCRIPT).read_text()
+    for required in [
+        "set -euo pipefail",
+        '"${GITHUB_ACTIONS:-}" == true',
+        "--runxfail",
+        "test_finance_metadata_owner.py",
+        "test_finance_metadata_history.py",
+        "test_event_log.py",
+        "test_schema_registry.py",
+        "test_event_log_metadata_migration.py",
+        "test_ci_release_gates.py",
+        "poetry run mypy",
+        "ADMINME_GATE7_FINANCE_METADATA_ONLY=1",
+        "npm run test:gate7",
+        "scripts/verify_invariants.sh",
+    ]:
+        assert required in script
+    assert "finance_watchdog.py" not in script

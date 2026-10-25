@@ -333,6 +333,183 @@ COS_REMINDER_REQUIRED_PATHS = frozenset(
         "scripts/acceptance/cos-reminder-release.sh",
     }
 )
+UPDATER_SOURCE_ASSURANCE = "adminme/source_assurance.py"
+UPDATER_EMAIL_ATTRIBUTION = "adminme/historical_attribution.py"
+UPDATER_EFFECT_CONTEXT_COMPONENT_PATHS = frozenset(
+    {"bootstrap/effect_context_repair.py"}
+)
+UPDATER_EFFECT_CONTEXT_TEST_PATHS = frozenset(
+    {
+        "tests/unit/bootstrap/test_effect_context_repair.py",
+        "tests/acceptance/test_effect_context_repair_operations.py",
+        "tests/acceptance/test_cos_email_audit_context.py",
+        "tests/unit/test_source_assurance.py",
+        "tests/unit/test_observation_readiness_window.py",
+        "tests/unit/test_historical_attribution.py",
+    }
+)
+UPDATER_EFFECT_CONTEXT_SHARED_REPLACEMENTS: dict[str, tuple[tuple[str, str], ...]] = {
+    "bootstrap/cli.py": (
+        (
+            (
+                '            child.add_argument("--submission-repair-manifest", type=Path)\n'
+                "            child.add_argument(\n"
+            ),
+            (
+                '            child.add_argument("--submission-repair-manifest", type=Path)\n'
+                '            child.add_argument("--effect-context-repair-plan", type=Path)\n'
+                "            child.add_argument(\n"
+            ),
+        ),
+        (
+            ("            ),\n        )\n"),
+            (
+                "            ),\n"
+                "            effect_context_repair_plan=(\n"
+                '                args.effect_context_repair_plan if args.command == "upgrade" else None\n'
+                "            ),\n"
+                "        )\n"
+            ),
+        ),
+    ),
+    "bootstrap/htr10_export.py": (
+        (
+            (
+                "    submission_repair_manifest: Path | None = None,\n"
+                "    test_mode: bool = False,\n"
+            ),
+            (
+                "    submission_repair_manifest: Path | None = None,\n"
+                "    effect_context_repair_plan: Path | None = None,\n"
+                "    test_mode: bool = False,\n"
+            ),
+        ),
+        (
+            (
+                "    repair = None\n"
+                "    if submission_repair_manifest is not None:\n"
+                "        from bootstrap.submission_repair import (\n"
+            ),
+            (
+                "    repair = None\n"
+                "    if effect_context_repair_plan is not None:\n"
+                "        from bootstrap.effect_context_repair import load_plan, verify_proof\n"
+                "        from bootstrap.source_identity import reviewed_candidate_commit\n"
+                "\n"
+                "        if submission_repair_manifest is not None or transition_public is not None:\n"
+                "            raise HTR10ExportError(\n"
+                '                "effect-context repair cannot combine deployment exceptions"\n'
+                "            )\n"
+                "        plan = load_plan(\n"
+                "            effect_context_repair_plan,\n"
+                "            paths,\n"
+                "            repository_root,\n"
+                "            candidate=reviewed_candidate_commit(repository_root),\n"
+                "            predecessor=capture_deployment_snapshot(paths).predecessor_commit,\n"
+                "            test_mode=test_mode,\n"
+                "        )\n"
+                "        await asyncio.to_thread(\n"
+                "            verify_proof,\n"
+                "            paths,\n"
+                "            repository_root,\n"
+                "            plan.effect_context_proof,\n"
+                "            diagnostics=diagnostics,\n"
+                "            test_mode=test_mode,\n"
+                "        )\n"
+                "    elif submission_repair_manifest is not None:\n"
+                "        from bootstrap.submission_repair import (\n"
+            ),
+        ),
+        (
+            (
+                '    parser.add_argument("--submission-repair-manifest", type=Path)\n'
+                "    parser.add_argument(\n"
+            ),
+            (
+                '    parser.add_argument("--submission-repair-manifest", type=Path)\n'
+                '    parser.add_argument("--effect-context-repair-plan", type=Path)\n'
+                "    parser.add_argument(\n"
+            ),
+        ),
+        (
+            (
+                "            submission_repair_manifest=args.submission_repair_manifest,\n"
+                '            test_mode=os.environ.get("ADMINME_TEST_MODE") == "1",\n'
+            ),
+            (
+                "            submission_repair_manifest=args.submission_repair_manifest,\n"
+                "            effect_context_repair_plan=args.effect_context_repair_plan,\n"
+                '            test_mode=os.environ.get("ADMINME_TEST_MODE") == "1",\n'
+            ),
+        ),
+    ),
+    "bootstrap/update.sh": (
+        (
+            (
+                '  submission_repair_manifest=""\n'
+                '  for argument in "${requested_args[@]}"; do\n'
+            ),
+            (
+                '  submission_repair_manifest=""\n'
+                '  effect_context_repair_plan=""\n'
+                '  for argument in "${requested_args[@]}"; do\n'
+            ),
+        ),
+        (
+            ("        ;;\n      --submission-repair-manifest=*)\n"),
+            (
+                "        ;;\n"
+                "      --effect-context-repair-plan=*)\n"
+                '        [[ -z "$effect_context_repair_plan" ]] || die "effect-context repair plan was repeated"\n'
+                '        effect_context_repair_plan="${argument#*=}"\n'
+                '        [[ "$effect_context_repair_plan" == /* && -f "$effect_context_repair_plan" ]] \\\n'
+                '          || die "effect-context repair plan must name an absolute private file"\n'
+                "        ;;\n"
+                "      --submission-repair-manifest=*)\n"
+            ),
+        ),
+        (
+            ('submission_repair_flag=""\nwhile [[ "${1:-}" == --* ]]; do\n'),
+            (
+                'submission_repair_flag=""\n'
+                'effect_context_repair_flag=""\n'
+                'while [[ "${1:-}" == --* ]]; do\n'
+            ),
+        ),
+        (
+            ("      ;;\n    --submission-repair-manifest=*)\n"),
+            (
+                "      ;;\n"
+                "    --effect-context-repair-plan=*)\n"
+                '      [[ -z "$effect_context_repair_flag" ]] || fail "effect-context repair plan was repeated"\n'
+                '      effect_context_repair_flag="$1"\n'
+                "      ;;\n"
+                "    --submission-repair-manifest=*)\n"
+            ),
+        ),
+        (
+            (
+                'upgrade_args=(upgrade "$candidate")\n'
+                'if [[ -n "$submission_repair_flag" ]]; then\n'
+            ),
+            (
+                'upgrade_args=(upgrade "$candidate")\n'
+                'if [[ -n "$effect_context_repair_flag" ]]; then\n'
+                '  upgrade_args+=("$effect_context_repair_flag")\n'
+                "fi\n"
+                'if [[ -n "$submission_repair_flag" ]]; then\n'
+            ),
+        ),
+    ),
+}
+UPDATER_EFFECT_CONTEXT_SHARED_PATHS = frozenset(
+    {UPDATER_SOURCE_ASSURANCE, *UPDATER_EFFECT_CONTEXT_SHARED_REPLACEMENTS}
+)
+UPDATER_EFFECT_CONTEXT_PATHS = (
+    UPDATER_EFFECT_CONTEXT_COMPONENT_PATHS
+    | UPDATER_EFFECT_CONTEXT_TEST_PATHS
+    | UPDATER_EFFECT_CONTEXT_SHARED_PATHS
+)
 UPDATER_COMPONENT_PATHS = frozenset(
     {
         "bootstrap/upgrade.py",
@@ -347,6 +524,7 @@ UPDATER_COMPONENT_PATHS = frozenset(
         "bootstrap/openclaw_tools.py",
     }
 )
+UPDATER_COMPONENT_PATHS |= UPDATER_EFFECT_CONTEXT_COMPONENT_PATHS
 UPDATER_TEST_PATHS = frozenset(
     {
         "tests/unit/bootstrap/test_source_identity.py",
@@ -368,6 +546,7 @@ UPDATER_TEST_PATHS = frozenset(
         "tests/acceptance/test_macos_bootstrap_operations.py",
     }
 )
+UPDATER_TEST_PATHS |= UPDATER_EFFECT_CONTEXT_TEST_PATHS
 UPDATER_CHECK_SCRIPT = "scripts/acceptance/updater-delivery-release.sh"
 UPDATER_OPTIONAL_MODULE_TESTS = {
     "bootstrap/prepared_runtime.py": "tests/unit/bootstrap/test_prepared_runtime.py",
@@ -376,7 +555,11 @@ UPDATER_OPTIONAL_MODULE_TESTS = {
 }
 UPDATER_REQUIRED_PATHS = (
     UPDATER_COMPONENT_PATHS | UPDATER_TEST_PATHS | {UPDATER_CHECK_SCRIPT}
-) - (UPDATER_OPTIONAL_MODULE_TESTS.keys() | UPDATER_OPTIONAL_MODULE_TESTS.values())
+) - (
+    UPDATER_OPTIONAL_MODULE_TESTS.keys()
+    | UPDATER_OPTIONAL_MODULE_TESTS.values()
+    | UPDATER_EFFECT_CONTEXT_PATHS
+)
 COS_SERVICE_WORK_APPLICATION = "adminme/runtime/application.py"
 COS_SERVICE_WORK_MEMBER = "adminme/products/member/main.py"
 COS_SERVICE_WORK_INGEST = "adminme/products/bridge/routers/ingest.py"
@@ -632,6 +815,62 @@ COS_SERVICE_WORK_REQUIRED_PATHS = (
     | COS_SERVICE_WORK_TEST_PATHS
     | {COS_SERVICE_WORK_CHECK_SCRIPT}
 )
+# Closed direct-owner metadata release. Full Finance imports, projections,
+# workers, CoS grants and bootstrap are deliberately outside this lane.
+FINANCE_METADATA_CHECK_SCRIPT = "scripts/acceptance/finance-metadata-release.sh"
+FINANCE_METADATA_COMPONENT_PATHS = frozenset(
+    {
+        "adminme/events/schemas/finance_dated_projection.py",
+        "adminme/events/schemas/finance_metadata.py",
+        "adminme/events/schemas/finance_publications.py",
+        "adminme/finance/__init__.py",
+        "adminme/finance/cash_publication.py",
+        "adminme/finance/contracts/books-journal-unit.v1.proposal.json",
+        "adminme/finance/contracts/household-books.accepted-publication.v1.schema.json",
+        "adminme/finance/contracts/household-books.dated-projection.v1.schema.json",
+        "adminme/finance/dated_projection.py",
+        "adminme/finance/metadata.py",
+        "adminme/finance/metadata_control.py",
+        "adminme/finance/publication.py",
+        "adminme/finance/publication_provenance.py",
+        "adminme/products/member/finance_metadata.py",
+    }
+)
+FINANCE_METADATA_TEST_PATHS = frozenset(
+    {
+        "tests/acceptance/test_finance_metadata_history.py",
+        "tests/acceptance/test_finance_metadata_owner.py",
+        "tests/fixtures/finance/accepted-publication.synthetic.json",
+        "tools/console-reference-harness/finance-metadata.mjs",
+        "tools/console-reference-harness/run-gate7.mjs",
+    }
+)
+# Exact reviewed additive wiring: existing EventLog methods, runtime startup
+# and adjacent Settings code cannot drift under a metadata-only release.
+# Each tuple is (protected predecessor, metadata wiring); both are full-file
+# SHA256 values. Any new neighboring change requires a fresh reviewed boundary.
+FINANCE_METADATA_SHARED = {
+    "adminme/events/log.py": (
+        "a0cf622784c33d84fad36fc476142d6eaca3d1c3d25ce55139e1634ae55c4c5a",
+        "ffc821917482f035a0cd4d25814935e5941312252f62f6bb38b145a0efa4f847",
+    ),
+    "adminme/runtime/application.py": (
+        "e18879b1016ecfdd808fc608dc7e24a92339e60fe857f3ae9d28e72aed15c299",
+        "1d43d21c2d17712b95b1172ca1108a83cd0a048fe2a5f3c30e67ba2c25084a06",
+    ),
+    "adminme/products/member/assets/member.js": (
+        "8c5a7344a4e73d99b5321cdb782ecf5c1edf446af3cd8876b9ec588cbe4d2573",
+        "4822b5fc58b7a93fbbcaea9a3d89ffe82581c6a01241894f26ed72655ea4c04b",
+    ),
+}
+FINANCE_METADATA_REQUIRED_PATHS = (
+    FINANCE_METADATA_COMPONENT_PATHS
+    | FINANCE_METADATA_TEST_PATHS
+    | set(FINANCE_METADATA_SHARED)
+    | {FINANCE_METADATA_CHECK_SCRIPT}
+)
+
+
 SCOPES = frozenset(
     {
         "documentation",
@@ -647,6 +886,7 @@ SCOPES = frozenset(
         "cos-reminders",
         "updater-delivery",
         "cos-service-work",
+        "finance-metadata",
         "system-wide",
     }
 )
@@ -708,6 +948,7 @@ def choose_scope(
     updater_interfaces_equal: bool = False,
     cos_service_work_interfaces_equal: bool = False,
     bridge_setup_interfaces_equal: bool = False,
+    finance_metadata_interfaces_equal: bool = False,
 ) -> str:
     if not changes:
         return "system-wide"
@@ -715,6 +956,17 @@ def choose_scope(
         return "system-wide"
     if all(_prose(path) and status in {"A", "M", "D"} for status, path in changes):
         return "documentation" if interfaces_equal else "system-wide"
+    if (
+        finance_metadata_interfaces_equal
+        and all(
+            status in {"A", "M"}
+            and (path in FINANCE_METADATA_REQUIRED_PATHS | POLICY_PATHS or _prose(path))
+            and path_modes.get(path) == {"100644"}
+            for status, path in changes
+        )
+        and any(path in FINANCE_METADATA_COMPONENT_PATHS for _, path in changes)
+    ):
+        return "finance-metadata"
     if (
         bridge_setup_interfaces_equal
         and all(
@@ -780,15 +1032,21 @@ def choose_scope(
         and all(
             status in {"A", "M"}
             and (
-                path in UPDATER_COMPONENT_PATHS | UPDATER_TEST_PATHS | POLICY_PATHS
+                path
+                in UPDATER_COMPONENT_PATHS
+                | UPDATER_TEST_PATHS
+                | UPDATER_EFFECT_CONTEXT_SHARED_PATHS
+                | {UPDATER_EMAIL_ATTRIBUTION}
+                | POLICY_PATHS
                 or path == UPDATER_CHECK_SCRIPT
                 or _prose(path)
             )
-            and path_modes.get(path) == {"100644"}
+            and path_modes.get(path) == {_updater_mode(path)}
             for status, path in changes
         )
         and any(
-            path in UPDATER_COMPONENT_PATHS or path == UPDATER_CHECK_SCRIPT
+            path in UPDATER_COMPONENT_PATHS | UPDATER_EFFECT_CONTEXT_SHARED_PATHS
+            or path == UPDATER_CHECK_SCRIPT
             for _, path in changes
         )
     ):
@@ -1096,13 +1354,101 @@ def _cos_recovery_dependency_fingerprint(entries: tuple[GitTreeEntry, ...]) -> s
     ).hexdigest()
 
 
-def _updater_dependency_fingerprint(entries: tuple[GitTreeEntry, ...]) -> str:
-    # This delivery controller boundary does not exempt toolchains, runtime,
-    # storage/crypto, permissions, provider code, or unknown tests. Bind every
-    # outside byte and mode in base, head and the exact-parent merge tree.
+def _updater_mode(path: str) -> str:
+    return "100755" if path == "bootstrap/update.sh" else "100644"
+
+
+def _updater_effect_context_shared_source(
+    path: str, source: str
+) -> tuple[str, bool] | None:
+    if path == UPDATER_SOURCE_ASSURANCE:
+        normalized = _updater_source_assurance(source)
+        return (
+            (normalized, "cos_instruction_references" in source) if normalized else None
+        )
+    replacements = UPDATER_EFFECT_CONTEXT_SHARED_REPLACEMENTS[path]
+    counts = [source.count(new) for _, new in replacements]
+    if any(counts) and counts != [1] * len(replacements):
+        return None
+    for old, new in replacements:
+        source = source.replace(new, old)
+    return hashlib.sha256(source.encode()).hexdigest(), bool(any(counts))
+
+
+def _finance_metadata_dependency_fingerprint(
+    repository: Path, revision: str, entries: tuple[GitTreeEntry, ...]
+) -> tuple[str, bool] | None:
+    coordinates: list[tuple[str, str, str]] = []
+    wired: set[str] = set()
+    inventory = {entry.path: entry for entry in entries}
+    for path, permitted in FINANCE_METADATA_SHARED.items():
+        entry = inventory.get(path)
+        if entry is None or entry.mode != "100644":
+            return None
+        digest = hashlib.sha256(
+            _git(repository, "show", f"{revision}:{path}").encode()
+        ).hexdigest()
+        if digest not in permitted:
+            return None
+        if digest == permitted[1]:
+            wired.add(path)
+        coordinates.append((path, entry.mode, "reviewed-finance-metadata-wiring-v1"))
+    allowed = FINANCE_METADATA_REQUIRED_PATHS | POLICY_PATHS
+    coordinates.extend(
+        (entry.path, entry.mode, entry.object_id)
+        for entry in entries
+        if not (
+            entry.mode == "100644" and (entry.path in allowed or _prose(entry.path))
+        )
+    )
+    coordinates.sort()
+    return (
+        hashlib.sha256(
+            json.dumps(coordinates, separators=(",", ":")).encode()
+        ).hexdigest(),
+        wired == set(FINANCE_METADATA_SHARED),
+    )
+
+
+def _updater_dependency_fingerprint(
+    repository: Path, revision: str, entries: tuple[GitTreeEntry, ...]
+) -> tuple[str, bool, bool] | None:
+    # Recovery controller changes do not exempt runtime/provider/accounting code.
+    # Shared entry points permit only the exact reviewed repair integration.
+    repair_active = bool(
+        UPDATER_EFFECT_CONTEXT_COMPONENT_PATHS & {entry.path for entry in entries}
+    )
+    shared_identities: list[tuple[str, str, str]] = []
+    wired_paths: set[str] = set()
+    for path in sorted(UPDATER_EFFECT_CONTEXT_SHARED_PATHS):
+        entry = next((entry for entry in entries if entry.path == path), None)
+        if entry is not None and entry.mode != _updater_mode(path):
+            return None
+        source = _git(repository, "show", f"{revision}:{path}") if entry else ""
+        normalized = _updater_effect_context_shared_source(path, source)
+        if normalized is None:
+            return None
+        if normalized[1]:
+            wired_paths.add(path)
+            repair_active = True
+        shared_identities.append((path, _updater_mode(path), normalized[0]))
+    historical = next(
+        (entry for entry in entries if entry.path == UPDATER_EMAIL_ATTRIBUTION), None
+    )
+    if historical is not None:
+        if historical.mode != "100644":
+            return None
+        normalized_history = _updater_email_attribution(
+            _git(repository, "show", f"{revision}:{historical.path}")
+        )
+        if normalized_history is None:
+            return None
+        shared_identities.append((historical.path, historical.mode, normalized_history))
     allowed = (
-        UPDATER_COMPONENT_PATHS
+        {UPDATER_EMAIL_ATTRIBUTION}
+        | UPDATER_COMPONENT_PATHS
         | UPDATER_TEST_PATHS
+        | UPDATER_EFFECT_CONTEXT_SHARED_PATHS
         | POLICY_PATHS
         | {UPDATER_CHECK_SCRIPT}
     )
@@ -1110,12 +1456,82 @@ def _updater_dependency_fingerprint(entries: tuple[GitTreeEntry, ...]) -> str:
         (entry.path, entry.mode, entry.object_id)
         for entry in entries
         if not (
-            entry.mode == "100644" and (entry.path in allowed or _prose(entry.path))
+            entry.mode == _updater_mode(entry.path)
+            and (entry.path in allowed or _prose(entry.path))
         )
     )
-    return hashlib.sha256(
-        json.dumps(coordinates, separators=(",", ":"), ensure_ascii=True).encode()
+    coordinates.extend(shared_identities)
+    coordinates.sort()
+    return (
+        hashlib.sha256(
+            json.dumps(coordinates, separators=(",", ":"), ensure_ascii=True).encode()
+        ).hexdigest(),
+        repair_active,
+        wired_paths == UPDATER_EFFECT_CONTEXT_SHARED_PATHS,
+    )
+
+
+def _updater_email_attribution(source: str) -> str | None:
+    # Exactly the legacy and repaired internal email owner predicates are allowed.
+    # Every neighboring historical binding/classification remains fingerprinted.
+    try:
+        module = ast.parse(source)
+    except SyntaxError:
+        return None
+    owners = [
+        node
+        for node in module.body
+        if isinstance(node, ast.AsyncFunctionDef)
+        and node.name == "_cos_response_owner_matches"
+    ]
+    if len(owners) != 1:
+        return None
+    owner = owners[0]
+    digest = hashlib.sha256(
+        ast.dump(owner, include_attributes=False).encode()
     ).hexdigest()
+    if digest not in {
+        "f116840576742c6de9afb7625e83ef5355dae0574ba6f55932a8e614cc913646",
+        "a63da9c7e1e8aee7673508f993e499b08efa0910bf2e7588c41befd86a20f3c5",
+    }:
+        return None
+    module.body[module.body.index(owner)] = ast.Pass()
+    return hashlib.sha256(
+        ast.dump(module, include_attributes=False).encode()
+    ).hexdigest()
+
+
+def _updater_source_assurance(source: str) -> str | None:
+    # Only the exact additive retained-email context hydration is in this lane.
+    # All other source-accounting and privacy behavior stays in the fingerprint.
+    addition = """    # Hydrate only the retained instruction/grounding explicitly named by the
+    # email approval. Their full envelopes are needed for owner, actor and
+    # source checks; unrelated private conversations remain metadata-only.
+    cos_instruction_references = {
+        str((event.get("payload") or {}).get(key) or "")
+        for event in cos_metadata
+        if event["type"] == COS_APPROVED
+        for key in {
+            "requested_email": (
+                "request_source_event_id",
+                "request_authorization_event_id",
+            ),
+            "authenticated_conversation": ("conversation_source_event_id",),
+        }.get(str((event.get("payload") or {}).get("authorization_method") or ""), ())
+    } - {""}
+"""
+    old = 'event["event_id"] in cos_ids | cos_openclaw_ids | cos_standing_references'
+    new = """event["event_id"]
+            in cos_ids
+            | cos_openclaw_ids
+            | cos_standing_references
+            | cos_instruction_references"""
+    anchor = "    cos_events: list[dict[str, Any]] = []\n"
+    addition += anchor
+    if source.count(addition) != source.count(new) or source.count(new) > 1:
+        return None
+    normalized = source.replace(addition, anchor).replace(new, old)
+    return hashlib.sha256(normalized.encode()).hexdigest()
 
 
 def _remove_service_statements(body: list[ast.stmt], source: str) -> int | None:
@@ -1959,6 +2375,8 @@ def select_scope(
     recovery_sources_present: dict[str, bool] = {}
     reminder_fingerprints: dict[str, str] = {}
     reminder_sources_present: dict[str, bool] = {}
+    finance_metadata_fingerprints: dict[str, str] = {}
+    finance_metadata_sources_present: dict[str, bool] = {}
     updater_fingerprints: dict[str, str] = {}
     updater_sources_present: dict[str, bool] = {}
     setup_fingerprints: dict[str, str] = {}
@@ -1983,8 +2401,17 @@ def select_scope(
         setup_sources_present[revision] = setup is not None and (
             revision == base or (setup[1] and BRIDGE_SETUP_REQUIRED <= setup_paths)
         )
-        updater_fingerprints[revision] = _updater_dependency_fingerprint(entries)
+        updater = _updater_dependency_fingerprint(repository, revision, entries)
+        updater_fingerprints[revision] = updater[0] if updater else ""
         regular_paths = {entry.path for entry in entries if entry.mode == "100644"}
+        metadata = _finance_metadata_dependency_fingerprint(
+            repository, revision, entries
+        )
+        finance_metadata_fingerprints[revision] = metadata[0] if metadata else ""
+        finance_metadata_sources_present[revision] = metadata is not None and (
+            revision == base
+            or (metadata[1] and FINANCE_METADATA_REQUIRED_PATHS <= regular_paths)
+        )
         member_google = _member_google_settings_dependency_fingerprint(
             repository, revision, entries
         )
@@ -2027,8 +2454,16 @@ def select_scope(
         required_updater_paths = UPDATER_REQUIRED_PATHS - (
             {UPDATER_CHECK_SCRIPT} if revision == base else set()
         )
+        updater_paths = {
+            entry.path for entry in entries if entry.mode == _updater_mode(entry.path)
+        }
         updater_sources_present[revision] = (
-            required_updater_paths <= regular_paths
+            updater is not None
+            and required_updater_paths <= regular_paths
+            and (
+                not updater[1]
+                or (updater[2] and UPDATER_EFFECT_CONTEXT_PATHS <= updater_paths)
+            )
             and all(
                 module not in regular_paths or test in regular_paths
                 for module, test in UPDATER_OPTIONAL_MODULE_TESTS.items()
@@ -2104,6 +2539,10 @@ def select_scope(
             all(service_work_sources_present.values())
             and len(set(service_work_fingerprints.values())) == 1
         ),
+        finance_metadata_interfaces_equal=(
+            all(finance_metadata_sources_present.values())
+            and len(set(finance_metadata_fingerprints.values())) == 1
+        ),
         updater_interfaces_equal=(
             all(updater_sources_present.values())
             and len(set(updater_fingerprints.values())) == 1
@@ -2129,6 +2568,7 @@ def select_scope(
         "cos_recovery_dependency_sha256": recovery_fingerprints[checkout],
         "cos_reminder_dependency_sha256": reminder_fingerprints[checkout],
         "updater_dependency_sha256": updater_fingerprints[checkout],
+        "finance_metadata_dependency_sha256": finance_metadata_fingerprints[checkout],
         "cos_service_work_dependency_sha256": service_work_fingerprints[checkout],
         "bridge_setup_dependency_sha256": setup_fingerprints[checkout],
         "cos_google_workspace_dependency_sha256": workspace_fingerprints[checkout],
@@ -2156,6 +2596,7 @@ def required_workers(scope: str, platform: str) -> tuple[str, ...]:
         "cos-recovery-history": "cos-recovery-history-validation",
         "cos-reminders": "cos-reminder-validation",
         "updater-delivery": "updater-delivery-validation",
+        "finance-metadata": "finance-metadata-validation",
         "cos-service-work": "cos-service-work-validation",
         "system-wide": "system-consistency"
         if platform == "linux"

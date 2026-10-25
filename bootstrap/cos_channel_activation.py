@@ -99,6 +99,7 @@ from bootstrap.service_settlement import run_release_doctor, wait_for_settled_do
 from bootstrap.services import ServiceManager
 from bootstrap.source_identity import (
     _run_git,
+    load_git_tree,
     reviewed_candidate_commit,
     verify_release_source_identity,
 )
@@ -110,6 +111,18 @@ from bootstrap.submission_repair import (
     repair_binding,
     validate_submission_repair_diagnostics,
     wait_for_submission_repair,
+)
+
+
+from bootstrap.effect_context_repair import (
+    EffectContextRepairRequest,
+    EffectContextProof,
+    contained_plan_history,
+    retain_successor_plan,
+    prepare_proof,
+    verify_proof,
+    wait_contained,
+    require_disabled,
 )
 
 
@@ -195,6 +208,7 @@ class MaintenancePreparationRequest(BaseModel):
     owner_authorization_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     operator_principal_id: str = Field(pattern=r"^operator:.+", max_length=240)
     owner_member_id: str = Field(min_length=1, max_length=240)
+    effect_context_repair: EffectContextRepairRequest | None = None
     sender_proofs: list[SenderProof] | None = Field(
         default=None, min_length=1, max_length=2
     )
@@ -206,6 +220,7 @@ class MaintenanceRestorationPlan(MaintenancePreparationRequest):
     contract: Literal["cos-maintenance-restoration-v1"] = (
         "cos-maintenance-restoration-v1"
     )
+    effect_context_proof: EffectContextProof | None = None
     plan_id: str = Field(pattern=r"^[0-9a-f]{32}$")
     prepared_at: str
     expires_at: str
@@ -1019,7 +1034,18 @@ class CoSChannelActivator:
                 raise CoSActivationError("maintenance target is already selected")
             snapshot = self._bound_snapshot(commit)
             before = self.services.runtime_diagnostics() or {}
-            if (
+            effect_proof = None
+            if request.effect_context_repair is not None:
+                effect_proof = prepare_proof(
+                    self.paths,
+                    self.repository,
+                    request.effect_context_repair,
+                    before,
+                    predecessor=commit,
+                    candidate=target,
+                    test_mode=self.test_mode,
+                )
+            elif (
                 before.get("ready") is not True
                 or before.get("observation_active") is not False
             ):
@@ -1049,6 +1075,7 @@ class CoSChannelActivator:
             plan = MaintenanceRestorationPlan(
                 **request.model_dump(mode="json", exclude={"sender_proofs"}),
                 sender_proofs=proofs,
+                effect_context_proof=effect_proof,
                 plan_id=uuid.uuid4().hex,
                 prepared_at=datetime.now(timezone.utc).isoformat(),
                 expires_at=expires.isoformat(),
@@ -1084,6 +1111,27 @@ class CoSChannelActivator:
         restoring: bool,
     ) -> dict[str, Any]:
         controls = self._maintenance_controls()
+        proof = plan.effect_context_proof
+        if (plan.effect_context_repair is None) != (proof is None) or (
+            proof is not None
+            and (
+                proof.request != plan.effect_context_repair
+                or proof.predecessor_commit != plan.predecessor_commit
+                or proof.candidate_commit != plan.target_commit
+            )
+        ):
+            raise CoSActivationError("maintenance effect-context proof differs")
+        if proof is not None:
+            require_disabled(self.paths, proof.request_actions_sha256)
+        if proof is not None and not restoring:
+            verify_proof(
+                self.paths,
+                self.repository,
+                proof,
+                test_mode=self.test_mode,
+                diagnostics=self.services.runtime_diagnostics() or {},
+                observation=False,
+            )
         prepared = aware_time(plan.prepared_at)
         expires = aware_time(plan.expires_at)
         now = datetime.now(timezone.utc)
@@ -1196,7 +1244,11 @@ class CoSChannelActivator:
                 )
         else:
             history = _json(self.directory / "history" / f"{plan.plan_id}.json")
-            if (
+            if proof is not None:
+                contained_plan_history(
+                    self.paths, self.repository, plan, test_mode=self.test_mode
+                )
+            elif (
                 history.get("phase") != "committed"
                 or history.get("operation") != "enter_observation"
                 or history.get("maintenance_plan_sha256") != plan.digest()
@@ -1417,6 +1469,18 @@ class CoSChannelActivator:
                     test_mode=self.test_mode,
                 )
             elif (
+                maintenance_plan is not None
+                and maintenance_plan.effect_context_proof is not None
+            ):
+                verify_proof(
+                    self.paths,
+                    self.repository,
+                    maintenance_plan.effect_context_proof,
+                    diagnostics=before,
+                    observation=False,
+                    test_mode=self.test_mode,
+                )
+            elif (
                 before.get("ready") is not True
                 or before.get("observation_active") is not False
             ):
@@ -1489,6 +1553,10 @@ class CoSChannelActivator:
             }
             if maintenance_plan is not None:
                 journal["maintenance_plan_sha256"] = maintenance_plan.digest()
+                if maintenance_plan.effect_context_proof is not None:
+                    journal["effect_context_proof"] = (
+                        maintenance_plan.effect_context_proof.model_dump(mode="json")
+                    )
             if repair is not None:
                 journal["submission_repair_manifest"] = repair.model_dump(mode="json")
                 journal["submission_repair"] = repair_binding(repair)
@@ -1506,7 +1574,11 @@ class CoSChannelActivator:
             return self._complete_enter_observation(journal, release=release)
 
     def _complete_enter_observation(
-        self, journal: dict[str, Any], *, release: Path
+        self,
+        journal: dict[str, Any],
+        *,
+        release: Path,
+        recovery_controller: str | None = None,
     ) -> dict[str, Any]:
         """Complete containment after interruption; never restore live writes."""
         try:
@@ -1515,7 +1587,7 @@ class CoSChannelActivator:
             if selected != (
                 journal["release_commit"],
                 release,
-                journal["controller_commit"],
+                recovery_controller or journal["controller_commit"],
             ):
                 raise CoSActivationError(
                     "observation operation source or selection changed"
@@ -1552,6 +1624,22 @@ class CoSChannelActivator:
                     repository_root=self.repository,
                     candidate_commit=journal["controller_commit"],
                     test_mode=self.test_mode,
+                )
+            effect_proof = (
+                EffectContextProof.model_validate(journal["effect_context_proof"])
+                if "effect_context_proof" in journal
+                else None
+            )
+            if effect_proof is not None:
+                if (
+                    effect_proof.predecessor_commit != journal["release_commit"]
+                    or effect_proof.candidate_commit != journal["controller_commit"]
+                ):
+                    raise CoSActivationError(
+                        "effect-context repair journal binding differs"
+                    )
+                journal["effect_context_quiesced"] = verify_proof(
+                    self.paths, self.repository, effect_proof, test_mode=self.test_mode
                 )
             effects = asyncio.run(self._effect_count())
             if "prior_provider_calls" not in journal:
@@ -1643,6 +1731,21 @@ class CoSChannelActivator:
                     deadline=deployment_clock() + 600,
                 )
                 if repair is not None
+                else wait_contained(
+                    self.paths,
+                    self.repository,
+                    effect_proof,
+                    diagnostics=self.services.runtime_diagnostics,
+                    doctor=lambda: run_release_doctor(
+                        self.paths,
+                        release,
+                        test_mode=self.test_mode,
+                        include_synthetic_proof=True,
+                    ),
+                    deadline=deployment_clock() + 600,
+                    test_mode=self.test_mode,
+                )
+                if effect_proof is not None
                 else self._settle(release)
             )
             after = self.services.runtime_diagnostics() or {}
@@ -1655,6 +1758,15 @@ class CoSChannelActivator:
                     repair,
                     repository_root=self.repository,
                     candidate_commit=journal["controller_commit"],
+                    test_mode=self.test_mode,
+                )
+            elif effect_proof is not None:
+                verify_proof(
+                    self.paths,
+                    self.repository,
+                    effect_proof,
+                    diagnostics=after,
+                    doctor=journal["doctor"],
                     test_mode=self.test_mode,
                 )
             elif (
@@ -1710,7 +1822,7 @@ class CoSChannelActivator:
                 self._finish(journal, "committed")
             return {
                 "status": "contained_degraded"
-                if repair is not None
+                if repair is not None or effect_proof is not None
                 else "observation_entered",
                 "observation_active": True,
                 **(
@@ -2549,6 +2661,204 @@ class CoSChannelActivator:
             "all_polling_paused": True,
         }
 
+    def prepare_effect_context_successor(
+        self, original: MaintenanceRestorationPlan
+    ) -> MaintenanceRestorationPlan:
+        """Bind a protected repair successor without repeating containment or consent."""
+        updater = UpgradeManager(
+            self.paths, root=self.repository, test_mode=self.test_mode
+        )
+        with updater._operation_lock():
+            if self.journal_path.exists() or updater.activation_journal.path.exists():
+                raise CoSActivationError(
+                    "complete the current operation before continuing maintenance"
+                )
+            commit, _release, target = self._observation_selection()
+            proof = original.effect_context_proof
+            history = contained_plan_history(
+                self.paths, self.repository, original, test_mode=self.test_mode
+            )
+            prepared, expires = (
+                aware_time(original.prepared_at),
+                aware_time(original.expires_at),
+            )
+            if (
+                proof is None
+                or proof.request != original.effect_context_repair
+                or proof.candidate_commit != original.target_commit
+                or proof.predecessor_commit != original.predecessor_commit
+                or commit != original.predecessor_commit
+                or target == original.target_commit
+                or history.get("maintenance_plan_sha256") != original.digest()
+                or prepared is None
+                or expires is None
+                or not prepared <= datetime.now(timezone.utc) < expires
+            ):
+                raise CoSActivationError(
+                    "successor requires the original unexpired effect repair plan"
+                )
+            load_git_tree(
+                self.repository, original.target_commit, retained_by_commit=target
+            )
+            controls = self._maintenance_controls()
+            if (
+                original.sender_proofs is None
+                or self._maintenance_proof_expiry(
+                    original.sender_proofs, controls["activation"]
+                )
+                != expires
+                or any(
+                    expected != _sha(_payload(value))
+                    for expected, value in (
+                        (original.adapter_sha256, controls["adapters"]),
+                        (original.receipt_sha256, controls["receipt"]),
+                        (original.member_mapping_sha256, controls["members"]),
+                        (original.recipient_policy_sha256, controls["policy"]),
+                    )
+                )
+                or capture_deployment_snapshot(self.paths).public()
+                != original.deployment_snapshot
+            ):
+                raise CoSActivationError("successor authority or configuration changed")
+            observation = _json(self.config_dir / "observation.json")
+            window = _json(self.config_dir / "deployment-readiness.json").get(
+                "provider_effect_window"
+            )
+            if observation.get("active") is not True or window != {
+                "started_at": history.get("observation_started_at"),
+                "reason": "cos_enter_observation",
+            }:
+                raise CoSActivationError(
+                    "successor requires the original observation boundary"
+                )
+            verify_proof(
+                self.paths,
+                self.repository,
+                proof,
+                diagnostics=self.services.runtime_diagnostics() or {},
+                test_mode=self.test_mode,
+            )
+            if (
+                capture_deployment_snapshot(self.paths).public()
+                != original.deployment_snapshot
+            ):
+                raise CoSActivationError("successor configuration changed during audit")
+            successor = original.model_copy(
+                update={
+                    "target_commit": target,
+                    "effect_context_proof": proof.model_copy(
+                        update={"candidate_commit": target}
+                    ),
+                }
+            )
+            retain_successor_plan(self.paths, original, successor)
+            contained_plan_history(
+                self.paths, self.repository, successor, test_mode=self.test_mode
+            )
+            return successor
+
+    def recover_effect_context_controller(
+        self, plan: MaintenanceRestorationPlan
+    ) -> dict[str, Any]:
+        """Continue this exact paused repair with a protected successor controller.
+
+        The original candidate, plan and proof remain immutable. This does not
+        admit a different deployment or restore write authority.
+        """
+        updater = UpgradeManager(
+            self.paths, root=self.repository, test_mode=self.test_mode
+        )
+        with updater._operation_lock():
+            if updater.activation_journal.path.exists():
+                raise CoSActivationError("release activation must complete first")
+            journal = _json(self.journal_path)
+            commit, release, successor = self._observation_selection()
+            proof = plan.effect_context_proof
+            prepared, expires = (
+                aware_time(plan.prepared_at),
+                aware_time(plan.expires_at),
+            )
+            if (
+                proof is None
+                or plan.effect_context_repair != proof.request
+                or proof.candidate_commit != plan.target_commit
+                or proof.predecessor_commit != plan.predecessor_commit
+                or commit != plan.predecessor_commit
+                or successor == plan.target_commit
+                or journal.get("contract") != "cos-channel-operation-journal-v1"
+                or journal.get("operation") != "enter_observation"
+                or journal.get("phase") != "verifying"
+                or journal.get("activation_id") != plan.plan_id
+                or journal.get("controller_commit") != plan.target_commit
+                or journal.get("release_commit") != plan.predecessor_commit
+                or journal.get("maintenance_plan_sha256") != plan.digest()
+                or journal.get("effect_context_proof") != proof.model_dump(mode="json")
+                or journal.get("request")
+                != plan.observation_request().model_dump(mode="json")
+                or journal.get("prior_activation_id") != plan.prior_activation_id
+                or journal.get("operator_principal_id") != plan.operator_principal_id
+                or journal.get("owner_member_id") != plan.owner_member_id
+                or journal.get("owner_authorization_sha256")
+                != plan.owner_authorization_sha256
+                or journal.get("initial_snapshot") != plan.deployment_snapshot
+                or not journal.get("observation_started_at")
+                or "submission_repair_manifest" in journal
+                or prepared is None
+                or expires is None
+                or not prepared <= datetime.now(timezone.utc) < expires
+            ):
+                raise CoSActivationError(
+                    "successor recovery requires the exact unexpired paused effect repair"
+                )
+            # This also rejects replacement refs and non-ancestor controllers.
+            load_git_tree(
+                self.repository, plan.target_commit, retained_by_commit=successor
+            )
+            controls = self._maintenance_controls()
+            if (
+                plan.sender_proofs is None
+                or self._maintenance_proof_expiry(
+                    plan.sender_proofs, controls["activation"]
+                )
+                != expires
+                or any(
+                    expected != _sha(_payload(value))
+                    for expected, value in (
+                        (plan.adapter_sha256, controls["adapters"]),
+                        (plan.receipt_sha256, controls["receipt"]),
+                        (plan.member_mapping_sha256, controls["members"]),
+                        (plan.recipient_policy_sha256, controls["policy"]),
+                    )
+                )
+            ):
+                raise CoSActivationError(
+                    "successor recovery authority or configuration changed"
+                )
+            observation = _json(self.config_dir / "observation.json")
+            window = _json(self.config_dir / "deployment-readiness.json").get(
+                "provider_effect_window"
+            )
+            if observation.get("active") is not True or window != {
+                "started_at": journal["observation_started_at"],
+                "reason": "cos_enter_observation",
+            }:
+                raise CoSActivationError(
+                    "successor recovery requires the original observation boundary"
+                )
+            verify_proof(self.paths, self.repository, proof, test_mode=self.test_mode)
+            receipt = {
+                "controller_commit": successor,
+                "original_controller_commit": plan.target_commit,
+                "maintenance_plan_sha256": plan.digest(),
+            }
+            if journal.get("effect_context_recovery_controller", receipt) != receipt:
+                raise CoSActivationError("successor recovery controller changed")
+            journal["effect_context_recovery_controller"] = receipt
+            self._write_journal(journal, "verifying")
+            return self._complete_enter_observation(
+                journal, release=release, recovery_controller=successor
+            )
+
     def recover(self) -> dict[str, Any]:
         updater = UpgradeManager(
             self.paths, root=self.repository, test_mode=self.test_mode
@@ -2587,7 +2897,9 @@ def main() -> None:
     mode.add_argument("--enter-observation", action="store_true")
     mode.add_argument("--repair-recovery-history", action="store_true")
     mode.add_argument("--recover", action="store_true")
+    mode.add_argument("--recover-effect-context-controller", action="store_true")
     mode.add_argument("--prepare-maintenance", action="store_true")
+    mode.add_argument("--prepare-effect-context-successor", action="store_true")
     mode.add_argument("--pause-maintenance", action="store_true")
     mode.add_argument("--restore-maintenance", action="store_true")
     parser.add_argument("--output", type=Path)
@@ -2595,6 +2907,7 @@ def main() -> None:
     arguments = parser.parse_args()
     maintenance = (
         arguments.prepare_maintenance
+        or arguments.prepare_effect_context_successor
         or arguments.pause_maintenance
         or arguments.restore_maintenance
     )
@@ -2604,8 +2917,10 @@ def main() -> None:
         parser.error(
             "maintenance plans preserve existing grants; do not combine activation options"
         )
-    if bool(arguments.output) != arguments.prepare_maintenance:
-        parser.error("--output is required only for --prepare-maintenance")
+    if bool(arguments.output) != (
+        arguments.prepare_maintenance or arguments.prepare_effect_context_successor
+    ):
+        parser.error("--output is required only for maintenance preparation")
     if arguments.recover == bool(arguments.request):
         parser.error("choose one private request or interrupted-operation recovery")
     if arguments.repair_recovery_history and (
@@ -2622,15 +2937,23 @@ def main() -> None:
         and not arguments.enter_observation
     ):
         parser.error("submission repair manifest is only for entering observation")
-    if arguments.recover and arguments.enable_live:
+    if (
+        arguments.recover or arguments.recover_effect_context_controller
+    ) and arguments.enable_live:
         parser.error("recovery cannot enable live operation")
     controller = CoSChannelActivator(
         DeploymentPaths.from_root(arguments.instance_root, production=True),
         repository=Path(__file__).resolve().parents[1],
     )
-    if arguments.prepare_maintenance:
-        plan = controller.prepare_maintenance(
-            MaintenancePreparationRequest.model_validate(_json(arguments.request))
+    if arguments.prepare_maintenance or arguments.prepare_effect_context_successor:
+        plan = (
+            controller.prepare_effect_context_successor(
+                MaintenanceRestorationPlan.model_validate(_json(arguments.request))
+            )
+            if arguments.prepare_effect_context_successor
+            else controller.prepare_maintenance(
+                MaintenancePreparationRequest.model_validate(_json(arguments.request))
+            )
         )
         descriptor = os.open(
             arguments.output,
@@ -2642,7 +2965,9 @@ def main() -> None:
             handle.flush()
             os.fsync(handle.fileno())
         result = {
-            "status": "maintenance_prepared",
+            "status": "effect_context_successor_prepared"
+            if arguments.prepare_effect_context_successor
+            else "maintenance_prepared",
             "plan_id": plan.plan_id,
             "target_commit": plan.target_commit,
             "expires_at": plan.expires_at,
@@ -2656,6 +2981,10 @@ def main() -> None:
         result = controller.activate(
             MaintenanceRestorationPlan.model_validate(_json(arguments.request)),
             enable_live=True,
+        )
+    elif arguments.recover_effect_context_controller:
+        result = controller.recover_effect_context_controller(
+            MaintenanceRestorationPlan.model_validate(_json(arguments.request))
         )
     elif arguments.recover:
         result = controller.recover()
