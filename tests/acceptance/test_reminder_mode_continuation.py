@@ -437,13 +437,31 @@ def test_earlier_same_second_answer_cannot_enter_execution_history(
         )
         execution = policy_receipt(client, answer, receipt)
         original_get = runtime.event_log.get
+        original_by_idempotency = runtime.event_log.get_by_idempotency
+        grounding_key = (
+            f"openclaw:{MEMBER_A}:cos.reminder.mode_grounded:"
+            + grounded["payload"]["continuation"]["offered"]["action_id"]
+        )
+        substituted_keys = []
 
         async def substituted_history(event_id):
             return earlier if event_id == grounding_id else await original_get(event_id)
 
+        async def substituted_idempotency(tenant_id, key):
+            event = await original_by_idempotency(tenant_id, key)
+            if event is not None and event["event_id"] == grounding_id:
+                assert tenant_id == grounded["tenant_id"] and key == grounding_key
+                substituted_keys.append(key)
+                return earlier
+            return event
+
         with monkeypatch.context() as history:
             history.setattr(runtime.event_log, "get", substituted_history)
+            history.setattr(
+                runtime.event_log, "get_by_idempotency", substituted_idempotency
+            )
             rejected = client.post(EXECUTE, headers=AUTH, json=execution)
+        assert substituted_keys and set(substituted_keys) == {grounding_key}
         assert rejected.status_code in {403, 409}, rejected.text
         assert native.saves == 0
         assert (
