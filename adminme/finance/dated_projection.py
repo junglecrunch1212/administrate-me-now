@@ -380,6 +380,7 @@ def _validate_owned_projection(result: dict[str, Any]) -> dict[str, Any]:
         schema_bytes = SCHEMA_PATH.read_bytes()
         current_schema_hash = hashlib.sha256(schema_bytes).hexdigest()
         receipt = (current_schema_hash, hashlib.sha256(raw).hexdigest())
+        del raw  # Keep encoded bytes out of later validation allocations.
         with _validation_receipt_lock:
             if receipt in _validation_receipts:
                 _validation_receipts.move_to_end(receipt)
