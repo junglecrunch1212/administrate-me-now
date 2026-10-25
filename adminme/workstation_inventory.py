@@ -382,7 +382,9 @@ def workstation_tools(runtime: Any, agent_id: str) -> dict[str, Any]:
     path = runtime.settings.openclaw_runtime_config_path
     try:
         config = read_private_document(path) if path else {}
-        agents = config.get("agents", {}).get("list", [])
+        from adminme.openclaw_roster import agent_rows
+
+        agents = agent_rows(config)
         matches = [row for row in agents if row.get("id") == agent_id]
         agent = matches[0] if len(matches) == 1 else {}
         tools = agent.get("tools") or {}

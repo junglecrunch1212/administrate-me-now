@@ -8,6 +8,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from adminme.openclaw_roster import agent_rows
+
 
 SERVICE_PRIVATE_TOOLS = (
     "administrateme_service_private_work",
@@ -243,7 +245,10 @@ def inspect_runtime_topology(
         return {"state": "blocked", "reason": "runtime_config_invalid"}
     if not isinstance(config, dict):
         return {"state": "blocked", "reason": "runtime_config_invalid"}
-    raw_agents = (config.get("agents") or {}).get("list") or []
+    try:
+        raw_agents = agent_rows(config)
+    except ValueError:
+        return {"state": "blocked", "reason": "runtime_topology_invalid"}
     raw_bindings = config.get("bindings") or []
     if not isinstance(raw_agents, list) or not isinstance(raw_bindings, list):
         return {"state": "blocked", "reason": "runtime_topology_invalid"}

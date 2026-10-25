@@ -272,7 +272,7 @@ try {
     },
     agents: {
       defaults: { workspace: path.join(state, "workspace"), heartbeat: { every: "0m" } },
-      list: [{ id: agent, tools: { deny: ["*"] } }],
+      entries: { [agent]: { tools: { deny: ["*"] } } },
     },
     plugins: {
       allow: ["administrateme"], load: { paths: [plugin] }, slots: { memory: "none" },
