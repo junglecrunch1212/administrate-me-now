@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi.testclient import TestClient
+import pytest
 
 from adminme.runtime.application import create_application
 from bootstrap.workstation_inventory import provision
@@ -109,4 +110,76 @@ def test_current_inventory_owner_filtering_and_truthful_unknowns(
         assert (
             read(_service("fresh-inventory"), section="identities")["items"][0][5]
             == "identity_mismatch"
+        )
+
+
+@pytest.mark.parametrize("channel", ["imessage", "gmail", "administrateme-portal"])
+def test_inventory_uses_actual_channel_identity_and_current_delegation(
+    tmp_path: Path, channel: str
+) -> None:
+    from tests.acceptance.test_authenticated_conversation_channels import (
+        MEMBER_A,
+        MEMBER_B,
+        MEMBER_HEADERS,
+        SECRET,
+        _instruction,
+        _normal_operation,
+        gmail_instruction,
+        portal_instruction,
+        settings,
+    )
+
+    with TestClient(create_application(settings(tmp_path / channel))) as client:
+        grant = client.post(
+            "/api/member/v1/cos/delegations",
+            headers=MEMBER_HEADERS,
+            json={
+                "request_id": "inventory-three-channel-read",
+                "context_scope": "member_private",
+                "permissions": ["read_context"],
+            },
+        )
+        assert grant.status_code == 201, grant.text
+        _normal_operation(client)
+        if channel == "imessage":
+            source = _instruction(client, "inventory-current-input")
+        elif channel == "gmail":
+            source = gmail_instruction(client, "inventory-current-input")
+        else:
+            source = portal_instruction(client, "inventory-current-input")
+        provenance = {**source["provenance"], "call_kind": "tool"}
+        runtime = client.app.state.runtime
+        config = runtime.settings.instance.config_dir
+        config.chmod(0o700)
+        value = document(datetime.now(timezone.utc))
+        for owner in (MEMBER_A, MEMBER_B):
+            row = document(datetime.now(timezone.utc), owner=owner)["bindings"][0]
+            row["binding_id"] = "browser-" + owner
+            value["bindings"].append(row)
+        provision(config, value, expected_revision=0)
+        headers = {"Authorization": "Bearer " + SECRET}
+        result = client.post(PATH, headers=headers, json={"provenance": provenance})
+        assert result.status_code == 200, result.text
+        assert result.json()["counts"]["identities"] == 2
+        assert "browser-" + MEMBER_A in result.text
+        assert "browser-" + MEMBER_B not in result.text
+        assert result.json()["provider_effect_count"] == 0
+        assert result.json()["inventory_grants_authority"] is False
+        forged = {**provenance, "actor_id": "model-invented-member"}
+        assert (
+            client.post(PATH, headers=headers, json={"provenance": forged}).status_code
+            == 403
+        )
+        revoked = client.request(
+            "DELETE",
+            "/api/member/v1/cos/delegations/" + grant.json()["grant_id"],
+            headers=MEMBER_HEADERS,
+            json={"request_id": "inventory-revoke", "reason": "fixture revocation"},
+        )
+        assert revoked.status_code == 200, revoked.text
+        assert (
+            client.post(
+                PATH, headers=headers, json={"provenance": provenance}
+            ).status_code
+            == 403
         )
