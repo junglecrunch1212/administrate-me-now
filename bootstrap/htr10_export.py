@@ -257,6 +257,7 @@ async def export_htr10_audits(
     source_output: Path,
     ownership_reviewed: bool,
     submission_repair_manifest: Path | None = None,
+    effect_context_repair_plan: Path | None = None,
     test_mode: bool = False,
 ) -> dict[str, Any]:
     if ownership_reviewed is not True:
@@ -314,7 +315,31 @@ async def export_htr10_audits(
     if not isinstance(diagnostics, dict):
         raise HTR10ExportError("active runtime readiness is unavailable")
     repair = None
-    if submission_repair_manifest is not None:
+    if effect_context_repair_plan is not None:
+        from bootstrap.effect_context_repair import load_plan, verify_proof
+        from bootstrap.source_identity import reviewed_candidate_commit
+
+        if submission_repair_manifest is not None or transition_public is not None:
+            raise HTR10ExportError(
+                "effect-context repair cannot combine deployment exceptions"
+            )
+        plan = load_plan(
+            effect_context_repair_plan,
+            paths,
+            repository_root,
+            candidate=reviewed_candidate_commit(repository_root),
+            predecessor=capture_deployment_snapshot(paths).predecessor_commit,
+            test_mode=test_mode,
+        )
+        await asyncio.to_thread(
+            verify_proof,
+            paths,
+            repository_root,
+            plan.effect_context_proof,
+            diagnostics=diagnostics,
+            test_mode=test_mode,
+        )
+    elif submission_repair_manifest is not None:
         from bootstrap.submission_repair import (
             load_submission_repair_manifest,
             validate_submission_repair_diagnostics,
@@ -454,6 +479,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--historical-output", type=Path, required=True)
     parser.add_argument("--source-output", type=Path, required=True)
     parser.add_argument("--submission-repair-manifest", type=Path)
+    parser.add_argument("--effect-context-repair-plan", type=Path)
     parser.add_argument(
         "--approve-provider-binding-migration",
         action="store_true",
@@ -476,6 +502,7 @@ def main(argv: list[str] | None = None) -> int:
             source_output=args.source_output,
             ownership_reviewed=args.approve_provider_binding_migration,
             submission_repair_manifest=args.submission_repair_manifest,
+            effect_context_repair_plan=args.effect_context_repair_plan,
             test_mode=os.environ.get("ADMINME_TEST_MODE") == "1",
         )
     )
