@@ -17,6 +17,10 @@ import yaml
 from bootstrap.source_identity import SourceIdentityError
 from scripts.release_scope import (
     CONTRACT,
+    FINANCE_METADATA_COMPONENT_PATHS,
+    FINANCE_METADATA_REQUIRED_PATHS,
+    FINANCE_METADATA_SHARED,
+    FINANCE_METADATA_CHECK_SCRIPT,
     COS_SERVICE_WORK_APPLICATION,
     COS_SERVICE_WORK_CHECK_SCRIPT,
     COS_SERVICE_WORK_NATIVE_INSTALL,
@@ -154,6 +158,7 @@ def _needs(proof: dict[str, Any], platform: str) -> dict[str, Any]:
         "cos-recovery-history",
         "cos-reminders",
         "updater-delivery",
+        "finance-metadata",
         "cos-service-work",
         "system-wide",
     ],
@@ -193,6 +198,7 @@ def test_scope_gate_requires_exact_corresponding_success(
         "cos-recovery-history",
         "cos-reminders",
         "updater-delivery",
+        "finance-metadata",
         "cos-service-work",
         "cos-google-workspace",
         "member-google-settings",
@@ -657,6 +663,7 @@ def test_stable_protected_job_recomputes_scope_and_requires_real_worker_results(
         "cos-recovery-history-validation",
         "cos-reminder-validation",
         "updater-delivery-validation",
+        "finance-metadata-validation",
         "cos-service-work-validation",
         system,
     }
@@ -4033,3 +4040,124 @@ def test_historical_repair_and_successor_stay_in_closed_updater_lane(
     assert select_scope(path, _event(base, head), checkout_sha=head)["scope"] == (
         "updater-delivery" if drift == "none" else "system-wide"
     )
+
+
+def _finance_metadata_candidate(path: Path) -> tuple[str, str]:
+    # Use the actual reviewed shared files; all surrounding bytes are pinned.
+    for name in FINANCE_METADATA_SHARED:
+        _commit(path, name, (ROOT / name).read_text())
+    base = _git(path, "rev-parse", "HEAD")
+    for name in sorted(FINANCE_METADATA_REQUIRED_PATHS - set(FINANCE_METADATA_SHARED)):
+        head = _commit(path, name, (ROOT / name).read_text())
+    return base, head
+
+
+def test_finance_metadata_selects_only_complete_immutable_scope(repository):
+    path, _ = repository
+    base, head = _finance_metadata_candidate(path)
+    (path / "adminme/runtime.py").write_text("UNCOMMITTED = True\n")
+    proof = select_scope(path, _event(base, head), checkout_sha=head)
+    assert proof["scope"] == "finance-metadata"
+    assert len(proof["finance_metadata_dependency_sha256"]) == 64
+    for platform in ("linux", "macos"):
+        assert required_workers("finance-metadata", platform) == (
+            "release-scope",
+            "finance-metadata-validation",
+        )
+        verify_gate(proof, _needs(proof, platform), platform=platform)
+
+
+@pytest.mark.parametrize(
+    "other",
+    [
+        *FINANCE_METADATA_SHARED,
+        "adminme/events/bus.py",
+        "adminme/products/member/main.py",
+        "adminme/finance/importer.py",
+        "adminme/settings_control.py",
+        "bootstrap/cos_channel_activation.py",
+        "poetry.lock",
+        "tests/unreviewed.py",
+    ],
+)
+def test_finance_metadata_rejects_neighbor_drift_and_forged_claims(repository, other):
+    path, _ = repository
+    base, _ = _finance_metadata_candidate(path)
+    head = _commit(path, other, "UNREVIEWED = True\n")
+    event = _event(base, head)
+    event.update(finance_metadata_interfaces_equal=True, changed_paths=[])
+    assert select_scope(path, event, checkout_sha=head)["scope"] == "system-wide"
+
+
+@pytest.mark.parametrize("drift", ["none", "shared", "missing-test", "mode", "unknown"])
+def test_finance_metadata_checks_candidate_and_actual_merge_dependencies(
+    repository, drift
+):
+    path, _ = repository
+    base, head = _finance_metadata_candidate(path)
+    if drift == "shared":
+        (path / "adminme/events/log.py").write_text("UNREVIEWED = True\n")
+    elif drift == "missing-test":
+        (path / "tests/acceptance/test_finance_metadata_history.py").unlink()
+    elif drift == "mode":
+        (path / "adminme/finance/metadata.py").chmod(0o755)
+    elif drift == "unknown":
+        (path / "adminme/finance/worker.py").write_text("UNREVIEWED = True\n")
+    _git(path, "add", "-A")
+    merge = _git(
+        path,
+        "commit-tree",
+        _git(path, "write-tree"),
+        "-p",
+        base,
+        "-p",
+        head,
+        "-m",
+        "Synthetic exact-parent metadata merge",
+    )
+    _git(path, "checkout", "--detach", merge)
+    proof = select_scope(path, _event(base, head), checkout_sha=merge)
+    assert proof["scope"] == ("finance-metadata" if drift == "none" else "system-wide")
+
+
+@pytest.mark.parametrize("status", ["D", "T", "U"])
+def test_finance_metadata_rejects_removed_or_retyped_component(status):
+    for path in FINANCE_METADATA_COMPONENT_PATHS:
+        assert (
+            choose_scope(
+                [(status, path)],
+                interfaces_equal=False,
+                finance_metadata_interfaces_equal=True,
+                path_modes={path: {"100644"}},
+            )
+            == "system-wide"
+        )
+
+
+@pytest.mark.parametrize(("filename", "protected", "platform", "system"), RELEASE_JOBS)
+def test_finance_metadata_worker_requires_native_owner_and_history_proof(
+    filename, protected, platform, system
+):
+    job = _workflow(filename)["jobs"]["finance-metadata-validation"]
+    assert job["if"] == "${{ needs.release-scope.outputs.scope == 'finance-metadata' }}"
+    assert job["steps"][-1]["id"] == "validated" and "if" not in job["steps"][-1]
+    commands = "\n".join(step.get("run", "") for step in job["steps"])
+    assert f"bash {FINANCE_METADATA_CHECK_SCRIPT} {platform}" in commands
+    script = (ROOT / FINANCE_METADATA_CHECK_SCRIPT).read_text()
+    for required in [
+        "set -euo pipefail",
+        '"${GITHUB_ACTIONS:-}" == true',
+        "--runxfail",
+        "test_finance_metadata_owner.py",
+        "test_finance_metadata_history.py",
+        "test_event_log.py",
+        "test_schema_registry.py",
+        "test_event_log_metadata_migration.py",
+        "test_ci_release_gates.py",
+        "poetry run mypy",
+        "ADMINME_GATE7_FINANCE_METADATA_ONLY=1",
+        "npm run test:gate7",
+        "scripts/verify_invariants.sh",
+    ]:
+        assert required in script
+    assert "finance_watchdog.py" not in script
