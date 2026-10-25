@@ -268,8 +268,8 @@ def _server(root, listener, channel, telemetry, allocation_profile=False):
                     )
                 ]
 
-                def durable_counts(conn):
-                    return {
+                def durable_outputs(conn):
+                    counts = {
                         name: conn.execute("SELECT COUNT(*) FROM " + name).fetchone()[0]
                         for name in (
                             "finance_provenance_blobs",
@@ -277,8 +277,22 @@ def _server(root, listener, channel, telemetry, allocation_profile=False):
                             "finance_dated_projections",
                         )
                     }
+                    outputs = {}
+                    for kind, table, identifier in (
+                        ("accounting", "finance_publications", "publication_id"),
+                        ("dated", "finance_dated_projections", "projection_id"),
+                    ):
+                        outputs[kind] = [
+                            {"id": row[0], "event_id": row[1]}
+                            for row in conn.execute(
+                                f"SELECT {identifier},last_event_id FROM {table}"
+                            ).fetchall()
+                        ]
+                    return counts, outputs
 
-                counts = await runtime.projections.read("money", durable_counts)
+                counts, outputs = await runtime.projections.read(
+                    "money", durable_outputs
+                )
                 channel.send(
                     {
                         "terminal": {
@@ -287,6 +301,7 @@ def _server(root, listener, channel, telemetry, allocation_profile=False):
                                 for r in receipts
                             ],
                             "counts": counts,
+                            "outputs": outputs,
                             "violations": violations,
                         }
                     }
@@ -465,7 +480,10 @@ async def _measure_import(tmp_path, *, allocation_profile):
                 len(context.get("record_ids", [])) for context in d["detail_manifest"]
             ),
         }
-        publication_id, projection_id = p["publication_id"], d["projection_id"]
+        report["expected_outputs"] = {
+            "accounting": p["publication_id"],
+            "dated": d["projection_id"],
+        }
         del p, d, package, packet
         gc.collect()
         async with httpx.AsyncClient(
@@ -594,16 +612,17 @@ async def _measure_import(tmp_path, *, allocation_profile):
 
             revoking = asyncio.create_task(revoke())
             network_tasks.append(revoking)
-            accepted = await asyncio.wait_for(importing, 120)
+            import_response = await asyncio.wait_for(importing, 120)
             report["import_seconds"] = time.monotonic() - began
-            report["import_status"] = accepted.status_code
-            report["import_result"] = accepted.json()
+            report["import_status"] = import_response.status_code
+            report["import_result"] = import_response.json()
             revoked = await asyncio.wait_for(revoking, 120)
-            assert accepted.status_code == 200, accepted.text
-            assert accepted.json()["accounting"]["publication_id"] == publication_id
-            assert accepted.json()["dated"]["projection_id"] == projection_id
-            assert accepted.json()["provider_effect_count"] == 0
             assert revoked.status_code == 200, revoked.text
+            # The commit precedes revocation, but disclosure follows settlement.
+            # Verify committed outputs through the owned fixture's terminal
+            # channel; the revoked HTTP caller must receive no output receipt.
+            assert import_response.status_code == 409, import_response.text
+            assert import_response.json() == {"detail": "finance_import_policy_changed"}
             control = (await client.get(CONTROL, headers=DEMO_HEADERS)).json()
             assert not control["books_enabled"] and not control["cos_analysis_enabled"]
             denied = await client.get(
@@ -772,17 +791,28 @@ async def _measure_import(tmp_path, *, allocation_profile):
                 "finance_publications": 1,
                 "finance_dated_projections": 1,
             }
-            assert len(terminal["receipts"]) == 1
-            receipt = terminal["receipts"][0]
-            assert receipt["event_id"] == report["import_result"]["audit_event_id"]
-            assert receipt["payload"]["outcome"] == "accepted"
-            assert (
-                receipt["payload"]["publication_event_id"]
-                == report["import_result"]["accounting"]["event_id"]
-            )
-            assert (
-                receipt["payload"]["projection_event_id"]
-                == report["import_result"]["dated"]["event_id"]
+            receipts = terminal["receipts"]
+            assert len(receipts) == 2
+            assert receipts[0]["event_id"] != receipts[1]["event_id"]
+            committed, withheld = (receipt["payload"] for receipt in receipts)
+            assert committed["outcome"] == "accepted"
+            assert committed["reason"] == "exact_approved_package"
+            assert withheld["outcome"] == "incomplete"
+            assert withheld["reason"] == "finance_import_authorization_changed"
+            assert committed["approval_event_id"] == withheld["approval_event_id"]
+            for kind, event_key in (
+                ("accounting", "publication_event_id"),
+                ("dated", "projection_event_id"),
+            ):
+                assert terminal["outputs"][kind] == [
+                    {
+                        "id": report["expected_outputs"][kind],
+                        "event_id": committed[event_key],
+                    }
+                ]
+                assert withheld[event_key] == committed[event_key]
+            assert all(
+                receipt["payload"]["provider_effects"] is False for receipt in receipts
             )
             assert (
                 report["owner_revocation_started_at"]
