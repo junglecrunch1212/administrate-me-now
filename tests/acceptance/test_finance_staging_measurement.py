@@ -31,6 +31,7 @@ from tests.acceptance.test_finance_storage_measurement import (
 )
 from tests.acceptance.test_openclaw_native_seam import DEMO_HEADERS, PRINCIPAL
 from tests.fixtures.finance_import_load import sized_package
+from tests.fixtures.finance_diagnostic_readiness import startup_evidence
 from tests.fixtures.finance_staging_measurement_report import (
     abort_pending,
     close_completed_slots,
@@ -503,6 +504,14 @@ async def test_one_staged_import_replay_and_loaded_queries(tmp_path):
                 )
                 approval = accepted["approval_event_id"]
                 report["empty_state"] = await call("inspect")
+                # The existing inspect flushes its trace before replying. Keep
+                # this gate inside startup; no extra request, wait or retry.
+                report["diagnostic_startup"] = startup_evidence(
+                    run.root / "measurement-trace.jsonl", time.monotonic()
+                )
+                assert report["diagnostic_startup"]["complete"], (
+                    "synthetic_diagnostic_startup_incomplete"
+                )
             warm_start = time.monotonic()
             report["warmup"] = {"started": warm_start, "seconds": 5, "core_slots": 100}
             await load("warm_core", min(end, warm_start + 5), seconds=5)

@@ -1,4 +1,4 @@
-name: Focused synthetic Finance diagnostic observers
+name: Bounded representative Finance diagnostics
 on:
   push:
     branches: ['codex/finance-encrypted-staging']
@@ -8,18 +8,19 @@ concurrency:
   group: finance-encrypted-staging-correctness
   cancel-in-progress: false
 jobs:
-  diagnostic-preflight:
+  staged-diagnostic:
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 10
     env:
       ADMINME_TEST_MODE: '1'
-      ADMINME_SYNTHETIC_DIAGNOSTIC_PREFLIGHT: '1'
       PYTHONDONTWRITEBYTECODE: '1'
       PYTHONPATH: bridge
       POETRY_VIRTUALENVS_IN_PROJECT: 'true'
     steps:
-      - name: Bind isolated evidence directory
-        run: printf 'FINANCE_STORAGE_ARTIFACT_DIR=%s/finance-diagnostic-evidence\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+      - name: Bind isolated evidence directories
+        run: |
+          printf 'FINANCE_STORAGE_ARTIFACT_DIR=%s/finance-staged-diagnostic\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+          printf 'FINANCE_MEASUREMENT_PINS=%s/finance-staged-diagnostic-pins\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           persist-credentials: false
@@ -29,98 +30,115 @@ jobs:
           python-version: '3.14.7'
       - run: pipx install poetry==2.4.1
       - run: poetry sync --with dev --no-interaction
-      - name: Bind reviewed diagnostics and unchanged workload
+      - name: Bind representative source and reused observer proof
         run: |
-          mkdir "$FINANCE_STORAGE_ARTIFACT_DIR"
-          git rev-parse HEAD HEAD:adminme HEAD:poetry.lock > "$FINANCE_STORAGE_ARTIFACT_DIR/source-pins.txt"
+          mkdir "$FINANCE_MEASUREMENT_PINS"
+          git rev-parse HEAD HEAD:adminme HEAD:poetry.lock > "$FINANCE_MEASUREMENT_PINS/source-pins.txt"
           .venv/bin/python - <<'PY_CHECK'
           import ast, hashlib, json, os, pathlib, subprocess
+          baseline='1c990dfc2b72d0e73989e58a9abaae14b95595a9'
           expected={
               '.github/workflows/finance-encrypted-staging.yml',
-              'tests/fixtures/finance_staging_measurement.py',
-              'tests/acceptance/test_finance_storage_isolation.py',
-              'tests/unit/test_finance_diagnostic_observers.py',
-              'tests/unit/test_finance_diagnostic_spans.py',
+              'tests/acceptance/test_finance_staging_measurement.py',
+              'tests/fixtures/finance_diagnostic_readiness.py',
+              'tests/unit/test_finance_diagnostic_readiness.py',
           }
-          actual=set(subprocess.check_output(['git','diff','--name-only','ccd47ed138d231ac351b050a5fed5cb674f09d1a','HEAD'],text=True).splitlines())
+          actual=set(subprocess.check_output(['git','diff','--name-only',baseline,'HEAD'],text=True).splitlines())
           assert actual==expected,actual
-          for p,h in {
-              'tests/fixtures/finance_staging_measurement.py':'042c942aafe0b7506d0d625ecfb9bc6609300c202da9f88fc4fd0bd511d6d909',
-              'tests/acceptance/test_finance_storage_isolation.py':'a718903f2ab940d4ffff84b3398804470f096f39ee4d8467f4b18211aefda7c9',
-              'tests/unit/test_finance_diagnostic_observers.py':'4b03801e981e0e70bb61b80300106cca55f1503d825f331996cf2b736d4231ec',
-          }.items():assert hashlib.sha256(pathlib.Path(p).read_bytes()).hexdigest()==h,p
+          pins={'tests/fixtures/finance_diagnostic_readiness.py': '1d14d3468ff347a25d57a7bd545ddca5951aa38baa403634fac4e5dfb0b2c8a0', 'tests/unit/test_finance_diagnostic_readiness.py': '0329ef70c37d4fb6e7cb8038c37b6c4dde494c228027d3514c7c5016482031aa', 'tests/acceptance/test_finance_staging_measurement.py': 'c363b611b7c979e3d05182c10742641d7ad75bd245f48ea07efdf71f676f6f71'}
+          for p,h in pins.items():assert hashlib.sha256(pathlib.Path(p).read_bytes()).hexdigest()==h,p
           assert subprocess.check_output(['git','rev-parse','HEAD:adminme'],text=True).strip()=='1873e65d8a36d8af74ed5608b49b62dac6934d73'
           assert subprocess.check_output(['git','rev-parse','HEAD:poetry.lock'],text=True).strip()=='cc2102f6e9dd2fd029bd636566806493c1df91dc'
           paths=subprocess.check_output(['git','diff','--name-only','35b4f0615c4ece0bc4fc0ed927b39507ea9774b2','HEAD'],text=True).splitlines()
-          assert len(paths)==23
+          assert len(paths)==25
           for p in paths:
-              if p.endswith('.py'):ast.parse(pathlib.Path(p).read_text())
+              data=pathlib.Path(p).read_bytes()
+              if p.endswith('.py'):ast.parse(data)
+              if p not in expected:assert data==subprocess.check_output(['git','show',baseline+':'+p]),p
           source=ast.parse(pathlib.Path('tests/fixtures/finance_storage_isolation.py').read_text())
           files=ast.literal_eval(next(n.value for n in source.body if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='ARTIFACT_FILES' for t in n.targets)))
           digest=hashlib.sha256()
           for p in files:
               digest.update(p.encode());digest.update(pathlib.Path(p).read_bytes())
           assert digest.hexdigest()=='ce01d08e6462af13a83bb6eb3fef3977532dc0a0a652149e0f8c2593add8e750'
-          out=pathlib.Path(os.environ['FINANCE_STORAGE_ARTIFACT_DIR'])
+          out=pathlib.Path(os.environ['FINANCE_MEASUREMENT_PINS'])
           for name,selected in [('source-sha256.json',paths),('dependency-sha256.json',files)]:
               (out/name).write_text(json.dumps({p:hashlib.sha256(pathlib.Path(p).read_bytes()).hexdigest() for p in selected},indent=2)+'\n')
           PY_CHECK
-          .venv/bin/ruff check tests/fixtures/finance_staging_measurement.py tests/acceptance/test_finance_storage_isolation.py tests/unit/test_finance_diagnostic_observers.py tests/unit/test_finance_diagnostic_spans.py
-          .venv/bin/ruff format --check tests/fixtures/finance_staging_measurement.py tests/acceptance/test_finance_storage_isolation.py tests/unit/test_finance_diagnostic_observers.py tests/unit/test_finance_diagnostic_spans.py
-      - name: Bounded observer reporting buffer and span tests
+          .venv/bin/ruff check tests/fixtures/finance_diagnostic_readiness.py tests/unit/test_finance_diagnostic_readiness.py tests/acceptance/test_finance_staging_measurement.py
+          .venv/bin/ruff format --check tests/fixtures/finance_diagnostic_readiness.py tests/unit/test_finance_diagnostic_readiness.py tests/acceptance/test_finance_staging_measurement.py
+      - name: Check only the new early diagnostic gate
+        id: preflight
         timeout-minutes: 2
         run: |
           ulimit -t 60
           ulimit -v 1048576
           timeout --signal=TERM --kill-after=5s 60s .venv/bin/python -m pytest -p no:cacheprovider -q --runxfail --maxfail=1 \
-            -o tmp_path_retention_policy=all \
-            --basetemp="$RUNNER_TEMP/finance-diagnostic-unit" \
-            --junitxml="$FINANCE_STORAGE_ARTIFACT_DIR/unit.xml" \
-            tests/unit/test_finance_diagnostic_observers.py \
-            tests/unit/test_finance_diagnostic_spans.py
-      - name: Preserve bounded observer evidence before scratch cleanup
+            --basetemp="$RUNNER_TEMP/finance-readiness-unit" \
+            --junitxml="$FINANCE_MEASUREMENT_PINS/preflight.xml" \
+            tests/unit/test_finance_diagnostic_readiness.py
+          .venv/bin/python - <<'PY_CHECK'
+          import collections, json, os, pathlib, xml.etree.ElementTree as E
+          root=pathlib.Path(os.environ['FINANCE_MEASUREMENT_PINS'])
+          rows=E.parse(root/'preflight.xml').findall('.//testcase')
+          expected={'test_first_inspect_requires_actual_observer_evidence':8,'test_gate_uses_only_completed_first_inspect_prefix':2,'test_unavailable_or_unbounded_trace_cannot_pass':3}
+          counts=collections.Counter(c.attrib.get('name','').split('[',1)[0] for c in rows)
+          clean=all(not any(c.find(k) is not None for k in ('failure','error','skipped')) for c in rows)
+          exact=len(rows)==13 and len({c.attrib.get('name') for c in rows})==13 and counts==expected and all(c.attrib.get('classname')=='tests.unit.test_finance_diagnostic_readiness' for c in rows)
+          result={'expected':13,'executed':len(rows),'counts':dict(counts),'exact_selection':exact,'zero_failed_error_skipped':clean,'permits_representative_step':bool(exact and clean)}
+          (root/'preflight-result.json').write_text(json.dumps(result,indent=2)+'\n')
+          assert result['permits_representative_step'],'incomplete preflight; representative diagnostic must not start'
+          PY_CHECK
+      - name: One representative staged import replay and planning diagnostic
+        id: measurement
+        if: steps.preflight.outcome == 'success'
+        timeout-minutes: 7
+        run: |
+          mkdir "$FINANCE_STORAGE_ARTIFACT_DIR"
+          .venv/bin/python -I -B tests/fixtures/finance_watchdog.py staged-bounded "$FINANCE_STORAGE_ARTIFACT_DIR"
+      - name: Preserve unchanged comparisons and partial failure verdicts
+        if: always() && steps.measurement.outcome != 'skipped' && steps.measurement.outcome != ''
+        run: .venv/bin/python -I -B tests/fixtures/finance_staging_measurement_report.py "$FINANCE_STORAGE_ARTIFACT_DIR"
+      - name: Retain bounded source outcome and cleanup evidence
         if: always()
         run: |
           python - <<'PY_CHECK'
           import hashlib, json, os, pathlib, shutil, sys, xml.etree.ElementTree as E
-          root=pathlib.Path(os.environ['FINANCE_STORAGE_ARTIFACT_DIR']);root.mkdir(exist_ok=True)
-          scratch=pathlib.Path(os.environ['RUNNER_TEMP'])/'finance-diagnostic-unit'
-          names={'measurement-trace.jsonl','diagnostic-observer.json','staged_bounded.json','staged_bounded-diagnostic-observer.json','staged_bounded-measurement-trace.jsonl'}
-          collected=[];omitted=[]
-          used=sum(p.stat().st_size for p in root.iterdir() if p.is_file())
-          count=sum(p.is_file() for p in root.iterdir())
-          for p in sorted(scratch.rglob('*')) if scratch.exists() else []:
-              if p.is_symlink() or not p.is_file() or p.name not in names:continue
-              name='unit__'+'__'.join(p.relative_to(scratch).parts)
-              size=p.stat().st_size
-              if count>=60 or used+size>8*1024*1024-131072:
-                  omitted.append({'relative_path':str(p.relative_to(scratch)),'bytes':size});continue
-              target=root/name;assert not target.exists()
-              shutil.copyfile(p,target);used+=size;count+=1
-              collected.append({'name':name,'bytes':size,'sha256':hashlib.sha256(target.read_bytes()).hexdigest()})
-          cases=E.parse(root/'unit.xml').findall('.//testcase') if (root/'unit.xml').exists() else []
-          result={'expected':15,'executed':len(cases),'passed':sum(not any(c.find(k) is not None for k in ('failure','error','skipped')) for c in cases),'failed':sum(any(c.find(k) is not None for k in ('failure','error')) for c in cases),'skipped':sum(c.find('skipped') is not None for c in cases)}
-          expected_reports={'trace-buffer','trace-overflow',*[prefix+'-'+outcome for prefix in ('readback','route','queue') for outcome in ('success','error','cancel')]}
-          reports_present=all((root/(name+'.json')).is_file() for name in expected_reports)
+          pins=pathlib.Path(os.environ['FINANCE_MEASUREMENT_PINS']);pins.mkdir(exist_ok=True)
+          root=pathlib.Path(os.environ['FINANCE_STORAGE_ARTIFACT_DIR'])
+          def cases(path):
+              if not path.is_file():return []
+              try:return E.parse(path).findall('.//testcase')
+              except E.ParseError:return []
+          def outcome(rows,expected):
+              return {'expected':expected,'executed':len(rows),'passed':sum(not any(c.find(k) is not None for k in ('failure','error','skipped')) for c in rows),'failed':sum(any(c.find(k) is not None for k in ('failure','error')) for c in rows),'skipped':sum(c.find('skipped') is not None for c in rows),'names':[c.attrib.get('name') for c in rows]}
+          unit=outcome(cases(pins/'preflight.xml'),13)
+          measurement=outcome(cases(root/'results.xml'),1)
+          scratch=pathlib.Path(os.environ['RUNNER_TEMP'])/'finance-readiness-unit'
           if scratch.exists():shutil.rmtree(scratch)
-          selection={'unit':result,'collected':collected,'omitted':omitted,'expected_collected_files':30,'expected_reports':sorted(expected_reports),'reports_present':reports_present,'unit_scratch_removed':not scratch.exists(),'real_runtime_integration':False,'resource_qualified':False,'production_qualified':False}
-          (root/'selection-result.json').write_text(json.dumps(selection,indent=2)+'\n')
-          files=sorted(p for p in root.iterdir() if p.is_file())
-          records=[{'name':p.name,'bytes':p.stat().st_size,'sha256':hashlib.sha256(p.read_bytes()).hexdigest()} for p in files]
-          bounded=len(files)<=63 and sum(r['bytes'] for r in records)<=8*1024*1024-65536
-          output=pathlib.Path(os.environ['RUNNER_TEMP'])/'finance-diagnostic-upload';output.mkdir()
-          (output/'artifact-manifest.json').write_text(json.dumps({'bounded':bounded,'files':records},indent=2)+'\n')
+          result={'candidate':os.environ['GITHUB_SHA'],'unit':unit,'measurement':measurement,'unit_scratch_removed':not scratch.exists(),'reused_observer_run':40242644380,'reused_observer_tests':15,'repeated_observer_tests':0,'resource_qualified':False,'production_qualified':False}
+          (pins/'selection-result.json').write_text(json.dumps(result,indent=2)+'\n')
+          output=pathlib.Path(os.environ['RUNNER_TEMP'])/'finance-staged-diagnostic-upload';output.mkdir()
+          files=sorted((p for parent in (pins,root) if parent.exists() for p in parent.glob('*') if p.is_file() and not p.is_symlink()),key=lambda p:p.name)
+          assert len({p.name for p in files})==len(files)
+          def digest(path):
+              with path.open('rb') as stream:return hashlib.file_digest(stream,'sha256').hexdigest()
+          records=[{'name':p.name,'bytes':p.stat().st_size,'sha256':digest(p)} for p in files]
+          bounded=len(files)<=63 and sum(r['bytes'] for r in records)<=32*1024*1024-65536
+          manifest=json.dumps({'bounded':bounded,'files':records,'resource_qualified':False,'production_qualified':False},indent=2)+'\n'
+          assert len(manifest.encode())<=65536
+          (output/'artifact-manifest.json').write_text(manifest)
           if bounded:
               for p in files:shutil.copyfile(p,output/p.name)
-          complete=result['passed']==15 and not result['failed'] and not result['skipped'] and len(collected)==30 and not omitted and reports_present
-          if not bounded or not complete:sys.exit('focused diagnostic evidence failed or incomplete; no qualification')
+          complete=unit['passed']==13 and not unit['failed'] and not unit['skipped'] and measurement['passed']==1 and not measurement['failed'] and not measurement['skipped']
+          if not bounded or not complete:sys.exit('bounded representative diagnostic failed or incomplete; raw evidence retained when within cap, no qualification')
           PY_CHECK
-      - name: Upload focused synthetic diagnostic receipts
+      - name: Upload representative diagnostic receipts
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: finance-diagnostic-preflight
-          path: ${{ runner.temp }}/finance-diagnostic-upload
+          name: finance-staged-representative-diagnostic
+          path: ${{ runner.temp }}/finance-staged-diagnostic-upload
           if-no-files-found: error
           retention-days: 7
           compression-level: 9
