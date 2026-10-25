@@ -1,0 +1,49 @@
+name: Single phased synthetic Finance evaluation
+on:
+  push:
+    branches: ['codex/finance-phased-eval-427990f5']
+permissions:
+  contents: read
+concurrency:
+  group: finance-watchdog-${{ github.ref }}-${{ github.sha }}
+  cancel-in-progress: false
+jobs:
+  phased-evaluation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      ADMINME_TEST_MODE: '1'
+      PYTHONDONTWRITEBYTECODE: '1'
+      POETRY_VIRTUALENVS_IN_PROJECT: 'true'
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.14.7'
+      - run: pipx install poetry==2.4.1
+      - run: poetry sync --with dev --no-interaction
+      - name: Pin production and verify test-only source
+        run: |
+          git rev-parse HEAD HEAD:adminme HEAD:poetry.lock
+          git diff --exit-code 9e3f4a506bc06fd9a5bf733fe0cf268fcd4e860e HEAD -- adminme pyproject.toml poetry.lock scripts/release_scope.py tests/unit/test_ci_release_gates.py
+          .venv/bin/ruff check tests/fixtures/finance_watchdog.py tests/fixtures/finance_watchdog_controller.py tests/fixtures/finance_startup.py tests/acceptance/test_finance_watchdog.py tests/acceptance/test_finance_storage_measurement.py tests/acceptance/test_finance_storage_isolation.py
+          .venv/bin/ruff format --check tests/fixtures/finance_watchdog.py tests/fixtures/finance_watchdog_controller.py tests/fixtures/finance_startup.py tests/acceptance/test_finance_watchdog.py tests/acceptance/test_finance_storage_measurement.py tests/acceptance/test_finance_storage_isolation.py
+      - name: ONE reviewed 200-second work / 230-second absolute-bound evaluation
+        timeout-minutes: 6
+        env:
+          FINANCE_PHASED_ARTIFACT_DIR: ${{ runner.temp }}/finance-phased-evaluation
+        run: |
+          mkdir -p "$FINANCE_PHASED_ARTIFACT_DIR"
+          mkdir "$FINANCE_PHASED_ARTIFACT_DIR/full"
+          exec .venv/bin/python -I -B tests/fixtures/finance_watchdog.py full "$FINANCE_PHASED_ARTIFACT_DIR/full"
+      - name: Preserve every terminal or incomplete receipt
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: finance-phased-evaluation
+          path: ${{ runner.temp }}/finance-phased-evaluation
+          if-no-files-found: error
+          retention-days: 7
