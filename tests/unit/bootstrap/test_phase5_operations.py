@@ -19,7 +19,12 @@ import urllib.error
 import pytest
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-from bootstrap.contracts import OPENCLAW_LABEL, RUNTIME_LABEL, DeploymentPaths
+from bootstrap.contracts import (
+    OPENCLAW_LABEL,
+    RUNTIME_LABEL,
+    DeploymentPaths,
+    atomic_write,
+)
 from bootstrap.cli import _bootstrap_diagnostic_status
 from bootstrap.cli import _interactive_answers
 from bootstrap.doctor import Doctor
@@ -214,7 +219,7 @@ def test_fixed_entrypoints_exist_and_delegate_without_secret_arguments() -> None
         in versions["openclaw"]["source_archive_url"]
     )
     assert versions["openclaw"]["package_manager"] == (
-        "pnpm@11.15.1+sha512.81350b07e53c9538a02f1f2303b4290fa2d7be04e56e2a970c4cc4b417dc761de196edabd49d55c7dc9580db81007c44143e4e3d7e462b3000d23c255122d065"
+        "pnpm@12.15.0+sha512.b3951d6d6ff4a9f13dc7cf56cd28d2b8eb37dbcc9c68e52e1e1191873ea9f82a017287ab50baadc5ccc494f036c67c0e47eb13608c2fa36f47711b61ea128e61"
     )
     assert (
         'OPENCLAW_STATE_DIR="$ADMINME_INSTANCE_ROOT/state/openclaw/runtime"' in common
@@ -1062,20 +1067,73 @@ def test_openclaw_activation_probes_server_side_and_writes_metadata_only(
         (workspace / name).write_text("fixture", encoding="utf-8")
 
     environments: list[dict[str, str]] = []
+    config_path = test_paths.instance_dir / "openclaw/runtime/openclaw.json"
+    native_entries: dict = {}
 
     def run(command, **kwargs):
         commands.append(command)
         environments.append(dict(kwargs.get("env", {})))
-        return SimpleNamespace(stdout="OpenClaw 2026.10.7")
+        # This command stub owns native file effects. A successful configure
+        # cannot be simulated by exit zero while leaving no native config.
+        if command[1] == "configure":
+            config_path.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
+            atomic_write(config_path, b'{"agents":{"defaults":{}}}', mode=0o600)
+        elif command[1:4] == ["config", "set", "agents.defaults.workspace"]:
+            config = json.loads(config_path.read_text())
+            config["agents"]["defaults"]["workspace"] = command[4]
+            atomic_write(config_path, json.dumps(config).encode(), mode=0o600)
+        elif command[:5] == [
+            "/fixture/node",
+            "/fixture/openclaw.mjs",
+            "config",
+            "set",
+            "agents.entries",
+        ]:
+            assert command[6:] == [
+                "--strict-json",
+                "--replace",
+                "--expect-current-absent",
+            ]
+            assert kwargs["env"]["OPENCLAW_SUPERVISOR_MODE"] == "external"
+            native_entries.update(json.loads(command[5]))
+            config = json.loads(config_path.read_text())
+            assert "entries" not in config["agents"]
+            config["agents"]["entries"] = copy.deepcopy(native_entries)
+            config["agents"]["entries"]["main"]["workspace"] = str(workspace)
+            config["agents"]["ownership"] = "explicit"
+            config["agents"]["defaults"]["systemAgent"] = {"agentId": "main"}
+            config["talk"] = {"agentId": "main"}
+            atomic_write(config_path, json.dumps(config).encode(), mode=0o600)
+        return SimpleNamespace(stdout="OpenClaw 2026.10.7", returncode=0)
 
     monkeypatch.setattr(
         "bootstrap.openclaw_activation.resolve_reviewed_openclaw",
         lambda _paths, test_mode=False: "/openclaw",
     )
+    monkeypatch.setattr(
+        "bootstrap.openclaw_migration._target_command",
+        lambda *_: (Path("/fixture/node"), Path("/fixture/openclaw.mjs")),
+    )
     monkeypatch.setattr("bootstrap.openclaw_activation.subprocess.run", run)
     result = activate(test_paths, root=REPO_ROOT, test_mode=True)
 
-    assert commands == [
+    # Real expansion/classification/read-back still executes around the stub;
+    # actual native CLI behavior is qualified by the separate hosted probe.
+    assert commands[3][:5] == [
+        "/fixture/node",
+        "/fixture/openclaw.mjs",
+        "config",
+        "set",
+        "agents.entries",
+    ]
+    receipt = json.loads(
+        (config_path.parent.parent / "native-roster-expansion.json").read_text()
+    )
+    assert receipt["kind"] == "sole-agent-expansion"
+    assert receipt["source"] == {"agents": {"defaults": {"workspace": str(workspace)}}}
+    assert receipt["requested_entries"] == native_entries
+    assert receipt["result"]["agents"]["ownership"] == "explicit"
+    assert commands[:3] + commands[4:] == [
         ["/openclaw", "--version"],
         ["/openclaw", "configure", "--section", "model", "--section", "channels"],
         [
@@ -1090,8 +1148,8 @@ def test_openclaw_activation_probes_server_side_and_writes_metadata_only(
         ["/openclaw", "gateway", "status", "--require-rpc"],
     ]
     assert result["contains_credentials"] is False
-    assert "OPENCLAW_GATEWAY_TOKEN" not in environments[4]
-    assert environments[5]["OPENCLAW_GATEWAY_TOKEN"]
+    assert "OPENCLAW_GATEWAY_TOKEN" not in environments[5]
+    assert environments[6]["OPENCLAW_GATEWAY_TOKEN"]
     assert result["cron_reconciled"] is True
     assert result["cron_jobs"] == 5
     assert model_provider_configured(test_paths) is True
