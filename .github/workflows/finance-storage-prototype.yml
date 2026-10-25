@@ -41,7 +41,7 @@ jobs:
       - name: One bounded synthetic correctness and resource evaluation
         timeout-minutes: 37
         env:
-        FINANCE_STORAGE_ARTIFACT_DIR: ${{ runner.temp }}/finance-storage-prototype
+          FINANCE_STORAGE_ARTIFACT_DIR: ${{ runner.temp }}/finance-storage-prototype
         run: >-
           exec .venv/bin/python -m pytest -q --runxfail --maxfail=3
           --junitxml="${{ runner.temp }}/finance-storage-prototype/results.xml"
