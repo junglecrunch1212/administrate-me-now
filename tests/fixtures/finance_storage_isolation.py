@@ -36,6 +36,18 @@ CONTROL_LIMIT = 128 * 1024
 ROOT = Path(__file__).resolve().parents[2]
 ARTIFACT_FILES = (
     "tests/fixtures/finance_storage_isolation.py",
+    "tests/fixtures/finance_staging_store.py",
+    "tests/fixtures/finance_staging_prepare.py",
+    "tests/fixtures/finance_staging.py",
+    "tests/fixtures/finance_staging_contract.json",
+    "adminme/finance/closed_import.py",
+    "adminme/finance/dated_projection.py",
+    "adminme/finance/publication_provenance.py",
+    "adminme/finance/provenance_store.py",
+    "adminme/finance/planning_store.py",
+    "adminme/finance/publication.py",
+    "adminme/finance/projection.py",
+    "adminme/finance/worker_protocol.py",
     "adminme/finance/worker_child.py",
     "adminme/finance/worker.py",
     "adminme/events/log.py",
@@ -76,6 +88,8 @@ class EventReference:
 
 class SyntheticStorage:
     """One temporary authority, one pipe owner and one executor at a time."""
+
+    executor_script = Path(__file__).resolve()
 
     def __init__(self, root: Path, *, namespace_nonce: str | None = None):
         from tests.fixtures.finance_startup import store_name
@@ -129,7 +143,7 @@ class SyntheticStorage:
         self.birth, self.seq = secrets.token_hex(16), 0
         self._cpu_at_spawn = resource.getrusage(resource.RUSAGE_CHILDREN)
         self.process = subprocess.Popen(
-            [sys.executable, "-I", "-B", str(Path(__file__).resolve()), "executor"],
+            [sys.executable, "-I", "-B", str(self.executor_script), "executor"],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
@@ -391,8 +405,12 @@ class SyntheticStorage:
                     log._id_gen = _EventIdGenerator(log._latest_native_event_id())
 
                 await log._run_on_connection_thread(sync_ids)
+            await self.after_append(result)
             await self.checkpoint("committed")
             return result
+
+    async def after_append(self, result):
+        """Optional synthetic lifecycle seam, after transaction settlement."""
 
     async def apply(self, envelope):
         await self.checkpoint("applying")
@@ -504,7 +522,7 @@ class SyntheticStorage:
                     await await_settled(self.close())
 
 
-async def executor():
+async def executor(*, staged=False):
     """Trusted only for the controller-created disposable encrypted databases."""
     import hmac
     import sqlcipher3
@@ -570,6 +588,7 @@ async def executor():
         outgoing, {"protocol": PROTOCOL, "artifact": artifact_digest(), "birth": birth}
     )
     stored = []
+    stage_store = None
     scope = None
     prepared_header = None
 
@@ -631,72 +650,94 @@ async def executor():
                         command["owner_id"],
                         command["manifest"]["binding"]["book_id"],
                     )
-                    metadata, info, total = None, None, 0
-                    worker_child._input = incoming
-
-                    class LocalMoney:
-                        def execute(self, sql, parameters):
-                            result = _sql(
-                                money,
-                                {
-                                    "kind": "sql",
-                                    "sql": sql,
-                                    "parameters": list(parameters),
-                                },
-                                read_only=True,
-                                scope=scope,
-                            )
-                            return worker_child.Cursor(result["rows"])
-
-                    def collect_json(_stream, value):
-                        nonlocal metadata, info
-                        if value["kind"] == "prepared" and metadata is None:
-                            metadata = value
-                        elif value["kind"] == "event" and info is None:
-                            info = value
-                        else:
-                            raise ValueError("synthetic_preparation_protocol")
-
-                    def collect_frame(_stream, raw):
-                        nonlocal info, total
-                        total += len(raw)
-                        if (
-                            info is None
-                            or len(stored) >= 131
-                            or total
-                            > 4 * sum(command["manifest"]["blobs"].values())
-                            + 64 * 1024 * 1024
-                            or info["bytes"] != len(raw)
-                            or hashlib.sha256(raw).hexdigest() != info["sha256"]
-                        ):
-                            raise ValueError("synthetic_preparation_limit")
-                        event = ValidatedFinanceEvent(
-                            *scope,
-                            info["type"],
-                            info["source_adapter"],
-                            info["idempotency_key"],
-                            raw.decode(),
-                            info["sha256"],
-                            b"",
+                    if staged:
+                        from tests.fixtures.finance_staging import new_stage
+                        from tests.fixtures.finance_staging_prepare import (
+                            prepare_staged,
                         )
-                        event = replace(event, _receipt=event._signature())
-                        event.verify()
-                        stored.append(event)
-                        diagnostics.emitted(len(raw))
-                        info = None
+                        from tests.fixtures.finance_import_diagnostics import (
+                            PreparationDiagnostics,
+                        )
 
-                    from tests.fixtures.finance_import_diagnostics import (
-                        PreparationDiagnostics,
-                    )
+                        durable_guard()
+                        stage_store = new_stage(root, command)
+                        diagnostics = PreparationDiagnostics()
+                        with diagnostics.instrument(), diagnostics.stage("prepare"):
+                            stored, metadata = prepare_staged(
+                                command,
+                                incoming,
+                                money,
+                                stage_store,
+                                durable_guard,
+                                diagnostics,
+                            )
+                    else:
+                        metadata, info, total = None, None, 0
+                        worker_child._input = incoming
 
-                    diagnostics = PreparationDiagnostics()
-                    worker_child.MoneyConnection = LocalMoney
-                    worker_child.write_json = collect_json
-                    worker_child.write_frame = collect_frame
-                    with diagnostics.instrument(), diagnostics.stage("prepare"):
-                        worker_child.prepare(command)
-                    if metadata is None or not stored or info is not None:
-                        raise ValueError("synthetic_preparation_incomplete")
+                        class LocalMoney:
+                            def execute(self, sql, parameters):
+                                result = _sql(
+                                    money,
+                                    {
+                                        "kind": "sql",
+                                        "sql": sql,
+                                        "parameters": list(parameters),
+                                    },
+                                    read_only=True,
+                                    scope=scope,
+                                )
+                                return worker_child.Cursor(result["rows"])
+
+                        def collect_json(_stream, value):
+                            nonlocal metadata, info
+                            if value["kind"] == "prepared" and metadata is None:
+                                metadata = value
+                            elif value["kind"] == "event" and info is None:
+                                info = value
+                            else:
+                                raise ValueError("synthetic_preparation_protocol")
+
+                        def collect_frame(_stream, raw):
+                            nonlocal info, total
+                            total += len(raw)
+                            if (
+                                info is None
+                                or len(stored) >= 131
+                                or total
+                                > 4 * sum(command["manifest"]["blobs"].values())
+                                + 64 * 1024 * 1024
+                                or info["bytes"] != len(raw)
+                                or hashlib.sha256(raw).hexdigest() != info["sha256"]
+                            ):
+                                raise ValueError("synthetic_preparation_limit")
+                            event = ValidatedFinanceEvent(
+                                *scope,
+                                info["type"],
+                                info["source_adapter"],
+                                info["idempotency_key"],
+                                raw.decode(),
+                                info["sha256"],
+                                b"",
+                            )
+                            event = replace(event, _receipt=event._signature())
+                            event.verify()
+                            stored.append(event)
+                            diagnostics.emitted(len(raw))
+                            info = None
+
+                        from tests.fixtures.finance_import_diagnostics import (
+                            PreparationDiagnostics,
+                        )
+
+                        diagnostics = PreparationDiagnostics()
+                        worker_child.MoneyConnection = LocalMoney
+                        worker_child.write_json = collect_json
+                        worker_child.write_frame = collect_frame
+                        with diagnostics.instrument(), diagnostics.stage("prepare"):
+                            worker_child.prepare(command)
+                        if metadata is None or not stored or info is not None:
+                            raise ValueError("synthetic_preparation_incomplete")
                     if profile:
                         profile.mark(
                             "encoded_batch_materialized",
@@ -704,13 +745,15 @@ async def executor():
                             top=True,
                         )
 
+                    reference_events = stored.reference_metadata() if staged else stored
+
                     def prior_ids():
                         return {
                             e.idempotency_key: log._conn.execute(
                                 "SELECT event_id FROM events WHERE tenant_id=? AND idempotency_key=?",
                                 (e.tenant_id, e.idempotency_key),
                             ).fetchone()
-                            for e in stored
+                            for e in reference_events
                         }
 
                     existing = await log._run_on_connection_thread(prior_ids)
@@ -727,7 +770,7 @@ async def executor():
                             if existing[e.idempotency_key]
                             else None,
                         ).wire()
-                        for e in stored
+                        for e in reference_events
                     ]
                     reply(
                         "result",
@@ -768,12 +811,19 @@ async def executor():
                             _EventIdGenerator(log._latest_native_event_id()),
                         )
                     )
-                    ids = await log._append_finance_batch(
-                        *scope,
-                        stored,
-                        commit_guard=guard,
-                        correlation_id=command.get("correlation_id"),
-                    )
+                    if staged:
+                        from tests.fixtures.finance_staging import append_staged
+
+                        ids = await append_staged(
+                            log, scope, stored, guard, command.get("correlation_id")
+                        )
+                    else:
+                        ids = await log._append_finance_batch(
+                            *scope,
+                            stored,
+                            commit_guard=guard,
+                            correlation_id=command.get("correlation_id"),
+                        )
                     if command.get("fault") == "event_after_commit":
                         os._exit(72)
                     stored.clear()
@@ -816,6 +866,8 @@ async def executor():
 
                     reply("result", result=await log._run_on_connection_thread(recover))
                 elif op == "apply":
+                    if staged and prepared_header is not None:
+                        raise ValueError("synthetic_preparation_owner_cannot_apply")
                     coordinates = command["coordinates"]
                     if coordinates["type"] not in MoneyProjection.subscribes_to:
                         raise ValueError("synthetic_apply_type_denied")
@@ -876,6 +928,8 @@ async def executor():
                 reply("error", reason="synthetic_" + type(exc).__name__)
                 return
     finally:
+        if stage_store is not None:
+            stage_store.close()
         money.close()
         await log.close()
 

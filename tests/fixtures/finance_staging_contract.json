@@ -1,0 +1,95 @@
+{
+  "contract": "synthetic-finance-unpublished-stage.v1",
+  "status": "Frozen source-only prototype contract; no production or execution admission",
+  "base": "35b4f0615c4ece0bc4fc0ed927b39507ea9774b2",
+  "production_tree": "1873e65d8a36d8af74ed5608b49b62dac6934d73",
+  "outcome": "A disposable import validates a complete encrypted unpublished package, atomically appends exact original event payloads using bounded iteration, confirms preparation-owner reap, deletes its encrypted stage, and applies/replays Money in a fresh executor. Focused correctness evidence is prepared for a separately admitted hosted run.",
+  "scope": "Explicit test fixture only, not imported or enabled by adminme. Existing non-staged fixture behavior and production source remain unchanged. Fresh random disposable TEST keys only; no private input, production credentials, grant, provider, native benchmark, or live activation.",
+  "ownership": {
+    "controller": "Existing SyntheticStorage controller, one async operation lock and one active child; owns fresh operation nonce, test stage encryption/MAC keys, exact source digest, approval/manifest identity and at most 131 scalar event references. No retained payload batch in controller.",
+    "child": "One exclusive stage-directory flock and one prepare/commit executor. Money cannot run in this process after preparation. Handoff requires successful wait/reap; uncertain reap quarantines and prevents spawn/cleanup.",
+    "thread": "Stage acquisition/validation has one connection owner. Before append, its writer connection is closed; an authenticated read-only connection is opened on the existing EventLog connection thread before BEGIN. No concurrent stage writer.",
+    "trusted_paths": "Only a controller-created 0700 child of its synthetic-store-* root, exact 32-hex operation leaf. Reject symlinks, wrong ownership, unexpected stage entries and wrong context. Never accept provider-supplied file paths."
+  },
+  "quotas": {
+    "components": 131,
+    "proof_blobs": 128,
+    "proof_units_per_chunk": 256,
+    "raw_input_total_bytes": 46137344,
+    "publication_bytes": 4194304,
+    "projection_bytes": 8388608,
+    "index_bytes": 262144,
+    "proof_blob_bytes": 1048576,
+    "aggregate_provenance_bytes": 33554432,
+    "events": 131,
+    "event_payload_bytes": 9437184,
+    "event_payload_total_bytes": 83886080,
+    "encrypted_row_chunk_bytes": 65536,
+    "control_frame_bytes": 131072,
+    "stage_database_page_bytes": 4096,
+    "stage_database_pages": 49152,
+    "stage_database_bytes": 201326592,
+    "stage_directory_bytes": 419430400,
+    "stage_file_rlimit_bytes": 203423744,
+    "active_executors": 1,
+    "operation_wall_seconds": 180,
+    "child_cpu_seconds": 90,
+    "child_address_space_bytes": 1073741824,
+    "cleanup_wait_seconds": [
+      5,
+      3,
+      3
+    ],
+    "retained_refs": 131,
+    "enforcement": "Pre-allocation frame/component/event/count checks; SQLCipher max_page_count and child RLIMIT_AS/CPU/FSIZE; stage-file aggregate checked after bounded writes. Aggregate disk is a cooperative bound, not a filesystem quota. Existing total test-job containment remains separate; these are containment ceilings, not Finance performance acceptance."
+  },
+  "encryption_integrity": {
+    "primitive": "Existing sqlcipher3 with a fresh 32-byte disposable stage key, default page authentication explicitly checked, DELETE journaling, temp_store=MEMORY, 512 KiB page cache. Fresh independent 32-byte test HMAC key; neither key persisted or logged.",
+    "binding": "Domain-separated canonical JSON HMAC-SHA256 records bind source artifact, operation, tenant, owner, book, approval, exact manifest hash, kind, unique ID, ordinal, byte count and SHA-256. A distinct seal domain authenticates BOTH the exact complete component inventory and the ordered event inventory. Exact unique names/ordinals, 64 KiB chunk order and final-short-chunk shape, object/event counts and lengths are checked; missing, duplicate, extra, cross-context or corrupted rows reject. Reads recompute content hashes; seal integrity is checked before append and again before the existing final guard. Corruption during append rolls back the whole batch.",
+    "transport": "Existing private inherited IPC with source digest, birth nonce and monotonically checked sequence. Stage descriptor originates solely in controller and carries fresh test keys over that pipe. No new network service."
+  },
+  "publication_boundary": [
+    "Upload may populate only encrypted staging. There are zero Finance event or Money writes during acquisition or full validation.",
+    "Use the existing canonical/pin, independent-evidence, proof/history, owner/book, head/transition and dated-anchor validators. A lazy blob mapping must not freeze/materialize all blobs.",
+    "Seal only after complete successful preparation. Exact event payloads are staged one at a time; immutable receipt verification, scope checks and complete ordered count/hash checks precede append.",
+    "Append all events in the existing EventLog transaction with exact existing idempotency behavior. Bounded local reads of the already sealed stage occur during iteration; there is no upload, provider access, new IPC confirmation or additional lock acquisition inside the transaction.",
+    "Preserve both existing commit_guard calls. Immediately before COMMIT retain the parent-authority confirmation followed by durable-authority recheck in their existing order. No guard is dropped or moved.",
+    "After atomic commit or definitive recovery, confirmed reap precedes stage cleanup and fresh Money-process creation. Per-event Money transactions and checkpoint-after-ack ordering remain unchanged."
+  ],
+  "authority": [
+    "Approval, exact manifest, owner/book scope and expiry checked before accepting staged input, after input wait and before sealing; current authority is rechecked after lock acquisition and at both existing commit guards.",
+    "No sealed stage, MAC or cache receipt is an access grant. Revoked/stale/mismatched authority rejects commit without partial publication. Existing final disclosure checks remain in production importer/query paths.",
+    "Recovery inspects exact durable event identities/hashes; it does not retry a commit or use stale staged approval. A complete durable result is still subject to normal fresh disclosure authority."
+  ],
+  "lifecycle": [
+    "NEW -> UPLOADING -> VALIDATED_SEALED -> COMMITTING -> DURABLE -> REAPED -> STAGE_REMOVED -> MONEY_APPLY. Errors before durable commit abort unpublished stage; no resume shortcut.",
+    "Cancellation keeps operation ownership until append outcome and child exit are settled. Stage deletion is forbidden while an owner may still be alive.",
+    "Crash before COMMIT: SQLite rollback and zero new batch; discard encrypted stage after verified reap. Child crash after COMMIT before acknowledgment is recoverable only with a surviving controller retaining exact scoped references, as detailed in the next rule. No blind retry.",
+    "Child crash after COMMIT before acknowledgment, while controller retains exact scoped references: fresh executor queries those durable identities and hashes, returning only a complete batch. It never retries a commit. Controller loss is different: volatile refs and keys vanish. This prototype has no authoritative durable operation anchor for exact fresh-controller reconciliation, so recovery reports outcome-unknown, refuses retry, and does not reuse expired approval. No new durable production mechanism is introduced.",
+    "Fresh Money process receives no prepared object graph, accumulated payload batch or stage keys. It reads immutable event-log records only. Preserve per-event Money transactions, commit-before-ack and checkpoint-after-ack ordering; before/after-commit and lost-ack cases restart/replay idempotently.",
+    "Controller loss discards in-memory stage keys. Unpublished staging is not resumed by a new controller; only known owned orphan paths may be removed after process ownership is resolved. Production orphan/key recovery is explicitly deferred."
+  ],
+  "memory_accounting": {
+    "prepare": "At most one encoded upload component, one decoded component, current proof chunk/two witness documents, bounded proof metadata, and one decoded publication/projection. Raw full package and accumulated emitted payloads live only in encrypted staging. Projection JSON and one-event encode/decode transients remain and must be measured later. Adjacent iteration values and canonical/base64 encode/decode transients can overlap; per-component limits bound these but do not establish RSS acceptance.",
+    "append": "One event payload and the previous iteration row may overlap; stage chunks are 64 KiB. No list of all payload strings or rows. Scalar references/count/hash inventories remain bounded.",
+    "handoff": "No overlap of preparation and Money child PIDs: confirmed reap first. Controller/runtime and bounded keys/references persist; their cost must remain included.",
+    "money": "Same existing one-event Money behavior, fresh process and caches. This removes preparation lifetime overlap by construction, but no 128 MiB qualification or 45 MiB RSS improvement is claimed."
+  },
+  "focused_tests_prepared_not_run": [
+    "Encryption/wrong key; domain-separated object/seal MAC; exact complete component inventory and ordered event inventory; missing, duplicate, extra, wrong ordinal/length or cross-context row rejection; corruption after seal and before/during append with complete rollback; symlink/path/lock denial and byte/count/page/aggregate limits.",
+    "Exact staged bytes and lazy reads; complete proof validation and no partial publication after late corruption.",
+    "Initial/duplicate/successor event and projection equality; stale head, expiry and revocation after upload/prepared/writer admission/final guard/disclosure.",
+    "Before/after event commit failure, cancellation with ownership retained, uncertain reap quarantine, fresh Money PID only after verified old exit.",
+    "Money before/after commit and checkpoint lost-ack recovery; clean restart/replay; stage cleanup on success/rejection/cancellation and controller-owned orphan discard.",
+    "Distinguish child lost-ack exact recovery using controller-retained refs from controller loss after COMMIT: explicit outcome-unknown/no-retry when there is no implemented durable authoritative anchor; never infer exact recovery from vanished keys/refs or expired approval."
+  ],
+  "production_decisions_deferred": [
+    "Whether to adopt any staging format or storage authority in production.",
+    "Production key custody/derivation/rotation, crash-orphan recovery and retention/secure-erasure policy.",
+    "Production process/OS sandbox boundaries and persistent format/schema lifecycle.",
+    "Production performance budgets and admissible resource cohort."
+  ],
+  "execution": "Only source edits and lightweight static checks on this host. Exact hosted correctness candidate/scope must receive sole-operator slot admission. No performance run, benchmark or live action is authorized.",
+  "review_revision": 3,
+  "prior_contract_sha256": "3ee10df885d508955b39aa62c1edcdc5aaa843911f44543aec16403b9e2fb340"
+}

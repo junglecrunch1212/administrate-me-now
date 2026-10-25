@@ -1,0 +1,114 @@
+name: Focused synthetic Finance encrypted staging correctness
+on:
+  push:
+    branches: ['codex/finance-encrypted-staging']
+permissions:
+  contents: read
+concurrency:
+  group: finance-encrypted-staging-correctness
+  cancel-in-progress: false
+jobs:
+  staging-correctness:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      ADMINME_TEST_MODE: '1'
+      ADMINME_SYNTHETIC_STAGING_CORRECTNESS: '1'
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONPATH: bridge
+      POETRY_VIRTUALENVS_IN_PROJECT: 'true'
+      FINANCE_STORAGE_ARTIFACT_DIR: ${{ runner.temp }}/finance-encrypted-staging-evidence
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.14.7'
+      - run: pipx install poetry==2.4.1
+      - run: poetry sync --with dev --no-interaction
+      - name: Pin synthetic-only scope and static checks
+        run: |
+          mkdir -p "$FINANCE_STORAGE_ARTIFACT_DIR"
+          git rev-parse HEAD HEAD:adminme HEAD:poetry.lock > "$FINANCE_STORAGE_ARTIFACT_DIR/source-pins.txt"
+          git diff --exit-code 35b4f0615c4ece0bc4fc0ed927b39507ea9774b2 HEAD -- adminme bootstrap pyproject.toml poetry.lock scripts/release_scope.py tests/unit/test_ci_release_gates.py
+          .venv/bin/python - <<'PY_CHECK'
+          import ast, hashlib, json, os, pathlib, subprocess
+          base='35b4f0615c4ece0bc4fc0ed927b39507ea9774b2'
+          paths=subprocess.check_output(['git','diff','--name-only',base,'HEAD'],text=True).splitlines()
+          allowed={
+              '.github/workflows/finance-encrypted-staging.yml',
+              'tests/fixtures/finance_storage_isolation.py',
+              'tests/fixtures/finance_staging.py',
+              'tests/fixtures/finance_staging_store.py',
+              'tests/fixtures/finance_staging_prepare.py',
+              'tests/fixtures/finance_staging_cases.py',
+              'tests/fixtures/finance_staging_contract.json',
+              'tests/unit/test_finance_encrypted_staging.py',
+              'tests/acceptance/test_finance_encrypted_staging.py',
+          }
+          assert set(paths)==allowed, paths
+          assert subprocess.check_output(['git','rev-parse','HEAD:adminme'],text=True).strip()=='1873e65d8a36d8af74ed5608b49b62dac6934d73'
+          for p in paths:
+              if p.endswith('.py'): ast.parse(pathlib.Path(p).read_text())
+          out=pathlib.Path(os.environ['FINANCE_STORAGE_ARTIFACT_DIR'])
+          (out/'source-sha256.json').write_text(json.dumps({p:hashlib.sha256(pathlib.Path(p).read_bytes()).hexdigest() for p in paths},indent=2)+'\n')
+          PY_CHECK
+          .venv/bin/ruff check tests/fixtures/finance_staging*.py tests/fixtures/finance_storage_isolation.py tests/unit/test_finance_encrypted_staging.py tests/acceptance/test_finance_encrypted_staging.py
+          .venv/bin/ruff format --check tests/fixtures/finance_staging*.py tests/fixtures/finance_storage_isolation.py tests/unit/test_finance_encrypted_staging.py tests/acceptance/test_finance_encrypted_staging.py
+      - name: Encrypted inventories exact bytes quotas and atomic rollback
+        timeout-minutes: 3
+        run: .venv/bin/python -m pytest -p no:cacheprovider -q --runxfail --maxfail=1 --junitxml="$FINANCE_STORAGE_ARTIFACT_DIR/stage-unit.xml" tests/unit/test_finance_encrypted_staging.py
+      - name: Small API preparation handoff authority crash cancellation and replay
+        timeout-minutes: 9
+        run: .venv/bin/python -m pytest -p no:cacheprovider -q --runxfail --maxfail=1 --junitxml="$FINANCE_STORAGE_ARTIFACT_DIR/stage-lifecycle.xml" tests/acceptance/test_finance_encrypted_staging.py
+      - name: Require exact correctness cases without resource qualification
+        run: |
+          .venv/bin/python - <<'PY_CHECK'
+          import json, os, pathlib, xml.etree.ElementTree as ET
+          root=pathlib.Path(os.environ['FINANCE_STORAGE_ARTIFACT_DIR'])
+          for name, expected in [('stage-unit.xml',36),('stage-lifecycle.xml',19)]:
+              doc=ET.parse(root/name).getroot()
+              assert sum(int(s.attrib['tests']) for s in doc.iter('testsuite'))==expected
+              assert not any(list(doc.iter(k)) for k in ('failure','error','skipped'))
+          receipts=[]
+          for path in root.glob('*.json'):
+              if path.name=='source-sha256.json': continue
+              row=json.loads(path.read_text())
+              if row.get('cohort')=='focused_staging_correctness':
+                  assert row['state']=='correctness_passed'
+                  assert row['cleanup']['runtime_exit']==0 and not row['cleanup']['forced']
+                  assert not row['cleanup']['remaining_owned'] and row['cleanup']['scratch_removed']
+                  assert not row['violations']
+                  receipts.append(path.name)
+          assert len(receipts)==19, receipts
+          (root/'verdict.json').write_text(json.dumps({'correctness_cases':55,'resource_qualified':False,'production_qualified':False,'new_live_authority':False,'receipts':sorted(receipts)},indent=2)+'\n')
+          PY_CHECK
+      - name: Bound retained evidence including failures
+        if: always()
+        run: |
+          python - <<'PY_CHECK'
+          import hashlib, json, os, pathlib, shutil, sys
+          source=pathlib.Path(os.environ['FINANCE_STORAGE_ARTIFACT_DIR'])
+          output=pathlib.Path(os.environ['RUNNER_TEMP'])/'finance-encrypted-staging-upload'
+          output.mkdir(exist_ok=True)
+          files=sorted(p for p in source.glob('*') if p.is_file()) if source.exists() else []
+          def digest(path):
+              with path.open('rb') as stream: return hashlib.file_digest(stream,'sha256').hexdigest()
+          records=[{'name':p.name,'bytes':p.stat().st_size,'sha256':digest(p)} for p in files]
+          bounded=sum(r['bytes'] for r in records)<=32*1024*1024-65536 and len(files)<=64
+          (output/'artifact-manifest.json').write_text(json.dumps({'bounded':bounded,'files':records,'qualification':False},indent=2)+'\n')
+          if bounded:
+              for p in files: shutil.copyfile(p,output/p.name)
+          if not bounded: sys.exit('evidence ceiling exceeded; manifest retained, cohort not qualified')
+          PY_CHECK
+      - name: Retain bounded correctness evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: finance-encrypted-staging-correctness
+          path: ${{ runner.temp }}/finance-encrypted-staging-upload
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 9
