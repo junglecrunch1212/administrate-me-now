@@ -77,6 +77,10 @@ openclaw_commit="$("$python_bin" -c \
   "$REPOSITORY_ROOT/bootstrap/versions.json")"
 node "$REPOSITORY_ROOT/openclaw/administrateme/scripts/check-openclaw-target-sdk.mjs" \
   "$TEST_ROOT/app/openclaw/$openclaw_commit"
+if [[ "${1:-}" == --native-upgrade ]]; then
+  PYTHONPATH="$REPOSITORY_ROOT:${PYTHONPATH:-}" poetry run python \
+    "$REPOSITORY_ROOT/scripts/acceptance/openclaw-native-upgrade.py" "$TEST_ROOT"
+fi
 if [[ "${1:-}" == --service-work ]]; then
   node "$REPOSITORY_ROOT/openclaw/administrateme/scripts/check-workstation-codex-policy.mjs" \
     "$TEST_ROOT/app/openclaw/$openclaw_commit" "$(poetry env info --executable)"

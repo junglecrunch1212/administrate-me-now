@@ -665,7 +665,7 @@ jobs:
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: "24.19.0"
+          node-version: "24.22.1"
           cache: npm
           cache-dependency-path: openclaw/administrateme/package-lock.json
 
@@ -674,6 +674,9 @@ jobs:
 
       - name: Install locked dependencies
         run: poetry sync --with dev
+
+      - name: Validate native upgrade and public recovery boundaries
+        run: bash scripts/acceptance/openclaw-upgrade-boundaries.sh
 
       - name: Render lifecycle catalog for review
         run: >-
