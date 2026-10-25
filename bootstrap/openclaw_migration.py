@@ -637,8 +637,45 @@ def run_doctor(
         ) from exc
 
 
+def configuration_origin(
+    paths: DeploymentPaths, journal: dict[str, Any]
+) -> dict[str, Any]:
+    """Earliest retained classified ownership transition, never a rewritten parent."""
+    from bootstrap.native_recovery import lineage
+
+    chain = lineage(paths, journal)
+    for item in reversed(chain):
+        if (item.get("openclaw_migration") or {}).get("configuration_sha256"):
+            return item
+    return journal
+
+
+def _configuration_source(paths: DeploymentPaths, journal: dict[str, Any]) -> Path:
+    from bootstrap.native_recovery import lineage
+
+    chain = lineage(paths, journal)
+    # A settled failed Doctor may have changed native stores before config
+    # classification. A correction can classify the entire original→result
+    # transition, against the original copied bytes and its own genuine IPC.
+    ancestors = chain[1:]
+    source = (
+        chain[-1]
+        if ancestors
+        and not any(
+            (item.get("openclaw_migration") or {}).get("configuration_sha256")
+            for item in ancestors
+        )
+        else journal
+    )
+    return _directory(paths, source) / "state/runtime/openclaw.json"
+
+
 def record_configuration(
-    paths: DeploymentPaths, release: Path, journal: dict[str, Any]
+    paths: DeploymentPaths,
+    release: Path,
+    journal: dict[str, Any],
+    *,
+    retain_primary: bool = False,
 ) -> str:
     """Bind exact native output before any application-owned config selection."""
     from adminme.openclaw_roster_migration import CONTRACT as ROSTER_CONTRACT
@@ -662,9 +699,7 @@ def record_configuration(
     result_bytes = _read(directory / "doctor-result.json")
     if hashlib.sha256(result_bytes).hexdigest() != doctor["result_sha256"]:
         raise NativeMigrationError("native Doctor classification receipt changed")
-    source = _json(
-        _read(directory / "state/runtime/openclaw.json", limit=16 * 1024 * 1024)
-    )
+    source = _json(_read(_configuration_source(paths, journal), limit=16 * 1024 * 1024))
     runtime = paths.instance_dir / "openclaw/runtime"
     result = _json(_read(runtime / "openclaw.json", limit=16 * 1024 * 1024))
     record = {
@@ -683,6 +718,10 @@ def record_configuration(
     payload = canonical(record)
     atomic_write(directory / "config-transition.json", payload, mode=0o600)
     destination = runtime.parent / "native-roster-migration.json"
+    if retain_primary and destination.exists():
+        # Keep the first classified ownership transition; the new transaction
+        # retains its own record and actual native process receipt separately.
+        return hashlib.sha256(payload).hexdigest()
     if destination.exists() and _read(destination, limit=32 * 1024 * 1024) != payload:
         raise NativeMigrationError(
             "a different native roster migration is already retained"
@@ -710,7 +749,7 @@ def configuration_transition(
     )
     original = _json(
         _read(
-            _directory(paths, journal) / "state/runtime/openclaw.json",
+            _configuration_source(paths, journal),
             limit=16 * 1024 * 1024,
         )
     )

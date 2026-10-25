@@ -48,6 +48,7 @@ if [[ "${ADMINME_UPDATE_SUPERVISED:-}" != "1" ]]; then
   test_reset_manifest=""
   submission_repair_manifest=""
   effect_context_repair_plan=""
+  native_recovery_plan=""
   for argument in "${requested_args[@]}"; do
     case "$argument" in
       --approve-runtime-migration | --approve-declared-source-assessment-repair | --approve-provider-binding-migration) ;;
@@ -57,6 +58,12 @@ if [[ "${ADMINME_UPDATE_SUPERVISED:-}" != "1" ]]; then
         pending_attestation="${argument#*=}"
         [[ "$pending_attestation" =~ ^[0-9a-f]{32}$ ]] \
           || die "pending-attestation identifier must be 32 lowercase hex"
+        ;;
+      --native-recovery-plan=*)
+        [[ -z "$native_recovery_plan" ]] || die "native recovery plan was repeated"
+        native_recovery_plan="${argument#*=}"
+        [[ "$native_recovery_plan" == /* && -f "$native_recovery_plan" ]] \
+          || die "native recovery plan must name an absolute private file"
         ;;
       --effect-context-repair-plan=*)
         [[ -z "$effect_context_repair_plan" ]] || die "effect-context repair plan was repeated"
@@ -143,6 +150,7 @@ pending_flag=""
 test_reset_flag=""
 submission_repair_flag=""
 effect_context_repair_flag=""
+native_recovery_flag=""
 while [[ "${1:-}" == --* ]]; do
   case "$1" in
     --approve-runtime-migration)
@@ -164,6 +172,10 @@ while [[ "${1:-}" == --* ]]; do
       [[ "$pending_value" =~ ^[0-9a-f]{32}$ ]] \
         || fail "pending-attestation identifier must be 32 lowercase hex"
       pending_flag="$1"
+      ;;
+    --native-recovery-plan=*)
+      [[ -z "$native_recovery_flag" ]] || fail "native recovery plan was repeated"
+      native_recovery_flag="$1"
       ;;
     --effect-context-repair-plan=*)
       [[ -z "$effect_context_repair_flag" ]] || fail "effect-context repair plan was repeated"
@@ -254,7 +266,22 @@ export PATH
 active_python="$ACTIVE_RELEASE_ROOT/.venv/bin/python"
 [[ -x "$active_python" ]] || fail "upgrade requires the active release interpreter"
 
-if [[ -n "$approve_flag" ]]; then
+if [[ -n "$native_recovery_flag" ]]; then
+  [[ -z "$approve_flag" && -z "$source_repair_flag" && -z "$provider_binding_flag" \
+     && -z "$effect_context_repair_flag" && -z "$submission_repair_flag" && -z "$test_reset_flag" ]] \
+    || fail "native contained recovery cannot combine deployment exceptions"
+  recovery_runtime_root="$(
+    "$manifest_parser" -I "$fixed_controller_root/bootstrap/native_recovery_entry.py" \
+      "$ADMINME_INSTANCE_ROOT" "$candidate" "$candidate_commit" "${native_recovery_flag#*=}"
+  )" || fail "contained native recovery tooling could not be verified"
+  [[ "$recovery_runtime_root" == "$ADMINME_INSTANCE_ROOT/app/releases/"* \
+     && -d "$recovery_runtime_root" && ! -L "$recovery_runtime_root" ]] \
+    || fail "contained native recovery tooling coordinate is invalid"
+  controller_python="$recovery_runtime_root/.venv/bin/python"
+  [[ -x "$controller_python" ]] || fail "retained failed-target interpreter is unavailable"
+  reviewed_node="$(resolve_formula_node "$node_formula" "$node_preferred")"
+  node_bin_dir="$(cd "$(dirname "$reviewed_node")" && pwd -P)"
+elif [[ -n "$approve_flag" ]]; then
   [[ -x /opt/homebrew/bin/brew ]] || fail "Homebrew is unavailable"
   controller_python="$(/opt/homebrew/bin/brew --prefix "$python_formula")/bin/python$python_minor"
   reviewed_node="$(resolve_formula_node "$node_formula" "$node_preferred")"
@@ -365,6 +392,9 @@ if [[ -n "$approve_flag" ]]; then
 fi
 
 upgrade_args=(upgrade "$candidate")
+if [[ -n "$native_recovery_flag" ]]; then
+  upgrade_args+=("$native_recovery_flag")
+fi
 if [[ -n "$effect_context_repair_flag" ]]; then
   upgrade_args+=("$effect_context_repair_flag")
 fi

@@ -74,7 +74,7 @@ from adminme.events.log import EventLog
 from adminme.events.writer import EventWriter
 from adminme.lib.instance_config import load_instance_config
 from adminme.lib.observation import ObservationManager
-from bootstrap.activation_transaction import ActivationJournalError
+from bootstrap.activation_transaction import ActivationJournal, ActivationJournalError
 from bootstrap.backup_restore import (
     BackupManager,
     _MAX_BACKUP_BYTES,
@@ -1151,7 +1151,19 @@ class CoSChannelActivator:
             raise CoSActivationError(
                 "maintenance restoration plan expired or has invalid proof times"
             )
-        if commit != (plan.target_commit if restoring else plan.predecessor_commit):
+        native_successor = None
+        if restoring and commit != plan.target_commit:
+            try:
+                native_successor = ActivationJournal(self.paths).native_successor(
+                    target_commit=commit,
+                    original_target=plan.target_commit,
+                    original_predecessor=plan.predecessor_commit,
+                )
+            except (ActivationJournalError, ValueError, OSError) as exc:
+                raise CoSActivationError(
+                    "maintenance restoration has no exact native successor"
+                ) from exc
+        elif not restoring and commit != plan.predecessor_commit:
             raise CoSActivationError(
                 "maintenance restoration belongs to another release"
             )
@@ -1296,10 +1308,14 @@ class CoSChannelActivator:
                 self.paths, root=self.repository, test_mode=self.test_mode
             )
             try:
-                deployment = updater.activation_journal.committed_activation(
-                    target_commit=plan.target_commit,
-                    predecessor_commit=plan.predecessor_commit,
-                )
+                if native_successor is not None:
+                    deployment, original_deployment = native_successor
+                else:
+                    deployment = updater.activation_journal.committed_activation(
+                        target_commit=plan.target_commit,
+                        predecessor_commit=plan.predecessor_commit,
+                    )
+                    original_deployment = deployment
             except ActivationJournalError as exc:
                 raise CoSActivationError(
                     "maintenance requires the exact completed updater transaction"
@@ -1316,7 +1332,7 @@ class CoSChannelActivator:
                 },
             }
             current_binding = {
-                "release_commit": plan.target_commit,
+                "release_commit": commit,
                 **{
                     key: snapshot[key]
                     for key in (
@@ -1327,9 +1343,11 @@ class CoSChannelActivator:
                 },
             }
             if (
-                deployment.get("initial_pointer_sha256")
+                original_deployment.get("initial_pointer_sha256")
                 != plan.deployment_snapshot["pointer_sha256"]
-                or (deployment.get("initial_readiness") or {}).get("deployment_binding")
+                or (original_deployment.get("initial_readiness") or {}).get(
+                    "deployment_binding"
+                )
                 != prior_binding
                 or (deployment.get("active_readiness") or {}).get("deployment_binding")
                 != current_binding
@@ -1355,20 +1373,23 @@ class CoSChannelActivator:
                     wrapper_path=str(wrapper), wrapper_sha256=_sha(wrapper.read_bytes())
                 )
             expected_gateway_fingerprint = plan.gateway_compatibility_sha256
-            if deployment.get("openclaw_migration") is not None:
+            if original_deployment.get("openclaw_migration") is not None:
                 from bootstrap.openclaw_activation import prepare_service_topology
                 from bootstrap.openclaw_migration import (
                     NativeMigrationError,
                     configuration_transition,
+                    configuration_origin,
                 )
 
                 try:
-                    transition = configuration_transition(self.paths, deployment)
+                    transition = configuration_transition(
+                        self.paths, configuration_origin(self.paths, deployment)
+                    )
                 except (OSError, ValueError, NativeMigrationError) as exc:
                     raise CoSActivationError(
                         "native migration receipt is unavailable or changed"
                     ) from exc
-                prior_release = Path(deployment["predecessor_path"])
+                prior_release = Path(original_deployment["predecessor_path"])
                 prepared_source = prepare_service_topology(
                     transition["source"],
                     self.paths,

@@ -54,8 +54,12 @@ def test_reviewed_binding_audit_view_uses_already_active_configuration(
 @pytest.mark.parametrize(
     "placement", ["between", "prior", "current", "unknown_between"]
 )
+@pytest.mark.parametrize("native_contained", [False, True])
 async def test_export_audits_every_observation_interval_without_reclassifying_live_effects(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, placement: str
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    placement: str,
+    native_contained: bool,
 ) -> None:
     monkeypatch.setenv("ADMINME_TEST_MODE", "1")
     fixed_now = datetime(2026, 10, 21, tzinfo=timezone.utc)
@@ -70,8 +74,15 @@ async def test_export_audits_every_observation_interval_without_reclassifying_li
             )
 
     monkeypatch.setattr(htr10_export, "datetime", FixtureClock)
-    paths = DeploymentPaths.from_root(tmp_path / "deployment")
-    paths.create()
+    if native_contained:
+        from tests.unit.bootstrap.test_native_recovery import (
+            fixture as contained_fixture,
+        )
+
+        paths, _candidate, _parent = contained_fixture(tmp_path, monkeypatch)
+    else:
+        paths = DeploymentPaths.from_root(tmp_path / "deployment")
+        paths.create()
     key = b"w" * 32
     reference = secret_store(paths, test_mode=True).put("event-log", key)
     current = {
@@ -109,6 +120,25 @@ async def test_export_audits_every_observation_interval_without_reclassifying_li
         "runtime_diagnostics",
         lambda _self: {"ready": True, "observation_active": True, "capabilities": {}},
     )
+    plan_reads = []
+    if native_contained:
+        from bootstrap import native_recovery
+
+        original_load = native_recovery.load
+
+        def retained_plan(*args, **kwargs):
+            value = original_load(*args, **kwargs)
+            plan_reads.append(value)
+            return value
+
+        monkeypatch.setattr(native_recovery, "load", retained_plan)
+
+        def no_live_health(_self):
+            raise AssertionError("contained export must not claim live health")
+
+        monkeypatch.setattr(
+            htr10_export.ServiceManager, "runtime_diagnostics", no_live_health
+        )
     log = EventLog(paths.instance_dir / "events" / "events.db", key)
     try:
         for event in _chain("unknown" if placement == "unknown_between" else "sent"):
@@ -119,6 +149,18 @@ async def test_export_audits_every_observation_interval_without_reclassifying_li
             await log.append(EventEnvelope(**event))
     finally:
         await log.close()
+    repository = Path(__file__).resolve().parents[3]
+    plan_path = None
+    if native_contained:
+        from bootstrap import native_recovery
+
+        plan_path = paths.backup_dir / "plan.json"
+        atomic_write(
+            plan_path,
+            json.dumps(
+                native_recovery.prepare(paths, repository, test_mode=True)
+            ).encode(),
+        )
     historical = paths.backup_dir / "historical.json"
     source = paths.backup_dir / "source.json"
     await htr10_export.export_htr10_audits(
@@ -128,7 +170,12 @@ async def test_export_audits_every_observation_interval_without_reclassifying_li
         source_output=source,
         ownership_reviewed=True,
         test_mode=True,
+        native_recovery_plan=plan_path,
     )
+    assert len(plan_reads) == (2 if native_contained else 0)
+    if native_contained:
+        assert plan_reads[0] == plan_reads[1]
+        assert plan_reads[0]["automatic_rollback_eligible"] is False
     audit = json.loads(source.read_bytes())
     assert json.loads(historical.read_bytes())["state"] == "healthy"
     effects = audit["provider_effects"]

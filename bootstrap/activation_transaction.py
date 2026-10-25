@@ -431,6 +431,7 @@ def validate_journal(value: object) -> dict[str, Any]:
             "effect_context_proof",
             "effect_context_plan_sha256",
             "openclaw_migration",
+            "native_recovery",
         }
     )
     has_config_transition = transition_fields <= keys
@@ -469,6 +470,16 @@ def validate_journal(value: object) -> dict[str, Any]:
         raw = value.get(name)
         if not isinstance(raw, str) or not Path(raw).is_absolute():
             raise ActivationJournalError("activation release coordinate is invalid")
+    recovery = value.get("native_recovery")
+    if recovery is not None:
+        from bootstrap.native_recovery import valid_binding
+
+        if (
+            not valid_binding(recovery)
+            or recovery["candidate_commit"] != value["candidate_commit"]
+            or recovery["parent_transaction_id"] == value["transaction_id"]
+        ):
+            raise ActivationJournalError("native recovery parent binding is invalid")
     migration = value.get("openclaw_migration")
     if migration is not None:
         from bootstrap.openclaw_migration import NativeMigrationError, validate_receipt
@@ -477,7 +488,7 @@ def validate_journal(value: object) -> dict[str, Any]:
             validate_receipt(migration, value)
         except NativeMigrationError as exc:
             raise ActivationJournalError("native migration journal is invalid") from exc
-    elif isinstance(phase, str) and phase.startswith("native_"):
+    elif isinstance(phase, str) and phase.startswith("native_") and recovery is None:
         raise ActivationJournalError("native migration journal is missing")
     rebind = value.get("cos_imessage_rebind")
     if rebind is not None:
@@ -486,7 +497,17 @@ def validate_journal(value: object) -> dict[str, Any]:
         try:
             validate_rebind(
                 rebind,
-                source_release=Path(value["predecessor_path"]),
+                source_release=(
+                    Path(value["predecessor_path"]).parent
+                    / recovery["failed_target_commit"]
+                    if recovery is not None
+                    and rebind.get("source_release")
+                    == str(
+                        Path(value["predecessor_path"]).parent
+                        / recovery["failed_target_commit"]
+                    )
+                    else Path(value["predecessor_path"])
+                ),
                 target_release=Path(value["target_path"]),
             )
         except (KeyError, TypeError, ValueError) as exc:
@@ -920,7 +941,48 @@ class ActivationJournal:
                 if not failed:
                     raise
 
-    def create(self, value: dict[str, Any]) -> dict[str, Any]:
+    def native_successor(
+        self, *, target_commit: str, original_target: str, original_predecessor: str
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        from bootstrap.native_recovery import lineage
+
+        directory_descriptor, history_descriptor = self._open_directories()
+        try:
+            matches = []
+            names = os.listdir(history_descriptor)
+            if len(names) > 10000:
+                raise ActivationJournalError(
+                    "activation history exceeds native lookup bound"
+                )
+            for name in names:
+                if re.fullmatch(r"[0-9a-f]{32}\.json", name) is None:
+                    raise ActivationJournalError("activation history contains residue")
+                payload, _metadata = _read_private_at(history_descriptor, name)
+                value = validate_journal(_json_no_duplicates(payload))
+                if (
+                    value["operation"] == "activate"
+                    and value["phase"] == "committed"
+                    and value["target_commit"] == target_commit
+                    and value.get("native_recovery")
+                ):
+                    chain = lineage(self.paths, value)
+                    origin = chain[-1]
+                    if (
+                        origin["target_commit"] == original_target
+                        and origin["predecessor_commit"] == original_predecessor
+                    ):
+                        matches.append((value, origin))
+            if len(matches) != 1:
+                raise ActivationJournalError(
+                    "exact native successor restoration lineage is unavailable"
+                )
+            return matches[0]
+        finally:
+            self._close_directories(history_descriptor, directory_descriptor)
+
+    def create(
+        self, value: dict[str, Any], *, contained_parent: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         fixed = {
             **value,
             "contract": JOURNAL_CONTRACT,
@@ -935,11 +997,45 @@ class ActivationJournal:
         directory_descriptor, history_descriptor = self._open_directories()
         failed = False
         try:
+            if contained_parent is not None:
+                current = self._load_at(directory_descriptor)
+                link = fixed.get("native_recovery") or {}
+                if (
+                    current != contained_parent
+                    or current["phase"] != "native_forward_repair_required"
+                    or link.get("parent_transaction_id") != current["transaction_id"]
+                    or link.get("parent_journal_sha256") != sha256_json(current)
+                    or link.get("failed_target_commit") != current["target_commit"]
+                ):
+                    raise ActivationJournalError(
+                        "contained native parent changed before successor admission"
+                    )
+                # Archive the exact failed journal, without a successful/terminal
+                # phase rewrite. A crash here leaves the old active owner; retry
+                # accepts only the identical immutable archive.
+                name = f"{current['transaction_id']}.json"
+                encoded = json.dumps(current, indent=2, sort_keys=True).encode("utf-8")
+                try:
+                    os.stat(name, dir_fd=history_descriptor, follow_symlinks=False)
+                except FileNotFoundError:
+                    _write_private_at(history_descriptor, name, encoded, replace=False)
+                else:
+                    existing, _metadata = _read_private_at(history_descriptor, name)
+                    if existing != encoded:
+                        raise ActivationJournalError(
+                            "retained contained journal conflicts"
+                        )
+            elif fixed.get("native_recovery") is not None:
+                raise ActivationJournalError(
+                    "native recovery requires retained parent admission"
+                )
+            # Atomic replacement makes either parent or linked successor own the
+            # transaction; there is never an unowned interval between journals.
             _write_private_at(
                 directory_descriptor,
                 "active.json",
                 json.dumps(fixed, indent=2, sort_keys=True).encode("utf-8"),
-                replace=False,
+                replace=contained_parent is not None,
             )
             _assert_directory_coordinate(directory_descriptor, self.directory)
             _assert_directory_coordinate(history_descriptor, self.history)

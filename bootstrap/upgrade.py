@@ -381,6 +381,7 @@ class UpgradeManager:
         test_reset_manifest: Path | None = None,
         submission_repair_manifest: Path | None = None,
         effect_context_repair_plan: Path | None = None,
+        native_recovery_plan: Path | None = None,
     ) -> None:
         self.paths = paths
         self.root = root.resolve()
@@ -392,6 +393,20 @@ class UpgradeManager:
         self.test_reset_manifest = test_reset_manifest
         self.submission_repair_manifest = submission_repair_manifest
         self.effect_context_repair_plan = effect_context_repair_plan
+        self.native_recovery_plan = native_recovery_plan
+        if native_recovery_plan is not None and any(
+            (
+                effect_context_repair_plan,
+                submission_repair_manifest,
+                test_reset_manifest,
+                approve_source_assessment_repair,
+                approve_provider_binding_migration,
+                approve_runtime_migration,
+            )
+        ):
+            raise UpgradeError(
+                "native contained recovery cannot combine deployment exceptions"
+            )
         if effect_context_repair_plan is not None and (
             submission_repair_manifest is not None
             or approve_source_assessment_repair
@@ -1846,6 +1861,7 @@ class UpgradeManager:
         source_release: Path,
         target_release: Path,
         adapter_config: dict[str, Any],
+        contained_source_release: Path | None = None,
     ) -> dict[str, Any] | None:
         try:
             return prepare_workspace_instructions(
@@ -1853,6 +1869,7 @@ class UpgradeManager:
                 source_release=source_release,
                 target_release=target_release,
                 adapter_config=adapter_config,
+                contained_source_release=contained_source_release,
             )
         except WorkspaceInstructionsError as exc:
             raise UpgradeError(str(exc)) from exc
@@ -2067,7 +2084,9 @@ class UpgradeManager:
         ):
             verify_guard_files(
                 json.loads(snapshot_bytes(rebind["guard"][side])),
-                reviewed_release=Path(journal[release_key]),
+                reviewed_release=Path(rebind["source_release"])
+                if side == "before"
+                else Path(journal[release_key]),
             )
         for name, relative in COORDINATES.items():
             payload, _ = self._read_private_json_payload(
@@ -2174,12 +2193,25 @@ class UpgradeManager:
                 "content_exposed": False,
             }
 
+        if (
+            journal.get("native_recovery") is not None
+            and journal.get("openclaw_migration") is None
+        ):
+            self.services.stop()
+            self.activation_journal.transition(
+                journal, "native_forward_repair_required"
+            )
+            raise UpgradeError(
+                "corrected native artifact remains contained; its linked state/history require another exact forward admission"
+            )
         if journal.get("openclaw_migration") is not None:
             # Stop only through the existing owned-service proof. Never select an
             # old binary first and discover an incompatible native schema later.
             self.services.stop()
             try:
-                native_restore_safe = openclaw_migration.may_restore_predecessor(
+                native_restore_safe = journal.get(
+                    "native_recovery"
+                ) is None and openclaw_migration.may_restore_predecessor(
                     self.paths, journal
                 )
             except (OSError, ValueError, openclaw_migration.NativeMigrationError):
@@ -2577,6 +2609,22 @@ class UpgradeManager:
                     "interrupted disposable test reset requires its exact manifest"
                 )
             self._require_bounded_target(candidate)
+            if self.native_recovery_plan is not None:
+                from bootstrap.native_recovery import load as load_native_recovery
+
+                if self.pending_attestation_id is None:
+                    raise UpgradeError(
+                        "native recovery requires fresh candidate-pending evidence"
+                    )
+                recovery = load_native_recovery(
+                    self.paths,
+                    candidate,
+                    self.native_recovery_plan,
+                    test_mode=self.test_mode,
+                )
+                return self._activate_transactional_locked(
+                    candidate, native_recovery=recovery
+                )
             recovered = self._recover_interrupted_transaction(candidate)
             if recovered is not None:
                 return recovered
@@ -2596,12 +2644,24 @@ class UpgradeManager:
                 return self._activate_locked(candidate)
             return self._activate_transactional_locked(candidate)
 
-    def _activate_transactional_locked(self, candidate: Path) -> dict[str, Any]:
+    def _activate_transactional_locked(
+        self, candidate: Path, *, native_recovery: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         """Run one evidence-bound, crash-recoverable candidate activation."""
 
         candidate = candidate.resolve()
         commit = self._candidate_commit(candidate)
         self._attest_controller_provenance(candidate, commit)
+        contained_parent = (
+            self.activation_journal.load() if native_recovery is not None else None
+        )
+        from bootstrap.native_recovery import binding as native_recovery_binding
+
+        recovery_link = (
+            native_recovery_binding(native_recovery)
+            if native_recovery is not None
+            else None
+        )
         active_root, protected_roots, pointer_digest, pointer_rows = (
             self._release_pointer_snapshot()
         )
@@ -2625,6 +2685,7 @@ class UpgradeManager:
                         self.approve_provider_binding_migration
                     ),
                     submission_repair_manifest=self.submission_repair_manifest,
+                    native_recovery_plan=self.native_recovery_plan,
                 )
             )
         except CandidateReadinessError as exc:
@@ -2677,7 +2738,9 @@ class UpgradeManager:
         )
         compatibility = self._validate_instance_candidate(
             candidate,
-            active_root=active_root,
+            active_root=Path(contained_parent["target_path"])
+            if contained_parent is not None
+            else active_root,
             approve_runtime_migration=self.approve_runtime_migration,
         )
         self._preflight_keychain_access(candidate)
@@ -2716,15 +2779,30 @@ class UpgradeManager:
                 source_config=adapter_config,
             )
         )
+        guard_source = active_root
+        if contained_parent is not None:
+            guard_path = self.paths.instance_dir / "config/cos-imsg-guard.json"
+            if guard_path.exists():
+                _guard_bytes, current_guard = self._read_private_json_payload(
+                    guard_path
+                )
+                if (current_guard or {}).get("wrapper_path") == str(
+                    Path(contained_parent["target_path"])
+                    / "openclaw/administrateme/bin/cos-imsg-guard.mjs"
+                ):
+                    guard_source = Path(contained_parent["target_path"])
         cos_rebind = self._prepare_cos_guard_rebind(
             adapter_config=selected_adapter_config,
-            source_release=active_root,
+            source_release=guard_source,
             target_release=release,
         )
         workspace_instructions = self._prepare_workspace_instructions(
             source_release=active_root,
             target_release=release,
             adapter_config=selected_adapter_config,
+            contained_source_release=Path(contained_parent["target_path"])
+            if contained_parent is not None
+            else None,
         )
         (
             current_pointer,
@@ -2741,7 +2819,11 @@ class UpgradeManager:
             raise UpgradeError("active-release pointer changed before journaling")
         predecessor_commit = pointer_rows[0]["commit"]
         predecessor_release = Path(pointer_rows[0]["path"])
-        was_running = self.services.status().status != "stopped"
+        was_running = (
+            contained_parent["was_running"]
+            if contained_parent is not None
+            else self.services.status().status != "stopped"
+        )
         if (
             repair_policy is not None
             or submission_repair is not None
@@ -2779,7 +2861,13 @@ class UpgradeManager:
                     if was_running
                     and submission_repair is None
                     and effect_proof is None
+                    and contained_parent is None
                     else None,
+                    **(
+                        {"native_recovery": recovery_link}
+                        if recovery_link is not None
+                        else {}
+                    ),
                     **(
                         {
                             "effect_context_proof": effect_proof.model_dump(
@@ -2844,7 +2932,8 @@ class UpgradeManager:
                     "fresh_backup": None,
                     "rollback_eligibility": None,
                     "active_readiness": None,
-                }
+                },
+                contained_parent=contained_parent,
             )
         except ActivationJournalError as exc:
             raise UpgradeError("activation transaction cannot be journaled") from exc
@@ -2934,14 +3023,25 @@ class UpgradeManager:
                 fresh_backup=fresh_backup,
             )
 
-            eligibility = self._prove_predecessor_rollback_eligibility(
-                candidate=candidate,
-                candidate_commit=commit,
-                candidate_release=release,
-                predecessor_commit=predecessor_commit,
-                predecessor_release=predecessor_release,
-                pointer_chain_sha256=pointer_digest,
-            )
+            if native_recovery is not None:
+                eligibility = {
+                    "eligible": False,
+                    "scope": "schema-aware-forward-repair",
+                    "failed_target_health_proven": False,
+                    "native_recovery_plan_sha256": sha256_json(native_recovery),
+                    "candidate_commit": commit,
+                    "fresh_rehearsal_receipt_sha256": receipt_sha256,
+                    "content_exposed": False,
+                }
+            else:
+                eligibility = self._prove_predecessor_rollback_eligibility(
+                    candidate=candidate,
+                    candidate_commit=commit,
+                    candidate_release=release,
+                    predecessor_commit=predecessor_commit,
+                    predecessor_release=predecessor_release,
+                    pointer_chain_sha256=pointer_digest,
+                )
             eligibility_sha256 = sha256_json(eligibility)
             journal = self.activation_journal.transition(
                 journal,
@@ -2963,6 +3063,7 @@ class UpgradeManager:
                             self.approve_provider_binding_migration
                         ),
                         submission_repair_manifest=self.submission_repair_manifest,
+                        native_recovery_plan=self.native_recovery_plan,
                     )
                 )
             except CandidateReadinessError as exc:
@@ -2985,6 +3086,16 @@ class UpgradeManager:
                 rollback_eligibility_sha256=eligibility_sha256,
                 tested_at=str(rehearsal["tested_at"]),
             )
+            if native_recovery is not None or openclaw_migration.required(
+                active_root, release
+            ):
+                from bootstrap.native_recovery import mark_forward_readiness
+
+                mark_forward_readiness(
+                    active_readiness,
+                    journal=journal,
+                    migration_origin=(contained_parent or journal)["transaction_id"],
+                )
             self._require_activation_capacity(begin_settlement=False)
             journal = self.activation_journal.transition(
                 journal,
@@ -3072,7 +3183,9 @@ class UpgradeManager:
                 # hold at the first selector mutation. This does not reset the
                 # already established candidate settlement deadline.
                 self._require_activation_capacity()
-                if openclaw_migration.required(active_root, release):
+                if native_recovery is not None or openclaw_migration.required(
+                    active_root, release
+                ):
                     migration = openclaw_migration.capture(self.paths, journal)
                     journal = self.activation_journal.transition(
                         journal,
@@ -3124,7 +3237,10 @@ class UpgradeManager:
                     self.paths, release, journal, publish=publish_native_doctor
                 )
                 config_digest = openclaw_migration.record_configuration(
-                    self.paths, release, journal
+                    self.paths,
+                    release,
+                    journal,
+                    retain_primary=native_recovery is not None,
                 )
                 journal = self.activation_journal.transition(
                     journal,
@@ -3139,7 +3255,7 @@ class UpgradeManager:
                 if journal.get("cos_imessage_rebind") is not None:
                     rebound = self._prepare_cos_guard_rebind(
                         adapter_config=selected_adapter_config,
-                        source_release=active_root,
+                        source_release=guard_source,
                         target_release=release,
                     )
                     journal = self.activation_journal.transition(
@@ -3335,6 +3451,13 @@ class UpgradeManager:
             try:
                 recovery = self._recover_interrupted_transaction(candidate)
             except Exception as recovery_error:
+                if (
+                    journal.get("openclaw_migration") is not None
+                    or native_recovery is not None
+                ):
+                    raise UpgradeError(
+                        f"candidate failed ({candidate_error}); schema-aware state remains contained for forward repair ({recovery_error})"
+                    ) from candidate_error
                 raise UpgradeError(
                     f"candidate failed ({candidate_error}); durable predecessor "
                     f"recovery also failed ({recovery_error})"
@@ -3667,6 +3790,13 @@ class UpgradeManager:
         if openclaw_migration.required(release, current_release):
             raise UpgradeError(
                 "native runtime migration is forward-only after admission; public rollback cannot select the old native format"
+            )
+        _readiness_payload, current_readiness = self._read_private_json_payload(
+            self.paths.instance_dir / "config/deployment-readiness.json"
+        )
+        if (current_readiness or {}).get("native_forward_recovery") is not None:
+            raise UpgradeError(
+                "this activation retained a failed native target for diagnosis; recovery requires a protected corrected artifact"
             )
         self._validate_instance_candidate(
             release,

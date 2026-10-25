@@ -421,3 +421,51 @@ def test_layout_cannot_silently_omit_a_program(tmp_path: Path) -> None:
     )
     with pytest.raises(WorkspaceInstructionsError, match="omits or repeats"):
         compile_instructions(target)
+
+
+def test_native_continuation_composes_exact_partial_selection_and_keeps_private_overlays(
+    tmp_path: Path,
+) -> None:
+    paths, source, failed, files = fixture_workspace(tmp_path)
+    corrected = tmp_path / "corrected"
+    programs = corrected / "bootstrap/openclaw/programs"
+    programs.mkdir(parents=True)
+    (programs / "fixture.md").write_text("Corrected instructions.\n")
+    # A process interruption left one file on each exact known source version.
+    files[0].write_bytes(
+        files[0]
+        .read_bytes()
+        .replace(compile_instructions(source), compile_instructions(failed))
+    )
+    with pytest.raises(WorkspaceInstructionsError, match="differ"):
+        prepare_transition(
+            paths,
+            source_release=source,
+            target_release=corrected,
+            adapter_config=ADAPTERS,
+        )
+    transition = prepare_transition(
+        paths,
+        source_release=source,
+        contained_source_release=failed,
+        target_release=corrected,
+        adapter_config=ADAPTERS,
+    )
+    apply_transition(paths, transition)
+    for file in files:
+        assert (
+            file.read_bytes()
+            == b"Private prefix.\n"
+            + compile_instructions(corrected)
+            + b"\nPrivate suffix.\n"
+        )
+        assert (file.parent / "SOUL.md").read_bytes() == b"Persona overlay.\n"
+    files[-1].write_bytes(b"Unknown instructions.\n")
+    with pytest.raises(WorkspaceInstructionsError, match="differ"):
+        prepare_transition(
+            paths,
+            source_release=source,
+            contained_source_release=failed,
+            target_release=corrected,
+            adapter_config=ADAPTERS,
+        )

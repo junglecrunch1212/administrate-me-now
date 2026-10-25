@@ -377,6 +377,50 @@ owner-created pending artifact validates. It does not execute human HTR rows,
 authorize deployment, promote fixture evidence, or complete post-switch
 privacy/browser/effect acceptance.
 
+### Native OpenClaw format migration and corrected-artifact recovery
+
+**MODERNIZE** for the reviewed `2026.7.2` source to stable `2026.10.7`
+transition: the supported updater owns the stopped-service transaction and
+invokes the pinned public `doctor --repair --non-interactive
+--no-workspace-suggestions` CLI with external service ownership. It records
+native IPC classification, process custody and managed-state generations.
+Exit zero alone proves neither migration success nor safe old-binary recovery.
+Original native bytes may be restored only before candidate admission, with
+unchanged original generations and settled owned processes. Changed/unknown
+native writes or candidate admission retain schema-aware state for forward
+repair; AdministrateMe domain history is never restored from this capsule.
+
+A stopped `native_forward_repair_required` transaction may admit a distinct,
+protected corrected artifact through an explicit private plan created by
+`python -m bootstrap.native_recovery --instance-root <root> --candidate <source>
+--output <private-plan>`. The four-hour plan binds the immutable failed journal,
+current native/domain/control generations and the exact same OpenClaw, Python
+and Node identity. Fresh candidate-compatible backup/rehearsal and full retained
+HTR-10 audits remain required. The audit export and candidate-readiness commands
+accept `--native-recovery-plan <private-plan>`; guarded `bootstrap/update.sh`
+accepts `--native-recovery-plan=<private-plan>` with its ordinary explicit
+pending-attestation ID. This does not grant another runtime migration or revive
+expired channel authorization.
+
+The fixed public launcher selects only an exact previously consumed target
+runtime (or a bound same-runtime consumed ancestor after an early correction
+failure), preserving an old active pointer if selection never completed. It
+verifies tracked source, preparation coordinates and the strict runtime
+fingerprint before using that interpreter. The full controller then revalidates
+the stopped plan and candidate-specific proof. The unchanged contained parent is
+archived before an atomic replacement with its linked successor, so interruption
+leaves a deterministic owner rather than an unjournaled gap. Each failed target
+and its evidence remain retained. Normal healthy successor readiness is required
+before the successor commits; public rollback cannot select a known failed native
+target. The original maintenance restoration plan retains its expiry and grants
+and may resolve only the exact committed successor lineage.
+
+The native upgrade and recovery paths require hosted qualification against the
+exact source/toolchain, including old-to-new retained databases, sessions, cron,
+roster ownership and failed/interrupted migration. Source preparation and
+synthetic boundary fixtures are not qualification or deployment claims. Daily
+stable-update scheduling is a subsequent deliverable on the existing scheduler.
+
 ### Deployment and recovery deadlines
 
 The deadline policy is **MODERNIZE** under this contract's activation-transaction
