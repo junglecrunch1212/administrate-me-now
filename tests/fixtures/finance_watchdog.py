@@ -19,6 +19,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import threading
 
 MIB = 1024 * 1024
 LIMITS = {
@@ -106,6 +107,49 @@ def violations(row):
     return [key for key, bound in LIMITS.items() if row[key] > bound]
 
 
+def mode_budget(mode):
+    contract = mode.startswith("contract-")
+    work, cleanup = (2.0, 4.0) if contract else (200.0, 30.0)
+    grace, term, kill = (1.0, 1.0, 1.0) if contract else (15.0, 5.0, 5.0)
+    limits = dict(LIMITS)
+    if mode == "staged-bounded":
+        work = 330.0
+        limits.update(runtime_executor_cpu_seconds=180, whole_tree_cpu_seconds=240)
+    return {
+        "work": work,
+        "cleanup": cleanup,
+        "absolute": work + cleanup,
+        "grace": grace,
+        "term": term,
+        "kill": kill,
+        "limits": limits,
+    }
+
+
+def remove_scratch(scratch, *, retain_unknown, remaining_owned):
+    if retain_unknown and remaining_owned:
+        return False
+    shutil.rmtree(scratch)
+    return not scratch.exists()
+
+
+def start_cleanup_sampler(mode, take_sample, emit, faults):
+    stop = threading.Event()
+    thread = None
+    if mode == "staged-bounded":
+
+        def collect():
+            try:
+                while not stop.wait(0.05):
+                    emit(take_sample())
+            except BaseException as exc:
+                faults.append("cleanup_sampler:" + type(exc).__name__)
+
+        thread = threading.Thread(target=collect, daemon=True)
+        thread.start()
+    return stop, thread
+
+
 def unique_object(pairs):
     result = {}
     for key, value in pairs:
@@ -142,6 +186,7 @@ def main(mode, directory):
         "full",
         "focused-import",
         "allocation-profile",
+        "staged-bounded",
         "setup",
         "setup-stop-before",
         "setup-stop-packets",
@@ -168,17 +213,25 @@ def main(mode, directory):
     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
     resource.setrlimit(resource.RLIMIT_CPU, (180, 180))
     contract = mode.startswith("contract-")
-    work, cleanup = (2.0, 4.0) if contract else (200.0, 30.0)
-    grace, term, _kill = (1.0, 1.0, 1.0) if contract else (15.0, 5.0, 5.0)
+    budget = mode_budget(mode)
+    work, cleanup = budget["work"], budget["cleanup"]
+    grace, term, _kill = budget["grace"], budget["term"], budget["kill"]
+    limits = budget["limits"]
     absolute = STARTED + work + cleanup
     scratch = root / "scratch"
     scratch.mkdir(mode=0o700)
     trace_file = (root / "watchdog-trace.jsonl").open("w", buffering=1)
+    trace_lock = threading.Lock()
+
+    def write_sample(row):
+        with trace_lock:
+            trace_file.write(json.dumps(row, separators=(",", ":")) + "\n")
+
     report = {
         "mode": mode,
         "candidate": os.environ.get("GITHUB_SHA"),
         "started": STARTED,
-        "limits": LIMITS,
+        "limits": limits,
         "work_cap_seconds": work,
         "cleanup_cap_seconds": cleanup,
         "absolute_stop_seconds": work + cleanup,
@@ -186,7 +239,7 @@ def main(mode, directory):
         "reaped": [],
         "forced": False,
         "faults": [],
-        "maxima": {k: 0 for k in LIMITS},
+        "maxima": {k: 0 for k in limits},
         "subreaper": True,
         "qualification": False,
     }
@@ -218,8 +271,8 @@ def main(mode, directory):
     output = (root / "controller-output.txt").open("wb")
     initial = sample(os.getpid(), None, None, [root])
     report["initial_sample"] = initial
-    report["maxima"] = {k: initial[k] for k in LIMITS}
-    trace_file.write(json.dumps(initial, separators=(",", ":")) + "\n")
+    report["maxima"] = {k: initial[k] for k in limits}
+    write_sample(initial)
     controller = subprocess.Popen(
         [sys.executable, "-I", "-B", str(controller_script)],
         env=env,
@@ -298,8 +351,8 @@ def main(mode, directory):
                         p["pid"] for p in row["pids"] if p["ppid"] in runtime_members
                     )
             known.update({p["pid"]: p["start_ticks"] for p in row["pids"]})
-            report["maxima"] = {k: max(report["maxima"][k], row[k]) for k in LIMITS}
-            trace_file.write(json.dumps(row, separators=(",", ":")) + "\n")
+            report["maxima"] = {k: max(report["maxima"][k], row[k]) for k in limits}
+            write_sample(row)
             if (
                 mode == "contract-alarm"
                 and len(row["pids"]) == 4
@@ -309,7 +362,7 @@ def main(mode, directory):
                 time.sleep(
                     work + cleanup
                 )  # Fixed fault: independent alarm must interrupt.
-            exceeded = violations(row)
+            exceeded = [key for key, bound in limits.items() if row[key] > bound]
             if exceeded:
                 stop("containment:" + ",".join(exceeded), now)
             for _, _ in selector.select(timeout=0):
@@ -449,6 +502,14 @@ def main(mode, directory):
         signal_owned(signal.SIGKILL)
     finally:
         # Final reserve: bounded nonblocking reap, then retained receipts/scratch removal.
+        cleanup_sampling_stop, cleanup_sampler = start_cleanup_sampler(
+            mode,
+            lambda: sample(
+                os.getpid(), runtime_pid, controller.pid, [root], runtime_cpu
+            ),
+            write_sample,
+            report["faults"],
+        )
         end = min(absolute, (finish_at or time.monotonic()) + cleanup)
         while time.monotonic() < end - 0.5:
             try:
@@ -483,12 +544,9 @@ def main(mode, directory):
             os.getpid(), runtime_pid, controller.pid, [root], runtime_cpu
         )
         report["maxima"] = {
-            k: max(report["maxima"][k], report["final_sample"][k]) for k in LIMITS
+            k: max(report["maxima"][k], report["final_sample"][k]) for k in limits
         }
-        trace_file.write(
-            json.dumps(report["final_sample"], separators=(",", ":")) + "\n"
-        )
-        trace_file.close()
+        write_sample(report["final_sample"])
         output.close()
         selector.close()
         os.close(read_fd)
@@ -496,8 +554,27 @@ def main(mode, directory):
         # Preserve synthetic trace prefixes if the controller could not finish.
         for index, path in enumerate(scratch.rglob("measurement-*.jsonl")):
             shutil.copyfile(path, root / ("emergency-" + str(index) + "-" + path.name))
-        shutil.rmtree(scratch)
-        report["scratch_removed"] = not scratch.exists()
+        report["scratch_removed"] = remove_scratch(
+            scratch,
+            retain_unknown=mode == "staged-bounded",
+            remaining_owned=report["remaining_owned"],
+        )
+        if mode == "staged-bounded" and not report["scratch_removed"]:
+            report["faults"].append("uncertain_ownership_scratch_retained")
+        if cleanup_sampler is not None:
+            cleanup_sampling_stop.set()
+            cleanup_sampler.join(timeout=1)
+            if cleanup_sampler.is_alive():
+                report["faults"].append("cleanup_sampler_unsettled")
+            report["post_cleanup_sample"] = sample(
+                os.getpid(), runtime_pid, controller.pid, [root], runtime_cpu
+            )
+            write_sample(report["post_cleanup_sample"])
+            report["maxima"] = {
+                k: max(report["maxima"][k], report["post_cleanup_sample"][k])
+                for k in limits
+            }
+        trace_file.close()
         report["finished"] = time.monotonic()
         report["elapsed_seconds"] = report["finished"] - STARTED
         report["cleanup_seconds"] = (

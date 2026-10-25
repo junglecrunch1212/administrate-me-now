@@ -80,6 +80,9 @@ def main():
     if mode == "full":
         os.environ["ADMINME_SYNTHETIC_STORAGE_MEASUREMENT"] = "1"
         selection = "tests/acceptance/test_finance_storage_measurement.py::test_fixed_schedule_representative_storage_measurement"
+    elif mode == "staged-bounded":
+        os.environ["ADMINME_SYNTHETIC_STAGED_MEASUREMENT"] = "1"
+        selection = "tests/acceptance/test_finance_staging_measurement.py::test_one_staged_import_replay_and_loaded_queries"
     elif mode == "allocation-profile":
         selection = "tests/acceptance/test_finance_allocation_profile.py::test_bounded_three_import_allocation_profile"
     elif mode == "focused-import":
