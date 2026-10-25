@@ -1522,3 +1522,60 @@ def test_transactional_activation_orders_fresh_rehearsal_before_selectors(
         == "b" * 64
     )
     assert not manager.activation_journal.path.exists()
+
+
+@pytest.mark.parametrize("state", ["changed", "unknown_custody", "candidate_admitted"])
+def test_native_migration_recovery_never_selects_old_source_after_uncertain_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, state: str
+) -> None:
+    from bootstrap import openclaw_migration
+
+    paths = _paths(tmp_path)
+    stub_uninitialized_intake(monkeypatch, paths)
+    native = paths.instance_dir / "openclaw/runtime"
+    native.mkdir(parents=True, mode=0o700)
+    atomic_write(
+        native / "openclaw.json", b'{"agents":{"list":[{"id":"main"}]}}', mode=0o600
+    )
+    owner = ActivationJournal(paths)
+    journal = owner.create(_journal_value(paths))
+    receipt = openclaw_migration.capture(paths, journal)
+    if state == "changed":
+        atomic_write(
+            native / "foreign.sqlite", b"foreign native generation", mode=0o600
+        )
+    else:
+        settled = state == "candidate_admitted"
+        receipt.update(
+            state="candidate_admitted" if settled else "doctor_starting",
+            doctor={
+                "settled": settled,
+                "result_path": "/tmp/openclaw/openclaw-update-doctor-1-00000000-0000-4000-8000-000000000001.json",
+                "nonce": "00000000-0000-4000-8000-000000000002",
+                "pid": 12345,
+                "returncode": 0 if settled else None,
+                "classification": "ok" if settled else None,
+                **({"result_sha256": "a" * 64} if settled else {}),
+            },
+        )
+    journal = owner.transition(
+        journal, "native_migration_captured", openclaw_migration=receipt
+    )
+    manager = UpgradeManager(paths, root=tmp_path, test_mode=True)
+    calls: list[str] = []
+    manager.services = SimpleNamespace(stop=lambda: calls.append("stop"))
+    monkeypatch.setattr(
+        manager,
+        "_install_reviewed_openclaw",
+        lambda *_: calls.append("unsafe-selector"),
+    )
+    with pytest.raises(UpgradeError, match="schema-aware forward repair required"):
+        manager._recover_interrupted_transaction()  # noqa: SLF001
+    retained = owner.load()
+    assert retained is not None
+    assert retained["phase"] == "native_forward_repair_required"
+    assert retained["openclaw_migration"]["state"] == "contained"
+    assert retained["initial_pointer"] == journal["initial_pointer"]
+    assert calls == ["stop"]
+    if state == "changed":
+        assert (native / "foreign.sqlite").read_bytes() == b"foreign native generation"

@@ -46,6 +46,10 @@ _ACTIVATE_PHASES = frozenset(
         "services_quiesced_for_repair",
         "preparation_consuming",
         "preparation_consumed",
+        "native_migration_captured",
+        "native_doctor_running",
+        "native_doctor_settled",
+        "native_forward_repair_required",
         "openclaw_selecting",
         "openclaw_selected",
         "services_quiescing",
@@ -426,6 +430,7 @@ def validate_journal(value: object) -> dict[str, Any]:
             "submission_repair_request_event_ids",
             "effect_context_proof",
             "effect_context_plan_sha256",
+            "openclaw_migration",
         }
     )
     has_config_transition = transition_fields <= keys
@@ -464,6 +469,16 @@ def validate_journal(value: object) -> dict[str, Any]:
         raw = value.get(name)
         if not isinstance(raw, str) or not Path(raw).is_absolute():
             raise ActivationJournalError("activation release coordinate is invalid")
+    migration = value.get("openclaw_migration")
+    if migration is not None:
+        from bootstrap.openclaw_migration import NativeMigrationError, validate_receipt
+
+        try:
+            validate_receipt(migration, value)
+        except NativeMigrationError as exc:
+            raise ActivationJournalError("native migration journal is invalid") from exc
+    elif isinstance(phase, str) and phase.startswith("native_"):
+        raise ActivationJournalError("native migration journal is missing")
     rebind = value.get("cos_imessage_rebind")
     if rebind is not None:
         from bootstrap.cos_guard_release import validate_rebind

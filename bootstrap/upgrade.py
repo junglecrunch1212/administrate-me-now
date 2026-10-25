@@ -26,6 +26,7 @@ from bootstrap.activation_transaction import (
     sha256_json,
 )
 from bootstrap.backup_restore import BackupManager
+from bootstrap import openclaw_migration
 from bootstrap.prepared_runtime import (
     PreparedRuntimeError,
     runtime_artifact_fingerprint,
@@ -2173,6 +2174,27 @@ class UpgradeManager:
                 "content_exposed": False,
             }
 
+        if journal.get("openclaw_migration") is not None:
+            # Stop only through the existing owned-service proof. Never select an
+            # old binary first and discover an incompatible native schema later.
+            self.services.stop()
+            try:
+                native_restore_safe = openclaw_migration.may_restore_predecessor(
+                    self.paths, journal
+                )
+            except (OSError, ValueError, openclaw_migration.NativeMigrationError):
+                native_restore_safe = False
+            if not native_restore_safe:
+                migration = {**journal["openclaw_migration"], "state": "contained"}
+                self.activation_journal.transition(
+                    journal,
+                    "native_forward_repair_required",
+                    openclaw_migration=migration,
+                )
+                raise UpgradeError(
+                    "native state changed or custody is unknown; services remain stopped, target native state and history retained; schema-aware forward repair required"
+                )
+
         predecessor_commit = journal["predecessor_commit"]
         predecessor = Path(journal["predecessor_path"])
         expected = self.paths.app_dir / "releases" / predecessor_commit
@@ -2463,12 +2485,24 @@ class UpgradeManager:
             raise UpgradeError(
                 "retained predecessor source or runtime is invalid"
             ) from exc
-        compatibility = self._validate_instance_candidate(
-            predecessor_release,
-            active_root=candidate_release,
-            approve_runtime_migration=True,
-            allow_openclaw_rollback=True,
+        native_migration = openclaw_migration.required(
+            predecessor_release, candidate_release
         )
+        if native_migration:
+            # Prove the reviewed forward transition, not reverse schema support.
+            # Recovery below separately requires unchanged original native state.
+            compatibility = self._validate_instance_candidate(
+                candidate_release,
+                active_root=predecessor_release,
+                approve_runtime_migration=self.approve_runtime_migration,
+            )
+        else:
+            compatibility = self._validate_instance_candidate(
+                predecessor_release,
+                active_root=candidate_release,
+                approve_runtime_migration=True,
+                allow_openclaw_rollback=True,
+            )
         for relative in (
             Path("bootstrap") / "install-openclaw-source.sh",
             Path("bootstrap") / "versions.json",
@@ -2489,6 +2523,9 @@ class UpgradeManager:
             "prepared_runtime_valid": True,
             "launchagent_restore_available": True,
             "openclaw_restore_available": True,
+            "openclaw_restore_scope": "unchanged-native-state-before-admission"
+            if native_migration
+            else "compatible-retained-state",
             "content_exposed": False,
         }
 
@@ -3035,6 +3072,13 @@ class UpgradeManager:
                 # hold at the first selector mutation. This does not reset the
                 # already established candidate settlement deadline.
                 self._require_activation_capacity()
+                if openclaw_migration.required(active_root, release):
+                    migration = openclaw_migration.capture(self.paths, journal)
+                    journal = self.activation_journal.transition(
+                        journal,
+                        "native_migration_captured",
+                        openclaw_migration=migration,
+                    )
                 journal = self.activation_journal.transition(
                     journal,
                     "openclaw_selecting",
@@ -3056,6 +3100,29 @@ class UpgradeManager:
                     raise UpgradeError(
                         "consumed preparation activity cleanup failed"
                     ) from cleanup_error
+
+            if journal.get("openclaw_migration") is not None:
+
+                def publish_native_doctor(record: dict[str, Any]) -> None:
+                    nonlocal journal
+                    migration = {
+                        **journal["openclaw_migration"],
+                        "state": "doctor_settled"
+                        if record.get("settled")
+                        else "doctor_starting",
+                        "doctor": record,
+                    }
+                    journal = self.activation_journal.transition(
+                        journal,
+                        "native_doctor_settled"
+                        if record.get("settled")
+                        else "native_doctor_running",
+                        openclaw_migration=migration,
+                    )
+
+                openclaw_migration.run_doctor(
+                    self.paths, release, journal, publish=publish_native_doctor
+                )
 
             if binding_transition is not None:
                 current_adapter_payload, current_adapter_config = (
@@ -3178,6 +3245,15 @@ class UpgradeManager:
                 journal,
                 "services_starting",
             )
+            if journal.get("openclaw_migration") is not None:
+                journal = self.activation_journal.transition(
+                    journal,
+                    "services_starting",
+                    openclaw_migration={
+                        **journal["openclaw_migration"],
+                        "state": "candidate_admitted",
+                    },
+                )
             started = self.services.start()
             if not self._service_start_reached_doctor_boundary(started):
                 raise UpgradeError(
@@ -3262,7 +3338,10 @@ class UpgradeManager:
             "activation_history": str(history),
             "compatibility": compatibility,
             "upgrade_controller_attested": True,
-            "rollback_available": True,
+            "rollback_available": journal.get("openclaw_migration") is None,
+            "native_recovery": "schema-aware-forward-repair"
+            if journal.get("openclaw_migration")
+            else "compatible-predecessor",
             "rollback_eligibility": {
                 "eligible": True,
                 "sha256": journal["rollback_eligibility"]["sha256"],
