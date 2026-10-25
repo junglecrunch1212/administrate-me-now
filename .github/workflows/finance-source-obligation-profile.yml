@@ -1,0 +1,67 @@
+name: Focused source obligation parsing diagnostic
+on:
+  push:
+    branches: ['codex/finance-source-obligation-profile']
+permissions:
+  contents: read
+jobs:
+  profile-contract-loader:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    env:
+      ADMINME_TEST_MODE: '1'
+      PYTHONPATH: bridge
+      PYTHONDONTWRITEBYTECODE: '1'
+      POETRY_VIRTUALENVS_IN_PROJECT: 'true'
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.14.7'
+      - run: pipx install poetry==2.4.1
+      - run: poetry sync --with dev --no-interaction
+      - name: Profile unchanged repository contract parsing only
+        timeout-minutes: 1
+        run: |
+          mkdir -p "$RUNNER_TEMP/source-obligation-profile"
+          .venv/bin/python - <<'PY_PROFILE'
+          import cProfile, hashlib, json, os, pathlib, pstats, subprocess, time
+          import adminme.source_assurance as module
+          root=pathlib.Path.cwd()
+          paths=list(module._manifest_paths(root))
+          files=[{'path':str(p.relative_to(root)),'sha256':hashlib.sha256(p.read_bytes()).hexdigest(),'bytes':p.stat().st_size} for p in paths]
+          original=module.yaml.safe_load
+          calls=0
+          def counted(*args,**kwargs):
+              global calls
+              calls+=1
+              return original(*args,**kwargs)
+          module.yaml.safe_load=counted
+          rows=[]
+          reference=None
+          for index in range(20):
+              wall=time.perf_counter(); cpu=time.thread_time(); before=calls
+              result=module.load_source_obligations(root)
+              rows.append({'index':index,'wall_seconds':time.perf_counter()-wall,'thread_cpu_seconds':time.thread_time()-cpu,'yaml_calls':calls-before})
+              coordinates=tuple(r.key for r in result)
+              if reference is None: reference=coordinates
+              assert coordinates==reference
+          profile=cProfile.Profile()
+          profile.enable(); module.load_source_obligations(root); profile.disable()
+          stats=pstats.Stats(profile).stats
+          functions=[{'file':str(key[0]),'line':key[1],'function':key[2],'primitive_calls':v[0],'total_calls':v[1],'own_seconds':v[2],'cumulative_seconds':v[3]} for key,v in stats.items()]
+          functions.sort(key=lambda v:v['cumulative_seconds'],reverse=True)
+          output={'evaluation':'bounded_loader_diagnostic_not_import_or_acceptance','candidate':subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(),'files':files,'obligations':len(reference),'unprofiled_samples':rows,'single_profile_top':functions[:40],'limitations':['No runtime/import/concurrent foreground traffic','Profile overhead is separate from twenty unprofiled timings','Does not attribute original full-run CPU or qualify latency']}
+          dest=pathlib.Path(os.environ['RUNNER_TEMP'])/'source-obligation-profile'/'profile.json'
+          dest.write_text(json.dumps(output,indent=2)+'\n')
+          print(json.dumps({'files':len(files),'obligations':len(reference),'samples':rows,'top':functions[:6]}))
+          PY_PROFILE
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: source-obligation-profile
+          path: ${{ runner.temp }}/source-obligation-profile
+          if-no-files-found: error
+          retention-days: 7
