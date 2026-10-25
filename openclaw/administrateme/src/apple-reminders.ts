@@ -4,6 +4,7 @@ import type { PluginRuntime } from "./runtime.js";
 import { takeReminderInput } from "./self-replies.js";
 import { rememberRequestAuthorization } from "./request-policy.js";
 import { toolResult } from "./result.js";
+import { assertToolInput } from "./tool-input.js";
 
 export const APPLE_REMINDER_INPUT_TOOLS = [
   "administrateme_confirm_apple_reminder",
@@ -23,12 +24,13 @@ export function registerAppleReminderTools(api: OpenClawPluginApi, runtime: Plug
       request_id: Type.String({ minLength: 8, maxLength: 120 }),
     }, { additionalProperties: false }),
     async execute(id, params) {
+      assertToolInput(params);
       const input = await takeReminderInput(runtime, id, context);
       const result = await runtime.transport.request("/api/openclaw/v1/tools/confirm-apple-reminder", {
         ...params, provenance: input.provenance, source_message_event_id: input.source_message_event_id,
         request_authorization: true,
       });
-      rememberRequestAuthorization(runtime, result, input, params as Record<string, unknown>);
+      rememberRequestAuthorization(runtime, result, input, params);
       return toolResult(result);
     },
   }), { name: "administrateme_confirm_apple_reminder", optional: true });
@@ -40,6 +42,7 @@ export function registerAppleReminderTools(api: OpenClawPluginApi, runtime: Plug
       domain_approval_event_id: Type.String({ minLength: 1, maxLength: 240 }),
     }, { additionalProperties: false }),
     async execute(id, params) {
+      assertToolInput(params);
       const { provenance, source_message_event_id } = await takeReminderInput(runtime, id, context);
       return toolResult(await runtime.transport.request("/api/openclaw/v1/tools/apple-reminder-status", {
         ...params, provenance, source_message_event_id,

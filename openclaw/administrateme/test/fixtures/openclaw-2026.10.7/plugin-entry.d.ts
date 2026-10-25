@@ -4,6 +4,8 @@
  * this unit fixture is not source-install or live-runtime compatibility proof.
  */
 
+import type { TSchema } from "typebox";
+
 export type JsonSchema = Record<string, unknown>;
 
 export type ToolResult = {
@@ -15,9 +17,9 @@ export type AnyAgentTool = {
   name: string;
   label?: string;
   description: string;
-  parameters: unknown;
+  parameters: TSchema;
   outputSchema?: unknown;
-  execute: (id: string, params: Record<string, unknown>) => Promise<ToolResult>;
+  execute: (id: string, params: unknown) => Promise<ToolResult>;
 };
 
 export type OpenClawPluginToolContext = {
@@ -93,7 +95,6 @@ export type PluginHookMessageContext = {
   runId?: string;
   messageId?: string;
   senderId?: string;
-  agentId?: string;
 };
 
 export type PluginHookMessageReceivedEvent = {
@@ -196,7 +197,7 @@ export type OpenClawPluginApi = {
     };
   };
   logger: {
-    debug: (message: string) => void;
+    debug?: (message: string) => void;
     info: (message: string) => void;
     warn: (message: string) => void;
     error: (message: string) => void;

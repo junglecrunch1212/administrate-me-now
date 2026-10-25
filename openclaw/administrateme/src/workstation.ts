@@ -4,6 +4,7 @@ import { provenanceFromTool } from "./provenance.js";
 import { provenanceFromServiceTool, serviceAgentId } from "./service-private.js";
 import type { PluginRuntime } from "./runtime.js";
 import { toolResult } from "./result.js";
+import { assertToolInput } from "./tool-input.js";
 
 export const WORKSTATION_INVENTORY_TOOL = "administrateme_workstation_inventory";
 
@@ -21,6 +22,7 @@ export function registerWorkstationInventory(api: OpenClawPluginApi, runtime: Pl
       limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 40 })),
     }, { additionalProperties: false }),
     async execute(_id, params) {
+      assertToolInput(params);
       const provenance = context.agentId === serviceAgentId()
         ? provenanceFromServiceTool(context, runtime.transport.config.sharedSecretEnv, runtime.transport.config.serviceWorkEnabled)
         : provenanceFromTool(context, "tool", runtime.transport.config.sharedSecretEnv, runtime);

@@ -504,6 +504,26 @@ describe("native OpenClaw contract fixture", () => {
     expect(requestBody(healthFetch, 3)).toMatchObject({ state: "unavailable" });
   });
 
+  it("continues health retry when the native logger omits optional debug", async () => {
+    vi.useFakeTimers();
+    const healthFetch = vi.fn()
+      .mockRejectedValueOnce(new TypeError("loopback runtime unavailable"))
+      .mockRejectedValueOnce(new TypeError("still unavailable"))
+      .mockResolvedValue(jsonResponse({ event_id: "ev_health", state: "healthy" }));
+    vi.stubGlobal("fetch", healthFetch);
+    const runtime = fakeApi();
+    delete runtime.api.logger.debug;
+    const service = runtime.services[0]!;
+    service.start();
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(healthFetch).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(healthFetch).toHaveBeenCalledTimes(3);
+    expect(runtime.api.logger.info).toHaveBeenCalledWith(expect.stringContaining("plugin ready"));
+    await service.stop();
+  });
+
   it("cancels pending health reconciliation when the plugin stops", async () => {
     vi.useFakeTimers();
     const healthFetch = vi
@@ -529,6 +549,17 @@ describe("native OpenClaw contract fixture", () => {
     expect([...runtime.gateways]).toHaveLength(14);
     expect([...runtime.tools]).toHaveLength(40);
     expect(runtime.services).toHaveLength(0);
+  });
+
+  it("rejects non-object native arguments for every registered tool before any transport", async () => {
+    const runtime = fakeApi();
+    for (const [name, factory] of runtime.tools) {
+      const tool = factory(toolContext()) as AnyAgentTool;
+      for (const input of [undefined, null, [], true, 1, "malformed"]) {
+        await expect(tool.execute(`invalid-${name}`, input)).rejects.toThrow("tool arguments must be an object");
+      }
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("sends a typed tool request with full trusted provenance and no operator token body", async () => {

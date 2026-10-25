@@ -4,6 +4,7 @@ import { callGatewayTool } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { PluginRuntime } from "./runtime.js";
 import { takeReminderInput, escapeReplyText } from "./self-replies.js";
 import { toolResult } from "./result.js";
+import { assertToolInput } from "./tool-input.js";
 
 const BASE = "/api/openclaw/v1/cos-reminders";
 const FIRE = "administrateme_self_reminder_fire";
@@ -55,6 +56,7 @@ export function registerSelfReminderTools(api: OpenClawPluginApi, runtime: Plugi
       Type.Object({ action: Type.Literal("status"), reminder_event_id: Type.String({ minLength: 1, maxLength: 240 }) }, { additionalProperties: false }),
     ]),
     async execute(id, params) {
+      assertToolInput(params);
       const input = await takeReminderInput(runtime, id, context);
       if (params.action === "status") {
         if (typeof params.reminder_event_id !== "string") throw new Error("Invalid reminder reference");
@@ -94,6 +96,7 @@ export function registerSelfReminderTools(api: OpenClawPluginApi, runtime: Plugi
     description: "Internal timer callback. Only the exact bound OpenClaw timer can use this; ordinary conversations cannot send with it.",
     parameters: Type.Object({ reminder_event_id: Type.String({ minLength: 1, maxLength: 240 }) }, { additionalProperties: false }),
     async execute(_id, params) {
+      assertToolInput(params);
       const match = /^agent:(adminme-[0-9a-f]{16}):cron:([a-zA-Z0-9_-]{1,120}):trigger$/.exec(context.sessionKey ?? "");
       if (!match || context.agentId !== match[1]) throw new Error("Only the bound native timer may deliver this reminder");
       const result = await runtime.transport.request<RecordValue>(`${BASE}/fire`, {

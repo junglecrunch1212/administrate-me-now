@@ -3,6 +3,7 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "./runtime.js";
 import { takeReminderInput } from "./self-replies.js";
 import { toolResult } from "./result.js";
+import { assertToolInput } from "./tool-input.js";
 
 /** Reuse the authenticated current-input binding; this tool never grants a reply/send. */
 export function registerMemberWorkTool(api: OpenClawPluginApi, runtime: PluginRuntime): void {
@@ -14,6 +15,7 @@ export function registerMemberWorkTool(api: OpenClawPluginApi, runtime: PluginRu
       Type.Object({ action: Type.Literal("status"), follow_up_source_id: Type.String({ minLength: 1, maxLength: 240 }) }, { additionalProperties: false }),
     ]),
     async execute(id, params) {
+      assertToolInput(params);
       if (!runtime.transport.config.serviceWorkEnabled) throw new Error("CoS internal work is disabled");
       const { provenance, source_message_event_id } = await takeReminderInput(runtime, id, context);
       return toolResult(await runtime.transport.request("/api/openclaw/v1/tools/service-follow-up", {
