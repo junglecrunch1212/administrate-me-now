@@ -198,7 +198,17 @@ def test_public_entry_uses_exact_consumed_target_without_moving_old_pointer(
 
 
 @pytest.mark.parametrize(
-    "mutation", ["plan", "journal", "runtime", "manifest", "unconsumed", "new_approval"]
+    "mutation",
+    [
+        "plan",
+        "journal",
+        "runtime",
+        "manifest",
+        "unconsumed",
+        "new_approval",
+        "integer_identity",
+        "integer_commit",
+    ],
 )
 def test_public_entry_refuses_unbound_or_new_runtime_authority(
     tmp_path: Path, mutation: str
@@ -209,6 +219,21 @@ def test_public_entry_refuses_unbound_or_new_runtime_authority(
         value = json.loads(path.read_bytes())
         value["candidate_commit" if mutation == "plan" else "target_commit"] = "d" * 40
         atomic_write(path, json.dumps(value).encode())
+    elif mutation in {"integer_identity", "integer_commit"}:
+        parent_path = instance / "app/activation/active.json"
+        parent = json.loads(parent_path.read_bytes())
+        field = "transaction_id" if mutation == "integer_identity" else "target_commit"
+        parent[field] = int("7" * (32 if mutation == "integer_identity" else 40))
+        atomic_write(parent_path, json.dumps(parent).encode())
+        # Bind the malformed identity exactly so rejection exercises type
+        # validation, not an earlier stale-plan fingerprint check.
+        value = json.loads(plan.read_bytes())
+        value["parent_transaction_id"] = parent["transaction_id"]
+        value["failed_target_commit"] = parent["target_commit"]
+        value["parent_journal_sha256"] = hashlib.sha256(
+            json.dumps(parent, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        atomic_write(plan, json.dumps(value).encode())
     elif mutation == "runtime":
         atomic_write(release / ".venv/bin/python", b"changed interpreter", mode=0o700)
     elif mutation == "manifest":
@@ -233,6 +258,12 @@ def test_public_entry_refuses_unbound_or_new_runtime_authority(
     )
     assert result.returncode != 0
     assert not result.stdout.strip()
+    if mutation in {"integer_identity", "integer_commit"}:
+        assert (
+            "NativeRecoveryEntryError: native recovery lineage is invalid"
+            in result.stderr
+        )
+        assert "TypeError" not in result.stderr
 
 
 @pytest.mark.parametrize("changed_ancestor", [False, True])

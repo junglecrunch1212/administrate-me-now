@@ -1013,7 +1013,7 @@ def test_rollback_refuses_ambiguous_committed_history_before_selector_work(
 ) -> None:
     paths = _paths(tmp_path)
     stub_uninitialized_intake(monkeypatch, paths)
-    _pointer_payload, pointer, _readiness_payload = _documents(paths)
+    _pointer_payload, pointer, readiness_payload = _documents(paths)
     candidate = paths.app_dir / "releases" / CANDIDATE_COMMIT
     current = {
         "path": str(candidate),
@@ -1024,6 +1024,11 @@ def test_rollback_refuses_ambiguous_committed_history_before_selector_work(
     atomic_write(
         paths.app_dir / "current-release.json",
         current_payload,
+        mode=0o600,
+    )
+    atomic_write(
+        paths.instance_dir / "config/deployment-readiness.json",
+        readiness_payload,
         mode=0o600,
     )
     owner = ActivationJournal(paths)
@@ -1442,13 +1447,19 @@ def test_transactional_activation_orders_fresh_rehearsal_before_selectors(
             candidate_path=str(failed_release),
             target_path=str(failed_release),
         )
-        parent_value["openclaw_migration"] = {
-            **openclaw_migration.capture(paths, parent_value),
-            "state": "contained",
-            "candidate_admitted": True,
-        }
-        parent_value["phase"] = "native_forward_repair_required"
-        parent = manager.activation_journal.create(parent_value)
+        parent_value = manager.activation_journal.create(parent_value)
+        parent_value = manager.activation_journal.transition(
+            parent_value, "services_quiesced"
+        )
+        parent = manager.activation_journal.transition(
+            parent_value,
+            "native_forward_repair_required",
+            openclaw_migration={
+                **openclaw_migration.capture(paths, parent_value),
+                "state": "contained",
+                "candidate_admitted": True,
+            },
+        )
         plan = {
             "parent_transaction_id": parent["transaction_id"],
             "parent_journal_sha256": sha256_json(parent),

@@ -332,9 +332,12 @@ async def export_htr10_audits(
         # runs below. The successor must prove live readiness after startup.
         diagnostics: dict[str, Any] = {}
     else:
-        diagnostics = ServiceManager(paths, test_mode=test_mode).runtime_diagnostics()
-        if not isinstance(diagnostics, dict):
+        live_diagnostics = ServiceManager(
+            paths, test_mode=test_mode
+        ).runtime_diagnostics()
+        if not isinstance(live_diagnostics, dict):
             raise HTR10ExportError("active runtime readiness is unavailable")
+        diagnostics = live_diagnostics
         if effect_context_repair_plan is not None:
             from bootstrap.effect_context_repair import load_plan, verify_proof
             from bootstrap.source_identity import reviewed_candidate_commit

@@ -94,7 +94,9 @@ def fixture(
         "ownership": "explicit",
         "entries": {
             row["id"]: {
-                key: value for key, value in row.items() if key not in {"id", "default"}
+                key: copy.deepcopy(value)
+                for key, value in row.items()
+                if key not in {"id", "default"}
             }
             for row in before["agents"]["list"]
         },

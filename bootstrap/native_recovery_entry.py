@@ -133,8 +133,10 @@ def select_runtime(
         failed_commit = current.get("target_commit")
         identity = current.get("transaction_id")
         if (
-            re.fullmatch(r"[0-9a-f]{40}", str(failed_commit)) is None
-            or re.fullmatch(r"[0-9a-f]{32}", str(identity)) is None
+            not isinstance(failed_commit, str)
+            or re.fullmatch(r"[0-9a-f]{40}", failed_commit) is None
+            or not isinstance(identity, str)
+            or re.fullmatch(r"[0-9a-f]{32}", identity) is None
             or failed_commit == commit
             or identity in seen
         ):

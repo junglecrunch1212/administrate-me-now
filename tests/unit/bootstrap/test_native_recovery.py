@@ -56,14 +56,20 @@ def fixture(
         b"observation_mode_override:\n  active: true\n",
     )
     atomic_write(paths.instance_dir / "config/observation.json", b'{"active":true}')
+    # Production creates the private journal before quiescence and capture.
+    owner = ActivationJournal(paths)
+    journal = owner.create(journal)
+    journal = owner.transition(journal, "services_quiesced")
     capsule = migration.capture(paths, journal)
-    journal["openclaw_migration"] = {
-        **capsule,
-        "state": "contained",
-        "candidate_admitted": True,
-    }
-    journal["phase"] = "native_forward_repair_required"
-    parent = ActivationJournal(paths).create(journal)
+    parent = owner.transition(
+        journal,
+        "native_forward_repair_required",
+        openclaw_migration={
+            **capsule,
+            "state": "contained",
+            "candidate_admitted": True,
+        },
+    )
     candidate = tmp_path / "corrected"
     (candidate / "bootstrap").mkdir(parents=True)
     (candidate / "bootstrap/versions.json").write_bytes(

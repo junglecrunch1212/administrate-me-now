@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from adminme.openclaw_roster import canonical_agent_rows
 from adminme.openclaw_topology import member_agent_id
 from bootstrap.contracts import DeploymentPaths
 from bootstrap.workspace_instructions import (
@@ -280,6 +281,30 @@ def test_recovery_preserves_unknown_later_edits_and_refuses_to_claim_success(
     assert files[1].read_bytes() == b"Unexpected later content.\n"
 
 
+def _migrated_member_roster(paths: DeploymentPaths) -> None:
+    # This target-writer fixture starts after native Doctor materialized ownership;
+    # the retained-state acceptance separately exercises the real native migration.
+    root = paths.instance_dir / "openclaw"
+    runtime = root / "runtime"
+    runtime.mkdir(mode=0o700)
+    (runtime / "openclaw.json").write_text(
+        json.dumps(
+            {
+                "agents": {
+                    "ownership": "explicit",
+                    "entries": {
+                        member_agent_id(MEMBER): {
+                            "workspace": str(
+                                root / "member-workspaces" / member_agent_id(MEMBER)
+                            )
+                        }
+                    },
+                }
+            }
+        )
+    )
+
+
 def test_updater_covers_workspaces_selected_by_production_member_topology(
     tmp_path: Path,
 ) -> None:
@@ -290,12 +315,15 @@ def test_updater_covers_workspaces_selected_by_production_member_topology(
     configuration = paths.instance_dir / "config"
     configuration.mkdir(mode=0o700)
     (configuration / "adapters.json").write_text(json.dumps(adapters))
+    _migrated_member_roster(paths)
     topology = reconcile_member_topology(paths)
     assert topology["member_agent_count"] == 2
     gateway = json.loads(
         (paths.instance_dir / "openclaw/runtime/openclaw.json").read_text()
     )
-    actual_workspaces = [Path(row["workspace"]) for row in gateway["agents"]["list"]]
+    actual_workspaces = [
+        Path(row["workspace"]) for row in canonical_agent_rows(gateway)
+    ]
     plan = prepare_transition(
         paths, source_release=source, target_release=target, adapter_config=adapters
     )
@@ -325,6 +353,7 @@ def test_full_legacy_member_files_keep_workflow_guidance_inside_native_budget(
     configuration = paths.instance_dir / "config"
     configuration.mkdir(mode=0o700)
     (configuration / "adapters.json").write_text(json.dumps(adapters))
+    _migrated_member_roster(paths)
     assert reconcile_member_topology(paths)["member_agent_count"] == 2
     gateway = json.loads(
         (paths.instance_dir / "openclaw/runtime/openclaw.json").read_text()
@@ -332,7 +361,7 @@ def test_full_legacy_member_files_keep_workflow_guidance_inside_native_budget(
     # Exercise the paths the native agent actually loads, with distinct private
     # layers and the entire six-kilobyte reserved overlay budget in each file.
     overlays = {}
-    for row in gateway["agents"]["list"]:
+    for row in canonical_agent_rows(gateway):
         file = Path(row["workspace"]) / "AGENTS.md"
         marker = f"Private policy for {row['id']}.\n".encode()
         prefix = marker + b"p" * (3000 - len(marker))
