@@ -16,6 +16,8 @@ from typing import Any
 from fastapi.testclient import TestClient
 import pytest
 
+from adminme.adapters.cos_channel_acquisition import CONFIG_KEY as COS_ACQUISITION
+from adminme.adapters.disposable_test_acquisition import CONFIG_KEY as TEST_ACQUISITION
 from adminme.runtime.application import create_application
 from adminme.source_assurance import audit_source_assurance
 from tests.acceptance.test_authenticated_conversation_reply import (
@@ -23,6 +25,7 @@ from tests.acceptance.test_authenticated_conversation_reply import (
     configured,
     reply_body,
 )
+from tests.acceptance.test_cos_channel_acquisition import _configuration
 from tests.acceptance.test_cos_response_execution import FakeGmailService, ROOT
 from tests.acceptance.test_requested_email_action import (
     AUTH,
@@ -50,6 +53,29 @@ def isolated_activation(monkeypatch: pytest.MonkeyPatch) -> None:
         "adminme.products.openclaw.cos_responses.require_cos_response_activation",
         activation,
     )
+
+
+def complete_sender_binding(client: TestClient, path: Path) -> None:
+    """Complete the reviewed synthetic OAuth binding before strict readiness."""
+    config = client.app.state.runtime.settings.adapter_config
+    reviewed = _configuration(path)
+    sender = config["adapters"][0]
+    sender["config"].update(
+        binding_provenance="oauth-subject",
+        ownership_attested=True,
+        oauth_credentials_ref="keychain://fixture/cos-gmail",
+        trusted_sender_routes=copy.deepcopy(
+            reviewed["adapters"][1]["config"]["trusted_sender_routes"]
+        ),
+    )
+    config[TEST_ACQUISITION] = reviewed[TEST_ACQUISITION]
+    config[COS_ACQUISITION] = {
+        **reviewed[COS_ACQUISITION],
+        "gmail_adapter_id": sender["id"],
+    }
+    for channel in config["service_identities"]["channels"]:
+        if channel["provider"] == "gmail":
+            channel["intake_mode"] = "member_submission"
 
 
 def published_assurance(client: TestClient) -> dict[str, Any]:
@@ -122,6 +148,7 @@ def test_real_source_audit_and_readiness_retain_email_chain_after_restart(
         create_application(config), base_url="https://central-fixture.ts.net"
     ) as client:
         prepare(client, service)
+        complete_sender_binding(client, tmp_path)
         model, _ = model_boundary(client)
         try:
             send_once(client, service, channel)
@@ -130,7 +157,8 @@ def test_real_source_audit_and_readiness_retain_email_chain_after_restart(
             client.portal.call(model.aclose)
     # Reopen the encrypted retained history without initiating another action.
     # No provider adapter or model is needed to explain the old successful send.
-    config.adapter_config["adapters"] = []
+    for adapter in config.adapter_config["adapters"]:
+        adapter["enabled"] = False
     with TestClient(
         create_application(config), base_url="https://central-fixture.ts.net"
     ) as client:
