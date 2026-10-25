@@ -70,6 +70,11 @@ def complete_sender_binding(client: TestClient, path: Path) -> None:
     config = client.app.state.runtime.settings.adapter_config
     reviewed = _configuration(path)
     sender = config["adapters"][0]
+    # The shared Gmail observation fixture identifies this exact source adapter.
+    # Keep its installed sender, retained binding and direct-intake source aligned.
+    sender["id"] = "fixture-cos"
+    managed = client.app.state.runtime.adapters._managed
+    managed["fixture-cos"] = managed.pop("fixture-conversation-gmail")
     sender["config"].update(
         binding_provenance="oauth-subject",
         ownership_attested=True,
@@ -436,6 +441,7 @@ def test_genuine_email_history_crosses_real_htr_export_and_review(
                     runtime_diagnostics=lambda: diagnostics
                 ),
             )
+            paths.backup_dir.mkdir(mode=0o700, parents=True)
             historical = paths.backup_dir / "historical.json"
             source = paths.backup_dir / "source.json"
             exported = asyncio.run(

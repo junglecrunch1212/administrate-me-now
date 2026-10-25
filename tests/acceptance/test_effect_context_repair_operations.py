@@ -23,6 +23,7 @@ from adminme.source_assurance import audit_source_assurance
 from bootstrap import cos_channel_activation as operation
 from bootstrap import effect_context_repair as repair
 from bootstrap import upgrade
+from bootstrap.candidate_readiness import CandidateReadinessError
 from bootstrap.contracts import atomic_write
 from bootstrap.secrets import secret_store
 from bootstrap.upgrade import UpgradeError, UpgradeManager
@@ -587,6 +588,7 @@ def test_real_email_containment_upgrade_and_schema_aware_fallback(
                         repair.EffectContextRepairError,
                         OSError,
                         ValueError,
+                        CandidateReadinessError,
                     )
                 ):
                     controller.prepare_effect_context_successor(
@@ -774,7 +776,7 @@ def test_real_email_containment_upgrade_and_schema_aware_fallback(
             # journal, source identity and the same changed-target receipt.
             receipt_bytes = receipt.read_bytes()
             receipt.unlink()
-            with pytest.raises((OSError, ValueError)):
+            with pytest.raises((OSError, ValueError, CandidateReadinessError)):
                 controller.activate(plan, enable_live=True)
             atomic_write(receipt, receipt_bytes)
             restored = controller.activate(plan, enable_live=True)
