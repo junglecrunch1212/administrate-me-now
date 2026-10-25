@@ -1,4 +1,4 @@
-name: Focused source obligation parsing diagnostic
+name: Focused source obligation cache correction
 on:
   push:
     branches: ['codex/finance-source-obligation-profile']
@@ -7,7 +7,7 @@ permissions:
 jobs:
   profile-contract-loader:
     runs-on: ubuntu-latest
-    timeout-minutes: 6
+    timeout-minutes: 8
     env:
       ADMINME_TEST_MODE: '1'
       PYTHONPATH: bridge
@@ -22,7 +22,25 @@ jobs:
           python-version: '3.14.7'
       - run: pipx install poetry==2.4.1
       - run: poetry sync --with dev --no-interaction
-      - name: Profile unchanged repository contract parsing only
+      - name: Check contract parsing, invalidation and audit freshness
+        timeout-minutes: 3
+        run: |
+          mkdir -p "$RUNNER_TEMP/source-obligation-profile"
+          .venv/bin/ruff check adminme/source_assurance.py tests/unit/test_source_obligation_cache.py
+          .venv/bin/ruff format --check adminme/source_assurance.py tests/unit/test_source_obligation_cache.py
+          .venv/bin/mypy adminme/source_assurance.py
+          .venv/bin/pyright adminme/source_assurance.py
+          .venv/bin/pytest -q --runxfail tests/unit/test_source_obligation_cache.py tests/unit/test_source_assurance.py --junitxml="$RUNNER_TEMP/source-obligation-profile/contracts.xml"
+          .venv/bin/pytest -q --runxfail tests/integration/test_runtime_application.py -k source_assurance --junitxml="$RUNNER_TEMP/source-obligation-profile/freshness.xml"
+          .venv/bin/python - <<'PY_CHECK'
+          import os, pathlib, xml.etree.ElementTree as ET
+          root = pathlib.Path(os.environ['RUNNER_TEMP']) / 'source-obligation-profile'
+          for name in ('contracts.xml', 'freshness.xml'):
+              suites = ET.parse(root / name).getroot().findall('testsuite')
+              assert suites and sum(int(s.attrib['tests']) for s in suites) > 0
+              assert all(int(s.attrib.get(k, 0)) == 0 for s in suites for k in ('failures', 'errors', 'skipped'))
+          PY_CHECK
+      - name: Profile cold and repeated current-file contract loads
         timeout-minutes: 1
         run: |
           mkdir -p "$RUNNER_TEMP/source-obligation-profile"
@@ -30,6 +48,7 @@ jobs:
           import cProfile, hashlib, json, os, pathlib, pstats, subprocess, time
           import adminme.source_assurance as module
           root=pathlib.Path.cwd()
+          module._cached_source_manifest.cache_clear()
           paths=list(module._manifest_paths(root))
           files=[{'path':str(p.relative_to(root)),'sha256':hashlib.sha256(p.read_bytes()).hexdigest(),'bytes':p.stat().st_size} for p in paths]
           original=module.yaml.safe_load
@@ -48,12 +67,14 @@ jobs:
               coordinates=tuple(r.key for r in result)
               if reference is None: reference=coordinates
               assert coordinates==reference
+          assert rows[0]['yaml_calls']==len(files)
+          assert all(row['yaml_calls']==0 for row in rows[1:])
           profile=cProfile.Profile()
           profile.enable(); module.load_source_obligations(root); profile.disable()
           stats=pstats.Stats(profile).stats
           functions=[{'file':str(key[0]),'line':key[1],'function':key[2],'primitive_calls':v[0],'total_calls':v[1],'own_seconds':v[2],'cumulative_seconds':v[3]} for key,v in stats.items()]
           functions.sort(key=lambda v:v['cumulative_seconds'],reverse=True)
-          output={'evaluation':'bounded_loader_diagnostic_not_import_or_acceptance','candidate':subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(),'files':files,'obligations':len(reference),'unprofiled_samples':rows,'single_profile_top':functions[:40],'limitations':['No runtime/import/concurrent foreground traffic','Profile overhead is separate from twenty unprofiled timings','Does not attribute original full-run CPU or qualify latency']}
+          output={'evaluation':'bounded_loader_diagnostic_not_import_or_acceptance','candidate':subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(),'files':files,'obligations':len(reference),'cache':module._cached_source_manifest.cache_info()._asdict(),'unprofiled_samples':rows,'single_profile_top':functions[:40],'limitations':['No runtime/import/concurrent foreground traffic','Profile overhead is separate from twenty unprofiled timings','Does not attribute original full-run CPU or qualify latency']}
           dest=pathlib.Path(os.environ['RUNNER_TEMP'])/'source-obligation-profile'/'profile.json'
           dest.write_text(json.dumps(output,indent=2)+'\n')
           print(json.dumps({'files':len(files),'obligations':len(reference),'samples':rows,'top':functions[:6]}))
