@@ -1,0 +1,64 @@
+name: Focused Finance import correction
+on:
+  push:
+    branches: ['codex/finance-correction-a52b371e']
+permissions:
+  contents: read
+concurrency:
+  group: finance-correction-${{ github.ref }}-${{ github.sha }}
+  cancel-in-progress: false
+jobs:
+  focused-correction:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      ADMINME_TEST_MODE: '1'
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONPATH: bridge
+      POETRY_VIRTUALENVS_IN_PROJECT: 'true'
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.14.7'
+      - run: pipx install poetry==2.4.1
+      - run: poetry sync --with dev --no-interaction
+      - name: Exact source and held interface checks
+        run: |
+          git rev-parse HEAD HEAD:adminme HEAD:poetry.lock
+          git diff --exit-code 427990f578b62d183dae47d5c3992f21adbd543e HEAD -- scripts/release_scope.py tests/unit/test_ci_release_gates.py bootstrap pyproject.toml poetry.lock
+          git diff --name-only 427990f578b62d183dae47d5c3992f21adbd543e HEAD -- adminme
+          .venv/bin/ruff check adminme/finance/dated_projection.py adminme/finance/closed_import.py tests/fixtures/finance_import_diagnostics.py tests/acceptance/test_finance_import_correction.py tests/unit/test_finance_projection_ownership.py
+      - name: Focused validation and input ownership contracts
+        timeout-minutes: 4
+        env:
+          FINANCE_FOCUSED_OUTPUT: ${{ runner.temp }}/finance-correction
+        run: |
+          mkdir -p "$FINANCE_FOCUSED_OUTPUT"
+          .venv/bin/python -m pytest -q --runxfail --junitxml="$FINANCE_FOCUSED_OUTPUT/validation.xml" tests/unit/test_finance_projection_ownership.py tests/unit/test_finance_provenance.py tests/acceptance/test_finance_planning.py tests/acceptance/test_finance_activation.py -k 'ownership or exact_projection_validation or dated_snapshot or semantic_conflations or closed_decoder or closed_upload_rejection or independently or proof_receipt or closed_bytes'
+      - name: Focused atomicity and revocation dependencies
+        timeout-minutes: 4
+        env:
+          ADMINME_SYNTHETIC_STORAGE_EVALUATION: '1'
+          FINANCE_STORAGE_ARTIFACT_DIR: ${{ runner.temp }}/finance-correction/atomic
+        run: |
+          mkdir -p "$FINANCE_STORAGE_ARTIFACT_DIR"
+          .venv/bin/python -m pytest -q --runxfail --junitxml="$FINANCE_STORAGE_ARTIFACT_DIR/results.xml" tests/acceptance/test_finance_storage_isolation.py -k 'synthetic_storage_contracts and (atomic_proof or revoke_prepared or role_before_commit or cancel_commit)'
+      - name: Bounded import cancellation replay and late shutdown receipts
+        timeout-minutes: 4
+        env:
+          FINANCE_STORAGE_ARTIFACT_DIR: ${{ runner.temp }}/finance-correction/focused
+        run: |
+          mkdir -p "$FINANCE_STORAGE_ARTIFACT_DIR"
+          exec .venv/bin/python -I -B tests/fixtures/finance_watchdog.py focused-import "$FINANCE_STORAGE_ARTIFACT_DIR"
+      - name: Preserve focused evidence including failures
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: finance-import-correction
+          path: ${{ runner.temp }}/finance-correction
+          if-no-files-found: error
+          retention-days: 7
