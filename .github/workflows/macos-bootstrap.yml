@@ -514,7 +514,9 @@ jobs:
     outputs:
       validated_sha: ${{ steps.validated.outputs.sha }}
     runs-on: macos-15
-    timeout-minutes: 35
+    # Native checks took 31m50s in run 40155331887; keep time for the
+    # required browser, evidence validation and final revision binding.
+    timeout-minutes: 45
     env:
       ADMINME_TEST_MODE: "1"
       PYTHONPATH: bridge
@@ -547,7 +549,7 @@ jobs:
       # Collect all selected lifecycle failures within the existing job bound.
       - name: Validate native helper and enrollment composition
         run: >-
-          poetry run pytest -p no:cacheprovider --runxfail -q -ra
+          poetry run pytest -p no:cacheprovider --runxfail -q -ra --durations=15
           --basetemp="${RUNNER_TEMP}/adminme-bridge-development-pytest"
           --junitxml="${RUNNER_TEMP}/bridge-enrollment.xml"
           tests/unit/bootstrap/test_member_bridge_helper_app.py
