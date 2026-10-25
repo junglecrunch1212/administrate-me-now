@@ -11,6 +11,8 @@ export const SERVICE_PRIVATE_TOOL_NAMES = [
   "administrateme_service_private_work_state",
   "administrateme_service_private_state",
   "administrateme_service_context",
+  "administrateme_workstation_source_policy",
+  "administrateme_provision_workstation_source_policy",
 ] as const;
 
 export function serviceAgentId(principalId = COS_SERVICE_PRINCIPAL_ID): string {
@@ -144,6 +146,22 @@ export function registerServicePrivateTools(api: OpenClawPluginApi, runtime: Plu
         limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 50, default: 20 })),
       }, { additionalProperties: false }),
       path: "/api/openclaw/v1/tools/service-context",
+    },
+    {
+      name: SERVICE_PRIVATE_TOOL_NAMES[4],
+      description: "Read the current policy and exact revision for one configured CoS browser resource. This grants no access. Use the returned resource, binding and policy coordinates when an operator needs to stage an authorized source-policy request.",
+      parameters: Type.Object({
+        resource_id: Type.String({ minLength: 1, maxLength: 300 }),
+      }, { additionalProperties: false }),
+      path: "/api/openclaw/v1/tools/workstation-browser/source-policy",
+    },
+    {
+      name: SERVICE_PRIVATE_TOOL_NAMES[5],
+      description: "Apply only an exact, current source-policy request already staged by the operator for a CoS browser resource. Supply that staged request ID; never invent or replace authorization, scope or revision. Returns policy read-back and an idempotent event receipt, not a browser-read or provider-write result. Existing restrictions remain enforced.",
+      parameters: Type.Object({
+        request_id: Type.String({ pattern: "^[0-9a-f]{32}$" }),
+      }, { additionalProperties: false }),
+      path: "/api/openclaw/v1/tools/workstation-browser/provision-source-policy",
     },
   ];
   for (const definition of definitions) {
