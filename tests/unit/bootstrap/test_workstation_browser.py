@@ -6,7 +6,6 @@ from pathlib import Path
 
 import pytest
 
-from adminme.openclaw_roster import agent_rows, replace_agent_rows
 from adminme.workstation_browser import BROWSER_POLICY_FILE
 from adminme.workstation_inventory import INVENTORY_FILE
 from bootstrap.workstation_browser import prepare_config, provision
@@ -149,7 +148,11 @@ def test_native_patch_uses_hash_guard_and_only_browser_and_existing_cos_agent(
         "gateway": {"auth": {"token": "synthetic-secret-never-in-patch"}},
     }
     if canonical:
-        replace_agent_rows(original, agent_rows(original))
+        rows = original["agents"].pop("list")
+        original["agents"]["ownership"] = "explicit"
+        original["agents"]["entries"] = {
+            row["id"]: {k: v for k, v in row.items() if k != "id"} for row in rows
+        }
     snapshot = {"valid": True, "hash": "a" * 64, "config": original}
     params = prepare_native_patch(snapshot, paths, release)
     patch = json.loads(params["raw"])

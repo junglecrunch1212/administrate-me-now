@@ -1,4 +1,4 @@
-"""Exact native roster conversion; retained identity and domain boundaries."""
+"""Native migration input is retained; canonical writers preserve ownership."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from typing import Any
 
 import pytest
 
-from adminme.openclaw_roster import agent_rows, replace_agent_rows
+from adminme.openclaw_roster import agent_rows, canonical_agent_rows, replace_agent_rows
 from adminme.openclaw_topology import (
     binding_fingerprints,
     inspect_runtime_topology,
@@ -52,37 +52,103 @@ def _legacy() -> dict[str, Any]:
 
 
 @pytest.mark.parametrize("selected", [None, "member-a", "cos"])
-def test_conversion_preserves_native_coordinates_and_default(
-    selected: str | None,
-) -> None:
+def test_legacy_migration_input_is_not_reinterpreted(selected: str | None) -> None:
     config = _legacy()
     if selected:
         for row in config["agents"]["list"]:
             row["default"] = row["id"] == selected
     original = copy.deepcopy(config)
     rows = agent_rows(config)
+    with pytest.raises(ValueError, match="native Doctor"):
+        replace_agent_rows(config, rows)
     assert config == original
-    replace_agent_rows(config, rows)
-    assert "list" not in config["agents"]
-    assert list(config["agents"]["entries"]) == ["member-a", "cos"]
-    assert config["agents"]["defaults"] == original["agents"]["defaults"]
-    assert config["bindings"] == original["bindings"]
-    assert config["session"] == original["session"]
-    normalized = agent_rows(config)
-    assert [row["id"] for row in normalized if row.get("default") is True] == [
-        selected or "member-a"
-    ]
-    for before, after in zip(rows, normalized, strict=True):
-        assert {k: v for k, v in before.items() if k != "default"} == {
-            k: v for k, v in after.items() if k != "default"
+    replace_agent_rows(config, rows, canonical=False)
+    assert config == original
+    rows[0]["tools"]["allow"].append("exec")
+    assert config == original
+
+
+def test_canonical_writes_preserve_native_roles_workspaces_and_routes() -> None:
+    config = _legacy()
+    rows = config["agents"].pop("list")
+    config["agents"]["entries"] = {
+        row["id"]: {k: v for k, v in row.items() if k not in {"id", "default"}}
+        for row in rows
+    }
+    config["agents"]["ownership"] = "explicit"
+    config["agents"]["defaults"].update(
+        {
+            role: {"agentId": "member-a"}
+            for role in ("heartbeat", "systemAgent", "authInheritance", "sessionStore")
         }
-    first = copy.deepcopy(config)
+    )
+    config["talk"] = {"agentId": "member-a"}
+    original = copy.deepcopy(config)
+    for _ in range(2):
+        replace_agent_rows(config, canonical_agent_rows(config))
+        assert config == original
+        assert not any("default" in row for row in agent_rows(config))
+
+
+@pytest.mark.parametrize("marker", [False, True])
+@pytest.mark.parametrize("canonical", [False, True])
+def test_retired_entry_marker_requires_native_migration(
+    marker: bool, canonical: bool
+) -> None:
+    config = {"agents": {"entries": {"main": {"default": marker}}}}
+    original = copy.deepcopy(config)
+    assert agent_rows(config) == [{"id": "main", "default": marker}]
+    with pytest.raises(ValueError, match="native Doctor"):
+        replace_agent_rows(config, [{"id": "main"}], canonical=canonical)
+    assert config == original
+
+
+@pytest.mark.parametrize("marker", [False, True])
+def test_writer_cannot_add_retired_marker(marker: bool) -> None:
+    config = {"agents": {"entries": {"main": {}}}}
+    original = copy.deepcopy(config)
+    with pytest.raises(ValueError, match="forbids legacy default"):
+        replace_agent_rows(config, [{"id": "main", "default": marker}])
+    assert config == original
+
+
+def test_sole_native_owner_stays_implicit_without_silent_expansion() -> None:
+    config = {"agents": {"entries": {"main": {"workspace": "/fixture/main"}}}}
+    original = copy.deepcopy(config)
     replace_agent_rows(config, agent_rows(config))
-    assert config == first
-    # Detached reads cannot mutate a current grant or retained historical config.
-    normalized[0]["tools"]["allow"].append("exec")
-    assert config == first
-    assert original["agents"]["list"] == rows
+    assert config == original
+    for replacement in ([{"id": "other"}], [*agent_rows(config), {"id": "cos"}]):
+        with pytest.raises(ValueError, match="explicit native ownership"):
+            replace_agent_rows(config, replacement)
+        assert config == original
+
+
+@pytest.mark.parametrize(
+    "agents", [{}, {"defaults": {"workspace": "/fixture/main"}}, {"list": []}]
+)
+def test_defaults_only_provisioning_remains_native(agents: dict[str, Any]) -> None:
+    config = {"agents": agents}
+    original = copy.deepcopy(config)
+    with pytest.raises(ValueError, match="native Doctor"):
+        replace_agent_rows(config, [{"id": "main"}])
+    assert config == original
+
+
+@pytest.mark.parametrize(
+    "role", ["systemAgent", "heartbeat", "authInheritance", "sessionStore", "talk"]
+)
+def test_explicit_native_owner_cannot_be_removed(role: str) -> None:
+    config: dict[str, Any] = {
+        "agents": {"ownership": "explicit", "entries": {"member-a": {}, "cos": {}}}
+    }
+    if role == "talk":
+        config["talk"] = {"agentId": "member-a"}
+    else:
+        config["agents"]["defaults"] = {role: {"agentId": "member-a"}}
+    original = copy.deepcopy(config)
+    with pytest.raises(ValueError, match="remove an explicit native owner"):
+        replace_agent_rows(config, [{"id": "cos"}])
+    assert config == original
 
 
 def test_explicit_ownership_does_not_invent_a_default() -> None:
@@ -127,15 +193,12 @@ def test_ambiguous_or_relabelled_identity_is_refused(agents: dict[str, Any]) -> 
     assert config == original
 
 
-def test_conversion_cannot_remove_implicit_default_or_create_an_empty_roster() -> None:
-    config = _legacy()
-    before = copy.deepcopy(config)
-    with pytest.raises(ValueError, match="default"):
-        replace_agent_rows(config, [agent_rows(config)[1]])
-    assert config == before
+def test_canonical_writer_cannot_create_empty_roster() -> None:
+    config = {"agents": {"ownership": "explicit", "entries": {"member-a": {}}}}
+    original = copy.deepcopy(config)
     with pytest.raises(ValueError, match="contain"):
         replace_agent_rows(config, [])
-    assert config == before
+    assert config == original
 
 
 @pytest.mark.parametrize("canonical", [False, True])
@@ -175,7 +238,10 @@ def test_production_topology_and_inventory_read_both_formats_without_writes(
         },
     }
     if canonical:
-        replace_agent_rows(config, agent_rows(config))
+        rows = config["agents"].pop("list")
+        config["agents"]["entries"] = {
+            row["id"]: {k: v for k, v in row.items() if k != "id"} for row in rows
+        }
     path = root / "runtime/openclaw.json"
     path.parent.mkdir()
     path.write_text(json.dumps(config))

@@ -10,7 +10,7 @@ from typing import Any
 
 import pytest
 
-from adminme.openclaw_roster import agent_rows, replace_agent_rows
+from adminme.openclaw_roster import agent_rows
 from adminme.openclaw_topology import (
     inspect_runtime_topology,
     member_agent_id,
@@ -77,6 +77,23 @@ def _fixture(tmp_path: Path) -> tuple[Path, dict[str, Any], dict[str, Any]]:
     return root, config, adapters
 
 
+def _canonical_fixture(config: dict[str, Any]) -> None:
+    """Authored target shape, not a simulation/proof of native Doctor migration."""
+    rows = config["agents"].pop("list")
+    config["agents"].update(
+        ownership="explicit",
+        entries={
+            row["id"]: {k: v for k, v in row.items() if k not in {"id", "default"}}
+            for row in rows
+        },
+    )
+    for binding in config["bindings"]:
+        if binding["agentId"].startswith("adminme-"):
+            binding["match"].update(
+                accountId="stale-account", peer={"kind": "direct", "id": "stale-peer"}
+            )
+
+
 @pytest.mark.parametrize("canonical", [False, True])
 def test_new_service_peer_bindings_are_exact_and_preserve_member_state(
     tmp_path: Path,
@@ -84,7 +101,7 @@ def test_new_service_peer_bindings_are_exact_and_preserve_member_state(
 ) -> None:
     root, previous, adapters = _fixture(tmp_path)
     if canonical:
-        replace_agent_rows(previous, agent_rows(previous))
+        _canonical_fixture(previous)
     original = copy.deepcopy(previous)
     prepared = prepare_existing_member_topology(
         previous, adapter_config=adapters, openclaw_root=root, known_members={A, B}
@@ -140,50 +157,48 @@ def test_unprovisioned_topology_is_rejected_without_writes(
     assert not (root / "runtime/openclaw.json").exists()
 
 
-@pytest.mark.parametrize("canonical", [False, True])
-@pytest.mark.parametrize("prior_default", [None, A, B, "service", "operator"])
-def test_repeated_reconciliation_preserves_or_recovers_member_default(
-    tmp_path: Path, prior_default: str | None, canonical: bool
+@pytest.mark.parametrize("prior_owner", [A, B, "service", "operator"])
+def test_repeated_reconciliation_preserves_canonical_native_roles(
+    tmp_path: Path, prior_owner: str
 ) -> None:
     paths = DeploymentPaths.from_root(tmp_path)
     root, config, adapters = _fixture(paths.instance_dir)
-    members = config["agents"]["list"][1:]
     service = {
         "id": service_agent_id(COS_SERVICE_PRINCIPAL_ID),
         "workspace": "/fixture/service",
     }
-    config["agents"]["list"] = [*members, service]
-    if prior_default in {A, B}:
-        for row, member in zip(members, (A, B), strict=True):
-            row["default"] = member == prior_default
-    elif prior_default == "service":
-        service["default"] = True
-    elif prior_default == "operator":
-        config["agents"]["list"].insert(0, {"id": "operator", "default": True})
-    if canonical:
-        replace_agent_rows(config, agent_rows(config))
+    config["agents"]["list"].extend([service, {"id": "operator"}])
+    _canonical_fixture(config)
+    expected = (
+        service["id"]
+        if prior_owner == "service"
+        else "operator"
+        if prior_owner == "operator"
+        else member_agent_id(prior_owner)
+    )
+    config["agents"]["defaults"] = {
+        role: {"agentId": expected}
+        for role in ("systemAgent", "heartbeat", "authInheritance", "sessionStore")
+    }
+    config["talk"] = {"agentId": expected}
+    member_row = config["agents"]["entries"][member_agent_id(A)]
+    member_row["model"] = "fixture/retained-model"
+    member_row["tools"] = {"allow": ["administrateme"], "deny": ["exec"]}
+    original_roles = copy.deepcopy(config["agents"]["defaults"])
     gateway = root / "runtime/openclaw.json"
     gateway.parent.mkdir()
     gateway.write_text(json.dumps(config))
     adapter_path = paths.instance_dir / "config/adapters.json"
     adapter_path.parent.mkdir()
     adapter_path.write_text(json.dumps(adapters))
-    expected = (
-        service["id"]
-        if prior_default == "service"
-        else "operator"
-        if prior_default == "operator"
-        else member_agent_id(prior_default or A)
-    )
     first = None
-    # Exercise two successive installations, including the already-lost flag.
     for _ in range(2):
         reconcile_member_topology(paths)
         current = json.loads(gateway.read_text())
-        assert "list" not in current["agents"]
-        assert [
-            row["id"] for row in agent_rows(current) if row.get("default") is True
-        ] == [expected]
+        assert current["agents"]["defaults"] == original_roles
+        assert current["talk"] == {"agentId": expected}
+        assert current["agents"]["entries"][member_agent_id(A)] == member_row
+        assert not any("default" in row for row in agent_rows(current))
         if first is not None:
             assert current == first
         first = current
@@ -191,6 +206,52 @@ def test_repeated_reconciliation_preserves_or_recovers_member_default(
         assert (
             member_workspace_path(root, member) / "private.txt"
         ).read_text() == "preserved private member state"
+
+
+@pytest.mark.parametrize("defect", ["legacy", "marker", "fallback", "workspace"])
+def test_reconciliation_refuses_unmigrated_or_unsupported_ownership_without_writes(
+    tmp_path: Path, defect: str
+) -> None:
+    paths = DeploymentPaths.from_root(tmp_path)
+    root, config, adapters = _fixture(paths.instance_dir)
+    if defect != "legacy":
+        _canonical_fixture(config)
+    if defect == "marker":
+        config["agents"]["entries"][member_agent_id(A)]["default"] = False
+    elif defect == "fallback":
+        config["bindings"].append(
+            {
+                "agentId": member_agent_id(A),
+                "match": {"channel": "imessage", "accountId": "*"},
+            }
+        )
+    elif defect == "workspace":
+        config["agents"]["entries"][member_agent_id(A)]["workspace"] = (
+            "/fixture/retained-other-workspace"
+        )
+    gateway = root / "runtime/openclaw.json"
+    gateway.parent.mkdir()
+    gateway.write_text(json.dumps(config))
+    original = gateway.read_bytes()
+    adapter_path = paths.instance_dir / "config/adapters.json"
+    adapter_path.parent.mkdir()
+    adapter_path.write_text(json.dumps(adapters))
+    with pytest.raises(RuntimeError, match="migrated|routing|coordinates"):
+        reconcile_member_topology(paths)
+    assert gateway.read_bytes() == original
+    for member in (A, B):
+        assert (
+            member_workspace_path(root, member) / "private.txt"
+        ).read_text() == "preserved private member state"
+    if defect == "fallback":
+        with pytest.raises(RuntimeError, match="routing"):
+            prepare_existing_member_topology(
+                config,
+                adapter_config=adapters,
+                openclaw_root=root,
+                known_members={A, B},
+            )
+        assert gateway.read_bytes() == original
 
 
 def test_current_explicit_ownership_is_not_replaced_with_a_member_default(
@@ -201,7 +262,7 @@ def test_current_explicit_ownership_is_not_replaced_with_a_member_default(
     config["agents"]["list"] = config["agents"]["list"][1:]
     config["agents"]["ownership"] = "explicit"
     config["bindings"] = []
-    replace_agent_rows(config, agent_rows(config))
+    _canonical_fixture(config)
     gateway = root / "runtime/openclaw.json"
     gateway.parent.mkdir()
     gateway.write_text(json.dumps(config))

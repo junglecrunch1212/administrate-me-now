@@ -1,8 +1,8 @@
-"""Lossless agent roster reads and the reviewed OpenClaw entries transition.
+"""Lossless retained roster reads and writes after native Doctor migration.
 
-Legacy list order can determine the default agent. Conversion makes that same
-selection explicit; it never renames an agent, moves state or changes a binding.
-Reading retained configuration does not rewrite it.
+Only native Doctor interprets ordered legacy lists and default markers. Keep
+that input intact until it has materialized canonical ownership and routing.
+Reading retained configuration never rewrites it or chooses a new owner.
 """
 
 from __future__ import annotations
@@ -60,19 +60,26 @@ def agent_rows(config: dict[str, Any]) -> list[dict[str, Any]]:
     return rows
 
 
+def canonical_agent_rows(config: dict[str, Any]) -> list[dict[str, Any]]:
+    """Require native migration before a target-runtime topology write."""
+    rows = agent_rows(config)
+    agents = config.get("agents", {})
+    if "entries" not in agents or any("default" in row for row in rows):
+        raise ValueError("OpenClaw native Doctor roster migration is required")
+    return rows
+
+
 def replace_agent_rows(
     config: dict[str, Any], rows: list[dict[str, Any]], *, canonical: bool = True
 ) -> None:
     """Replace only the roster, preserving all other configuration coordinates.
 
-    ``canonical=False`` retains legacy format for legacy-plugin cleanup. Normal
-    target writes use entries. Callers retain ownership of their authorized row
-    changes; this codec supplies no new tools, account routes or default choice.
+    ``canonical=False`` retains legacy format for legacy-plugin cleanup. Target
+    writes require already migrated entries and retain explicit ownership.
+    This codec cannot replace native migration or assign implicit surface roles.
     """
     existing = agent_rows(config)
     agents = copy.deepcopy(config.get("agents", {}))
-    # Validate replacement identities without interpreting a legacy list's order
-    # as a new owner when the current roster has explicit ownership.
     candidate: dict[str, Any] = {"agents": {"list": copy.deepcopy(rows)}}
     if agents.get("ownership") == "explicit":
         candidate["agents"]["ownership"] = "explicit"
@@ -80,27 +87,36 @@ def replace_agent_rows(
     if not canonical and "entries" not in agents:
         agents["list"] = checked
     else:
+        canonical_agent_rows(config)
         if not checked:
             raise ValueError("OpenClaw current roster must contain an agent")
-        if agents.get("ownership") != "explicit" and not any(
-            row.get("default") is True for row in checked
-        ):
-            previous_default = next(
-                (row["id"] for row in existing if row.get("default") is True),
-                existing[0]["id"] if existing else None,
+        if any("default" in row for row in checked):
+            raise ValueError("OpenClaw canonical roster forbids legacy default markers")
+        if agents.get("ownership") != "explicit" and [row["id"] for row in checked] != [
+            row["id"] for row in existing
+        ]:
+            raise ValueError(
+                "OpenClaw roster change requires explicit native ownership"
             )
-            if previous_default is not None:
-                match = next(
-                    (row for row in checked if row["id"] == previous_default), None
+        removed = {row["id"] for row in existing} - {row["id"] for row in checked}
+        defaults = agents.get("defaults", {})
+        roles = [config.get("talk")]
+        if isinstance(defaults, dict):
+            roles.extend(
+                defaults.get(name)
+                for name in (
+                    "systemAgent",
+                    "heartbeat",
+                    "authInheritance",
+                    "sessionStore",
                 )
-                if match is None:
-                    raise ValueError(
-                        "OpenClaw conversion would change the default agent"
-                    )
-                match["default"] = True
-            elif len(checked) > 1:
-                raise ValueError("OpenClaw new roster requires an explicit owner")
-        agents.pop("list", None)
+            )
+        if any(
+            isinstance(role, dict) and role.get("agentId") in removed for role in roles
+        ):
+            raise ValueError(
+                "OpenClaw roster change would remove an explicit native owner"
+            )
         agents["entries"] = {
             row["id"]: {key: value for key, value in row.items() if key != "id"}
             for row in checked

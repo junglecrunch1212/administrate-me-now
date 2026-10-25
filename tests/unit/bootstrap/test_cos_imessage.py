@@ -100,7 +100,11 @@ def test_preparation_is_pure_exact_guarded_and_preserves_unrelated_config(
 ) -> None:
     previous = _previous()
     if canonical:
-        replace_agent_rows(previous, agent_rows(previous))
+        rows = previous["agents"].pop("list")
+        previous["agents"]["ownership"] = "explicit"
+        previous["agents"]["entries"] = {
+            row["id"]: {k: v for k, v in row.items() if k != "id"} for row in rows
+        }
     original = copy.deepcopy(previous)
     guard = _guard(tmp_path)
     result = prepare_channel(previous, guard, allowed_senders=[*SENDERS, SENDERS[0]])
@@ -222,7 +226,11 @@ def test_validator_checks_each_action_identity_route_and_member_tool(
     guard = _guard(tmp_path)
     prepared = prepare_channel(_previous(), guard, allowed_senders=SENDERS)
     if canonical:
-        replace_agent_rows(prepared, agent_rows(prepared))
+        rows = prepared["agents"].pop("list")
+        prepared["agents"]["ownership"] = "explicit"
+        prepared["agents"]["entries"] = {
+            row["id"]: {k: v for k, v in row.items() if k != "id"} for row in rows
+        }
     for action in DISABLED_ACTIONS:
         changed = copy.deepcopy(prepared)
         changed["channels"]["imessage"]["accounts"][ACCOUNT]["actions"][action] = True

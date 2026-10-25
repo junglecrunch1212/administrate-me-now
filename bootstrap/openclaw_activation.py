@@ -13,7 +13,11 @@ from typing import Any
 
 import yaml
 
-from adminme.openclaw_roster import agent_rows, replace_agent_rows
+from adminme.openclaw_roster import (
+    agent_rows,
+    canonical_agent_rows,
+    replace_agent_rows,
+)
 from adminme.openclaw_topology import (
     SERVICE_PRIVATE_TOOLS,
     binding_fingerprints,
@@ -65,6 +69,36 @@ def model_provider_configured(paths: DeploymentPaths) -> bool:
     )
 
 
+def _require_member_peer_bindings(bindings: list[Any]) -> None:
+    """Do not erase native-migrated ownership outside our exact peer routes."""
+    for binding in bindings:
+        if not isinstance(binding, dict) or not str(
+            binding.get("agentId", "")
+        ).startswith("adminme-"):
+            continue
+        match = binding.get("match")
+        peer = match.get("peer") if isinstance(match, dict) else None
+        if (
+            set(binding) != {"agentId", "match"}
+            or not isinstance(match, dict)
+            or set(match) != {"channel", "accountId", "peer"}
+            or not isinstance(peer, dict)
+            or set(peer) != {"kind", "id"}
+            or peer.get("kind") != "direct"
+            or not all(
+                isinstance(value, str) and value
+                for value in (
+                    match.get("channel"),
+                    match.get("accountId"),
+                    peer.get("id"),
+                )
+            )
+        ):
+            raise RuntimeError(
+                "OpenClaw migrated member routing requires explicit reconciliation"
+            )
+
+
 def prepare_existing_member_topology(
     config: dict[str, Any],
     *,
@@ -100,6 +134,8 @@ def prepare_existing_member_topology(
     result = copy.deepcopy(config)
     try:
         agents = agent_rows(result)
+        if "entries" in result.get("agents", {}):
+            canonical_agent_rows(result)
     except ValueError as exc:
         raise RuntimeError("OpenClaw prepared member agents are unavailable") from exc
     member_rows = [
@@ -130,6 +166,8 @@ def prepare_existing_member_topology(
         isinstance(row, dict) for row in existing_bindings
     ):
         raise RuntimeError("OpenClaw prepared bindings are invalid")
+    if "entries" in result.get("agents", {}):
+        _require_member_peer_bindings(existing_bindings)
     bindings = [
         row
         for row in existing_bindings
@@ -215,9 +253,11 @@ def reconcile_member_topology(paths: DeploymentPaths) -> dict[str, Any]:
     if not isinstance(config, dict):
         raise RuntimeError("OpenClaw configuration root is invalid")
     try:
-        existing_agents = agent_rows(config)
+        existing_agents = canonical_agent_rows(config)
     except ValueError as exc:
-        raise RuntimeError("OpenClaw agent roster is invalid") from exc
+        raise RuntimeError(
+            "OpenClaw member topology requires a migrated native roster"
+        ) from exc
     retained_agents = [
         row
         for row in existing_agents
@@ -225,18 +265,36 @@ def reconcile_member_topology(paths: DeploymentPaths) -> dict[str, Any]:
             isinstance(row, dict) and str(row.get("id") or "").startswith("adminme-")
         )
     ]
-    existing_member_defaults = {
-        row["id"]: row["default"]
+    existing_member_rows = {
+        row["id"]: row
         for row in existing_agents
-        if isinstance(row, dict)
-        and str(row.get("id") or "").startswith("adminme-")
-        and "default" in row
+        if str(row.get("id") or "").startswith("adminme-")
     }
+    # Native Doctor may materialize an old ambient owner as an account fallback.
+    # The existing member topology admits only exact peer routes. Never erase a
+    # migrated fallback to make that check pass; leave the original config intact.
+    existing_bindings = config.get("bindings") or []
+    if not isinstance(existing_bindings, list):
+        raise RuntimeError("OpenClaw bindings are invalid")
+    _require_member_peer_bindings(existing_bindings)
+    replace_agent_rows(
+        copy.deepcopy(config),
+        retained_agents
+        + [
+            existing_member_rows.get(
+                member_agent_id(member), {"id": member_agent_id(member)}
+            )
+            for member in members
+        ],
+    )
     openclaw_root = paths.instance_dir / "openclaw"
     template_workspace = openclaw_root / "workspace"
     member_agents: list[dict[str, Any]] = []
     for member in members:
         member_workspace = member_workspace_path(openclaw_root, member)
+        previous = existing_member_rows.get(member_agent_id(member), {})
+        if previous and previous.get("workspace") != str(member_workspace):
+            raise RuntimeError("OpenClaw member workspace coordinates changed")
         if not member_workspace.exists():
             if template_workspace.is_dir() and not template_workspace.is_symlink():
                 shutil.copytree(template_workspace, member_workspace, symlinks=True)
@@ -247,43 +305,17 @@ def reconcile_member_topology(paths: DeploymentPaths) -> dict[str, Any]:
         member_workspace.chmod(0o700)
         member_agents.append(
             {
+                **previous,
                 "id": member_agent_id(member),
                 "workspace": str(member_workspace),
             }
         )
-        if member_agents[-1]["id"] in existing_member_defaults:
-            member_agents[-1]["default"] = existing_member_defaults[
-                member_agents[-1]["id"]
-            ]
         if isinstance(adapter_config.get("cos_channel_acquisition"), dict):
             from bootstrap.cos_imessage import MEMBER_TOOLS
 
             member_agents[-1]["tools"] = {"allow": list(MEMBER_TOOLS)}
-    # A service agent must not displace the member default on the next upgrade.
-    # Also repair the prior reconciler's lost flag when the only retained agent
-    # is the canonical CoS and nobody has an explicit default selection.
-    only_service_retained = all(
-        isinstance(row, dict)
-        and row.get("id") == service_agent_id(COS_SERVICE_PRINCIPAL_ID)
-        for row in retained_agents
-    )
-    has_default = any(
-        isinstance(row, dict) and row.get("default") is True
-        for row in [*retained_agents, *member_agents]
-    )
-    if (
-        only_service_retained
-        and member_agents
-        and not has_default
-        and config.get("agents", {}).get("ownership") != "explicit"
-        and "entries" not in config.get("agents", {})
-    ):
-        member_agents[0]["default"] = True
     replace_agent_rows(config, retained_agents + member_agents)
 
-    existing_bindings = config.get("bindings") or []
-    if not isinstance(existing_bindings, list):
-        raise RuntimeError("OpenClaw bindings are invalid")
     retained_bindings = [
         row
         for row in existing_bindings
@@ -466,9 +498,13 @@ def _prepare_service_topology(
 ) -> dict[str, Any]:
     config = copy.deepcopy(gateway)
     try:
-        agents = agent_rows(config)
+        agents = (
+            canonical_agent_rows(config) if files is not None else agent_rows(config)
+        )
     except ValueError as exc:
-        raise RuntimeError("service topology is invalid") from exc
+        raise RuntimeError(
+            "service topology requires a migrated native roster"
+        ) from exc
     bindings = config.get("bindings", [])
     if not isinstance(bindings, list):
         raise RuntimeError("service topology is invalid")
@@ -526,18 +562,17 @@ def _prepare_service_topology(
                 and (not target.is_file() or target.read_bytes() != content)
             ):
                 raise RuntimeError("immutable service workspace files changed")
+        previous_service = next(
+            (row for row in agents if row.get("id") == expected_agent), {}
+        )
         retained.append(
             {
+                **previous_service,
                 "id": expected_agent,
                 "workspace": str(workspace),
                 "tools": {"allow": [*SERVICE_PRIVATE_TOOLS, *(native_tools or [])]},
             }
         )
-        previous_service = next(
-            (row for row in agents if row.get("id") == expected_agent), None
-        )
-        if previous_service is not None and "default" in previous_service:
-            retained[-1]["default"] = previous_service["default"]
     replace_agent_rows(config, retained, canonical=files is not None)
     config["bindings"] = retained_bindings
     return config
