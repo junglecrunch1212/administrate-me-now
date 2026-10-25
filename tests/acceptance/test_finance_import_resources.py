@@ -63,6 +63,17 @@ def _server(root, listener, channel, telemetry, allocation_profile=False):
     stop = threading.Event()
     violations = []
     allocation_baseline = None
+    allocator_baseline = None
+    allocator = attribution = None
+    if allocation_profile:
+        from tests.fixtures.finance_import_attribution import (
+            AllocatorProbe,
+            CommitAttribution,
+            request_kind,
+        )
+
+        allocator = AllocatorProbe(telemetry.parent)
+        attribution = CommitAttribution(telemetry.with_name("import-attribution.jsonl"))
 
     def sample(event="sample", stage="runtime", **extra):
         usage = resource.getrusage(resource.RUSAGE_SELF)
@@ -149,9 +160,11 @@ def _server(root, listener, channel, telemetry, allocation_profile=False):
     async def measured_lifespan(application):
         async with lifespan(application):
             runtime = application.state.runtime
+            if attribution is not None:
+                attribution.install(runtime)
 
             async def commands():
-                nonlocal allocation_baseline
+                nonlocal allocation_baseline, allocator_baseline
                 while True:
                     if channel.poll():
                         command = channel.recv()
@@ -160,6 +173,9 @@ def _server(root, listener, channel, telemetry, allocation_profile=False):
                             return
                         if command == "begin_allocation_profile":
                             assert allocation_profile and allocation_baseline is None
+                            assert allocator is not None and attribution is not None
+                            allocator_baseline = allocator.snapshot("before_import")
+                            attribution.enabled = True
                             tracemalloc.start(1)
                             allocation_baseline = tracemalloc.take_snapshot()
                             channel.send({"allocation_profile_started": True})
@@ -201,6 +217,8 @@ def _server(root, listener, channel, telemetry, allocation_profile=False):
                                 "after_subscriber_drain_gc": drained,
                             }
                             if allocation_baseline is not None:
+                                assert allocator is not None and attribution is not None
+                                allocator_retained = allocator.snapshot("after_drain")
                                 allocation_now = tracemalloc.take_snapshot()
 
                                 def detail(stat):
@@ -274,6 +292,9 @@ def _server(root, listener, channel, telemetry, allocation_profile=False):
                                             "cache_spill",
                                         )
                                     }
+                                    allocator_before = allocator.snapshot(
+                                        name + "_before"
+                                    )
                                     before_release = sample(
                                         "diagnostic",
                                         "cache_release_" + name + "_before",
@@ -291,6 +312,10 @@ def _server(root, listener, channel, telemetry, allocation_profile=False):
                                         "settings": settings,
                                         "before": before_release,
                                         "after": after_release,
+                                        "allocator_before": allocator_before,
+                                        "allocator_after": allocator.snapshot(
+                                            name + "_after"
+                                        ),
                                     }
 
                                 native_cache = [
@@ -308,6 +333,28 @@ def _server(root, listener, channel, telemetry, allocation_profile=False):
                                     "diagnostic_only": True,
                                     "after_original_retention_observations": True,
                                     "connections": native_cache,
+                                }
+                                retained["commit_attribution"] = attribution.finish()
+                                allocator_before_trim = allocator.snapshot(
+                                    "before_trim"
+                                )
+                                before_trim = sample(
+                                    "diagnostic", "allocator_trim_before"
+                                )
+                                trim_result = allocator.trim_once()
+                                after_trim = sample(
+                                    "diagnostic", "allocator_trim_after"
+                                )
+                                retained["allocator_probe"] = {
+                                    "diagnostic_only": True,
+                                    "after_original_retention_observations": True,
+                                    "baseline": allocator_baseline,
+                                    "after_drain": allocator_retained,
+                                    "before_trim": allocator_before_trim,
+                                    "after_trim": allocator.snapshot("after_trim"),
+                                    "trim_result": trim_result,
+                                    "rss_before_trim": before_trim["VmRSS_bytes"],
+                                    "rss_after_trim": after_trim["VmRSS_bytes"],
                                 }
                             channel.send({"snapshot": retained})
                     await asyncio.sleep(0.02)
@@ -398,7 +445,19 @@ def _server(root, listener, channel, telemetry, allocation_profile=False):
                     sample("end", "upload")
                 return message
 
-            await app(scope, observed_receive, send)
+            if (
+                attribution is not None
+                and scope.get("path") == "/api/member/v1/surfaces/reminders"
+            ):
+                token = request_kind.set("core_reminders")
+                try:
+                    await attribution.async_call(
+                        "http_core_reminders", app, scope, observed_receive, send
+                    )
+                finally:
+                    request_kind.reset(token)
+            else:
+                await app(scope, observed_receive, send)
 
     server = uvicorn.Server(
         uvicorn.Config(UploadObservation(), log_level="error", access_log=False)
@@ -425,6 +484,8 @@ def _server(root, listener, channel, telemetry, allocation_profile=False):
         stop.set()
         thread.join(2)
         sample("stopped", sampler_stopped=not thread.is_alive())
+        if attribution is not None:
+            attribution.close()
         channel.close()
         listener.close()
 
