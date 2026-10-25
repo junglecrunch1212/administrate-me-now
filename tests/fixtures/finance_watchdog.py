@@ -125,6 +125,16 @@ def notify(kind, **fields):
     )
     if len(data) > 2048 or os.write(fd, data) != len(data):
         raise ValueError("watchdog_control_write")
+    if kind == "runtime":
+        ack_fd = int(os.environ["FINANCE_WATCHDOG_ACK_FD"])
+        ack = b""
+        while not ack.endswith(b"\n") and len(ack) < 64:
+            part = os.read(ack_fd, 1)
+            if not part:
+                raise ValueError("watchdog_ack_closed")
+            ack += part
+        if ack != b"runtime_bound\n":
+            raise ValueError("watchdog_ack_invalid")
 
 
 def main(mode, directory):
@@ -183,6 +193,7 @@ def main(mode, directory):
         report["events"].append({"at": time.monotonic(), "kind": kind, **fields})
 
     read_fd, write_fd = os.pipe()
+    ack_read_fd, ack_write_fd = os.pipe()
     os.set_blocking(read_fd, False)
     supervisor = process_row(os.getpid())
     env = {
@@ -198,6 +209,7 @@ def main(mode, directory):
         "FINANCE_WATCHDOG_BIRTH": str(supervisor["start_ticks"]),
         "FINANCE_WATCHDOG_STARTED": str(STARTED),
         "FINANCE_WATCHDOG_FD": str(write_fd),
+        "FINANCE_WATCHDOG_ACK_FD": str(ack_read_fd),
         "FINANCE_WATCHDOG_MODE": mode,
     }
     controller_script = Path(__file__).with_name("finance_watchdog_controller.py")
@@ -213,10 +225,11 @@ def main(mode, directory):
         stdout=output,
         stderr=subprocess.STDOUT,
         close_fds=True,
-        pass_fds=(write_fd,),
+        pass_fds=(write_fd, ack_read_fd),
         start_new_session=True,
     )
     os.close(write_fd)
+    os.close(ack_read_fd)
     event("controller.spawned", pid=controller.pid)
     report["supervisor"] = supervisor
     report["controller_pid"] = controller.pid
@@ -224,6 +237,9 @@ def main(mode, directory):
     buffer = b""
     known = {}
     runtime_cpu = 0.0
+    runtime_members = set()
+    reaped_runtime_cpu = 0.0
+    runtime_final_received = False
     finish_at = None
     stop_at = None
     term_sent = kill_sent = False
@@ -272,7 +288,13 @@ def main(mode, directory):
         while True:
             now = time.monotonic()
             row = sample(os.getpid(), runtime_pid, controller.pid, [root], runtime_cpu)
-            runtime_cpu = row["runtime_executor_cpu_seconds"]
+            runtime_cpu = max(row["runtime_executor_cpu_seconds"], reaped_runtime_cpu)
+            if runtime_pid is not None:
+                runtime_members.add(runtime_pid)
+                for _ in row["pids"]:
+                    runtime_members.update(
+                        p["pid"] for p in row["pids"] if p["ppid"] in runtime_members
+                    )
             known.update({p["pid"]: p["start_ticks"] for p in row["pids"]})
             report["maxima"] = {k: max(report["maxima"][k], row[k]) for k in LIMITS}
             trace_file.write(json.dumps(row, separators=(",", ":")) + "\n")
@@ -322,6 +344,31 @@ def main(mode, directory):
                                 raise ValueError("runtime_binding")
                             runtime_pid = msg["pid"]
                             report["runtime_binding"] = current
+                            runtime_members.add(runtime_pid)
+                            os.write(ack_write_fd, b"runtime_bound\n")
+                        elif msg.get("kind") == "runtime_reaped" and set(msg) == {
+                            "kind",
+                            "pid",
+                            "cpu_seconds",
+                        }:
+                            if (
+                                runtime_final_received
+                                or msg["pid"] != runtime_pid
+                                or type(msg["cpu_seconds"]) not in (int, float)
+                                or not math.isfinite(msg["cpu_seconds"])
+                                or msg["cpu_seconds"] < 0
+                            ):
+                                raise ValueError("runtime_final_accounting")
+                            current = process_row(runtime_pid)
+                            if (
+                                current
+                                and current["start_ticks"]
+                                == report["runtime_binding"]["start_ticks"]
+                            ):
+                                raise ValueError("runtime_not_reaped")
+                            runtime_final_received = True
+                            runtime_cpu = max(runtime_cpu, msg["cpu_seconds"])
+                            report["runtime_final_cpu_seconds"] = msg["cpu_seconds"]
                         elif msg.get("kind") == "work_finished" and set(msg) == {
                             "kind",
                             "at",
@@ -352,6 +399,9 @@ def main(mode, directory):
                     break
                 if not pid:
                     break
+                if pid in runtime_members:
+                    reaped_runtime_cpu += usage.ru_utime + usage.ru_stime
+                    runtime_cpu = max(runtime_cpu, reaped_runtime_cpu)
                 code = os.waitstatus_to_exitcode(status)
                 report["reaped"].append(
                     {
@@ -404,6 +454,9 @@ def main(mode, directory):
             except ChildProcessError:
                 break
             if pid:
+                if pid in runtime_members:
+                    reaped_runtime_cpu += usage.ru_utime + usage.ru_stime
+                    runtime_cpu = max(runtime_cpu, reaped_runtime_cpu)
                 report["reaped"].append(
                     {
                         "pid": pid,
@@ -422,6 +475,7 @@ def main(mode, directory):
             r for r in tree_rows(os.getpid()) if r["pid"] != os.getpid()
         ]
         report["controller_exit"] = controller.returncode
+        report["adopted_runtime_cpu_seconds"] = reaped_runtime_cpu
         report["work_finished_at"] = finish_at
         report["final_sample"] = sample(
             os.getpid(), runtime_pid, controller.pid, [root], runtime_cpu
@@ -436,6 +490,7 @@ def main(mode, directory):
         output.close()
         selector.close()
         os.close(read_fd)
+        os.close(ack_write_fd)
         # Preserve synthetic trace prefixes if the controller could not finish.
         for index, path in enumerate(scratch.rglob("measurement-*.jsonl")):
             shutil.copyfile(path, root / ("emergency-" + str(index) + "-" + path.name))
