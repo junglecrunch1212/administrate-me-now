@@ -580,11 +580,30 @@ async def audit_source_assurance(
             "reminder_binding_event_id",
         )
     } - {""}
+    # Hydrate only the retained instruction/grounding explicitly named by the
+    # email approval. Their full envelopes are needed for owner, actor and
+    # source checks; unrelated private conversations remain metadata-only.
+    cos_instruction_references = {
+        str((event.get("payload") or {}).get(key) or "")
+        for event in cos_metadata
+        if event["type"] == COS_APPROVED
+        for key in {
+            "requested_email": (
+                "request_source_event_id",
+                "request_authorization_event_id",
+            ),
+            "authenticated_conversation": ("conversation_source_event_id",),
+        }.get((event.get("payload") or {}).get("authorization_method"), ())
+    } - {""}
     cos_events: list[dict[str, Any]] = []
     for event in cos_metadata:
         payload = event.get("payload") or {}
         if not (
-            event["event_id"] in cos_ids | cos_openclaw_ids | cos_standing_references
+            event["event_id"]
+            in cos_ids
+            | cos_openclaw_ids
+            | cos_standing_references
+            | cos_instruction_references
             or (
                 cos_standing_references
                 and event["type"]

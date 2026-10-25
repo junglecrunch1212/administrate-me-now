@@ -382,6 +382,7 @@ COS_SERVICE_WORK_MEMBER = "adminme/products/member/main.py"
 COS_SERVICE_WORK_INGEST = "adminme/products/bridge/routers/ingest.py"
 COS_SERVICE_WORK_OBSERVATION = "adminme/lib/observation.py"
 COS_SERVICE_WORK_HISTORY = "adminme/historical_attribution.py"
+COS_SERVICE_WORK_SOURCE_ASSURANCE = "adminme/source_assurance.py"
 COS_SERVICE_WORK_CHECK_SCRIPT = "scripts/acceptance/cos-service-work-release.sh"
 COS_SERVICE_WORK_NATIVE_INSTALL = "scripts/acceptance/openclaw-source-install.sh"
 COS_SERVICE_WORK_COMPONENT_PATHS = frozenset(
@@ -392,6 +393,7 @@ COS_SERVICE_WORK_COMPONENT_PATHS = frozenset(
         COS_SERVICE_WORK_INGEST,
         COS_SERVICE_WORK_OBSERVATION,
         COS_SERVICE_WORK_HISTORY,
+        COS_SERVICE_WORK_SOURCE_ASSURANCE,
         "adminme/adapters/cos_apple_reminders.py",
         "adminme/adapters/cos_reminders_helper.py",
         "adminme/adapters/cos_reminders_write.py",
@@ -549,6 +551,9 @@ COS_SERVICE_WORK_TEST_PATHS = frozenset(
         "openclaw/administrateme/test/requested-email.test.ts",
         "openclaw/administrateme/scripts/requested-email-policy-probe.mjs",
         "tests/acceptance/test_requested_email_action.py",
+        "tests/acceptance/test_cos_email_audit_context.py",
+        "tests/unit/test_source_assurance.py",
+        "tests/unit/test_observation_readiness_window.py",
         "tests/unit/products/openclaw/test_requested_email.py",
         "openclaw/administrateme/test/conversation-input.test.ts",
         "tests/acceptance/test_workstation_inventory.py",
@@ -1630,6 +1635,37 @@ def _service_work_ingest(source: str) -> str | None:
     ).hexdigest()
 
 
+def _service_work_source_assurance(source: str) -> str | None:
+    # Only the exact additive retained-email context hydration is in this lane.
+    # All other source-accounting and privacy behavior stays in the fingerprint.
+    addition = """    # Hydrate only the retained instruction/grounding explicitly named by the
+    # email approval. Their full envelopes are needed for owner, actor and
+    # source checks; unrelated private conversations remain metadata-only.
+    cos_instruction_references = {
+        str((event.get("payload") or {}).get(key) or "")
+        for event in cos_metadata
+        if event["type"] == COS_APPROVED
+        for key in {
+            "requested_email": (
+                "request_source_event_id",
+                "request_authorization_event_id",
+            ),
+            "authenticated_conversation": ("conversation_source_event_id",),
+        }.get((event.get("payload") or {}).get("authorization_method"), ())
+    } - {""}
+"""
+    old = 'event["event_id"] in cos_ids | cos_openclaw_ids | cos_standing_references'
+    new = """event["event_id"]
+            in cos_ids
+            | cos_openclaw_ids
+            | cos_standing_references
+            | cos_instruction_references"""
+    if source.count(addition) != source.count(new) or source.count(new) > 1:
+        return None
+    normalized = source.replace(addition, "").replace(new, old)
+    return hashlib.sha256(normalized.encode()).hexdigest()
+
+
 def _service_work_dependency_fingerprint(
     repository: Path, revision: str, entries: tuple[GitTreeEntry, ...]
 ) -> tuple[str, bool] | None:
@@ -1652,6 +1688,7 @@ def _service_work_dependency_fingerprint(
         (COS_SERVICE_WORK_INGEST, _service_work_ingest),
         (COS_SERVICE_WORK_OBSERVATION, _service_work_observation),
         (COS_SERVICE_WORK_HISTORY, _service_work_history),
+        (COS_SERVICE_WORK_SOURCE_ASSURANCE, _service_work_source_assurance),
     ):
         entry = next((entry for entry in entries if entry.path == path), None)
         if entry is not None and entry.mode != "100644":

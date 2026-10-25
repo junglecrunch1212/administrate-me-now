@@ -22,6 +22,7 @@ from scripts.release_scope import (
     COS_SERVICE_WORK_NATIVE_INSTALL,
     COS_SERVICE_WORK_OBSERVATION,
     COS_SERVICE_WORK_HISTORY,
+    COS_SERVICE_WORK_SOURCE_ASSURANCE,
     COS_SERVICE_WORK_COMPONENT_PATHS,
     COS_SERVICE_WORK_REQUIRED_PATHS,
     _service_work_application,
@@ -29,6 +30,7 @@ from scripts.release_scope import (
     _service_work_ingest,
     _service_work_observation,
     _service_work_history,
+    _service_work_source_assurance,
     UPDATER_COMPONENT_PATHS,
     UPDATER_TEST_PATHS,
     UPDATER_REQUIRED_PATHS,
@@ -3782,3 +3784,72 @@ def test_requested_email_closed_paths_use_existing_affected_lane(
         select_scope(path, _event(base, head), checkout_sha=head)["scope"]
         == "cos-service-work"
     )
+
+
+def _email_audit_sources() -> tuple[str, str]:
+    after = (ROOT / COS_SERVICE_WORK_SOURCE_ASSURANCE).read_text()
+    start = after.index("    # Hydrate only the retained instruction")
+    end = after.index("    cos_events: list[dict[str, Any]] = []", start)
+    before = after[:start] + after[end:]
+    before = before.replace(
+        'event["event_id"]\n            in cos_ids\n            | cos_openclaw_ids\n'
+        "            | cos_standing_references\n            | cos_instruction_references",
+        'event["event_id"] in cos_ids | cos_openclaw_ids | cos_standing_references',
+    )
+    assert before != after and "cos_instruction_references" not in before
+    return before, after
+
+
+def test_email_context_scope_normalizes_only_exact_reference_hydration() -> None:
+    before, after = _email_audit_sources()
+    assert _service_work_source_assurance(before) == _service_work_source_assurance(
+        after
+    )
+    for changed in (
+        after.replace('"request_source_event_id"', '"any_source_event_id"'),
+        after.replace('"conversation_source_event_id"', '"message_id"'),
+        after.replace('if event["type"] == COS_APPROVED', "if True"),
+        after.replace('"requested_email": (', '"exact": ('),
+        after.replace("| cos_instruction_references", "| all_private_sources"),
+        after.replace(
+            "include_payload_for=sorted(payload_types)",
+            "include_payload_for=sorted(interesting)",
+        ),
+        after.replace("full_event is None", "False"),
+        after + "\nUNRELATED = True\n",
+    ):
+        assert _service_work_source_assurance(
+            changed
+        ) != _service_work_source_assurance(before)
+
+
+@pytest.mark.parametrize("drift", ["none", "neighbor", "dependency", "mode"])
+def test_email_context_repair_uses_existing_service_lane_with_closed_scope(
+    repository: tuple[Path, str], drift: str
+) -> None:
+    path, _ = repository
+    _service_work_candidate(path)
+    before, after = _email_audit_sources()
+    _commit(path, "poetry.lock", "# fixed dependency\n")
+    base = _commit(path, COS_SERVICE_WORK_SOURCE_ASSURANCE, before)
+    head = _commit(path, COS_SERVICE_WORK_SOURCE_ASSURANCE, after)
+    if drift == "neighbor":
+        head = _commit(
+            path, COS_SERVICE_WORK_SOURCE_ASSURANCE, after + "\nUNRELATED = True\n"
+        )
+    elif drift == "dependency":
+        head = _commit(path, "poetry.lock", "# changed dependency\n")
+    elif drift == "mode":
+        (path / COS_SERVICE_WORK_SOURCE_ASSURANCE).chmod(0o755)
+        _git(path, "add", "--all")
+        _git(path, "commit", "-m", "Unsupported source mode")
+        head = _git(path, "rev-parse", "HEAD")
+    proof = select_scope(path, _event(base, head), checkout_sha=head)
+    assert proof["scope"] == ("cos-service-work" if drift == "none" else "system-wide")
+    script = (ROOT / COS_SERVICE_WORK_CHECK_SCRIPT).read_text()
+    for test in (
+        "tests/acceptance/test_cos_email_audit_context.py",
+        "tests/unit/test_source_assurance.py",
+        "tests/unit/test_observation_readiness_window.py",
+    ):
+        assert "  " + test in script.splitlines()
