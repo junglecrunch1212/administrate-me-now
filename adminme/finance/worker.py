@@ -32,8 +32,10 @@ from adminme.finance.worker_protocol import (
     UPLOAD_CHUNK,
     read_frame,
     read_json,
+    text_sha256,
     write_frame,
     write_json,
+    write_text_frame,
 )
 
 _admission = threading.Lock()
@@ -68,7 +70,7 @@ class ValidatedFinanceEvent:
         if (
             not hmac.compare_digest(self._receipt, self._signature())
             or self.type not in FINANCE_TYPES
-            or hashlib.sha256(self.payload_json.encode()).hexdigest() != self.sha256
+            or text_sha256(self.payload_json) != self.sha256
             or self.source_adapter
             != (
                 "accepted_books_projection"
@@ -197,6 +199,10 @@ class FinanceWorker:
     def send_bytes(self, value: bytes):
         assert self.process is not None and self.process.stdin is not None
         write_frame(self.process.stdin, value)
+
+    def send_text(self, value: str):
+        assert self.process is not None and self.process.stdin is not None
+        write_text_frame(self.process.stdin, value)
 
     def receive(self):
         assert self.process is not None and self.process.stdout is not None
@@ -574,7 +580,7 @@ class MoneyCalculation:
         raw = envelope["_payload_json"]
         try:
             worker.send({"operation": "apply", "envelope": metadata})
-            worker.send_bytes(raw.encode())
+            worker.send_text(raw)
             while True:
                 message = worker.receive()
                 if message.get("kind") in {"sql", "sql_many"}:

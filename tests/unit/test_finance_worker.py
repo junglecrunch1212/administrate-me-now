@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from adminme.finance import worker
+from adminme.finance import worker, worker_protocol
 from adminme.finance.publication import PublicationError
 from adminme.finance.worker_protocol import FRAME_LIMIT, read_frame, write_json
 
@@ -322,3 +322,70 @@ def test_owned_child_exits_after_abrupt_parent_death_in_hosted_linux(mode, reque
         assert proof["unread_pipe_bytes"] > 0
     assert receipt["mode"] == mode and receipt["reaped"]
     assert receipt["seconds_after_parent_exit"] < 5
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["", "a" * 200_000, "aé🙂" * 70_000],
+    ids=["empty", "ascii-multiple-chunks", "unicode-multiple-chunks"],
+)
+def test_chunked_text_frame_and_hash_preserve_every_utf8_byte(text):
+    import hashlib
+
+    class RecordingPipe(io.BytesIO):
+        def __init__(self):
+            super().__init__()
+            self.largest_write = 0
+
+        def write(self, data):
+            self.largest_write = max(self.largest_write, len(data))
+            return super().write(data)
+
+    pipe = RecordingPipe()
+    child = object.__new__(worker.FinanceWorker)
+    child.process = SimpleNamespace(stdin=pipe)
+    child.send_text(text)
+    assert pipe.largest_write <= worker_protocol.UPLOAD_CHUNK
+    pipe.seek(0)
+    assert read_frame(pipe) == text.encode("utf-8")
+    assert (
+        worker_protocol.text_sha256(text) == hashlib.sha256(text.encode()).hexdigest()
+    )
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["a" * 65, "🙂" * 17, "a" + chr(0xD800)],
+    ids=["ascii-oversize", "unicode-oversize", "invalid-surrogate"],
+)
+def test_text_frame_rejects_invalid_or_oversize_before_writing_header(
+    monkeypatch, text
+):
+    monkeypatch.setattr(worker_protocol, "FRAME_LIMIT", 64)
+    pipe = io.BytesIO()
+    with pytest.raises((ValueError, UnicodeEncodeError)):
+        worker_protocol.write_text_frame(pipe, text)
+    assert pipe.getvalue() == b""
+
+
+def test_receipt_hash_checks_changes_after_multiple_utf8_chunks():
+    from dataclasses import replace
+    import hashlib
+
+    payload = '{"value":"' + "aé🙂" * 70_000 + '"}'
+    event = worker.ValidatedFinanceEvent(
+        "tenant",
+        "owner",
+        "book",
+        "finance.publication_accepted",
+        "accepted_books",
+        "key",
+        payload,
+        hashlib.sha256(payload.encode()).hexdigest(),
+        b"",
+    )
+    event = replace(event, _receipt=event._signature())
+    event.verify()
+    changed = replace(event, payload_json=payload[:-3] + 'changed"}')
+    with pytest.raises(PublicationError, match="receipt_invalid"):
+        changed.verify()

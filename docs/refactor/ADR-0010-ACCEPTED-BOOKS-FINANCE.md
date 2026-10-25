@@ -167,6 +167,11 @@ remain identical to replaying decoded envelopes; the production import/rebuild
 regression compares every graph column. Its effect on combined RSS and allocator
 retention must be measured, not inferred from the absence of live Python objects.
 
+Receipt verification hashes every UTF-8 byte in bounded chunks, and the parent
+streams committed JSON text into the existing length-prefixed worker frame with
+at most 64 KiB temporary chunks. Wire bytes, hashes and pre-header size rejection
+are unchanged; this avoids additional whole-payload encodings in the parent.
+
 Each child uses the same pinned Python with isolated import paths, a credential-free
 environment, private stdio pipes, CORE=0 and a 60-second CPU limit. Parent watchdogs
 bound preparation to 60 seconds and projection application to 30 seconds. Owned

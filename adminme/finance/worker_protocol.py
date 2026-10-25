@@ -6,6 +6,8 @@ this pipe. Limits apply before allocating or decoding a received frame.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+import hashlib
 import json
 import struct
 from typing import Any, IO
@@ -46,6 +48,38 @@ def write_frame(stream: IO[bytes], data: bytes) -> None:
         raise ValueError("finance_worker_frame_limit")
     stream.write(struct.pack("!I", len(data)))
     stream.write(data)
+    stream.flush()
+
+
+def utf8_chunks(text: str) -> Iterator[bytes]:
+    # At most four UTF-8 bytes per code point; closed JSON is normally ASCII.
+    step = UPLOAD_CHUNK if text.isascii() else UPLOAD_CHUNK // 4
+    for offset in range(0, len(text), step):
+        yield text[offset : offset + step].encode("utf-8")
+
+
+def text_sha256(text: str) -> str:
+    digest = hashlib.sha256()
+    for chunk in utf8_chunks(text):
+        digest.update(chunk)
+    return digest.hexdigest()
+
+
+def write_text_frame(stream: IO[bytes], text: str) -> None:
+    # Keep the existing wire format and reject oversize/invalid UTF-8 before
+    # writing a header, without allocating a whole second payload in the parent.
+    size = len(text)
+    if size > FRAME_LIMIT:
+        raise ValueError("finance_worker_frame_limit")
+    if not text.isascii():
+        size = 0
+        for chunk in utf8_chunks(text):
+            size += len(chunk)
+            if size > FRAME_LIMIT:
+                raise ValueError("finance_worker_frame_limit")
+    stream.write(struct.pack("!I", size))
+    for chunk in utf8_chunks(text):
+        stream.write(chunk)
     stream.flush()
 
 
