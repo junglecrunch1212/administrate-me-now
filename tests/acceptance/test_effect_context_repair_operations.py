@@ -502,9 +502,9 @@ def test_real_email_containment_upgrade_and_schema_aware_fallback(
             controller, services, settings, plan, plan_path, monkeypatch, old
         )
         loaded = repair.load_plan(
+            plan_path,
             controller.paths,
             ROOT,
-            plan_path,
             candidate=plan.target_commit,
             predecessor=plan.predecessor_commit,
             test_mode=True,
