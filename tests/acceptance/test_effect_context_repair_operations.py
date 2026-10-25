@@ -313,6 +313,7 @@ def _prepare_upgrade(
     "outcome",
     [
         "healthy_candidate",
+        "successor_candidate",
         "failed_candidate",
         "interrupted_containment",
         "failed_original_recovery",
@@ -325,6 +326,44 @@ def test_real_email_containment_upgrade_and_schema_aware_fallback(
     with maintenance_runtime(tmp_path, monkeypatch, allow_degraded=True) as fixture:
         controller, _activate, _pause, services, settings, gmail, config = fixture
         request = _sent_fixture(fixture, monkeypatch)
+        if outcome == "successor_candidate":
+            # Match the disposable OS/source snapshot to the updater's actual
+            # pointer and readiness journal, so restoration validates that journal.
+            pointer = controller.paths.app_dir / "current-release.json"
+            predecessor = controller.paths.app_dir / "releases" / ("a" * 40)
+            atomic_write(
+                pointer,
+                json.dumps(
+                    {"path": str(predecessor), "commit": "a" * 40, "previous": None}
+                ).encode(),
+            )
+            snapshot = controller._bound_snapshot("a" * 40)
+            binding = json.loads((config / "deployment-readiness.json").read_bytes())[
+                "deployment_binding"
+            ]
+            snapshot.update(
+                {
+                    k: binding[k]
+                    for k in (
+                        "instance_fingerprint",
+                        "host_fingerprint",
+                        "configuration_fingerprint",
+                    )
+                }
+            )
+            snapshot["pointer_sha256"] = hashlib.sha256(
+                pointer.read_bytes()
+            ).hexdigest()
+            monkeypatch.setattr(
+                controller,
+                "_bound_snapshot",
+                lambda commit: {**snapshot, "predecessor_commit": commit},
+            )
+            monkeypatch.setattr(
+                operation,
+                "capture_deployment_snapshot",
+                lambda _paths: SimpleNamespace(public=lambda: copy.deepcopy(snapshot)),
+            )
         before = services.settle()
         repair.validate_diagnostics(before, observation=False)
         policy_before = asyncio.run(_audit(controller))[0]
@@ -498,6 +537,121 @@ def test_real_email_containment_upgrade_and_schema_aware_fallback(
             (config / name).read_bytes() == payload
             for name, payload in controls.items()
         )
+        if outcome == "successor_candidate":
+            original = plan
+            original_bytes = plan_path.read_bytes()
+            history_path = controller.directory / "history" / f"{plan.plan_id}.json"
+            history_bytes = history_path.read_bytes()
+            monkeypatch.setattr(
+                controller,
+                "_observation_selection",
+                lambda: (original.predecessor_commit, ROOT, "c" * 40),
+            )
+
+            def ancestry(repository, commit, *, retained_by_commit):
+                assert (
+                    repository == ROOT
+                    and commit == original.target_commit
+                    and retained_by_commit == "c" * 40
+                )
+
+            monkeypatch.setattr(operation, "load_git_tree", ancestry)
+            monkeypatch.setattr("bootstrap.source_identity.load_git_tree", ancestry)
+            for filename, field, value in (
+                ("adapters.json", "unexpected_config", True),
+                ("observation.json", "active", False),
+                (
+                    "request-actions-control.json",
+                    "revoked_before",
+                    "2000-01-01T00:00:00Z",
+                ),
+            ):
+                path = config / filename
+                saved = path.read_bytes()
+                altered = json.loads(saved)
+                altered[field] = value
+                atomic_write(path, json.dumps(altered).encode())
+                with pytest.raises(
+                    (operation.CoSActivationError, repair.EffectContextRepairError)
+                ):
+                    controller.prepare_effect_context_successor(original)
+                atomic_write(path, saved)
+            for field, value in (
+                ("owner_member_id", "another-member"),
+                ("plan_id", "f" * 32),
+                ("expires_at", "2000-01-01T00:00:00Z"),
+            ):
+                with pytest.raises(
+                    (
+                        operation.CoSActivationError,
+                        repair.EffectContextRepairError,
+                        OSError,
+                        ValueError,
+                    )
+                ):
+                    controller.prepare_effect_context_successor(
+                        original.model_copy(update={field: value})
+                    )
+            atomic_write(controller.journal_path, b"{}")
+            with pytest.raises(operation.CoSActivationError, match="current operation"):
+                controller.prepare_effect_context_successor(original)
+            controller.journal_path.unlink()
+            plan = controller.prepare_effect_context_successor(original)
+            assert plan.plan_id == original.plan_id
+            assert (
+                plan.prepared_at == original.prepared_at
+                and plan.expires_at == original.expires_at
+            )
+            assert (
+                plan_path.read_bytes() == original_bytes
+                and history_path.read_bytes() == history_bytes
+            )
+            assert (
+                plan.model_copy(
+                    update={
+                        "target_commit": original.target_commit,
+                        "effect_context_proof": original.effect_context_proof,
+                    }
+                )
+                == original
+            )
+            receipt = (
+                controller.directory / "plan-continuations" / f"{plan.digest()}.json"
+            )
+            receipt_bytes = receipt.read_bytes()
+            assert receipt.stat().st_mode & 0o777 == 0o600
+            # Exact protected source and immutable changed-target receipt are
+            # exercised again by both load_plan and actual restoration below.
+            monkeypatch.setattr(
+                "bootstrap.source_identity.reviewed_candidate_commit",
+                lambda repository: "c" * 40 if repository == ROOT else "d" * 40,
+            )
+            repair.contained_plan_history(controller.paths, ROOT, plan, test_mode=False)
+            with pytest.raises(
+                repair.EffectContextRepairError, match="exact protected"
+            ):
+                repair.contained_plan_history(
+                    controller.paths, tmp_path, plan, test_mode=False
+                )
+            for field in (
+                "original_plan_sha256",
+                "successor_target_commit",
+                "successor_plan_sha256",
+            ):
+                changed = json.loads(receipt_bytes)
+                changed[field] = "0" * len(changed[field])
+                atomic_write(receipt, json.dumps(changed).encode())
+                with pytest.raises(
+                    repair.EffectContextRepairError, match="exact original"
+                ):
+                    repair.contained_plan_history(
+                        controller.paths, ROOT, plan, test_mode=False
+                    )
+            atomic_write(receipt, receipt_bytes)
+            assert controller.prepare_effect_context_successor(original) == plan
+            assert receipt.read_bytes() == receipt_bytes
+            plan_path = tmp_path / "successor-effect-plan.json"
+            atomic_write(plan_path, plan.model_dump_json().encode())
         manager, _candidate, pointer = _prepare_upgrade(
             controller, services, settings, plan, plan_path, monkeypatch, old
         )
@@ -547,6 +701,29 @@ def test_real_email_containment_upgrade_and_schema_aware_fallback(
                     )
                 )
         assert not historical.exists() and not exported.exists()
+        historical = controller.paths.backup_dir / "accepted-historical.json"
+        exported = controller.paths.backup_dir / "accepted-source.json"
+        result = asyncio.run(
+            htr10_export.export_htr10_audits(
+                controller.paths,
+                repository_root=ROOT,
+                historical_output=historical,
+                source_output=exported,
+                ownership_reviewed=True,
+                effect_context_repair_plan=plan_path,
+                test_mode=True,
+            )
+        )
+        assert result["historical_state"] == result["source_state"] == "healthy"
+        from bootstrap.candidate_readiness import record_htr10_review
+
+        review = record_htr10_review(
+            controller.paths,
+            historical_attribution=historical,
+            source_assurance=exported,
+            observed_at=datetime.now(timezone.utc).isoformat(),
+        )
+        assert review["provider_effect_integrity"] == "healthy"
         services.settle_on_start = False
         if outcome in {"failed_candidate", "failed_original_recovery"}:
             original = manager._post_switch_doctor
@@ -589,6 +766,24 @@ def test_real_email_containment_upgrade_and_schema_aware_fallback(
             assert json.loads(pointer.read_bytes())["commit"] == plan.target_commit
             assert services.settle()["ready"] is True
         assert services.runtime_diagnostics()["observation_active"] is True
+        if outcome == "successor_candidate":
+            monkeypatch.setattr(
+                controller, "_selection", lambda: (plan.target_commit, ROOT)
+            )
+            # Production restoration validates the genuine committed updater
+            # journal, source identity and the same changed-target receipt.
+            receipt_bytes = receipt.read_bytes()
+            receipt.unlink()
+            with pytest.raises((OSError, ValueError)):
+                controller.activate(plan, enable_live=True)
+            atomic_write(receipt, receipt_bytes)
+            restored = controller.activate(plan, enable_live=True)
+            assert restored["observation_active"] is False
+            assert services.settle()["ready"] is True
+            assert history_path.read_bytes() == history_bytes
+            assert (
+                tmp_path / "private-effect-plan.json"
+            ).read_bytes() == original_bytes
         assert gmail.calls == 1
         assert all(
             (config / name).read_bytes() == payload

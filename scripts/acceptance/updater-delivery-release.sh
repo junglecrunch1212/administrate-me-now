@@ -22,6 +22,7 @@ tests=(
   tests/acceptance/test_macos_bootstrap_operations.py::test_credential_free_bootstrap_doctor_backup_restore_round_trip
   tests/unit/test_ci_release_gates.py
   tests/acceptance/test_cos_email_audit_context.py
+  tests/unit/test_historical_attribution.py
   tests/unit/test_source_assurance.py
   tests/unit/test_observation_readiness_window.py
   tests/unit/bootstrap/test_effect_context_repair.py
@@ -38,10 +39,10 @@ for module in prepared_runtime workspace_instructions storage_headroom; do
     exit 1
   fi
 done
-poetry run ruff check bootstrap adminme/source_assurance.py scripts/release_scope.py "${tests[@]%%::*}"
-poetry run ruff format --check bootstrap adminme/source_assurance.py scripts/release_scope.py "${tests[@]%%::*}"
-poetry run mypy bootstrap bridge/adminme_bridge adminme/source_assurance.py scripts/release_scope.py
-poetry run pyright bootstrap adminme/source_assurance.py scripts/release_scope.py
+poetry run ruff check bootstrap adminme/source_assurance.py adminme/historical_attribution.py scripts/release_scope.py "${tests[@]%%::*}"
+poetry run ruff format --check bootstrap adminme/source_assurance.py adminme/historical_attribution.py scripts/release_scope.py "${tests[@]%%::*}"
+poetry run mypy bootstrap bridge/adminme_bridge adminme/source_assurance.py adminme/historical_attribution.py scripts/release_scope.py
+poetry run pyright bootstrap adminme/source_assurance.py adminme/historical_attribution.py scripts/release_scope.py
 poetry run pytest -p no:cacheprovider --runxfail -q -ra \
   --basetemp="$RUNNER_TEMP/updater-delivery-tests" \
   --junitxml="$RUNNER_TEMP/updater-delivery.xml" "${tests[@]}"
