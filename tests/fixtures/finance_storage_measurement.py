@@ -150,7 +150,16 @@ async def serve(root: Path):
     trace = Trace(root)
     trace.mark("runtime.start")
     instrument(storage, patches, trace)
-    app = create_application(storage.settings())
+    settings = storage.settings()
+    # This is synthetic identity metadata, not readiness or storage authority.
+    # Publish it before lifespan startup so independent packet construction can
+    # overlap startup without moving the controller's process-birth clock.
+    trace.mark("runtime.fixture_coordinates")
+    write_json(
+        sys.stdout.buffer,
+        {"fixture_coordinates": 1, "tenant": settings.instance.tenant_id},
+    )
+    app = create_application(settings)
     storage.install(app, patches)
 
     @app.middleware("http")

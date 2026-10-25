@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 from copy import deepcopy
+from contextlib import contextmanager
 import gc
+import hashlib
 import json
 import os
 import platform
@@ -58,7 +60,37 @@ class MeasuredRun(OwnedRun):
         self.pipe_lock = threading.Lock()
         self.calls = set()
         self.work_end = None
+        self.setup_stop = threading.Event()
+        self.setup_trace_lock = threading.Lock()
+        self.setup_stages = []
+        self.startup_received = 0
+        self.http_ready = False
         super().__init__("measured_lifetime", root)
+        self.record["setup_stages"] = self.setup_stages
+        self.setup_mark("controller.started", process_birth=self.started)
+
+    def setup_mark(self, stage, **fields):
+        with self.setup_trace_lock:
+            self.setup_stages.append({"stage": stage, "at": time.monotonic(), **fields})
+
+    def setup_check(self):
+        if self.setup_stop.is_set():
+            raise RuntimeError("synthetic_setup_cancelled")
+        if time.monotonic() >= self.started + 10:
+            raise TimeoutError("fixed synthetic setup deadline")
+
+    @contextmanager
+    def setup_stage(self, name):
+        self.setup_mark(name + ".start")
+        try:
+            self.setup_check()
+            yield
+            self.setup_check()
+        except BaseException as exc:
+            self.setup_mark(name + ".end", outcome="failed", error=type(exc).__name__)
+            raise
+        else:
+            self.setup_mark(name + ".end", outcome="passed")
 
     def sample(self):
         with self.sample_lock:
@@ -89,7 +121,17 @@ class MeasuredRun(OwnedRun):
 
     def command(self, op):
         with self.pipe_lock:
-            return super().command(op) if op is not None else self.receive()
+            value = super().command(op) if op is not None else self.receive()
+            if op is None:
+                self.startup_received += 1
+                self.http_ready = self.http_ready or value.get("ready") is True
+                self.setup_mark(
+                    "runtime.startup_receipt",
+                    frame=self.startup_received,
+                    fixture_coordinates=value.get("fixture_coordinates"),
+                    http_ready=value.get("ready"),
+                )
+            return value
 
     async def thread(self, function, *args):
         task = asyncio.create_task(asyncio.to_thread(function, *args))
@@ -120,6 +162,71 @@ def coordinates(state):
         "finance_events": state["finance_events"],
         "money_checkpoint": state["money_checkpoint"],
     }
+
+
+def prepare_packets(run, ready):
+    """Same deterministic construction as 8b8a0c2e; owned off-loop work only."""
+    report = run.record
+    with run.setup_stage("fixture.branch"):
+        with run.setup_stage("fixture.generate"):
+            p, d, package = sized_package(ready["tenant"], PRINCIPAL)
+        with run.setup_stage("fixture.initial_packet"):
+            manifest, packet = packet_for(p, d, package)
+            wire = json.dumps(packet, separators=(",", ":")).encode()
+        with run.setup_stage("fixture.successor_publication"):
+            later = deepcopy(p)
+            later["prior_publication_id"] = p["publication_id"]
+            seal_publication(later)
+        with run.setup_stage("fixture.successor_projection"):
+            later_d = deepcopy(d)
+            later_d["prior_projection_id"] = d["projection_id"]
+            later_d["projection_id"] = "projection-measured-successor"
+            later_d["accounting_publication_id"] = later["publication_id"]
+            later_d["accounting_content_sha256"] = later["content_sha256"]
+            later_d = seal(later_d)
+        with run.setup_stage("fixture.successor_packet"):
+            next_manifest, next_packet = packet_for(later, later_d, package)
+            next_wire = json.dumps(next_packet, separators=(",", ":")).encode()
+        report["geometry"] = {
+            "accepted_units": len(p["accepted_journal_revision_ids"]),
+            "proof_blobs": len(package.blobs),
+            "shared_variants": len(d["shared_event_inventory"]),
+            "context_references": sum(
+                len(c["record_ids"]) for c in d["detail_manifest"]
+            ),
+            "wire_bytes": len(wire),
+        }
+        assert report["geometry"]["accepted_units"] == 8022
+        assert report["geometry"]["proof_blobs"] == 98
+        selection = {
+            "book_id": p["book_id"],
+            "context_id": d["contexts"][0]["context_id"],
+        }
+        expected = (
+            p["publication_id"],
+            d["projection_id"],
+            later["publication_id"],
+            later_d["projection_id"],
+        )
+        with run.setup_stage("fixture.pins"):
+            report["constructed_pins"] = {
+                "initial": {
+                    "publication": manifest["publication"],
+                    "projection": manifest["projection"],
+                    "wire_sha256": hashlib.sha256(wire).hexdigest(),
+                    "wire_bytes": len(wire),
+                },
+                "successor": {
+                    "publication": next_manifest["publication"],
+                    "projection": next_manifest["projection"],
+                    "wire_sha256": hashlib.sha256(next_wire).hexdigest(),
+                    "wire_bytes": len(next_wire),
+                },
+            }
+        with run.setup_stage("fixture.release"):
+            del p, d, package, packet, later, later_d, next_packet
+            gc.collect()  # Controller buffers only; startup is fully measured.
+        return manifest, next_manifest, wire, next_wire, selection, expected
 
 
 def window_summary(rows, expected):
@@ -312,46 +419,40 @@ async def test_fixed_schedule_representative_storage_measurement(tmp_path):
     try:
 
         async def setup():
-            ready = await run.call(None)
-            assert ready["ready"]
-            p, d, package = await run.thread(sized_package, ready["tenant"], PRINCIPAL)
-            manifest, packet = packet_for(p, d, package)
-            wire = json.dumps(packet, separators=(",", ":")).encode()
-            later = deepcopy(p)
-            later["prior_publication_id"] = p["publication_id"]
-            seal_publication(later)
-            later_d = deepcopy(d)
-            later_d["prior_projection_id"] = d["projection_id"]
-            later_d["projection_id"] = "projection-measured-successor"
-            later_d["accounting_publication_id"] = later["publication_id"]
-            later_d["accounting_content_sha256"] = later["content_sha256"]
-            later_d = seal(later_d)
-            next_manifest, next_packet = packet_for(later, later_d, package)
-            next_wire = json.dumps(next_packet, separators=(",", ":")).encode()
-            report["geometry"] = {
-                "accepted_units": len(p["accepted_journal_revision_ids"]),
-                "proof_blobs": len(package.blobs),
-                "shared_variants": len(d["shared_event_inventory"]),
-                "context_references": sum(
-                    len(c["record_ids"]) for c in d["detail_manifest"]
-                ),
-                "wire_bytes": len(wire),
-            }
-            assert report["geometry"]["accepted_units"] == 8022
-            assert report["geometry"]["proof_blobs"] == 98
-            selection = {
-                "book_id": p["book_id"],
-                "context_id": d["contexts"][0]["context_id"],
-            }
-            expected = (
-                p["publication_id"],
-                d["projection_id"],
-                later["publication_id"],
-                later_d["projection_id"],
+            with run.setup_stage("runtime.coordinates_wait"):
+                coordinates = await run.call(None)
+                assert set(coordinates) == {"fixture_coordinates", "tenant"}
+                assert coordinates["fixture_coordinates"] == 1
+                assert isinstance(coordinates["tenant"], str)
+
+            async def readiness():
+                with run.setup_stage("runtime.readiness_branch"):
+                    ready = await run.call(None)
+                    assert ready["ready"]
+                    assert ready["tenant"] == coordinates["tenant"]
+                    return ready
+
+            run.setup_mark("branches.submitted")
+            fixture_task = asyncio.create_task(
+                run.thread(prepare_packets, run, coordinates)
             )
-            del p, d, package, packet, later, later_d, next_packet
-            gc.collect()  # Controller buffers only; startup is fully measured.
-            return ready, manifest, next_manifest, wire, next_wire, selection, expected
+            readiness_task = asyncio.create_task(readiness())
+            branches = (fixture_task, readiness_task)
+            active.update(branches)
+            try:
+                packets, ready = await asyncio.gather(*branches)
+                run.setup_check()
+                run.setup_mark("branches.joined")
+                return ready, *packets
+            except BaseException as exc:
+                run.setup_stop.set()
+                run.setup_mark("branches.join_failed", error=type(exc).__name__)
+                for branch in branches:
+                    branch.cancel()
+                await asyncio.gather(*branches, return_exceptions=True)
+                raise
+            finally:
+                active.difference_update(branches)
 
         (
             ready,
@@ -362,14 +463,15 @@ async def test_fixed_schedule_representative_storage_measurement(tmp_path):
             selection,
             expected,
         ) = await bounded(setup(), 10)
-        client = httpx.AsyncClient(
-            base_url=ready["url"],
-            trust_env=False,
-            timeout=1,
-            limits=httpx.Limits(
-                max_connections=6, max_keepalive_connections=6, keepalive_expiry=4
-            ),
-        )
+        with run.setup_stage("controller.client"):
+            client = httpx.AsyncClient(
+                base_url=ready["url"],
+                trust_env=False,
+                timeout=1,
+                limits=httpx.Limits(
+                    max_connections=6, max_keepalive_connections=6, keepalive_expiry=4
+                ),
+            )
 
         async def controls():
             control = await client.put(
@@ -401,7 +503,9 @@ async def test_fixed_schedule_representative_storage_measurement(tmp_path):
             assert settled(state), state["consumers"]
             return ids, state
 
-        approvals, state = await bounded(controls(), 10)
+        with run.setup_stage("runtime.controls_and_settlement"):
+            approvals, state = await bounded(controls(), 10)
+        run.setup_mark("setup.completed")
         report["setup"] = {
             "finished": time.monotonic(),
             "state": state,
@@ -663,6 +767,8 @@ async def test_fixed_schedule_representative_storage_measurement(tmp_path):
         }
         raise
     finally:
+        run.setup_stop.set()
+        run.setup_mark("owned_work.stopping")
         run.finish_work()
         cleanup_started = time.monotonic()
         for task in active:
@@ -674,6 +780,11 @@ async def test_fixed_schedule_representative_storage_measurement(tmp_path):
                 if run.calls:
                     await asyncio.gather(*list(run.calls), return_exceptions=True)
                 if not shutdown_sent and run.process.poll() is None:
+                    # A cancelled setup may leave the second startup frame
+                    # unread. Consume it before issuing a control command.
+                    while not run.http_ready and run.startup_received < 2:
+                        await run.call(None)
+                    assert run.http_ready, "synthetic HTTP readiness unavailable"
                     report["cleanup_shutdown"] = await run.call("shutdown")
         except BaseException as exc:
             report["cleanup_request_error"] = type(exc).__name__
@@ -689,6 +800,10 @@ async def test_fixed_schedule_representative_storage_measurement(tmp_path):
                 )
                 report["unsettled_owned_calls"] = len(unresolved)
             report["total_cleanup_seconds"] = time.monotonic() - cleanup_started
+            run.setup_mark(
+                "owned_work.cleaned",
+                unresolved_calls=report.get("unsettled_owned_calls", 0),
+            )
             try:
                 summarize(report)
             except BaseException as exc:
