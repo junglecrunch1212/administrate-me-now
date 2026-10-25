@@ -166,7 +166,7 @@ class StageStore:
                 conn.execute("PRAGMA journal_mode=DELETE").close()
                 conn.execute("PRAGMA synchronous=FULL").close()
                 conn.execute("PRAGMA journal_size_limit=0").close()
-                if conn.execute("PRAGMA page_size").fetchone() != (4096,):
+                if conn.execute("PRAGMA page_size").fetchone() != ("4096",):
                     raise StageError("stage_page_size")
                 conn.execute(f"PRAGMA max_page_count={MAX_DB // 4096}").close()
             return conn

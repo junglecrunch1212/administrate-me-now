@@ -87,37 +87,60 @@ def event_count(log):
 
 
 _PROVIDER_ROW = object()
+_STAGE_PRAGMAS = {
+    "cipher_use_hmac",
+    "page_size",
+    "max_page_count",
+    "journal_mode",
+    "journal_size_limit",
+    "temp_store",
+    "cache_size",
+    "synchronous",
+    "query_only",
+}
 
 
-def observe_hmac_connections(monkeypatch, *, disabled=False, row=_PROVIDER_ROW):
+def pragma_reading(pragma, row, readonly):
+    return {
+        "pragma": pragma,
+        "readonly": readonly,
+        "row_type": type(row).__name__,
+        "row_repr": repr(row)[:128],
+        "value_types": [type(v).__name__ for v in row]
+        if isinstance(row, tuple)
+        else [],
+    }
+
+
+def observe_stage_connections(
+    monkeypatch, *, disabled=False, row=_PROVIDER_ROW, substitute="cipher_use_hmac"
+):
     from tests.fixtures import finance_staging_store
 
     connect = finance_staging_store.sqlcipher3.connect
     connections, readings = [], []
 
     class ObservedConnection:
-        def __init__(self, raw):
+        def __init__(self, raw, readonly):
             self.raw, self.closed = raw, False
+            self.readonly = readonly
 
         def execute(self, sql, *args):
             cursor = self.raw.execute(sql, *args)
             if disabled and sql.startswith("PRAGMA key="):
                 self.raw.execute("PRAGMA cipher_use_hmac=OFF").close()
-            if sql == "PRAGMA cipher_use_hmac":
+            pragma = sql.removeprefix("PRAGMA ")
+            if sql.startswith("PRAGMA ") and pragma.split("=", 1)[0] in _STAGE_PRAGMAS:
                 actual = cursor.fetchone()
                 cursor.close()
-                readings.append(
-                    {
-                        "pragma": "cipher_use_hmac",
-                        "row_type": type(actual).__name__,
-                        "row_repr": repr(actual)[:128],
-                        "value_types": [type(v).__name__ for v in actual]
-                        if isinstance(actual, tuple)
-                        else [],
-                    }
-                )
+                readings.append(pragma_reading(pragma, actual, self.readonly))
                 return SimpleNamespace(
-                    fetchone=lambda: actual if row is _PROVIDER_ROW else row
+                    fetchone=lambda: (
+                        row
+                        if pragma == substitute and row is not _PROVIDER_ROW
+                        else actual
+                    ),
+                    close=lambda: None,
                 )
             return cursor
 
@@ -126,7 +149,9 @@ def observe_hmac_connections(monkeypatch, *, disabled=False, row=_PROVIDER_ROW):
             self.closed = True
 
     def observed_connect(*args, **kwargs):
-        connection = ObservedConnection(connect(*args, **kwargs))
+        connection = ObservedConnection(
+            connect(*args, **kwargs), kwargs.get("uri", False)
+        )
         connections.append(connection)
         return connection
 
@@ -135,12 +160,15 @@ def observe_hmac_connections(monkeypatch, *, disabled=False, row=_PROVIDER_ROW):
 
 
 @pytest.mark.parametrize("disabled", [False, True], ids=["enabled", "disabled"])
-def test_pinned_provider_hmac_and_constructor_cleanup(tmp_path, monkeypatch, disabled):
+def test_pinned_provider_pragmas_and_constructor_cleanup(
+    tmp_path, monkeypatch, disabled
+):
     root = tmp_path / "synthetic-store-provider"
     root.mkdir(mode=0o700)
     context = {"operation": "e" * 32}
-    connections, readings = observe_hmac_connections(monkeypatch, disabled=disabled)
-    store = None
+    connections, readings = observe_stage_connections(monkeypatch, disabled=disabled)
+    store = reader = None
+    pragmas_verified = False
     descriptors = set(os.listdir("/proc/self/fd"))
     try:
         if disabled:
@@ -148,26 +176,76 @@ def test_pinned_provider_hmac_and_constructor_cleanup(tmp_path, monkeypatch, dis
                 StageStore(
                     root, context, secrets.token_bytes(32), secrets.token_bytes(32)
                 )
+            assert readings == [pragma_reading("cipher_use_hmac", ("0",), False)]
         else:
             store = StageStore(
                 root, context, secrets.token_bytes(32), secrets.token_bytes(32)
             )
-        assert readings == [
-            {
-                "pragma": "cipher_use_hmac",
-                "row_type": "tuple",
-                "row_repr": "('0',)" if disabled else "('1',)",
-                "value_types": ["str"],
-            }
-        ]
+            writer_setup = [
+                ("cipher_use_hmac", ("1",)),
+                ("temp_store=MEMORY", None),
+                ("cache_size=-512", None),
+                ("journal_mode=DELETE", ("delete",)),
+                ("synchronous=FULL", None),
+                ("journal_size_limit=0", (0,)),
+                ("page_size", ("4096",)),
+                ("max_page_count=49152", (49152,)),
+            ]
+            common_readbacks = [
+                ("cipher_use_hmac", ("1",)),
+                ("page_size", ("4096",)),
+                ("temp_store", (2,)),
+                ("cache_size", (-512,)),
+            ]
+            writer_readbacks = common_readbacks + [
+                ("max_page_count", (49152,)),
+                ("journal_mode", ("delete",)),
+                ("synchronous", (2,)),
+                ("journal_size_limit", (0,)),
+                ("query_only", (0,)),
+            ]
+            for pragma, expected in writer_readbacks:
+                cursor = store.conn.execute("PRAGMA " + pragma)
+                try:
+                    assert cursor.fetchone() == expected
+                finally:
+                    cursor.close()
+            store.close_writer()
+            reader = store.connect(readonly=True)
+            reader_setup = [
+                ("cipher_use_hmac", ("1",)),
+                ("temp_store=MEMORY", None),
+                ("cache_size=-512", None),
+                ("query_only=ON", None),
+            ]
+            reader_readbacks = common_readbacks + [("query_only", (1,))]
+            for pragma, expected in reader_readbacks:
+                cursor = reader.execute("PRAGMA " + pragma)
+                try:
+                    assert cursor.fetchone() == expected
+                finally:
+                    cursor.close()
+            assert readings == [
+                pragma_reading(pragma, value, readonly)
+                for readonly, rows in [
+                    (False, writer_setup + writer_readbacks),
+                    (True, reader_setup + reader_readbacks),
+                ]
+                for pragma, value in rows
+            ]
+        pragmas_verified = True
     finally:
+        if reader is not None:
+            reader.close()
         if store is not None:
             store.close()
             cleanup(root, context["operation"])
         evidence = {
             "provider_package": version("sqlcipher3"),
             "disabled_by_test": disabled,
+            "pragmas_verified": pragmas_verified,
             "readings": readings,
+            "connection_count": len(connections),
             "connections_closed": all(c.closed for c in connections),
             "stage_removed": not list(root.iterdir()),
             "descriptors_restored": set(os.listdir("/proc/self/fd")) == descriptors,
@@ -205,8 +283,40 @@ def test_hmac_guard_rejects_disabled_unknown_and_missing_rows(
 ):
     root = tmp_path / "synthetic-store-hmac-rejection"
     root.mkdir(mode=0o700)
-    connections, _ = observe_hmac_connections(monkeypatch, row=row)
+    connections, _ = observe_stage_connections(monkeypatch, row=row)
     with pytest.raises(StageError, match="^stage_page_authentication$"):
+        StageStore(
+            root,
+            {"operation": "f" * 32},
+            secrets.token_bytes(32),
+            secrets.token_bytes(32),
+        )
+    assert len(connections) == 1 and connections[0].closed
+    assert not list(root.iterdir())
+
+
+@pytest.mark.parametrize(
+    "row",
+    [
+        ("8192",),
+        ("unknown",),
+        (4096,),
+        None,
+        (),
+        ("4096 ",),
+        ("04096",),
+        ("4096", "4096"),
+    ],
+)
+def test_page_size_guard_rejects_wrong_unknown_and_missing_rows(
+    tmp_path, monkeypatch, row
+):
+    root = tmp_path / "synthetic-store-page-size-rejection"
+    root.mkdir(mode=0o700)
+    connections, _ = observe_stage_connections(
+        monkeypatch, row=row, substitute="page_size"
+    )
+    with pytest.raises(StageError, match="^stage_page_size$"):
         StageStore(
             root,
             {"operation": "f" * 32},
