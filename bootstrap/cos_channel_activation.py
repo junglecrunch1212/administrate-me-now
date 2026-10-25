@@ -117,6 +117,8 @@ from bootstrap.submission_repair import (
 from bootstrap.effect_context_repair import (
     EffectContextRepairRequest,
     EffectContextProof,
+    contained_plan_history,
+    retain_successor_plan,
     prepare_proof,
     verify_proof,
     wait_contained,
@@ -1242,7 +1244,11 @@ class CoSChannelActivator:
                 )
         else:
             history = _json(self.directory / "history" / f"{plan.plan_id}.json")
-            if (
+            if proof is not None:
+                contained_plan_history(
+                    self.paths, self.repository, plan, test_mode=self.test_mode
+                )
+            elif (
                 history.get("phase") != "committed"
                 or history.get("operation") != "enter_observation"
                 or history.get("maintenance_plan_sha256") != plan.digest()
@@ -2655,6 +2661,102 @@ class CoSChannelActivator:
             "all_polling_paused": True,
         }
 
+    def prepare_effect_context_successor(
+        self, original: MaintenanceRestorationPlan
+    ) -> MaintenanceRestorationPlan:
+        """Bind a protected repair successor without repeating containment or consent."""
+        updater = UpgradeManager(
+            self.paths, root=self.repository, test_mode=self.test_mode
+        )
+        with updater._operation_lock():
+            if self.journal_path.exists() or updater.activation_journal.path.exists():
+                raise CoSActivationError(
+                    "complete the current operation before continuing maintenance"
+                )
+            commit, _release, target = self._observation_selection()
+            proof = original.effect_context_proof
+            history = contained_plan_history(
+                self.paths, self.repository, original, test_mode=self.test_mode
+            )
+            prepared, expires = (
+                aware_time(original.prepared_at),
+                aware_time(original.expires_at),
+            )
+            if (
+                proof is None
+                or proof.request != original.effect_context_repair
+                or proof.candidate_commit != original.target_commit
+                or proof.predecessor_commit != original.predecessor_commit
+                or commit != original.predecessor_commit
+                or target == original.target_commit
+                or history.get("maintenance_plan_sha256") != original.digest()
+                or prepared is None
+                or expires is None
+                or not prepared <= datetime.now(timezone.utc) < expires
+            ):
+                raise CoSActivationError(
+                    "successor requires the original unexpired effect repair plan"
+                )
+            load_git_tree(
+                self.repository, original.target_commit, retained_by_commit=target
+            )
+            controls = self._maintenance_controls()
+            if (
+                original.sender_proofs is None
+                or self._maintenance_proof_expiry(
+                    original.sender_proofs, controls["activation"]
+                )
+                != expires
+                or any(
+                    expected != _sha(_payload(value))
+                    for expected, value in (
+                        (original.adapter_sha256, controls["adapters"]),
+                        (original.receipt_sha256, controls["receipt"]),
+                        (original.member_mapping_sha256, controls["members"]),
+                        (original.recipient_policy_sha256, controls["policy"]),
+                    )
+                )
+                or capture_deployment_snapshot(self.paths).public()
+                != original.deployment_snapshot
+            ):
+                raise CoSActivationError("successor authority or configuration changed")
+            observation = _json(self.config_dir / "observation.json")
+            window = _json(self.config_dir / "deployment-readiness.json").get(
+                "provider_effect_window"
+            )
+            if observation.get("active") is not True or window != {
+                "started_at": history.get("observation_started_at"),
+                "reason": "cos_enter_observation",
+            }:
+                raise CoSActivationError(
+                    "successor requires the original observation boundary"
+                )
+            verify_proof(
+                self.paths,
+                self.repository,
+                proof,
+                diagnostics=self.services.runtime_diagnostics() or {},
+                test_mode=self.test_mode,
+            )
+            if (
+                capture_deployment_snapshot(self.paths).public()
+                != original.deployment_snapshot
+            ):
+                raise CoSActivationError("successor configuration changed during audit")
+            successor = original.model_copy(
+                update={
+                    "target_commit": target,
+                    "effect_context_proof": proof.model_copy(
+                        update={"candidate_commit": target}
+                    ),
+                }
+            )
+            retain_successor_plan(self.paths, original, successor)
+            contained_plan_history(
+                self.paths, self.repository, successor, test_mode=self.test_mode
+            )
+            return successor
+
     def recover_effect_context_controller(
         self, plan: MaintenanceRestorationPlan
     ) -> dict[str, Any]:
@@ -2797,6 +2899,7 @@ def main() -> None:
     mode.add_argument("--recover", action="store_true")
     mode.add_argument("--recover-effect-context-controller", action="store_true")
     mode.add_argument("--prepare-maintenance", action="store_true")
+    mode.add_argument("--prepare-effect-context-successor", action="store_true")
     mode.add_argument("--pause-maintenance", action="store_true")
     mode.add_argument("--restore-maintenance", action="store_true")
     parser.add_argument("--output", type=Path)
@@ -2804,6 +2907,7 @@ def main() -> None:
     arguments = parser.parse_args()
     maintenance = (
         arguments.prepare_maintenance
+        or arguments.prepare_effect_context_successor
         or arguments.pause_maintenance
         or arguments.restore_maintenance
     )
@@ -2813,8 +2917,10 @@ def main() -> None:
         parser.error(
             "maintenance plans preserve existing grants; do not combine activation options"
         )
-    if bool(arguments.output) != arguments.prepare_maintenance:
-        parser.error("--output is required only for --prepare-maintenance")
+    if bool(arguments.output) != (
+        arguments.prepare_maintenance or arguments.prepare_effect_context_successor
+    ):
+        parser.error("--output is required only for maintenance preparation")
     if arguments.recover == bool(arguments.request):
         parser.error("choose one private request or interrupted-operation recovery")
     if arguments.repair_recovery_history and (
@@ -2839,9 +2945,15 @@ def main() -> None:
         DeploymentPaths.from_root(arguments.instance_root, production=True),
         repository=Path(__file__).resolve().parents[1],
     )
-    if arguments.prepare_maintenance:
-        plan = controller.prepare_maintenance(
-            MaintenancePreparationRequest.model_validate(_json(arguments.request))
+    if arguments.prepare_maintenance or arguments.prepare_effect_context_successor:
+        plan = (
+            controller.prepare_effect_context_successor(
+                MaintenanceRestorationPlan.model_validate(_json(arguments.request))
+            )
+            if arguments.prepare_effect_context_successor
+            else controller.prepare_maintenance(
+                MaintenancePreparationRequest.model_validate(_json(arguments.request))
+            )
         )
         descriptor = os.open(
             arguments.output,
@@ -2853,7 +2965,9 @@ def main() -> None:
             handle.flush()
             os.fsync(handle.fileno())
         result = {
-            "status": "maintenance_prepared",
+            "status": "effect_context_successor_prepared"
+            if arguments.prepare_effect_context_successor
+            else "maintenance_prepared",
             "plan_id": plan.plan_id,
             "target_commit": plan.target_commit,
             "expires_at": plan.expires_at,

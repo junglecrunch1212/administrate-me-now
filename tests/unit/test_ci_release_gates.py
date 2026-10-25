@@ -30,6 +30,8 @@ from scripts.release_scope import (
     _service_work_observation,
     _service_work_history,
     UPDATER_SOURCE_ASSURANCE,
+    UPDATER_EMAIL_ATTRIBUTION,
+    _updater_email_attribution,
     UPDATER_EFFECT_CONTEXT_PATHS,
     UPDATER_EFFECT_CONTEXT_SHARED_PATHS,
     UPDATER_EFFECT_CONTEXT_SHARED_REPLACEMENTS,
@@ -1859,8 +1861,8 @@ def test_updater_worker_requires_recovery_and_supported_process_checks(
         "test_ci_release_gates.py",
         "prepared_runtime workspace_instructions storage_headroom",
         'test -f "tests/unit/bootstrap/test_$module.py"',
-        "poetry run mypy bootstrap bridge/adminme_bridge adminme/source_assurance.py scripts/release_scope.py",
-        "poetry run pyright bootstrap adminme/source_assurance.py scripts/release_scope.py",
+        "poetry run mypy bootstrap bridge/adminme_bridge adminme/source_assurance.py adminme/historical_attribution.py scripts/release_scope.py",
+        "poetry run pyright bootstrap adminme/source_assurance.py adminme/historical_attribution.py scripts/release_scope.py",
         "scripts/verify_invariants.sh",
         "poetry run ruff check",
         "poetry run ruff format --check",
@@ -3958,4 +3960,76 @@ def test_effect_context_scope_preserves_each_shared_entrypoint_mode(
     assert (
         select_scope(path, _event(base, head), checkout_sha=head)["scope"]
         == "system-wide"
+    )
+
+
+_HISTORICAL_LEGACY_OWNER = 'async def _cos_response_owner_matches(event_log: EventLog, event_id: str) -> bool:\n    """Attribute the exact internal command without inventing a provider binding.\n\n    These envelope checks establish only ownership. Source assurance separately\n    validates recipient policy, both approvals, fingerprints and terminal effects.\n    Private payloads used for correlation never enter the exported report.\n    """\n    attempt = await event_log.get(event_id)\n    if attempt is None or attempt.get("type") != ATTEMPTED:\n        return False\n    payload = attempt.get("payload") or {}\n    member = payload.get("member_id")\n    approval_id = payload.get("approval_event_id")\n    if (\n        not isinstance(member, str)\n        or not member\n        or not isinstance(approval_id, str)\n        or not approval_id\n        or approval_id >= event_id\n    ):\n        return False\n    approved = await event_log.get(approval_id)\n    if approved is None or approved.get("type") != APPROVED:\n        return False\n    approval = approved.get("payload") or {}\n    scope = f"private:{member}"\n    standing = approval.get("authorization_method") in {\n        "standing_self_reply",\n        "requested_self_reminder",\n    }\n    if standing:\n        from adminme.cos_response_assurance import _standing_valid\n\n        references = [\n            await event_log.get(approval.get(key, ""))\n            for key in (\n                "standing_authorization_event_id",\n                "source_message_event_id",\n                "reminder_event_id",\n                "reminder_binding_event_id",\n            )\n            if approval.get(key)\n        ]\n        if approval.get("reminder_event_id"):\n            reminder = await event_log.get(approval["reminder_event_id"])\n            if reminder is not None:\n                references.append(\n                    await event_log.get(reminder["payload"]["activation_event_id"])\n                )\n        if not _standing_valid(\n            approved, {row["event_id"]: row for row in references if row is not None}\n        ):\n            return False\n    return bool(\n        attempt.get("schema_version") == 1\n        and approved.get("schema_version") in ({2, 3} if standing else {1, 2, 3})\n        and all(\n            row.get("source_adapter") == "openclaw-plugin"\n            and row.get("source_account_id") == "cos-response"\n            and row.get("owner_scope") == scope\n            and row.get("visibility_scope") == scope\n            and row.get("payload", {}).get("contract") == RESPONSE_CONTRACT\n            for row in (attempt, approved)\n        )\n        and attempt.get("tenant_id")\n        and attempt.get("tenant_id") == approved.get("tenant_id")\n        and approved.get("actor_identity")\n        == (COS_SERVICE_PRINCIPAL_ID if standing else member)\n        and attempt.get("actor_identity") in {member, COS_SERVICE_PRINCIPAL_ID}\n        and approval.get("member_id") == member\n        and payload.get("automatic_retry_allowed") is False\n        and payload.get("openclaw_approval_event_id")\n        and attempt.get("causation_id") == payload["openclaw_approval_event_id"]\n        and payload.get("content_fingerprint")\n        and payload.get("content_fingerprint") == approval.get("content_fingerprint")\n        and payload.get("policy_event_id")\n        and payload.get("policy_event_id") == approval.get("policy_event_id")\n    )'
+
+
+def _historical_email_sources() -> tuple[str, str]:
+    import ast
+
+    after = (ROOT / UPDATER_EMAIL_ATTRIBUTION).read_text()
+    owner = next(
+        n
+        for n in ast.parse(after).body
+        if isinstance(n, ast.AsyncFunctionDef)
+        and n.name == "_cos_response_owner_matches"
+    )
+    lines = after.splitlines(keepends=True)
+    before = (
+        "".join(lines[: owner.lineno - 1])
+        + _HISTORICAL_LEGACY_OWNER
+        + "\n"
+        + "".join(lines[owner.end_lineno :])
+    )
+    return before, after
+
+
+def test_email_attribution_scope_accepts_only_exact_owner_predicate() -> None:
+    before, after = _historical_email_sources()
+    assert _updater_email_attribution(before) == _updater_email_attribution(after)
+    for altered in (
+        after.replace('"request_source_event_id"', '"unbound_source"'),
+        after.replace('"conversation_source_event_id"', '"unbound_source"'),
+        after.replace("if requested_email or conversation:", "if False:"),
+        after.replace('and approval.get("member_id") == member', "and True"),
+        after.replace(
+            'and attempt.get("tenant_id") == approved.get("tenant_id")', "and True"
+        ),
+        after.replace(
+            "{COS_SERVICE_PRINCIPAL_ID}\n            if requested_email",
+            "{member}\n            if requested_email",
+        ),
+        after + "\nUNRELATED = True\n",
+    ):
+        assert altered != after
+        assert _updater_email_attribution(altered) != _updater_email_attribution(before)
+
+
+@pytest.mark.parametrize("drift", ["none", "neighbor", "owner", "mode"])
+def test_historical_repair_and_successor_stay_in_closed_updater_lane(
+    repository: tuple[Path, str], drift: str
+) -> None:
+    path, _ = repository
+    before, after = _historical_email_sources()
+    _effect_context_candidate(path)
+    base = _commit(path, UPDATER_EMAIL_ATTRIBUTION, before)
+    _commit(
+        path,
+        "bootstrap/effect_context_repair.py",
+        "# Bounded successor plan admission\n",
+    )
+    if drift == "neighbor":
+        after += "\nUNRELATED = True\n"
+    elif drift == "owner":
+        after = after.replace('"request_source_event_id"', '"unbound_source"')
+    head = _commit(path, UPDATER_EMAIL_ATTRIBUTION, after)
+    if drift == "mode":
+        (path / UPDATER_EMAIL_ATTRIBUTION).chmod(0o755)
+        _git(path, "add", "--all")
+        _git(path, "commit", "-m", "Unsupported history mode")
+        head = _git(path, "rev-parse", "HEAD")
+    assert select_scope(path, _event(base, head), checkout_sha=head)["scope"] == (
+        "updater-delivery" if drift == "none" else "system-wide"
     )
