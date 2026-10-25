@@ -26,6 +26,8 @@ def parent(mode):
         import array
         import fcntl
         import termios
+        import struct
+        import io
 
         raw = json.dumps(
             {"synthetic": "x" * 524288}, separators=(",", ":"), sort_keys=True
@@ -61,19 +63,45 @@ def parent(mode):
         )
         assert child.receive()["kind"] == "sql"
         child.send({"kind": "rows", "rows": []})
-        # Leave the child's large INSERT RPC unread. Inspect only this owned
-        # pipe, proving backpressure before the abrupt parent exit.
+        # Identify the large INSERT frame without consuming its body. A pipe
+        # can block a large write before every byte slot is occupied, because
+        # its page/atomic-write constraints differ from F_GETPIPE_SZ capacity.
         fd = child.process.stdout.fileno()
         capacity = fcntl.fcntl(fd, fcntl.F_GETPIPE_SZ)
+        while True:
+            header = child.process.stdout.read(4)
+            assert len(header) == 4, "child ended before the large output frame"
+            declared = struct.unpack("!I", header)[0]
+            if declared > capacity + io.DEFAULT_BUFFER_SIZE:
+                break
+            message = json.loads(child.process.stdout.read(declared))
+            assert message["kind"] == "usage", message
         deadline = time.monotonic() + 3
+        previous, stable_since = None, None
         while time.monotonic() < deadline:
             available = array.array("i", [0])
             fcntl.ioctl(fd, termios.FIONREAD, available, True)
-            if available[0] >= capacity:
-                print(json.dumps({"blocked_output": True}), flush=True)
-                os._exit(0)
+            assert child.process.poll() is None, "child exited before parent"
+            if available[0] > 0 and available[0] == previous:
+                stable_since = stable_since or time.monotonic()
+                if time.monotonic() - stable_since >= 0.1:
+                    print(
+                        json.dumps(
+                            {
+                                "blocked_output": True,
+                                "declared_frame_bytes": declared,
+                                "pipe_capacity_bytes": capacity,
+                                "unread_pipe_bytes": available[0],
+                            }
+                        ),
+                        flush=True,
+                    )
+                    os._exit(0)
+            else:
+                stable_since = None
+            previous = available[0]
             time.sleep(0.01)
-        raise AssertionError("owned child output did not reach backpressure")
+        raise AssertionError("owned large output frame did not stall without a reader")
     print(json.dumps({"blocked_input": True}), flush=True)
     os._exit(0)  # Deliberately bypass FinanceWorker.close and its timer.
 
@@ -106,6 +134,7 @@ def supervisor(mode):
                     json.dumps(
                         {
                             "mode": mode,
+                            "parent_evidence": records[-1],
                             "reaped": True,
                             "exit_status": status,
                             "seconds_after_parent_exit": time.monotonic() - started,

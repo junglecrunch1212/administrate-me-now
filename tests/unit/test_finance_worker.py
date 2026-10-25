@@ -294,7 +294,7 @@ def test_calculation_guard_allows_only_readonly_trusted_code():
 
 
 @pytest.mark.parametrize("mode", ["blocked_input", "blocked_output"])
-def test_owned_child_exits_after_abrupt_parent_death_in_hosted_linux(mode):
+def test_owned_child_exits_after_abrupt_parent_death_in_hosted_linux(mode, request):
     import json
     from pathlib import Path
     import subprocess
@@ -310,5 +310,15 @@ def test_owned_child_exits_after_abrupt_parent_death_in_hosted_linux(mode):
         check=True,
     )
     receipt = json.loads(result.stdout)
+    request.node.user_properties.append(
+        ("owned_parent_exit_receipt", json.dumps(receipt, sort_keys=True))
+    )
+    if mode == "blocked_output":
+        proof = receipt["parent_evidence"]
+        assert (
+            proof["declared_frame_bytes"]
+            > proof["pipe_capacity_bytes"] + io.DEFAULT_BUFFER_SIZE
+        )
+        assert proof["unread_pipe_bytes"] > 0
     assert receipt["mode"] == mode and receipt["reaped"]
     assert receipt["seconds_after_parent_exit"] < 5

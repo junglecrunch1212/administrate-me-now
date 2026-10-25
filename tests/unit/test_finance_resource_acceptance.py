@@ -36,6 +36,19 @@ def evidence(*, workload="light", latency=6, outlier=None, cpu=0.2, growth=0, pe
     for m in members:
         raw["lifecycle"].append({"kind": "registered", **m})
         raw["lifecycle"].append({"birth": m["birth"], "record": {"kind": "hello", **m}})
+    # This offline counter fixture simulates no child launches. Presence is
+    # mandatory; tests below separately reject missing/incomplete ownership.
+    worker_ledger = {
+        "active": None,
+        "launches": 0,
+        "completed_count": 0,
+        "failed_count": 0,
+        "lifetimes": [],
+        "completed_cpu_seconds": 0.0,
+        "completed_user_cpu_seconds": 0.0,
+        "completed_system_cpu_seconds": 0.0,
+        "peak_child_rss_bytes": 0,
+    }
     clock, cpu_total, peak_total = 100.0, 0.0, 100 * policy.MIB
     last_rss = 100 * policy.MIB
 
@@ -104,7 +117,15 @@ def evidence(*, workload="light", latency=6, outlier=None, cpu=0.2, growth=0, pe
                 raw["lifecycle"].append(
                     {
                         "birth": m["birth"],
-                        "record": {"kind": "sample", "metrics": value},
+                        "record": {
+                            "kind": "sample",
+                            "metrics": value,
+                            **(
+                                {"finance_workers": deepcopy(worker_ledger)}
+                                if m["target"] == "runtime"
+                                else {}
+                            ),
+                        },
                     }
                 )
             raw["resources"].append(
@@ -132,11 +153,17 @@ def evidence(*, workload="light", latency=6, outlier=None, cpu=0.2, growth=0, pe
                     "metrics": value,
                     "faults": [],
                     "outcome": "returned",
+                    **(
+                        {"finance_workers": deepcopy(worker_ledger)}
+                        if m["target"] == "runtime"
+                        else {}
+                    ),
                 },
             }
         )
     summary["cleanup"] = {
         "all_registered_processes_stopped": True,
+        "all_owned_finance_workers_reaped": True,
         "registered_coverage_complete": True,
         "errors": [],
         "members": [
@@ -298,3 +325,46 @@ def test_old_diagnostic_summary_is_not_retroactive_acceptance():
         )
     )
     assert result["state"] == "incomplete" and not result["accepted"]
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "missing",
+        "active",
+        "unaccounted",
+        "missing_lifetime",
+        "failed",
+        "bad_count",
+        "incomplete_exit",
+    ],
+)
+def test_owned_finance_ledger_must_be_present_and_complete(fault):
+    summary, raw = evidence()
+    terminal = next(
+        row["record"]
+        for row in raw["lifecycle"]
+        if row.get("birth") == "runtime"
+        and row.get("record", {}).get("kind") == "terminal"
+    )
+    ledger = terminal["finance_workers"]
+    if fault == "missing":
+        del terminal["finance_workers"]
+    elif fault == "active":
+        ledger["active"] = {"pid": 999}
+    elif fault == "unaccounted":
+        ledger["launches"] = 1
+    elif fault == "missing_lifetime":
+        ledger["completed_count"] = 1
+    elif fault == "failed":
+        ledger["failed_count"] = 1
+    elif fault == "bad_count":
+        ledger["launches"] = True
+    else:
+        ledger.update(
+            launches=1,
+            completed_count=1,
+            lifetimes=[{"complete": False, "exitcode": -9, "terminal_received": False}],
+        )
+    result = evaluate((summary, raw))
+    assert result["state"] == "incomplete" and not result["accepted"], result
