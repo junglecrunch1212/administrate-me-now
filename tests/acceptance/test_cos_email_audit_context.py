@@ -209,7 +209,17 @@ def test_real_source_audit_and_readiness_retain_email_chain_after_restart(
         create_application(config), base_url="https://central-fixture.ts.net"
     ) as client:
         assert_retained_effect(published_assurance(client))
-        assert_historical_email(client)
+        # Disabling a service enrollment intentionally removes its current
+        # provider binding; the retained internal email ownership still validates.
+        historical = historical_audit(client)
+        assert (
+            sum(
+                row["event_count"]
+                for row in historical["groups"]
+                if row["binding_state"] == "internal_cos_member_source_reconciled"
+            )
+            == 1
+        )
         assert len(service.calls) == 1
 
 
