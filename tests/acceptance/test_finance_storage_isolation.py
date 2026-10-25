@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from copy import deepcopy
 import gc
+import hashlib
 import json
 import math
 import os
@@ -259,6 +260,31 @@ class OwnedRun:
             self.error_file.close()
             for trace in self.root.glob("measurement-*.jsonl"):
                 shutil.copyfile(trace, self.output / (self.name + "-" + trace.name))
+            if self.runtime_script == "finance_staging_measurement.py":
+                # Diagnostic proposal only: retain before deleting owned scratch.
+                observer = self.root / "diagnostic-observer.json"
+                evidence = {"complete": False, "limit_bytes": 65536}
+                try:
+                    with observer.open("rb") as stream:
+                        raw = stream.read(65537)
+                    evidence["read_bytes"] = len(raw)
+                    if len(raw) > 65536:
+                        raise ValueError("diagnostic_observer_limit")
+                    target = self.output / (self.name + "-diagnostic-observer.json")
+                    target.write_bytes(raw)
+                    evidence.update(
+                        name=target.name, sha256=hashlib.sha256(raw).hexdigest()
+                    )
+                    value = json.loads(raw)
+                    evidence["complete"] = (
+                        value.get("diagnostic_complete") is True
+                        and value.get("loop_probe", {}).get("complete") is True
+                    )
+                except (OSError, ValueError, TypeError, AttributeError) as exc:
+                    evidence["error"] = type(exc).__name__
+                self.record["diagnostic_observer"] = evidence
+                if not evidence["complete"]:
+                    self.record["violations"].append("diagnostic_observer_incomplete")
             shutil.rmtree(self.root)
             self.record["cleanup"]["scratch_removed"] = not self.root.exists()
             self.record["maxima"] = {
