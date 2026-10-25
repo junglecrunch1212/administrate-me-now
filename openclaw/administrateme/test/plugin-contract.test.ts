@@ -188,7 +188,7 @@ describe("native OpenClaw contract fixture", () => {
     const runtime = fakeApi();
     expect(pkg.peerDependencies.openclaw).toBe(OPENCLAW_VERSION);
     expect(pkg.openclaw.build.openclawCommit).toBe(OPENCLAW_COMMIT);
-    expect([...runtime.tools]).toHaveLength(38);
+    expect([...runtime.tools]).toHaveLength(40);
     expect([...runtime.commands]).toHaveLength(9);
     expect([...runtime.gateways]).toHaveLength(19);
     expect(runtime.gateways.has("administrateme.conversation.prepare")).toBe(true);
@@ -238,6 +238,50 @@ describe("native OpenClaw contract fixture", () => {
     expect((transition.parameters as Record<string, unknown>).additionalProperties).toBe(false);
   });
 
+  it.each(["full", "tool-discovery"])("registers closed source-policy tools with native service provenance in %s", async (mode) => {
+    const runtime = fakeApi({}, mode);
+    const context = {
+      agentId: serviceAgentId(),
+      sessionKey: serviceSessionKey(process.env.ADMINME_OPENCLAW_SHARED_SECRET!, COS_SERVICE_PRINCIPAL_ID, "source-policy-fixture"),
+      messageChannel: "webchat", deliveryContext: { channel: "webchat" },
+    };
+    const state = runtime.tools.get("administrateme_workstation_source_policy")!(context) as AnyAgentTool;
+    const provision = runtime.tools.get("administrateme_provision_workstation_source_policy")!(context) as AnyAgentTool;
+    for (const [tool, field] of [[state, "resource_id"], [provision, "request_id"]] as const) {
+      const schema = tool.parameters as { properties: Record<string, unknown>; required: string[]; additionalProperties: boolean };
+      expect(Object.keys(schema.properties)).toEqual([field]);
+      expect(schema.required).toEqual([field]);
+      expect(schema.additionalProperties).toBe(false);
+      expect(await runtime.hooks.get("before_tool_call")?.[0]?.handler({ toolName: tool.name, params: {} }, context)).toBeUndefined();
+    }
+    expect((provision.parameters as { properties: Record<string, unknown> }).properties.request_id).toMatchObject({ pattern: "^[0-9a-f]{32}$" });
+    await state.execute("policy-state", { resource_id: "fixture-resource" });
+    await provision.execute("policy-provision", { request_id: "4".repeat(32) });
+    expect(fetchMock.mock.calls.map((call) => String(call[0]))).toEqual([
+      "http://127.0.0.1:3330/api/openclaw/v1/tools/workstation-browser/source-policy",
+      "http://127.0.0.1:3330/api/openclaw/v1/tools/workstation-browser/provision-source-policy",
+    ]);
+    for (const index of [0, 1]) {
+      expect(requestBody(fetchMock, index)).toEqual({
+        ...(index === 0 ? { resource_id: "fixture-resource" } : { request_id: "4".repeat(32) }),
+        provenance: {
+          actor_id: COS_SERVICE_PRINCIPAL_ID, agent_id: context.agentId,
+          session_key: context.sessionKey, channel_id: "administrateme-service", call_kind: "tool",
+          correlation_id: expect.any(String), openclaw_version: OPENCLAW_VERSION, openclaw_commit: OPENCLAW_COMMIT,
+        },
+      });
+    }
+    fetchMock.mockResolvedValueOnce(jsonResponse({ detail: "staged request expired" }, 409));
+    await expect(provision.execute("expired", { request_id: "4".repeat(32) })).rejects.toThrow();
+    fetchMock.mockClear();
+    const disabled = fakeApi({ serviceWorkEnabled: false });
+    for (const name of [state.name, provision.name]) {
+      const tool = disabled.tools.get(name)!(context) as AnyAgentTool;
+      await expect(tool.execute("disabled", {})).rejects.toThrow("Service-private work is disabled");
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("rejects service-private authority from every member and delivery context", async () => {
     const runtime = fakeApi();
     const valid = { agentId: serviceAgentId(), sessionKey: serviceSessionKey(process.env.ADMINME_OPENCLAW_SHARED_SECRET!) };
@@ -260,9 +304,11 @@ describe("native OpenClaw contract fixture", () => {
       { ...valid, deliveryContext: { channel: "imessage" } },
     ];
     for (const context of contexts) {
-      const tool = runtime.tools.get("administrateme_service_private_work")!(context) as AnyAgentTool;
-      await expect(tool.execute("denied", { request_id: "denied-fixture", title: "Denied" })).rejects.toThrow(/[Ss]ervice-private/);
-      expect(await before?.({ toolName: tool.name, params: {} }, context)).toMatchObject({ block: true });
+      for (const name of ["administrateme_service_private_work", "administrateme_workstation_source_policy", "administrateme_provision_workstation_source_policy"]) {
+        const tool = runtime.tools.get(name)!(context) as AnyAgentTool;
+        await expect(tool.execute("denied", { request_id: "denied-fixture", title: "Denied" })).rejects.toThrow(/[Ss]ervice-private/);
+        expect(await before?.({ toolName: tool.name, params: {} }, context)).toMatchObject({ block: true });
+      }
     }
     const memberTool = runtime.tools.get("administrateme_service_work")!({ ...valid, requesterSenderId: "actor-a", messageChannel: "discord", agentAccountId: "account-a" }) as AnyAgentTool;
     await expect(memberTool.execute("cross-route", { request_id: "cross-route-fixture", title: "Denied" })).rejects.toThrow("cannot invoke member tools");
@@ -481,7 +527,7 @@ describe("native OpenClaw contract fixture", () => {
   it("exposes tools without starting services during tool discovery", () => {
     const runtime = fakeApi({}, "tool-discovery");
     expect([...runtime.gateways]).toHaveLength(14);
-    expect([...runtime.tools]).toHaveLength(38);
+    expect([...runtime.tools]).toHaveLength(40);
     expect(runtime.services).toHaveLength(0);
   });
 
