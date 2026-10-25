@@ -265,6 +265,7 @@ def test_wrapper_tamper_or_broader_journal_delta_is_refused(
 def test_real_plugin_replacement_keeps_reverse_guard_preparation_available(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    from adminme.openclaw_topology import member_agent_id, member_workspace_path
     from bootstrap.openclaw_activation import reconcile_member_topology
     from bootstrap.openclaw_tools import reconcile_administrateme_plugin
     from tests.unit.bootstrap.test_openclaw_plugin_reconciliation import (
@@ -293,6 +294,27 @@ def test_real_plugin_replacement_keeps_reverse_guard_preparation_available(
     config = gateway["plugins"]["entries"]["administrateme"]["config"]
     config.pop("existing_preference")  # Guard-only fixture's untyped sentinel.
     config["baseUrl"] = "http://127.0.0.1:3330"
+    # This target-side plugin/guard composition begins after native Doctor.
+    # Preserve actual mapped member identities and explicit owner coordinates;
+    # the separate native migration acceptance proves legacy interpretation.
+    members = sorted(set(adapters["openclaw_actor_identities"].values()))
+    gateway["agents"] = {
+        "ownership": "explicit",
+        "defaults": {"systemAgent": {"agentId": member_agent_id(members[0])}},
+        "entries": {
+            **{
+                member_agent_id(member): {
+                    "workspace": str(
+                        member_workspace_path(
+                            manager.paths.instance_dir / "openclaw", member
+                        )
+                    )
+                }
+                for member in members
+            },
+            "unrelated-agent": {"tools": {"allow": ["memory_search"]}},
+        },
+    }
     atomic_write(gateway_path, json.dumps(gateway).encode())
     reconcile_member_topology(manager.paths)
     before = json.loads(gateway_path.read_bytes())["plugins"]["entries"][
