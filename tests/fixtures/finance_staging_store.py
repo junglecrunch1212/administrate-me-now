@@ -155,7 +155,8 @@ class StageStore:
         conn = sqlcipher3.connect(target, uri=readonly, isolation_level=None, timeout=0)
         try:
             conn.execute(f"PRAGMA key=\"x'{self.encryption_key.hex()}'\"").close()
-            if conn.execute("PRAGMA cipher_use_hmac").fetchone() != (1,):
+            # Pinned sqlcipher3 0.6.2 emits this PRAGMA as SQL TEXT, not INTEGER.
+            if conn.execute("PRAGMA cipher_use_hmac").fetchone() != ("1",):
                 raise StageError("stage_page_authentication")
             conn.execute("PRAGMA temp_store=MEMORY").close()
             conn.execute("PRAGMA cache_size=-512").close()

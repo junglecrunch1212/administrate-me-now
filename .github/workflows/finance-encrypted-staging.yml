@@ -69,10 +69,15 @@ jobs:
           .venv/bin/python - <<'PY_CHECK'
           import json, os, pathlib, xml.etree.ElementTree as ET
           root=pathlib.Path(os.environ['FINANCE_STORAGE_ARTIFACT_DIR'])
-          for name, expected in [('stage-unit.xml',36),('stage-lifecycle.xml',19)]:
+          for name, expected in [('stage-unit.xml',53),('stage-lifecycle.xml',19)]:
               doc=ET.parse(root/name).getroot()
               assert sum(int(s.attrib['tests']) for s in doc.iter('testsuite'))==expected
               assert not any(list(doc.iter(k)) for k in ('failure','error','skipped'))
+          for label, disabled in [('enabled',False),('disabled',True)]:
+              row=json.loads((root/f'stage-provider-{label}.json').read_text())
+              assert row['provider_package']=='0.6.2' and row['disabled_by_test'] is disabled
+              assert row['readings']==[{'pragma':'cipher_use_hmac','row_type':'tuple','row_repr':"('0',)" if disabled else "('1',)",'value_types':['str']}]
+              assert row['connections_closed'] and row['stage_removed'] and row['descriptors_restored']
           receipts=[]
           for path in root.glob('*.json'):
               if path.name=='source-sha256.json': continue
@@ -84,7 +89,7 @@ jobs:
                   assert not row['violations']
                   receipts.append(path.name)
           assert len(receipts)==19, receipts
-          (root/'verdict.json').write_text(json.dumps({'correctness_cases':55,'resource_qualified':False,'production_qualified':False,'new_live_authority':False,'receipts':sorted(receipts)},indent=2)+'\n')
+          (root/'verdict.json').write_text(json.dumps({'correctness_cases':72,'resource_qualified':False,'production_qualified':False,'new_live_authority':False,'receipts':sorted(receipts)},indent=2)+'\n')
           PY_CHECK
       - name: Bound retained evidence including failures
         if: always()

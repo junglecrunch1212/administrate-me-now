@@ -2,11 +2,13 @@
 
 from dataclasses import replace
 import fcntl
+from importlib.metadata import version
 import json
 import os
 from pathlib import Path
 import secrets
 import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -84,6 +86,137 @@ def event_count(log):
     ).fetchone()[0]
 
 
+_PROVIDER_ROW = object()
+
+
+def observe_hmac_connections(monkeypatch, *, disabled=False, row=_PROVIDER_ROW):
+    from tests.fixtures import finance_staging_store
+
+    connect = finance_staging_store.sqlcipher3.connect
+    connections, readings = [], []
+
+    class ObservedConnection:
+        def __init__(self, raw):
+            self.raw, self.closed = raw, False
+
+        def execute(self, sql, *args):
+            cursor = self.raw.execute(sql, *args)
+            if disabled and sql.startswith("PRAGMA key="):
+                self.raw.execute("PRAGMA cipher_use_hmac=OFF").close()
+            if sql == "PRAGMA cipher_use_hmac":
+                actual = cursor.fetchone()
+                cursor.close()
+                readings.append(
+                    {
+                        "pragma": "cipher_use_hmac",
+                        "row_type": type(actual).__name__,
+                        "row_repr": repr(actual)[:128],
+                        "value_types": [type(v).__name__ for v in actual]
+                        if isinstance(actual, tuple)
+                        else [],
+                    }
+                )
+                return SimpleNamespace(
+                    fetchone=lambda: actual if row is _PROVIDER_ROW else row
+                )
+            return cursor
+
+        def close(self):
+            self.raw.close()
+            self.closed = True
+
+    def observed_connect(*args, **kwargs):
+        connection = ObservedConnection(connect(*args, **kwargs))
+        connections.append(connection)
+        return connection
+
+    monkeypatch.setattr(finance_staging_store.sqlcipher3, "connect", observed_connect)
+    return connections, readings
+
+
+@pytest.mark.parametrize("disabled", [False, True], ids=["enabled", "disabled"])
+def test_pinned_provider_hmac_and_constructor_cleanup(tmp_path, monkeypatch, disabled):
+    root = tmp_path / "synthetic-store-provider"
+    root.mkdir(mode=0o700)
+    context = {"operation": "e" * 32}
+    connections, readings = observe_hmac_connections(monkeypatch, disabled=disabled)
+    store = None
+    descriptors = set(os.listdir("/proc/self/fd"))
+    try:
+        if disabled:
+            with pytest.raises(StageError, match="^stage_page_authentication$"):
+                StageStore(
+                    root, context, secrets.token_bytes(32), secrets.token_bytes(32)
+                )
+        else:
+            store = StageStore(
+                root, context, secrets.token_bytes(32), secrets.token_bytes(32)
+            )
+        assert readings == [
+            {
+                "pragma": "cipher_use_hmac",
+                "row_type": "tuple",
+                "row_repr": "('0',)" if disabled else "('1',)",
+                "value_types": ["str"],
+            }
+        ]
+    finally:
+        if store is not None:
+            store.close()
+            cleanup(root, context["operation"])
+        evidence = {
+            "provider_package": version("sqlcipher3"),
+            "disabled_by_test": disabled,
+            "readings": readings,
+            "connections_closed": all(c.closed for c in connections),
+            "stage_removed": not list(root.iterdir()),
+            "descriptors_restored": set(os.listdir("/proc/self/fd")) == descriptors,
+        }
+        output = Path(os.environ["FINANCE_STORAGE_ARTIFACT_DIR"])
+        output.mkdir(parents=True, exist_ok=True)
+        name = "stage-provider-" + ("disabled" if disabled else "enabled") + ".json"
+        (output / name).write_text(json.dumps(evidence, indent=2) + "\n")
+    assert evidence["connections_closed"]
+    assert evidence["stage_removed"] and evidence["descriptors_restored"]
+
+
+@pytest.mark.parametrize(
+    "row",
+    [
+        (0,),
+        ("0",),
+        None,
+        (),
+        (None,),
+        ("ON",),
+        ("true",),
+        ("01",),
+        ("1 ",),
+        (1,),
+        (True,),
+        (1.0,),
+        (b"1",),
+        ("1", "1"),
+        ["1"],
+    ],
+)
+def test_hmac_guard_rejects_disabled_unknown_and_missing_rows(
+    tmp_path, monkeypatch, row
+):
+    root = tmp_path / "synthetic-store-hmac-rejection"
+    root.mkdir(mode=0o700)
+    connections, _ = observe_hmac_connections(monkeypatch, row=row)
+    with pytest.raises(StageError, match="^stage_page_authentication$"):
+        StageStore(
+            root,
+            {"operation": "f" * 32},
+            secrets.token_bytes(32),
+            secrets.token_bytes(32),
+        )
+    assert len(connections) == 1 and connections[0].closed
+    assert not list(root.iterdir())
+
+
 def test_encrypted_exact_roundtrip_seal_and_lazy_blobs(stage):
     raw = b"synthetic-secret-" + b"x" * (CHUNK + 17)
     stage.put("component", "blob:one", raw)
@@ -94,7 +227,7 @@ def test_encrypted_exact_roundtrip_seal_and_lazy_blobs(stage):
         "SELECT ordinal,length(body) FROM chunks WHERE name='blob:one' ORDER BY ordinal"
     ).fetchall() == [(0, CHUNK), (1, len(raw) - CHUNK)]
     assert raw[:16] not in (stage.path / "stage.db").read_bytes()
-    assert stage.conn.execute("PRAGMA cipher_use_hmac").fetchone() == (1,)
+    assert stage.conn.execute("PRAGMA cipher_use_hmac").fetchone() == ("1",)
     assert stage.conn.execute("PRAGMA max_page_count").fetchone()[0] * 4096 == MAX_DB
     assert stage.conn.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
 
