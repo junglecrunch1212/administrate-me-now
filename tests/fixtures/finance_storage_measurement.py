@@ -144,7 +144,9 @@ async def snapshot(runtime, storage):
     return result
 
 
-async def serve(root: Path, *, namespace_nonce: str, announced_tenant: str):
+async def serve(
+    root: Path, *, namespace_nonce: str, announced_tenant: str, focused=False
+):
     storage = SyntheticStorage(root, namespace_nonce=namespace_nonce)
     patches = pytest.MonkeyPatch()
     trace = Trace(root)
@@ -159,6 +161,16 @@ async def serve(root: Path, *, namespace_nonce: str, announced_tenant: str):
     trace.mark("runtime.namespace_verified")
     app = create_application(settings)
     storage.install(app, patches)
+    successor_committed = asyncio.Event()
+    if focused:
+
+        async def delayed_successor(stage):
+            if stage == "committed" and REQUEST.get() == "successor":
+                successor_committed.set()
+                trace.mark("focused.successor_committed")
+                await asyncio.sleep(5)
+
+        storage.hook = delayed_successor
 
     @app.middleware("http")
     async def timed(request, call_next):
@@ -227,6 +239,16 @@ async def serve(root: Path, *, namespace_nonce: str, announced_tenant: str):
             elif op == "replay":
                 await replay(runtime, storage)
                 result = await snapshot(runtime, storage)
+            elif op == "wait_successor_committed" and focused:
+                await asyncio.wait_for(successor_committed.wait(), timeout=30)
+                result = {"committed": True}
+            elif op == "settled_import" and focused:
+                import_lock = runtime.settings_command_locks.setdefault(
+                    "finance-closed-package-import", asyncio.Lock()
+                )
+                async with import_lock:
+                    await storage.close()
+                    result = await snapshot(runtime, storage)
             elif op == "shutdown":
                 import_lock = runtime.settings_command_locks.setdefault(
                     "finance-closed-package-import", asyncio.Lock()
@@ -236,6 +258,10 @@ async def serve(root: Path, *, namespace_nonce: str, announced_tenant: str):
                     result = await snapshot(runtime, storage)
             else:
                 raise ValueError("synthetic measurement command denied")
+            if focused and op == "shutdown":
+                # Reproduce the original four-second waiter timeout without
+                # extending work or cleanup deadlines or losing the result.
+                await asyncio.sleep(5)
             trace.mark("control.end", operation=op)
             trace.flush()
             write_json(sys.stdout.buffer, result)

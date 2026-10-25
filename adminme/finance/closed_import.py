@@ -9,7 +9,7 @@ from typing import Any
 from dataclasses import dataclass
 
 from adminme.events.schemas.finance_import import FinanceImportManifest, ImportBlobPin
-from adminme.finance.dated_projection import validate_projection
+from adminme.finance.dated_projection import _validate_owned_projection
 from adminme.finance.publication import (
     PublicationError,
     canonical_bytes,
@@ -137,7 +137,7 @@ def _decode_packet(packet, manifest):
             projection_raw = _decode(packet.pop("projection"), manifest.projection)
             projection_value = _canonical_json(projection_raw)
             del projection_raw
-            projection = validate_projection(projection_value)
+            projection = _validate_owned_projection(projection_value)
             if any(
                 projection.get(k) != publication[k]
                 for k in ("tenant_id", "owner_id", "book_id")

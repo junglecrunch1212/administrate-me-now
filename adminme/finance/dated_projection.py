@@ -351,12 +351,27 @@ def _json_snapshot(value: Any) -> Any:
 
 
 def validate_projection(value: dict[str, Any]) -> dict[str, Any]:
-    """Validate the complete producer export without recalculating its forecast."""
+    """Validate a detached snapshot of caller-owned producer containers."""
     try:
         try:
             result = _json_snapshot(value)
         except TypeError:
             result = json.loads(canonical_bytes(value))
+        return _validate_owned_projection(result)
+    except PublicationError:
+        raise
+    except Exception:
+        raise PublicationError("projection_invalid") from None
+
+
+def _validate_owned_projection(result: dict[str, Any]) -> dict[str, Any]:
+    """Validate an exclusively owned JSON decode without copying its containers.
+
+    Only the closed-packet decoder supplies this private path. All size, hash,
+    schema, receipt and semantic checks remain identical to the public path;
+    callers with shared or mutable input must use validate_projection.
+    """
+    try:
         raw = canonical_bytes(result)
         if len(raw) > MAX_BYTES:
             raise PublicationError("projection_size_limit")

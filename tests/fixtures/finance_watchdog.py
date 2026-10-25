@@ -140,6 +140,7 @@ def notify(kind, **fields):
 def main(mode, directory):
     if sys.platform != "linux" or mode not in {
         "full",
+        "focused-import",
         "setup",
         "setup-stop-before",
         "setup-stop-packets",
