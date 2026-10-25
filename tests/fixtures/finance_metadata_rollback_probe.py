@@ -42,6 +42,7 @@ def main():
     os.chdir(source)
     from fastapi.testclient import TestClient
     from adminme.events.registry import registry
+    from adminme.events.bus import EventBus
     from adminme.runtime import application
     from tests.acceptance.test_openclaw_native_seam import _settings, DEMO_HEADERS
     import asyncio
@@ -57,6 +58,21 @@ def main():
         "metadata_enablement": False,
         "scope": "synthetic runtime/state compatibility, not updater or live-device qualification",
     }
+
+    active_drains = set()
+    original_drain_once = EventBus._drain_once
+
+    async def tracked_drain_once(bus, subscriber):
+        # Both exact releases expose this drain method but no draining field.
+        # Observe its lifetime without changing event delivery or its result.
+        identity = (id(bus), subscriber.subscriber_id)
+        active_drains.add(identity)
+        try:
+            return await original_drain_once(bus, subscriber)
+        finally:
+            active_drains.remove(identity)
+
+    EventBus._drain_once = tracked_drain_once
 
     async def inventory(runtime):
         rows = [row async for row in runtime.event_log.read_since()]
@@ -82,7 +98,7 @@ def main():
             status = await runtime.bus.subscriber_status(name)
             values[name] = {
                 "lag": status["lag_count"],
-                "draining": subscriber.draining,
+                "draining": (id(runtime.bus), name) in active_drains,
                 "triggered": subscriber.trigger.is_set(),
                 "degraded": subscriber.degraded,
                 "poison": subscriber.poison_event_id,
@@ -263,6 +279,7 @@ def main():
             result["second_clean_shutdown"] = True
         result["state"] = "passed"
     finally:
+        EventBus._drain_once = original_drain_once
         report.write_text(json.dumps(result, indent=2) + "\n")
 
 
