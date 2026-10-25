@@ -157,6 +157,14 @@ back the whole Money transaction and the bus advances only its successful prefix
 Replay uses the same full proof checks and actual archived bytes. Event pages are
 byte-bounded without treating a short page as EOF.
 
+**PRESERVE** Context Fabric's metadata-only graph contract from
+`ADR-0008-DETERMINISTIC-CONTEXT-FABRIC.md`: for the three closed Finance event
+types, delivery and replay retain encoded payloads and index only envelope
+coordinates and lineage. This avoids decoding unused large financial bodies in
+the parent. Node/edge values, owner and visibility scope, source coordinates and
+successful-prefix checkpoints remain identical to replaying decoded envelopes;
+the production import/rebuild regression compares every graph column.
+
 Each child uses the same pinned Python with isolated import paths, a credential-free
 environment, private stdio pipes, CORE=0 and a 60-second CPU limit. Parent watchdogs
 bound preparation to 60 seconds and projection application to 30 seconds. Owned
@@ -212,7 +220,12 @@ allocation frame from immediately before upload, retains raw core outcomes,
 compares live allocations after GC and bounded subscriber settlement, and reports
 remaining lag/degradation. Its instrumentation overhead cannot establish latency
 or resource acceptance. Python-tracked bytes do not attribute SQLCipher native
-allocations or allocator free pages; unexplained RSS is reported as such.
+allocations or allocator free pages; unexplained RSS is reported as such. After
+recording the original retention observations, this diagnostic additionally
+requests `PRAGMA shrink_memory` on the owned event-log and Money connection
+threads, recording each connection's unchanged cache settings and before/after
+RSS. These post-measurement probes never replace acceptance measurements, close
+connections, or change persistent state or production behavior.
 
 Dated structural validation retains at most 32 successful receipts containing
 only the pinned-schema and complete canonical-payload hashes. Every reuse hashes

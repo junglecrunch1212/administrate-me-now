@@ -961,7 +961,10 @@ class ProjectionRunner:
                     "finance.projection_verified",
                 }
             )
-            if name == "money"
+            # Context Fabric indexes only envelope coordinates and lineage
+            # for these types; it never consumes their Finance bodies. Retain
+            # the raw log representation instead of decoding it in the parent.
+            if name in {"money", "context_fabric"}
             else frozenset()
         )
 

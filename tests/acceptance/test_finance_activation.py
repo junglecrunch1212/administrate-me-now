@@ -135,6 +135,84 @@ async def events(runtime, types):
     return [event async for event in runtime.event_log.read_since(types=types)]
 
 
+def test_context_fabric_finance_metadata_matches_decoded_history_and_replay(
+    tmp_path, monkeypatch
+):
+    import sqlite3
+
+    from adminme.finance.worker_protocol import FINANCE_TYPES
+    from adminme.projections.context_fabric import ContextFabricProjection
+
+    observed = []
+    original = ContextFabricProjection.apply
+
+    def observe(self, envelope, conn):
+        if envelope["type"] in FINANCE_TYPES:
+            assert "payload" not in envelope
+            assert isinstance(envelope["_payload_json"], str)
+            observed.append(envelope["event_id"])
+        return original(self, envelope, conn)
+
+    monkeypatch.setattr(ContextFabricProjection, "apply", observe)
+    settings = configured(tmp_path)
+    p, d, package = fixture(settings.instance.tenant_id, total_events=24)
+    manifest, packet = packet_for(p, d, package)
+
+    def graph(conn):
+        return {
+            table: sorted(
+                (tuple(row) for row in conn.execute("SELECT * FROM " + table)),
+                key=repr,
+            )
+            for table in ("context_nodes", "context_edges")
+        }
+
+    with TestClient(create_application(settings)) as client:
+        runtime = client.app.state.runtime
+        control(client, manifest["binding"])
+        result = upload(client, approve(client, manifest), packet)
+        assert result.status_code == 200, result.text
+
+        async def settled_history():
+            async with asyncio.timeout(5):
+                while True:
+                    status = await runtime.bus.subscriber_status(
+                        "projection:context_fabric"
+                    )
+                    assert not status["degraded"], status
+                    if not status["lag_count"] and not status["draining"]:
+                        return [event async for event in runtime.event_log.read_since()]
+                    await asyncio.sleep(0.01)
+
+        history = client.portal.call(settled_history)
+        finance = [event for event in history if event["type"] in FINANCE_TYPES]
+        assert {event["type"] for event in finance} == FINANCE_TYPES
+        assert set(observed) == {event["event_id"] for event in finance}
+        # Replay the original decoded envelopes into a separate synthetic graph.
+        # Comparing every node/edge column preserves owner, visibility, source
+        # coordinates and lineage, rather than merely counting indexed events.
+        reference = sqlite3.connect(":memory:")
+        reference.row_factory = sqlite3.Row
+        try:
+            reference.executescript(ContextFabricProjection.schema_path.read_text())
+            projection = ContextFabricProjection()
+            for event in history:
+                original(projection, event, reference)
+            expected = graph(reference)
+        finally:
+            reference.close()
+        assert (
+            client.portal.call(runtime.projections.read, "context_fabric", graph)
+            == expected
+        )
+        client.portal.call(runtime.projections.rebuild, "context_fabric")
+        assert (
+            client.portal.call(runtime.projections.read, "context_fabric", graph)
+            == expected
+        )
+        assert all(observed.count(event["event_id"]) == 2 for event in finance)
+
+
 @pytest.mark.parametrize("witness_factory", ["activation", "resource"])
 def test_composed_browser_projection_imports_without_shared_evidence_lists(
     tmp_path, witness_factory
