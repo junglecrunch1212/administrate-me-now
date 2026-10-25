@@ -1143,7 +1143,16 @@ def test_explicit_rollback_restores_predecessor_settings_control_bytes(
 
 @pytest.mark.parametrize("reuse", [False, True])
 @pytest.mark.parametrize(
-    "workspace_case", ["unchanged", "changed", "failure", "crash", "rollback"]
+    "workspace_case",
+    [
+        "unchanged",
+        "changed",
+        "failure",
+        "crash",
+        "rollback",
+        "disk_before",
+        "disk_after",
+    ],
 )
 def test_transactional_activation_orders_fresh_rehearsal_before_selectors(
     tmp_path: Path,
@@ -1222,7 +1231,11 @@ def test_transactional_activation_orders_fresh_rehearsal_before_selectors(
         lambda *_args, **_kwargs: {"compatible": True},
     )
     monkeypatch.setattr(manager, "_preflight_keychain_access", lambda _candidate: None)
-    monkeypatch.setattr(manager, "_publish_release", lambda *_args: release)
+    monkeypatch.setattr(
+        manager,
+        "_publish_release",
+        lambda *_args: events.append("action:publish") or release,
+    )
     snapshot = SimpleNamespace(public=lambda: {"binding": "fixture"})
     pending = {
         "attestation_id": PENDING_ID,
@@ -1359,6 +1372,39 @@ def test_transactional_activation_orders_fresh_rehearsal_before_selectors(
         return original_transition(value, phase, **updates)
 
     monkeypatch.setattr(manager.activation_journal, "transition", observe_transition)
+
+    if workspace_case in {"disk_before", "disk_after"}:
+        controls = {
+            path: path.read_bytes()
+            for path in (paths.instance_dir / "config").rglob("*")
+            if path.is_file()
+        }
+        monkeypatch.setattr(
+            "bootstrap.storage_headroom._volume",
+            lambda _path: (
+                1,
+                (
+                    5
+                    if workspace_case == "disk_before" or "action:publish" in events
+                    else 100
+                )
+                * 1024**3,
+            ),
+        )
+        try:
+            with pytest.raises(UpgradeError, match="disk headroom insufficient"):
+                manager.activate(candidate)
+        finally:
+            os.close(activity_descriptor)
+        assert ("action:publish" in events) is (workspace_case == "disk_after")
+        assert not manager.activation_journal.path.exists()
+        assert "action:stop" not in events
+        assert "action:backup" not in events
+        assert "action:rehearsal" not in events
+        assert (paths.app_dir / "current-release.json").read_bytes() == pointer_payload
+        assert instruction_path.read_bytes() == original_instructions
+        assert all(path.read_bytes() == original for path, original in controls.items())
+        return
 
     if workspace_case == "failure":
 

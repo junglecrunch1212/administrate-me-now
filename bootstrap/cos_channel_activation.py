@@ -91,6 +91,7 @@ from bootstrap.cos_recovery_history import (
     initial_readiness,
     window_vector,
 )
+from bootstrap.storage_headroom import StorageHeadroomError, require_deployment_headroom
 from bootstrap.contracts import DeploymentPaths, atomic_write, load_versions
 from bootstrap.deployment_budget import deployment_clock
 from bootstrap.secrets import secret_store
@@ -1491,6 +1492,16 @@ class CoSChannelActivator:
             if repair is not None:
                 journal["submission_repair_manifest"] = repair.model_dump(mode="json")
                 journal["submission_repair"] = repair_binding(repair)
+            try:
+                require_deployment_headroom(
+                    self.paths,
+                    backup_copies=3 if maintenance_plan is not None else 1,
+                    release_sources=(release, self.repository)
+                    if maintenance_plan is not None
+                    else (),
+                )
+            except StorageHeadroomError as exc:
+                raise CoSActivationError(str(exc)) from exc
             self._write_journal(journal, "prepared")
             return self._complete_enter_observation(journal, release=release)
 
@@ -2298,6 +2309,10 @@ class CoSChannelActivator:
                         if path.exists()
                         else None
                     )
+            try:
+                require_deployment_headroom(self.paths, backup_copies=1)
+            except StorageHeadroomError as exc:
+                raise CoSActivationError(str(exc)) from exc
             self._write_journal(journal, "prepared")
             try:
                 self.services.stop()
