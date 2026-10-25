@@ -38,6 +38,10 @@ for module in prepared_runtime workspace_instructions storage_headroom; do
     exit 1
   fi
 done
+poetry run ruff check bootstrap adminme/source_assurance.py scripts/release_scope.py "${tests[@]%%::*}"
+poetry run ruff format --check bootstrap adminme/source_assurance.py scripts/release_scope.py "${tests[@]%%::*}"
+poetry run mypy bootstrap bridge/adminme_bridge adminme/source_assurance.py scripts/release_scope.py
+poetry run pyright bootstrap adminme/source_assurance.py scripts/release_scope.py
 poetry run pytest -p no:cacheprovider --runxfail -q -ra \
   --basetemp="$RUNNER_TEMP/updater-delivery-tests" \
   --junitxml="$RUNNER_TEMP/updater-delivery.xml" "${tests[@]}"
@@ -54,10 +58,6 @@ tests = sum(int(suite.attrib["tests"]) for suite in suites)
 assert tests > 0 and len(list(root.iter("testcase"))) == tests
 assert not any(list(root.iter(k)) for k in ("skipped", "failure", "error"))
 PY_CHECK
-poetry run ruff check bootstrap adminme/source_assurance.py scripts/release_scope.py "${tests[@]%%::*}"
-poetry run ruff format --check bootstrap adminme/source_assurance.py scripts/release_scope.py "${tests[@]%%::*}"
-poetry run mypy bootstrap bridge/adminme_bridge adminme/source_assurance.py scripts/release_scope.py
-poetry run pyright bootstrap adminme/source_assurance.py scripts/release_scope.py
 bash -n bootstrap/update.sh scripts/acceptance/updater-delivery-release.sh
 bash scripts/verify_invariants.sh
 poetry check --lock
