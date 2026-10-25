@@ -144,21 +144,19 @@ async def snapshot(runtime, storage):
     return result
 
 
-async def serve(root: Path):
-    storage = SyntheticStorage(root)
+async def serve(root: Path, *, namespace_nonce: str, announced_tenant: str):
+    storage = SyntheticStorage(root, namespace_nonce=namespace_nonce)
     patches = pytest.MonkeyPatch()
     trace = Trace(root)
     trace.mark("runtime.start")
     instrument(storage, patches, trace)
     settings = storage.settings()
-    # This is synthetic identity metadata, not readiness or storage authority.
-    # Publish it before lifespan startup so independent packet construction can
-    # overlap startup without moving the controller's process-birth clock.
-    trace.mark("runtime.fixture_coordinates")
-    write_json(
-        sys.stdout.buffer,
-        {"fixture_coordinates": 1, "tenant": settings.instance.tenant_id},
-    )
+    if settings.instance.tenant_id != announced_tenant:
+        trace.mark("runtime.namespace_mismatch")
+        trace.close()
+        patches.undo()
+        raise ValueError("synthetic_startup_tenant_mismatch")
+    trace.mark("runtime.namespace_verified")
     app = create_application(settings)
     storage.install(app, patches)
 

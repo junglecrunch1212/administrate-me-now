@@ -72,6 +72,9 @@ def process_row(pid):
 
 
 class OwnedRun:
+    runtime_script = "finance_storage_cases.py"
+    runtime_case = None
+
     def __init__(self, name, root):
         resource.setrlimit(resource.RLIMIT_CPU, (180, 180))
         resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
@@ -106,9 +109,10 @@ class OwnedRun:
                 "-B",
                 str(
                     Path(__file__).resolve().parents[1]
-                    / "fixtures/finance_storage_cases.py"
+                    / "fixtures"
+                    / self.runtime_script
                 ),
-                name,
+                self.runtime_case or name,
                 str(root),
             ],
             stdin=subprocess.PIPE,
@@ -250,7 +254,7 @@ class OwnedRun:
             self.process.stdout.close()
             self.error_file.close()
             for trace in self.root.glob("measurement-*.jsonl"):
-                shutil.copyfile(trace, self.output / trace.name)
+                shutil.copyfile(trace, self.output / (self.name + "-" + trace.name))
             shutil.rmtree(self.root)
             self.record["cleanup"]["scratch_removed"] = not self.root.exists()
             self.record["maxima"] = {

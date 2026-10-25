@@ -33,6 +33,7 @@ from tests.acceptance.test_finance_storage_isolation import (
 from tests.acceptance.test_openclaw_native_seam import DEMO_HEADERS, PRINCIPAL
 from tests.fixtures.finance_import_load import sized_package
 from tests.fixtures.finance_planning import seal
+from tests.fixtures.finance_startup import StartupFrames
 from tests.fixtures.finance_provenance import seal_publication
 
 pytestmark = pytest.mark.skipif(
@@ -55,7 +56,10 @@ PLANNING_PATH = "/api/member/v1/finance/planning"
 
 
 class MeasuredRun(OwnedRun):
-    def __init__(self, root):
+    runtime_script = "finance_startup.py"
+    runtime_case = "measured_lifetime"
+
+    def __init__(self, root, *, name="measured_lifetime"):
         self.sample_lock = threading.Lock()
         self.pipe_lock = threading.Lock()
         self.calls = set()
@@ -63,9 +67,10 @@ class MeasuredRun(OwnedRun):
         self.setup_stop = threading.Event()
         self.setup_trace_lock = threading.Lock()
         self.setup_stages = []
-        self.startup_received = 0
-        self.http_ready = False
-        super().__init__("measured_lifetime", root)
+        self.startup = StartupFrames()
+        self.setup_hook = None
+        self.client = None
+        super().__init__(name, root)
         self.record["setup_stages"] = self.setup_stages
         self.setup_mark("controller.started", process_birth=self.started)
 
@@ -121,17 +126,21 @@ class MeasuredRun(OwnedRun):
 
     def command(self, op):
         with self.pipe_lock:
-            value = super().command(op) if op is not None else self.receive()
             if op is None:
-                self.startup_received += 1
-                self.http_ready = self.http_ready or value.get("ready") is True
+                value = self.startup.read(self.process.stdout)
                 self.setup_mark(
                     "runtime.startup_receipt",
-                    frame=self.startup_received,
+                    frame=self.startup.count,
                     fixture_coordinates=value.get("fixture_coordinates"),
                     http_ready=value.get("ready"),
                 )
-            return value
+                return value
+            return self.startup.control_result(super().command(op))
+
+    async def setup_boundary(self, name):
+        self.setup_mark("boundary." + name)
+        if self.setup_hook is not None:
+            await self.setup_hook(name)
 
     async def thread(self, function, *args):
         task = asyncio.create_task(asyncio.to_thread(function, *args))
@@ -358,6 +367,195 @@ def test_baseline_verdict_preserves_invalidity_and_absolute_failure(mutation):
     assert set(result["against_each"]) == {"left", "right"}
 
 
+async def bounded_work(run, active, work, end):
+    report = run.record
+    task = asyncio.create_task(work)
+    active.add(task)
+    try:
+        done, _ = await asyncio.wait(
+            {task}, timeout=max(0, run.started + end - time.monotonic())
+        )
+        if not done or time.monotonic() > run.started + end:
+            report["faults"].append(
+                {"kind": "phase_deadline", "end": end, "at": time.monotonic()}
+            )
+            task.cancel()
+            raise TimeoutError("fixed synthetic phase deadline")
+        return task.result()
+    finally:
+        if task.done():
+            active.discard(task)
+
+
+async def setup_runtime(run, active):
+    report = run.record
+
+    async def setup():
+        await run.setup_boundary("before_coordinates")
+        with run.setup_stage("runtime.coordinates_wait"):
+            coordinates = await run.call(None)
+            assert set(coordinates) == {"fixture_coordinates", "tenant"}
+            assert coordinates["fixture_coordinates"] == 1
+            assert isinstance(coordinates["tenant"], str)
+
+        await run.setup_boundary("coordinates")
+
+        async def readiness():
+            with run.setup_stage("runtime.readiness_branch"):
+                ready = await run.call(None)
+                assert ready["ready"]
+                assert ready["tenant"] == coordinates["tenant"]
+                await run.setup_boundary("http_ready")
+                return ready
+
+        run.setup_mark("branches.submitted")
+        fixture_task = asyncio.create_task(
+            run.thread(prepare_packets, run, coordinates)
+        )
+        readiness_task = asyncio.create_task(readiness())
+        branches = (fixture_task, readiness_task)
+        active.update(branches)
+        try:
+            packets, ready = await asyncio.gather(*branches)
+            run.setup_check()
+            run.setup_mark("branches.joined")
+            await run.setup_boundary("joined")
+            return ready, *packets
+        except BaseException as exc:
+            run.setup_stop.set()
+            run.setup_mark("branches.join_failed", error=type(exc).__name__)
+            for branch in branches:
+                branch.cancel()
+            await asyncio.gather(*branches, return_exceptions=True)
+            raise
+        finally:
+            active.difference_update(branches)
+
+    (
+        ready,
+        manifest,
+        next_manifest,
+        wire,
+        next_wire,
+        selection,
+        expected,
+    ) = await bounded_work(run, active, setup(), 10)
+    with run.setup_stage("controller.client"):
+        client = run.client = httpx.AsyncClient(
+            base_url=ready["url"],
+            trust_env=False,
+            timeout=1,
+            limits=httpx.Limits(
+                max_connections=6, max_keepalive_connections=6, keepalive_expiry=4
+            ),
+        )
+
+    async def controls():
+        control = await client.put(
+            CONTROL,
+            headers=DEMO_HEADERS,
+            json={
+                "request_id": str(uuid4()),
+                "expected_revision": 0,
+                "binding": manifest["binding"],
+                "books_enabled": True,
+                "cos_analysis_enabled": False,
+            },
+        )
+        assert control.status_code == 200, control.text
+        report["setup_control"] = control.json()
+        await run.setup_boundary("control")
+        ids = []
+        report["setup_approval_ids"] = ids
+        for value in (manifest, next_manifest):
+            response = await client.post(
+                APPROVALS,
+                headers=DEMO_HEADERS,
+                json={
+                    "request_id": str(uuid4()),
+                    "expected_policy_revision": 1,
+                    "manifest": value,
+                },
+            )
+            assert response.status_code == 200, response.text
+            ids.append(response.json()["approval_event_id"])
+            await run.setup_boundary("approval_" + str(len(ids)))
+        state = await run.call("inspect")
+        assert settled(state), state["consumers"]
+        await run.setup_boundary("settled")
+        return ids, state
+
+    with run.setup_stage("runtime.controls_and_settlement"):
+        approvals, state = await bounded_work(run, active, controls(), 10)
+    run.setup_mark("setup.completed")
+    report["setup"] = {
+        "finished": time.monotonic(),
+        "state": state,
+        "resources": run.sample(),
+    }
+
+    return (
+        ready,
+        manifest,
+        next_manifest,
+        wire,
+        next_wire,
+        selection,
+        expected,
+        approvals,
+        state,
+    )
+
+
+async def cleanup_run(run, active, *, shutdown_sent=False):
+    report = run.record
+    run.setup_stop.set()
+    run.setup_mark("owned_work.stopping")
+    run.finish_work()
+    cleanup_started = time.monotonic()
+    for task in active:
+        task.cancel()
+    try:
+        async with asyncio.timeout(max(4, run.started + 10 - time.monotonic())):
+            if active:
+                await asyncio.gather(*active, return_exceptions=True)
+            if run.calls:
+                await asyncio.gather(
+                    *(asyncio.shield(call) for call in list(run.calls)),
+                    return_exceptions=True,
+                )
+            if not shutdown_sent and run.process.poll() is None:
+                # A cancelled setup may leave the second startup frame
+                # unread. Consume it before issuing a control command.
+                while not run.startup.ready and run.startup.count < 2:
+                    await run.call(None)
+                assert run.startup.ready, "synthetic HTTP readiness unavailable"
+                report["cleanup_shutdown"] = await run.call("shutdown")
+    except BaseException as exc:
+        report["cleanup_request_error"] = type(exc).__name__
+    if run.client is not None:
+        await run.client.aclose()
+    try:
+        run.close()
+    finally:
+        if run.calls:
+            _, unresolved = await asyncio.wait(
+                list(run.calls),
+                timeout=max(0, cleanup_started + 29 - time.monotonic()),
+            )
+            report["unsettled_owned_calls"] = len(unresolved)
+        report["total_cleanup_seconds"] = time.monotonic() - cleanup_started
+        run.setup_mark(
+            "owned_work.cleaned",
+            unresolved_calls=report.get("unsettled_owned_calls", 0),
+        )
+        (run.output / (run.name + ".json")).write_text(
+            json.dumps(report, indent=2) + "\n"
+        )
+    assert report["total_cleanup_seconds"] < 30
+    assert not report.get("unsettled_owned_calls", 0)
+
+
 async def test_fixed_schedule_representative_storage_measurement(tmp_path):
     run = MeasuredRun(tmp_path / "measured")
     report = run.record
@@ -399,61 +597,9 @@ async def test_fixed_schedule_representative_storage_measurement(tmp_path):
             await asyncio.sleep(remaining)
 
     async def bounded(work, end):
-        task = asyncio.create_task(work)
-        active.add(task)
-        try:
-            done, _ = await asyncio.wait(
-                {task}, timeout=max(0, run.started + end - time.monotonic())
-            )
-            if not done or time.monotonic() > run.started + end:
-                report["faults"].append(
-                    {"kind": "phase_deadline", "end": end, "at": time.monotonic()}
-                )
-                task.cancel()
-                raise TimeoutError("fixed synthetic phase deadline")
-            return task.result()
-        finally:
-            if task.done():
-                active.discard(task)
+        return await bounded_work(run, active, work, end)
 
     try:
-
-        async def setup():
-            with run.setup_stage("runtime.coordinates_wait"):
-                coordinates = await run.call(None)
-                assert set(coordinates) == {"fixture_coordinates", "tenant"}
-                assert coordinates["fixture_coordinates"] == 1
-                assert isinstance(coordinates["tenant"], str)
-
-            async def readiness():
-                with run.setup_stage("runtime.readiness_branch"):
-                    ready = await run.call(None)
-                    assert ready["ready"]
-                    assert ready["tenant"] == coordinates["tenant"]
-                    return ready
-
-            run.setup_mark("branches.submitted")
-            fixture_task = asyncio.create_task(
-                run.thread(prepare_packets, run, coordinates)
-            )
-            readiness_task = asyncio.create_task(readiness())
-            branches = (fixture_task, readiness_task)
-            active.update(branches)
-            try:
-                packets, ready = await asyncio.gather(*branches)
-                run.setup_check()
-                run.setup_mark("branches.joined")
-                return ready, *packets
-            except BaseException as exc:
-                run.setup_stop.set()
-                run.setup_mark("branches.join_failed", error=type(exc).__name__)
-                for branch in branches:
-                    branch.cancel()
-                await asyncio.gather(*branches, return_exceptions=True)
-                raise
-            finally:
-                active.difference_update(branches)
-
         (
             ready,
             manifest,
@@ -462,55 +608,10 @@ async def test_fixed_schedule_representative_storage_measurement(tmp_path):
             next_wire,
             selection,
             expected,
-        ) = await bounded(setup(), 10)
-        with run.setup_stage("controller.client"):
-            client = httpx.AsyncClient(
-                base_url=ready["url"],
-                trust_env=False,
-                timeout=1,
-                limits=httpx.Limits(
-                    max_connections=6, max_keepalive_connections=6, keepalive_expiry=4
-                ),
-            )
-
-        async def controls():
-            control = await client.put(
-                CONTROL,
-                headers=DEMO_HEADERS,
-                json={
-                    "request_id": str(uuid4()),
-                    "expected_revision": 0,
-                    "binding": manifest["binding"],
-                    "books_enabled": True,
-                    "cos_analysis_enabled": False,
-                },
-            )
-            assert control.status_code == 200, control.text
-            ids = []
-            for value in (manifest, next_manifest):
-                response = await client.post(
-                    APPROVALS,
-                    headers=DEMO_HEADERS,
-                    json={
-                        "request_id": str(uuid4()),
-                        "expected_policy_revision": 1,
-                        "manifest": value,
-                    },
-                )
-                assert response.status_code == 200, response.text
-                ids.append(response.json()["approval_event_id"])
-            state = await run.call("inspect")
-            assert settled(state), state["consumers"]
-            return ids, state
-
-        with run.setup_stage("runtime.controls_and_settlement"):
-            approvals, state = await bounded(controls(), 10)
-        run.setup_mark("setup.completed")
-        report["setup"] = {
-            "finished": time.monotonic(),
-            "state": state,
-            "resources": run.sample(),
-        }
+            approvals,
+            state,
+        ) = await setup_runtime(run, active)
+        client = run.client
         initial_authority = state["authority"]
 
         async def import_sequence():
@@ -767,52 +868,16 @@ async def test_fixed_schedule_representative_storage_measurement(tmp_path):
         }
         raise
     finally:
-        run.setup_stop.set()
-        run.setup_mark("owned_work.stopping")
-        run.finish_work()
-        cleanup_started = time.monotonic()
-        for task in active:
-            task.cancel()
         try:
-            async with asyncio.timeout(4):
-                if active:
-                    await asyncio.gather(*active, return_exceptions=True)
-                if run.calls:
-                    await asyncio.gather(*list(run.calls), return_exceptions=True)
-                if not shutdown_sent and run.process.poll() is None:
-                    # A cancelled setup may leave the second startup frame
-                    # unread. Consume it before issuing a control command.
-                    while not run.http_ready and run.startup_received < 2:
-                        await run.call(None)
-                    assert run.http_ready, "synthetic HTTP readiness unavailable"
-                    report["cleanup_shutdown"] = await run.call("shutdown")
-        except BaseException as exc:
-            report["cleanup_request_error"] = type(exc).__name__
-        if client is not None:
-            await client.aclose()
-        try:
-            run.close()
+            await cleanup_run(run, active, shutdown_sent=shutdown_sent)
         finally:
-            if run.calls:
-                _, unresolved = await asyncio.wait(
-                    list(run.calls),
-                    timeout=max(0, cleanup_started + 29 - time.monotonic()),
-                )
-                report["unsettled_owned_calls"] = len(unresolved)
-            report["total_cleanup_seconds"] = time.monotonic() - cleanup_started
-            run.setup_mark(
-                "owned_work.cleaned",
-                unresolved_calls=report.get("unsettled_owned_calls", 0),
-            )
             try:
                 summarize(report)
             except BaseException as exc:
                 report["summary_error"] = type(exc).__name__
-            (run.output / "measured_lifetime.json").write_text(
+            (run.output / (run.name + ".json")).write_text(
                 json.dumps(report, indent=2) + "\n"
             )
-        assert report["total_cleanup_seconds"] < 30
-        assert not report.get("unsettled_owned_calls", 0)
         assert not completed or report["work_elapsed_seconds"] <= 180
 
 

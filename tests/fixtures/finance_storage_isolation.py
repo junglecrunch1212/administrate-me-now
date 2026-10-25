@@ -76,9 +76,13 @@ class EventReference:
 class SyntheticStorage:
     """One temporary authority, one pipe owner and one executor at a time."""
 
-    def __init__(self, root: Path):
-        # The caller cannot nominate existing DBs or supply a production key.
-        self.root = root / ("synthetic-store-" + secrets.token_hex(8))
+    def __init__(self, root: Path, *, namespace_nonce: str | None = None):
+        from tests.fixtures.finance_startup import store_name
+
+        # Only an internal fresh namespace nonce is accepted, never a key or DB.
+        self.root = root / store_name(
+            secrets.token_hex(8) if namespace_nonce is None else namespace_nonce
+        )
         self.root.mkdir(mode=0o700)
         self.key = secrets.token_bytes(32)
         self.runtime = None
