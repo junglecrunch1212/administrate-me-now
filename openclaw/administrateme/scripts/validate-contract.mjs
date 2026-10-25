@@ -51,6 +51,7 @@ const expectedTools = [
   "administrateme_service_private_state",
   "administrateme_service_context",
   "administrateme_workstation_inventory",
+  "administrateme_workstation_work",
 ];
 
 function assert(condition, message) {
@@ -65,6 +66,7 @@ assert(pkg.openclaw.build.openclawCommit === expectedCommit, "source commit pin"
 assert(pkg.engines.node === expectedNode, "exact OpenClaw Node engine");
 assert(pkg.openclaw.extensions[0] === "./src/index.ts", "source entrypoint");
 assert(pkg.openclaw.runtimeExtensions[0] === "./dist/index.js", "runtime entrypoint");
+assert(manifest.contracts.nativeAccountApps === "disabled", "ambient native account apps disabled");
 assert(JSON.stringify(manifest.contracts.tools) === JSON.stringify(expectedTools), "typed tool declarations");
 assert(JSON.stringify(manifest.contracts.serviceWorkspaceFiles) === JSON.stringify(["AGENTS.md", "IDENTITY.md"]), "established service workspace declaration");
 for (const filename of manifest.contracts.serviceWorkspaceFiles) {

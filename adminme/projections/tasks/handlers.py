@@ -1664,7 +1664,13 @@ def apply_source_read_receipt(
         or p.get("context_scope") != "service_private"
         or p.get("authority_grant_id") is not None
         or p.get("operation")
-        not in {"tools.service-context", "tools.service-private-state"}
+        not in {
+            "tools.service-context",
+            "tools.service-private-state",
+            "tools.workstation-work.seed",
+            "tools.workstation-browser.seed",
+            "tools.workstation-browser.capture",
+        }
     ):
         return
     for source in p["source_read_authorities"]:

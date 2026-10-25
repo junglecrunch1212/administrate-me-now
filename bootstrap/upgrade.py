@@ -42,6 +42,7 @@ from bootstrap.communication_intake import (
     CommunicationIntakeInspectionError,
     required_instance_policies,
 )
+from bootstrap.storage_headroom import StorageHeadroomError, require_deployment_headroom
 from bootstrap.contracts import (
     PROJECTION_NAMES,
     DeploymentPaths,
@@ -2562,7 +2563,19 @@ class UpgradeManager:
         )
         if repair_adapter_ids is None:
             repair_adapter_ids = frozenset()
+        try:
+            require_deployment_headroom(
+                self.paths, backup_copies=2, release_sources=(active_root, candidate)
+            )
+        except StorageHeadroomError as exc:
+            raise UpgradeError(str(exc)) from exc
         release = self._publish_release(candidate, commit)
+        # Preparation can consume its estimate; recheck the remaining backup /
+        # recovery budget before journaling or stopping the selected runtime.
+        try:
+            require_deployment_headroom(self.paths, backup_copies=2)
+        except StorageHeadroomError as exc:
+            raise UpgradeError(str(exc)) from exc
         (
             pointer_payload,
             pointer,

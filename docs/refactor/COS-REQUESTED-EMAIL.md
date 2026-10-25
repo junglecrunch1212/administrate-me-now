@@ -11,6 +11,12 @@ The existing final allowlist, governance, rate limit, content/privacy guard,
 provider permit and attempt/result ledger remain in force. No new OAuth or sender
 is introduced, and legacy approvals retain their existing path.
 
+Grounding skill 1.1.2 retains the natural reminder-title and scoped-negative
+rules from 1.0.3 alongside the closed email rule. A reminder to email supplies no
+send authority; a no-send restriction denies sending. A no-reminder restriction
+does not deny an affirmative send-now request. Exact quotes, sender, recipient,
+content, current source and independent approval bindings remain unchanged.
+
 Use `administrateme_confirm_requested_email`, then the existing
 `administrateme_cos_response` with the returned `approval_event_id`. Read
 `administrateme_requested_email_status` after a timeout or from another private

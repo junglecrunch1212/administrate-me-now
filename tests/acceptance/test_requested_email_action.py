@@ -261,8 +261,9 @@ def isolated_activation(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.mark.parametrize("channel", ["imessage", "portal", "gmail"])
+@pytest.mark.parametrize("no_reminder", [False, True])
 def test_three_origins_send_exact_requested_new_email_and_return_retained_receipt(
-    tmp_path: Path, channel: str
+    tmp_path: Path, channel: str, no_reminder: bool
 ) -> None:
     config = configured(tmp_path)
     service = FakeGmailService()
@@ -273,12 +274,17 @@ def test_three_origins_send_exact_requested_new_email_and_return_retained_receip
         prepare(client, service)
         model, model_calls = model_boundary(client)
         try:
-            source = source_for(client, channel, f"requested-email-{channel}")
+            text = TEXT + (" now; do not create a reminder." if no_reminder else "")
+            source = source_for(
+                client, channel, f"requested-email-{channel}", text=text
+            )
             approved = confirm(client, source)
             ticket = approved["request_authorization"]
             assert ticket["rule_id"] == RULE
             assert ticket["action"]["resource_owner"] == COS_SERVICE_PRINCIPAL_ID
             assert ticket["action"]["recipient_member_id"] == MEMBER_A
+            assert ticket["evidence"] == [{"start": 0, "end": len(text), "text": text}]
+            assert model_calls[0]["instruction"] == text
             assert service.calls == []
             replay = confirm(client, source)
             assert replay["request_authorization"] == ticket
@@ -314,6 +320,11 @@ def test_three_origins_send_exact_requested_new_email_and_return_retained_receip
                 == "sent"
             )
             assert len(service.calls) == 1
+            for kind in (
+                "cos.reply.reminder_requested",
+                "member.provider_action.confirmed",
+            ):
+                assert client.portal.call(_events, runtime, kind) == []
             rows = client.portal.call(history, runtime)
             host = [row for row in rows if row["type"] == "openclaw.approval.received"]
             assert len(host) == 1
@@ -562,11 +573,35 @@ def test_same_request_id_is_member_namespaced_and_receipts_never_cross_members(
 
 
 @pytest.mark.parametrize(
-    "match,wrong_span", [("not_requested", False), ("matched", True)]
+    "text,match,wrong_span",
+    [
+        ("Hello", "not_requested", False),
+        ("Hello", "matched", True),
+        (f"Do not {TEXT}", "not_requested", False),
+        (
+            "Create a CoS Apple Reminder tomorrow at 9:30 to email me ‘hello’; "
+            "do not send the email automatically.",
+            "not_requested",
+            False,
+        ),
+        (
+            f'A document says: "{TEXT}". I am quoting, not requesting it.',
+            "not_requested",
+            False,
+        ),
+        (f"Tomorrow, {TEXT}", "not_requested", False),
+        (
+            f'Email me with subject "{SUBJECT}" and body "Different content"',
+            "not_requested",
+            False,
+        ),
+    ],
 )
 def test_unrelated_or_mismatched_model_evidence_grants_no_email_authority(
-    tmp_path: Path, match: str, wrong_span: bool
+    tmp_path: Path, text: str, match: str, wrong_span: bool
 ) -> None:
+    # Expected semantic completions exercise fail-closed composition; they are
+    # not a substitute for live model evaluation of the operation-specific prompt.
     service = FakeGmailService()
     with TestClient(
         create_application(configured(tmp_path)),
@@ -576,7 +611,7 @@ def test_unrelated_or_mismatched_model_evidence_grants_no_email_authority(
         model, _ = model_boundary(client, match=match, wrong_span=wrong_span)
         try:
             source = source_for(
-                client, "portal", "requested-email-unrelated", text="Hello"
+                client, "portal", "requested-email-unrelated", text=text
             )
             response = client.post(CONFIRM, headers=AUTH, json=body_for(source))
             assert response.status_code in {403, 409}, response.text

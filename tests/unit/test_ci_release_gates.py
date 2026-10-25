@@ -1848,7 +1848,7 @@ def test_updater_worker_requires_recovery_and_supported_process_checks(
         "test_cos_live_maintenance.py",
         "test_macos_bootstrap_operations.py::test_credential_free_bootstrap_doctor_backup_restore_round_trip",
         "test_ci_release_gates.py",
-        "prepared_runtime workspace_instructions",
+        "prepared_runtime workspace_instructions storage_headroom",
         'test -f "tests/unit/bootstrap/test_$module.py"',
         "poetry run mypy bootstrap bridge/adminme_bridge scripts/release_scope.py",
         "poetry run pyright bootstrap scripts/release_scope.py",
@@ -3353,6 +3353,9 @@ def test_conversation_integration_uses_immutable_focused_scope(
     [
         ("workstation", "workstation_router"),
         ("reminder_choice_tools", "reminder_choice_router"),
+        ("workstation_work", "workstation_work_router"),
+        ("workstation_browser", "workstation_browser_router"),
+        ("workstation_source_policy", "workstation_source_policy_router"),
     ],
 )
 def test_workstation_scope_requires_exact_complete_router_pair(
@@ -3420,6 +3423,8 @@ def test_authenticated_action_paths_use_the_affected_lane(repository, relative) 
         "adminme/products/openclaw/workstation.py",
         "bootstrap/workstation_inventory.py",
         "openclaw/administrateme/src/workstation.ts",
+        "adminme/products/openclaw/workstation_work.py",
+        "openclaw/administrateme/src/workstation-work.ts",
     ],
 )
 def test_workstation_changes_use_affected_service_lane(

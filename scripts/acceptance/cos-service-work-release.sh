@@ -8,8 +8,15 @@ tests=(
   tests/unit/test_reminder_choices.py
   tests/acceptance/test_reminder_choice_continuation.py
   tests/acceptance/test_reminder_mode_continuation.py
+  tests/unit/bootstrap/test_workspace_instructions.py
+  tests/unit/bootstrap/test_openclaw_programs_loadable.py
+  tests/acceptance/test_cos_browser_workstation.py
+  tests/unit/bootstrap/test_workstation_browser.py
+  tests/unit/test_workstation_browser.py
+  tests/acceptance/test_cos_workstation_handoff.py
   tests/acceptance/test_requested_email_action.py
   tests/unit/products/openclaw/test_requested_email.py
+  tests/unit/bootstrap/test_native_account_policy.py
   tests/acceptance/test_cos_owned_apple_reminder.py
   tests/unit/adapters/reminders/test_cos_reminders_write.py
   tests/unit/adapters/reminders/test_cos_reminders_write_policy.py

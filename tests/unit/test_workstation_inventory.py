@@ -149,6 +149,12 @@ def test_literal_tool_denial_is_not_provider_disconnection_or_native_registratio
     }
     assert tools["browser"]["tool_accessible"]["value"] is False
     assert tools["browser"]["connected"]["value"] is None
+    rows = [tool for group in result["capabilities"] for tool in group["tools"]]
+    assert all(row["runtime_surface"] == "openclaw_dynamic" for row in rows)
+    assert (
+        tools["exec"]["tool_accessible"]["basis"]
+        == "explicit_openclaw_dynamic_tool_policy"
+    )
     assert tools["memory_get"]["tool_accessible"]["value"] is None
     assert result["effective_toolset_verified"] is False
     assert result["declaration_catalog_proves_access"] is False
@@ -260,6 +266,8 @@ def test_realistic_map_and_detail_pages_fit_entire_native_result_without_data_lo
     source = realistic_inventory()
     assert len(json.dumps(source)) > 64000
     first = inventory_page(source)
+    assert first["tool_rows_scope"] == "openclaw_dynamic_only"
+    assert first["native_base_tools_scope"] == "shell_files_mcp_apps"
     assert first["counts"] == {
         "identities": 18,
         "providers": 0,

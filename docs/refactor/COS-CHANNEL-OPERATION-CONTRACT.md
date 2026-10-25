@@ -46,6 +46,23 @@ restore rehearsal. It journals the prior configuration, settles both services,
 runs Doctor and restores observation and prior configuration on failure.
 There is no manual edit of an installed release or active configuration.
 
+Before maintenance journals or stops the healthy predecessor, a metadata-only
+storage admission budgets the remaining pause, update and normal-restoration
+backups, the rehearsal's simultaneous authenticated TAR and extracted state,
+and a conservative release/build allowance. Requirements sharing a filesystem
+are added before retaining the existing 5 GiB recovery reserve. Updater checks
+again before publication and after preparation; normal restoration checks its
+remaining backup/rehearsal budget before stopping services. A refused admission
+leaves that operation's runtime state, grants, journal and release pointer
+unchanged. It reports required/free bytes without household paths or contents;
+free space through separately authorized operations, then retry. It does not
+delete backups, change retention or replace encrypted restore proof. A standalone
+enter-observation operation reserves only its own backup/rehearsal, without
+requiring space for an unrequested future release. Estimates
+cannot prevent another process consuming disk later, so existing guarded
+recovery remains mandatory. This modernizes admission after the observed
+backup-rehearsal disk failure; backup format and recovery checks are preserved.
+
 The original bounded acquisition selection and lifetime ledger remain intact.
 Non-CoS adapters remain stopped. Ending observation never releases previously
 suppressed sends: every response must have a new exact approval after the

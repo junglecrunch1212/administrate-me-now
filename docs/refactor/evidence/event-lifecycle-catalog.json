@@ -3862,8 +3862,8 @@
     "missing_source_candidate_cells": [],
     "object_lifecycles": 28,
     "source_candidate_cells": 143,
-    "technical_event_schemas": 389,
-    "technical_event_types": 306,
+    "technical_event_schemas": 391,
+    "technical_event_types": 308,
     "uncataloged_event_types": [],
     "unproved_exact_lifecycle_transitions": [],
     "unproved_supported_source_candidate_cells": []
@@ -15682,6 +15682,295 @@
         "authority_kind"
       ],
       "schema_version": 2
+    },
+    {
+      "additional_properties": false,
+      "event_type": "cos.workstation.read_requested",
+      "family": "openclaw",
+      "properties": {
+        "audience_member_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 20,
+          "minItems": 1,
+          "title": "Audience Member Ids",
+          "type": "array"
+        },
+        "authority_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Authority Sha256",
+          "type": "string"
+        },
+        "instruction_source_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Instruction Source Event Id",
+          "type": "string"
+        },
+        "inventory_binding_id": {
+          "maxLength": 300,
+          "minLength": 1,
+          "title": "Inventory Binding Id",
+          "type": "string"
+        },
+        "inventory_binding_revision": {
+          "minimum": 1,
+          "title": "Inventory Binding Revision",
+          "type": "integer"
+        },
+        "operating_principal_id": {
+          "const": "service-principal:chief-of-staff",
+          "title": "Operating Principal Id",
+          "type": "string"
+        },
+        "operation": {
+          "const": "native_browser_read",
+          "title": "Operation",
+          "type": "string"
+        },
+        "provider_effect_count": {
+          "const": 0,
+          "default": 0,
+          "title": "Provider Effect Count",
+          "type": "integer"
+        },
+        "request_id": {
+          "pattern": "^[0-9a-f]{32}$",
+          "title": "Request Id",
+          "type": "string"
+        },
+        "requested_at": {
+          "format": "date-time",
+          "title": "Requested At",
+          "type": "string"
+        },
+        "requester_member_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Requester Member Id",
+          "type": "string"
+        },
+        "resource_id": {
+          "maxLength": 300,
+          "minLength": 1,
+          "title": "Resource Id",
+          "type": "string"
+        },
+        "resource_owner_principal_id": {
+          "const": "service-principal:chief-of-staff",
+          "title": "Resource Owner Principal Id",
+          "type": "string"
+        },
+        "route_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Route Sha256",
+          "type": "string"
+        },
+        "work_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Work Event Id",
+          "type": "string"
+        },
+        "worker_session_digest": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Worker Session Digest",
+          "type": "string"
+        }
+      },
+      "required": [
+        "operation",
+        "request_id",
+        "worker_session_digest",
+        "instruction_source_event_id",
+        "work_event_id",
+        "requester_member_id",
+        "resource_id",
+        "inventory_binding_id",
+        "inventory_binding_revision",
+        "authority_sha256",
+        "route_sha256",
+        "audience_member_ids",
+        "requested_at",
+        "operating_principal_id",
+        "resource_owner_principal_id"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "cos.workstation.source_observed",
+      "family": "openclaw",
+      "properties": {
+        "actual_identity": {
+          "$ref": "#/$defs/AccountIdentity"
+        },
+        "audience_member_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 20,
+          "minItems": 1,
+          "title": "Audience Member Ids",
+          "type": "array"
+        },
+        "authority_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Authority Sha256",
+          "type": "string"
+        },
+        "authorized_url_prefix": {
+          "maxLength": 2000,
+          "minLength": 1,
+          "title": "Authorized Url Prefix",
+          "type": "string"
+        },
+        "browser_profile": {
+          "maxLength": 300,
+          "minLength": 1,
+          "title": "Browser Profile",
+          "type": "string"
+        },
+        "content_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Content Sha256",
+          "type": "string"
+        },
+        "device": {
+          "maxLength": 300,
+          "minLength": 1,
+          "title": "Device",
+          "type": "string"
+        },
+        "excerpt": {
+          "maxLength": 2000,
+          "minLength": 1,
+          "title": "Excerpt",
+          "type": "string"
+        },
+        "instruction_source_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Instruction Source Event Id",
+          "type": "string"
+        },
+        "inventory_binding_id": {
+          "maxLength": 300,
+          "minLength": 1,
+          "title": "Inventory Binding Id",
+          "type": "string"
+        },
+        "inventory_binding_revision": {
+          "minimum": 1,
+          "title": "Inventory Binding Revision",
+          "type": "integer"
+        },
+        "native_target_id": {
+          "maxLength": 300,
+          "minLength": 1,
+          "title": "Native Target Id",
+          "type": "string"
+        },
+        "observed_at": {
+          "format": "date-time",
+          "title": "Observed At",
+          "type": "string"
+        },
+        "operating_principal_id": {
+          "const": "service-principal:chief-of-staff",
+          "title": "Operating Principal Id",
+          "type": "string"
+        },
+        "operation": {
+          "const": "native_browser_read",
+          "title": "Operation",
+          "type": "string"
+        },
+        "os_user": {
+          "maxLength": 300,
+          "minLength": 1,
+          "title": "Os User",
+          "type": "string"
+        },
+        "provider_effect_count": {
+          "const": 0,
+          "default": 0,
+          "title": "Provider Effect Count",
+          "type": "integer"
+        },
+        "request_event_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Request Event Id",
+          "type": "string"
+        },
+        "resource_id": {
+          "maxLength": 300,
+          "minLength": 1,
+          "title": "Resource Id",
+          "type": "string"
+        },
+        "resource_owner_principal_id": {
+          "const": "service-principal:chief-of-staff",
+          "title": "Resource Owner Principal Id",
+          "type": "string"
+        },
+        "restrictions": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 20,
+          "title": "Restrictions",
+          "type": "array"
+        },
+        "route_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Route Sha256",
+          "type": "string"
+        },
+        "truncated": {
+          "title": "Truncated",
+          "type": "boolean"
+        },
+        "url": {
+          "maxLength": 2000,
+          "minLength": 1,
+          "title": "Url",
+          "type": "string"
+        },
+        "worker_session_digest": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Worker Session Digest",
+          "type": "string"
+        }
+      },
+      "required": [
+        "operation",
+        "request_event_id",
+        "instruction_source_event_id",
+        "worker_session_digest",
+        "resource_id",
+        "inventory_binding_id",
+        "inventory_binding_revision",
+        "authority_sha256",
+        "route_sha256",
+        "native_target_id",
+        "url",
+        "authorized_url_prefix",
+        "device",
+        "os_user",
+        "browser_profile",
+        "actual_identity",
+        "excerpt",
+        "truncated",
+        "content_sha256",
+        "audience_member_ids",
+        "observed_at",
+        "operating_principal_id",
+        "resource_owner_principal_id"
+      ],
+      "schema_version": 1
     },
     {
       "additional_properties": false,

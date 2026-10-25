@@ -66,6 +66,7 @@ function fakeApi(
     ) {
       gateways.set(method, { handler, scope: opts?.scope });
     },
+    registerAgentToolResultMiddleware: vi.fn(),
     registerService(service: OpenClawPluginService) {
       services.push(service);
     },
@@ -273,7 +274,7 @@ describe("native OpenClaw contract fixture", () => {
   it("admits a sealed native service run without exposing the session or choosing a member", async () => {
     const runtime = fakeApi();
     const run = vi.fn(async (_params: { sessionKey: string; message: string; idempotencyKey?: string; deliver?: boolean }) => ({ runId: "fixture-native-run" }));
-    runtime.api.runtime = { subagent: { run }, channel: { outbound: { loadAdapter: vi.fn() } } };
+    runtime.api.runtime = { config: { current: () => runtime.api.config }, subagent: { run, waitForRun: async () => ({ status: "ok" as const }) }, channel: { outbound: { loadAdapter: vi.fn() } } };
     const registration = runtime.gateways.get("administrateme.service.run")!;
     const respond = vi.fn();
     expect(registration.scope).toBe("operator.admin");
@@ -358,6 +359,7 @@ describe("native OpenClaw contract fixture", () => {
     });
     runtime.api.config = { channels: { imessage: { accounts: { "cos-fixture": {} } } } };
     runtime.api.runtime = {
+      config: { current: () => runtime.api.config },
       channel: { outbound: { loadAdapter: vi.fn(async () => ({ sendText })) } },
     };
     fetchMock

@@ -339,6 +339,7 @@ UPDATER_COMPONENT_PATHS = frozenset(
         "bootstrap/source_identity.py",
         "bootstrap/prepared_runtime.py",
         "bootstrap/workspace_instructions.py",
+        "bootstrap/storage_headroom.py",
         "bootstrap/activation_transaction.py",
         "bootstrap/cos_channel_activation.py",
         "bootstrap/candidate_readiness.py",
@@ -351,6 +352,7 @@ UPDATER_TEST_PATHS = frozenset(
         "tests/unit/bootstrap/test_source_identity.py",
         "tests/unit/bootstrap/test_prepared_runtime.py",
         "tests/unit/bootstrap/test_workspace_instructions.py",
+        "tests/unit/bootstrap/test_storage_headroom.py",
         "tests/unit/bootstrap/test_activation_transaction.py",
         "tests/acceptance/test_forwarded_submission_repair_operations.py",
         "tests/unit/bootstrap/test_cos_channel_activation.py",
@@ -370,6 +372,7 @@ UPDATER_CHECK_SCRIPT = "scripts/acceptance/updater-delivery-release.sh"
 UPDATER_OPTIONAL_MODULE_TESTS = {
     "bootstrap/prepared_runtime.py": "tests/unit/bootstrap/test_prepared_runtime.py",
     "bootstrap/workspace_instructions.py": "tests/unit/bootstrap/test_workspace_instructions.py",
+    "bootstrap/storage_headroom.py": "tests/unit/bootstrap/test_storage_headroom.py",
 }
 UPDATER_REQUIRED_PATHS = (
     UPDATER_COMPONENT_PATHS | UPDATER_TEST_PATHS | {UPDATER_CHECK_SCRIPT}
@@ -384,6 +387,7 @@ COS_SERVICE_WORK_NATIVE_INSTALL = "scripts/acceptance/openclaw-source-install.sh
 COS_SERVICE_WORK_COMPONENT_PATHS = frozenset(
     {
         COS_SERVICE_WORK_APPLICATION,
+        "bootstrap/native_account_policy.py",
         COS_SERVICE_WORK_MEMBER,
         COS_SERVICE_WORK_INGEST,
         COS_SERVICE_WORK_OBSERVATION,
@@ -455,8 +459,35 @@ COS_SERVICE_WORK_COMPONENT_PATHS = frozenset(
         "packs/skills/ground_requested_action/prompt.jinja2",
         "packs/skills/ground_requested_action/schemas/input.schema.json",
         "packs/skills/ground_requested_action/schemas/output.schema.json",
+        "adminme/events/schemas/workstation.py",
+        "adminme/products/openclaw/workstation_browser.py",
+        "adminme/products/openclaw/workstation_source_policy.py",
+        "adminme/workstation_browser.py",
+        "adminme/workstation_source_policy.py",
+        "adminme/workstation_sources.py",
+        "bootstrap/workstation_browser.py",
+        "bootstrap/workspace_instructions.py",
+        "bootstrap/openclaw/workspace-layout.json",
+        "openclaw/administrateme/scripts/compile-workspace.mjs",
+        "openclaw/administrateme/skills/administrateme-household/programs/crm_surface.md",
+        "openclaw/administrateme/skills/administrateme-household/programs/custody_brief.md",
+        "openclaw/administrateme/skills/administrateme-household/programs/morning_digest.md",
+        "openclaw/administrateme/skills/administrateme-household/programs/paralysis_detection.md",
+        "openclaw/administrateme/skills/administrateme-household/programs/reminder_dispatch.md",
+        "openclaw/administrateme/skills/administrateme-household/programs/reward_dispatch.md",
+        "openclaw/administrateme/src/workstation-browser.ts",
+        "openclaw/administrateme/src/workstation-browser-hooks.ts",
+        "openclaw/administrateme/test/fixtures/openclaw-2026.7.2/global-singleton.d.ts",
+        "openclaw/administrateme/test/fixtures/openclaw-2026.7.2/global-singleton.ts",
+        "openclaw/administrateme/tsconfig.json",
+        "openclaw/administrateme/vitest.config.ts",
+        "openclaw/administrateme/skills/administrateme-household/SKILL.md",
+        "openclaw/administrateme/test/fixtures/openclaw-2026.7.2/plugin-entry.d.ts",
         "adminme/workstation_inventory.py",
         "adminme/products/openclaw/workstation.py",
+        "adminme/products/openclaw/workstation_work.py",
+        "openclaw/administrateme/src/workstation-work.ts",
+        "bootstrap/openclaw/programs/workstation_work.md",
         "bootstrap/workstation_inventory.py",
         "bootstrap/openclaw/programs/workstation_inventory.md",
         "openclaw/administrateme/src/workstation.ts",
@@ -515,6 +546,8 @@ COS_SERVICE_WORK_TEST_PATHS = frozenset(
         "openclaw/administrateme/test/fixtures/openclaw-2026.7.2/global-singleton.d.ts",
         "tests/fixtures/openclaw_reminder_mode_probe.mjs",
         "openclaw/administrateme/test/reminder-choice-policy.test.ts",
+        "tests/unit/bootstrap/test_native_account_policy.py",
+        "openclaw/administrateme/scripts/check-cos-native-account-policy.mjs",
         "tests/acceptance/test_cos_owned_apple_reminder.py",
         "tests/unit/adapters/reminders/test_cos_reminders_write.py",
         "tests/unit/adapters/reminders/test_cos_reminders_write_policy.py",
@@ -551,6 +584,19 @@ COS_SERVICE_WORK_TEST_PATHS = frozenset(
         "tests/unit/products/openclaw/test_requested_email.py",
         "openclaw/administrateme/test/conversation-input.test.ts",
         "tests/acceptance/test_workstation_inventory.py",
+        "tests/acceptance/test_cos_browser_workstation.py",
+        "tests/unit/bootstrap/test_workstation_browser.py",
+        "tests/unit/bootstrap/test_workspace_instructions.py",
+        "tests/unit/bootstrap/test_openclaw_programs_loadable.py",
+        "tests/unit/test_workstation_browser.py",
+        "tests/fixtures/openclaw_browser_transport.mjs",
+        "openclaw/administrateme/test/workstation-browser.test.ts",
+        "openclaw/administrateme/test/workstation-browser-hooks.test.ts",
+        "tests/acceptance/test_cos_workstation_handoff.py",
+        "openclaw/administrateme/test/workstation-work.test.ts",
+        "openclaw/administrateme/scripts/check-workstation-work-gateway.mjs",
+        "openclaw/administrateme/scripts/check-workstation-codex-policy.mjs",
+        "tests/fixtures/openclaw_workstation_work_probe.mjs",
         "tests/unit/test_workstation_inventory.py",
         "openclaw/administrateme/test/workstation.test.ts",
         "tests/acceptance/test_native_reminder_due_components.py",
@@ -1416,6 +1462,37 @@ def _service_work_application(source: str) -> tuple[str, bool] | None:
         and body_shapes.index(mode_shapes[1]) != body_shapes.index(mode_shapes[0]) + 1
     ):
         return None
+    workstation_work_shapes = [
+        ast.dump(node, include_attributes=False)
+        for node in ast.parse(
+            "from adminme.products.openclaw.workstation_work import router as workstation_work_router\n"
+            "app.include_router(workstation_work_router)\n"
+        ).body
+    ]
+    work_counts = [body_shapes.count(shape) for shape in workstation_work_shapes]
+    if work_counts not in ([0, 0], [1, 1]):
+        return None
+    if work_counts == [1, 1] and body_shapes.index(
+        workstation_work_shapes[0]
+    ) > body_shapes.index(workstation_work_shapes[1]):
+        return None
+    browser_shapes = []
+    for module_name in ("workstation_browser", "workstation_source_policy"):
+        pair = [
+            ast.dump(node, include_attributes=False)
+            for node in ast.parse(
+                f"from adminme.products.openclaw.{module_name} import router as {module_name}_router\n"
+                f"app.include_router({module_name}_router)\n"
+            ).body
+        ]
+        pair_counts = [body_shapes.count(shape) for shape in pair]
+        if pair_counts not in ([0, 0], [1, 1]):
+            return None
+        if pair_counts == [1, 1] and body_shapes.index(pair[0]) > body_shapes.index(
+            pair[1]
+        ):
+            return None
+        browser_shapes.extend(pair)
     email_shapes = [
         ast.dump(node, include_attributes=False)
         for node in ast.parse(
@@ -1440,6 +1517,8 @@ def _service_work_application(source: str) -> tuple[str, bool] | None:
         + workstation_shapes
         + choice_shapes
         + mode_shapes
+        + workstation_work_shapes
+        + browser_shapes
         + email_shapes
     ]
     digest = hashlib.sha256(
