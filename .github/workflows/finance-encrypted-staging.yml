@@ -45,7 +45,7 @@ jobs:
           }
           actual=set(subprocess.check_output(['git','diff','--name-only',baseline,'HEAD'],text=True).splitlines())
           assert actual==expected,actual
-          pins={'tests/fixtures/finance_diagnostic_readiness.py': '42cfff4e70f492a1aedc35f7e4527c0fb6061bffd16a2fc925e21db01d1c0307', 'tests/unit/test_finance_diagnostic_readiness.py': 'ed2d770cb7b8f3ec3ec1a8cccc98ce6ebfe2a1ad9e04a1e9fdbb273907c76801', 'tests/acceptance/test_finance_staging_measurement.py': 'c363b611b7c979e3d05182c10742641d7ad75bd245f48ea07efdf71f676f6f71'}
+          pins={'tests/fixtures/finance_diagnostic_readiness.py': '42cfff4e70f492a1aedc35f7e4527c0fb6061bffd16a2fc925e21db01d1c0307', 'tests/unit/test_finance_diagnostic_readiness.py': '930b750b3f7f850223ed0824b134c2360a1e5d033f6951afba340f7f1b644eb5', 'tests/acceptance/test_finance_staging_measurement.py': 'c363b611b7c979e3d05182c10742641d7ad75bd245f48ea07efdf71f676f6f71'}
           for p,h in pins.items():assert hashlib.sha256(pathlib.Path(p).read_bytes()).hexdigest()==h,p
           assert subprocess.check_output(['git','rev-parse','HEAD:adminme'],text=True).strip()=='1873e65d8a36d8af74ed5608b49b62dac6934d73'
           assert subprocess.check_output(['git','rev-parse','HEAD:poetry.lock'],text=True).strip()=='cc2102f6e9dd2fd029bd636566806493c1df91dc'

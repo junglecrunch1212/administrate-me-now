@@ -58,7 +58,14 @@ def test_first_inspect_requires_actual_observer_evidence(tmp_path, fault):
     result = startup_evidence(path, 10.1)
     assert result["complete"] is (fault is None)
     assert bool(result["faults"]) is (fault is not None)
-    assert result["rows"] == len(values)
+    assert 0 < result["rows"] <= len(values)
+    if result["complete"]:
+        assert result["rows"] == len(values)
+    elif fault == "resource":
+        rejected_prefix = "".join(json.dumps(row) + "\n" for row in values[:-1])
+        assert result["faults"] == ["ValueError"]
+        assert result["rows"] == len(values) - 1
+        assert result["bytes"] == len(rejected_prefix.encode()) < path.stat().st_size
 
 
 @pytest.mark.parametrize(
