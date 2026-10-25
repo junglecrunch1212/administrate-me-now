@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import signal
+import resource
 import subprocess
 import sys
 import time
@@ -65,6 +66,12 @@ def main():
             notify("work_finished", at=time.monotonic())
             runtime.terminate()
             assert runtime.wait(timeout=1) == 0
+            usage = resource.getrusage(resource.RUSAGE_CHILDREN)
+            notify(
+                "runtime_reaped",
+                pid=runtime.pid,
+                cpu_seconds=usage.ru_utime + usage.ru_stime,
+            )
             return 0
         while True:
             time.sleep(0.05)

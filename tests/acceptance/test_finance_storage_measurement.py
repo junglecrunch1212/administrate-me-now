@@ -11,6 +11,7 @@ import json
 import os
 import platform
 import signal
+import resource
 import sys
 import threading
 import time
@@ -206,6 +207,8 @@ class PhasedRun(MeasuredRun):
         self.supervisor_pid = int(os.environ["FINANCE_WATCHDOG_PID"])
         self.supervisor_birth = int(os.environ["FINANCE_WATCHDOG_BIRTH"])
         self.clock_start = float(os.environ["FINANCE_WATCHDOG_STARTED"])
+        before = resource.getrusage(resource.RUSAGE_CHILDREN)
+        self.child_cpu_before = before.ru_utime + before.ru_stime
         self.runtime_released = False
         self.runtime_cpu = 0.0
         parent = watchdog.process_row(self.supervisor_pid)
@@ -260,6 +263,17 @@ class PhasedRun(MeasuredRun):
             value = read_json(self.process.stdout, 2048)
             assert value == {"stopped": True, "tenant": self.startup.tenant}
             return value
+
+    def close(self):
+        try:
+            super().close()
+        finally:
+            usage = resource.getrusage(resource.RUSAGE_CHILDREN)
+            watchdog.notify(
+                "runtime_reaped",
+                pid=self.runtime_pid,
+                cpu_seconds=usage.ru_utime + usage.ru_stime - self.child_cpu_before,
+            )
 
     def finish_work(self):
         super().finish_work()
