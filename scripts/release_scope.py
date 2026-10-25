@@ -402,6 +402,19 @@ COS_SERVICE_WORK_COMPONENT_PATHS = frozenset(
         "bootstrap/native/cos_reminders_launcher.m",
         "openclaw/administrateme/src/cos-reminders.ts",
         "adminme/products/openclaw/apple_reminders.py",
+        "adminme/reminder_modes.py",
+        "adminme/events/schemas/reminder_modes.py",
+        "adminme/products/openclaw/reminder_mode_tools.py",
+        "adminme/products/openclaw/reminder_mode_evidence.py",
+        "openclaw/administrateme/src/reminder-mode.ts",
+        "openclaw/administrateme/src/reminder-mode-policy.ts",
+        "openclaw/administrateme/tsconfig.json",
+        "openclaw/administrateme/vitest.config.ts",
+        "packs/skills/ground_reminder_mode/SKILL.md",
+        "packs/skills/ground_reminder_mode/pack.yaml",
+        "packs/skills/ground_reminder_mode/prompt.jinja2",
+        "packs/skills/ground_reminder_mode/schemas/input.schema.json",
+        "packs/skills/ground_reminder_mode/schemas/output.schema.json",
         "adminme/reminder_choices.py",
         "adminme/events/schemas/reminder_choices.py",
         "adminme/products/openclaw/reminder_choice_work.py",
@@ -496,6 +509,11 @@ COS_SERVICE_WORK_TEST_PATHS = frozenset(
         "tests/unit/test_service_work_principal.py",
         "tests/unit/test_reminder_choices.py",
         "tests/acceptance/test_reminder_choice_continuation.py",
+        "tests/acceptance/test_reminder_mode_continuation.py",
+        "openclaw/administrateme/test/reminder-mode-policy.test.ts",
+        "openclaw/administrateme/test/fixtures/openclaw-2026.7.2/global-singleton.ts",
+        "openclaw/administrateme/test/fixtures/openclaw-2026.7.2/global-singleton.d.ts",
+        "tests/fixtures/openclaw_reminder_mode_probe.mjs",
         "openclaw/administrateme/test/reminder-choice-policy.test.ts",
         "tests/acceptance/test_cos_owned_apple_reminder.py",
         "tests/unit/adapters/reminders/test_cos_reminders_write.py",
@@ -1383,6 +1401,21 @@ def _service_work_application(source: str) -> tuple[str, bool] | None:
         choice_shapes[0]
     ) > body_shapes.index(choice_shapes[1]):
         return None
+    mode_shapes = [
+        ast.dump(node, include_attributes=False)
+        for node in ast.parse(
+            "from adminme.products.openclaw.reminder_mode_tools import router as reminder_mode_router\n"
+            "app.include_router(reminder_mode_router)\n"
+        ).body
+    ]
+    mode_counts = [body_shapes.count(shape) for shape in mode_shapes]
+    if mode_counts not in ([0, 0], [1, 1]):
+        return None
+    if (
+        mode_counts == [1, 1]
+        and body_shapes.index(mode_shapes[1]) != body_shapes.index(mode_shapes[0]) + 1
+    ):
+        return None
     email_shapes = [
         ast.dump(node, include_attributes=False)
         for node in ast.parse(
@@ -1406,6 +1439,7 @@ def _service_work_application(source: str) -> tuple[str, bool] | None:
         + reminder_shapes
         + workstation_shapes
         + choice_shapes
+        + mode_shapes
         + email_shapes
     ]
     digest = hashlib.sha256(

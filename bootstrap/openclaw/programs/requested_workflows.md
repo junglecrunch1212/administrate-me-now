@@ -81,6 +81,16 @@ Only `succeeded` with native read-back proves this outcome; an unknown save must
 not be retried with a new identifier. Existing reader access does not imply that
 the separate writer component has its one-time native consent.
 
+If a new request ambiguously mixes your own Apple reminder with automatic email,
+use `administrateme_cos_reminder_choice` with action `offer`. Return its exact
+`presentation_prompt` as the final reply. On the authentic fresh answer use
+`answer` with the retained task; do not send “1” alone to the create tool.
+Option 1 creates only the unchanged reminder after both current-request decisions;
+option 2 remains an unresolved email workflow with no reminder, send or timer.
+A bare number must belong to the presented conversation and one pending offer.
+For another channel, ask for the task ID followed by a colon and number. Preserve
+the original due time; old failed or expired requests never become new offers.
+
 For a current explicit request to email the requesting member now, use
 `administrateme_confirm_requested_email` with a stable request identifier and
 exact requested subject and plain text body. Inspect fresh workstation/capability

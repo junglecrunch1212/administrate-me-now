@@ -402,6 +402,8 @@ print(json.dumps([enabled, entry["hooks"]]))
 
   const { proveReminderChoice } = await import(pathToFileURL(path.join(repository, "tests/fixtures/openclaw_reminder_choice_probe.mjs")).href);
   await proveReminderChoice({ pluginDirectory: appleDirectory, nativeRegistration, policy: preparedPolicies[0], api, hookSdk, createHookRunner, versions });
+  const { proveReminderMode } = await import(pathToFileURL(path.join(repository, "tests/fixtures/openclaw_reminder_mode_probe.mjs")).href);
+  await proveReminderMode({ pluginDirectory: appleDirectory, nativeRegistration, policy: preparedPolicies[0], api, hookSdk, createHookRunner, versions });
 
   const literalCases = [...corpus.cases.map((row) => row.text.replace(/\s+/gu, " ").trim()),
     "**bold** _italic_ ~~strike~~ `code` <u>underline</u> [link](https://example.invalid/?x=1&y=2)",

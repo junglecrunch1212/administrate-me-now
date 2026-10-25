@@ -54,6 +54,7 @@ _TOOL_PERMISSION_OPTIONS: dict[str, frozenset[str]] = {
         {"prepare_external_actions"}
     ),
     "administrateme_cos_apple_reminder_status": frozenset({"read_context"}),
+    "administrateme_cos_reminder_choice": frozenset({"read_context"}),
     "administrateme_confirm_requested_email": frozenset({"prepare_external_actions"}),
     "administrateme_requested_email_status": frozenset({"read_context"}),
     "administrateme_cos_response": frozenset({"prepare_external_actions"}),
@@ -123,6 +124,7 @@ _DOMAIN_DEFINITIONS: tuple[dict[str, Any], ...] = (
             "administrateme_confirm_cos_apple_reminder",
             "administrateme_execute_pending_provider_action",
             "administrateme_cos_apple_reminder_status",
+            "administrateme_cos_reminder_choice",
         ],
         "terminal_result_support": True,
         "later_observation_support": True,
@@ -1515,6 +1517,8 @@ def compose_member_catalog(
             row["openclaw"].update(
                 effective_tools=own_reminder_tools,
                 current_request_rule=RULE_ID,
+                clarification_tool="administrateme_cos_reminder_choice",
+                clarification_rule="current-human-request.cos-reminder-mode-choice.v1",
                 execution_authority_modes=["authenticated_current_request_policy"],
                 policy_receipt_is_human_approval=False,
                 historical_pending_auto_resume=False,

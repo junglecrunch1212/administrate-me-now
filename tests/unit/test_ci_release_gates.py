@@ -3790,3 +3790,67 @@ def test_requested_email_closed_paths_use_existing_affected_lane(
         select_scope(path, _event(base, head), checkout_sha=head)["scope"]
         == "cos-service-work"
     )
+
+
+_REMINDER_MODE_ROUTER = (
+    "    from adminme.products.openclaw.reminder_mode_tools import router as reminder_mode_router\n"
+    "    app.include_router(reminder_mode_router)\n"
+)
+
+
+def test_reminder_mode_router_scope_is_exact_adjacent_and_keeps_neighbors() -> None:
+    before = _SERVICE_WIRED_RUNTIME
+    after = before.replace(
+        "    return app\n", _REMINDER_MODE_ROUTER + "    return app\n"
+    )
+    assert _service_work_application(before) == _service_work_application(after)
+    for old, new in (
+        (_REMINDER_MODE_ROUTER, _REMINDER_MODE_ROUTER * 2),
+        ("    app.include_router(reminder_mode_router)\n", ""),
+        (
+            "    from adminme.products.openclaw.reminder_mode_tools import router as reminder_mode_router\n",
+            "",
+        ),
+        (
+            "app.include_router(reminder_mode_router)",
+            "app.include_router(other_router)",
+        ),
+        (
+            _REMINDER_MODE_ROUTER,
+            _REMINDER_MODE_ROUTER.replace(
+                "    app.include_router",
+                "    unrelated_effect()\n    app.include_router",
+            ),
+        ),
+        (
+            _REMINDER_MODE_ROUTER,
+            "    if enabled:\n"
+            + "\n".join("    " + line for line in _REMINDER_MODE_ROUTER.splitlines())
+            + "\n",
+        ),
+        ("    return app\n", "    return untrusted_app\n"),
+    ):
+        assert _service_work_application(
+            after.replace(old, new)
+        ) != _service_work_application(before)
+
+
+def test_reminder_mode_router_scope_reads_immutable_tree(
+    repository: tuple[Path, str],
+) -> None:
+    path, _ = repository
+    _, base = _service_work_candidate(path)
+    after = _SERVICE_WIRED_RUNTIME.replace(
+        "    return app\n", _REMINDER_MODE_ROUTER + "    return app\n"
+    )
+    head = _commit(path, COS_SERVICE_WORK_APPLICATION, after)
+    (path / COS_SERVICE_WORK_APPLICATION).write_text("UNCOMMITTED = True\n")
+    assert (
+        select_scope(path, _event(base, head), checkout_sha=head)["scope"]
+        == "cos-service-work"
+    )
+    bad = _commit(path, COS_SERVICE_WORK_APPLICATION, after + "\nUNRELATED = True\n")
+    assert (
+        select_scope(path, _event(base, bad), checkout_sha=bad)["scope"]
+        == "system-wide"
+    )

@@ -208,6 +208,10 @@ class OpenClawApprovalStore:
                     "current-human-request.apple-reminder-list-choice.v1",
                 ),
                 (
+                    "administrateme_execute_pending_provider_action",
+                    "current-human-request.cos-reminder-mode-choice.v1",
+                ),
+                (
                     "administrateme_cos_response",
                     "current-human-request.cos-email-to-requester.v1",
                 ),

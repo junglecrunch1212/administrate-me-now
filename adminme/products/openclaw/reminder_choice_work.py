@@ -43,6 +43,19 @@ from adminme.service_identities import (
 )
 
 
+OFFER_TYPES = [OFFERED, "cos.reminder.mode_offered"]
+
+
+def offered_payload(event: dict[str, Any]) -> Any:
+    if event.get("type") == "cos.reminder.mode_offered":
+        from adminme.events.schemas.reminder_modes import ReminderModeOfferedV1
+
+        return ReminderModeOfferedV1.model_validate(event["payload"])
+    if event.get("type") != OFFERED:
+        raise HTTPException(403, "Unsupported reminder clarification")
+    return ReminderChoiceOfferedV1.model_validate(event["payload"])
+
+
 def draft_fields(*, title: str, due_at: datetime, notes: str | None) -> dict[str, Any]:
     return {"title": title, "due_at": due_at.isoformat(), "notes": notes}
 
@@ -86,12 +99,18 @@ async def source_and_work_authority(
 async def offered_by_action(
     runtime: Any, member: Session, action_id: str
 ) -> dict[str, Any] | None:
-    row = await runtime.event_log.get_by_idempotency(
-        member.tenant_id, receipt_key(member.auth_member_id, OFFERED, action_id)
-    )
-    if row is not None and not _owned(row, member, OFFERED):
-        raise HTTPException(404, "Private reminder choice not found")
-    return row
+    rows = []
+    for kind in OFFER_TYPES:
+        row = await runtime.event_log.get_by_idempotency(
+            member.tenant_id, receipt_key(member.auth_member_id, kind, action_id)
+        )
+        if row is not None:
+            if not _owned(row, member, kind):
+                raise HTTPException(404, "Private reminder choice not found")
+            rows.append(row)
+    if len(rows) > 1:
+        raise HTTPException(409, "Conflicting reminder offer identities")
+    return rows[0] if rows else None
 
 
 async def offer_choice(
@@ -215,7 +234,7 @@ async def ensure_choice_work(
         sensitivity=cast(Sensitivity, source["sensitivity"]),
         payload={
             "task_id": task_id,
-            "title": "Create a requested reminder after choosing its list",
+            "title": "Complete a requested reminder after clarification",
             "due": p["due_at"],
             "record_kind": "work",
             "source_authorities": [authority],
@@ -230,7 +249,11 @@ async def ensure_choice_work(
             "authority_grant_id": None,
             "source_invocation_id": member.correlation_id,
             "created_by": COS_SERVICE_PRINCIPAL_ID,
-            "source_system": "member-reminder-list-choice",
+            "source_system": (
+                "cos-reminder-mode-choice"
+                if offered["type"] != OFFERED
+                else "member-reminder-list-choice"
+            ),
             "provider_effect_count": 0,
         },
     )
@@ -307,7 +330,7 @@ async def selection_snapshot(
     cutoff = datetime.fromisoformat(answer["payload"]["submitted_at"])
     candidates: list[dict[str, Any]] = []
     async for event in event_log.read_since(
-        owner_scope=f"private:{member}", types=[OFFERED]
+        owner_scope=f"private:{member}", types=OFFER_TYPES
     ):
         if event["event_id"] >= answer["event_id"] or event["tenant_id"] != tenant:
             continue
@@ -321,9 +344,24 @@ async def selection_snapshot(
             raise HTTPException(
                 409, "Retained reminder offer ownership is inconsistent"
             )
-        p = ReminderChoiceOfferedV1.model_validate(event["payload"])
+        p = offered_payload(event)
         if p.pending_expires_at <= cutoff:
             continue
+        if event["type"] != OFFERED:
+            from adminme.products.openclaw.reminder_mode_evidence import (
+                presentation_matches,
+            )
+
+            shown = await event_log.get_by_idempotency(
+                tenant,
+                receipt_key(member, "cos.reminder.mode_presented", event["event_id"]),
+            )
+            if (
+                shown is None
+                or shown["event_id"] >= answer["event_id"]
+                or not await presentation_matches(event_log, event, shown)
+            ):
+                continue
         original = await event_log.get(p.original_source_event_id)
         if (
             original is None
@@ -416,11 +454,11 @@ async def resolve_task(
     choices = []
     now = datetime.now(timezone.utc)
     async for event in runtime.event_log.read_since(
-        owner_scope=f"private:{member.auth_member_id}", types=[OFFERED]
+        owner_scope=f"private:{member.auth_member_id}", types=OFFER_TYPES
     ):
-        if not _owned(event, member, OFFERED):
+        if not _owned(event, member, event["type"]):
             continue
-        payload = ReminderChoiceOfferedV1.model_validate(event["payload"])
+        payload = offered_payload(event)
         if task_id is not None:
             if payload.task_id == task_id:
                 await validate_original(runtime, member, event)
@@ -450,9 +488,11 @@ async def event_log_get(runtime: Any, event_id: str) -> dict[str, Any]:
 async def validate_original(
     runtime: Any, member: Session, offered: dict[str, Any]
 ) -> dict[str, Any]:
-    if not _owned(offered, member, OFFERED):
+    if offered.get("type") not in OFFER_TYPES or not _owned(
+        offered, member, offered["type"]
+    ):
         raise HTTPException(404, "Private reminder choice not found")
-    p = ReminderChoiceOfferedV1.model_validate(offered["payload"])
+    p = offered_payload(offered)
     source, _, _ = await source_and_work_authority(
         runtime, member, p.original_source_event_id
     )
@@ -585,6 +625,10 @@ async def update_choice_work(
 
 def choice_summary(offered: dict[str, Any]) -> dict[str, Any]:
     p = offered["payload"]
+    if offered["type"] != OFFERED:
+        from adminme.products.openclaw.reminder_mode_tools import mode_summary
+
+        return mode_summary(offered)
     return {
         "state": "expired"
         if datetime.fromisoformat(p["pending_expires_at"]) <= datetime.now(timezone.utc)

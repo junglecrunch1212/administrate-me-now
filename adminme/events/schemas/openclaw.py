@@ -213,6 +213,7 @@ class OpenClawApprovalReceivedV2(OpenClawApprovalReceivedV1):
         Literal[
             "current-human-request.apple-reminder-create.v1",
             "current-human-request.apple-reminder-list-choice.v1",
+            "current-human-request.cos-reminder-mode-choice.v1",
             "current-human-request.cos-reminder-create.v1",
             "current-human-request.cos-email-to-requester.v1",
         ]

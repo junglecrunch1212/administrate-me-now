@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import AwareDatetime, BaseModel, Field, model_validator
 
@@ -15,7 +15,7 @@ class ReminderListChoice(BaseModel):
     label: str = Field(min_length=1, max_length=1000)
 
 
-class ReminderChoiceOfferedV1(BaseModel):
+class ReminderChoiceDraftV1(BaseModel):
     model_config = {"extra": "forbid"}
     member_id: str = Field(min_length=1, max_length=240)
     task_id: str = Field(min_length=1, max_length=240)
@@ -27,23 +27,30 @@ class ReminderChoiceOfferedV1(BaseModel):
     draft_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
     provider: Literal["apple_reminders"]
     operation: Literal["create_reminder"]
-    resource_owner: Literal["requester"]
     provider_account_id: str = Field(min_length=1, max_length=500)
     title: str = Field(min_length=1, max_length=1000)
     due_at: AwareDatetime
     notes: str | None = Field(default=None, max_length=10000)
-    choices: list[ReminderListChoice] = Field(min_length=1, max_length=100)
     offered_at: AwareDatetime
     pending_expires_at: AwareDatetime
     expiry_reason: Literal["requested_reminder_due_time"]
     provider_effect_count: Literal[0] = 0
 
     @model_validator(mode="after")
-    def exact_pending_lifetime(self) -> ReminderChoiceOfferedV1:
+    def exact_pending_lifetime(self) -> ReminderChoiceDraftV1:
         if not self.original_submitted_at <= self.offered_at < self.pending_expires_at:
             raise ValueError("pending choice requires an unexpired original request")
         if self.pending_expires_at != self.due_at:
             raise ValueError("pending choice expiry must remain its original due time")
+        return self
+
+
+class ReminderChoiceOfferedV1(ReminderChoiceDraftV1):
+    resource_owner: Literal["requester"]
+    choices: list[ReminderListChoice] = Field(min_length=1, max_length=100)
+
+    @model_validator(mode="after")
+    def unique_lists(self) -> ReminderChoiceOfferedV1:
         ids = [choice.list_id for choice in self.choices]
         if len(ids) != len(set(ids)):
             raise ValueError("list choices must have unique provider identities")
@@ -126,16 +133,20 @@ class ReminderChoiceSelectionV1(BaseModel):
         return self
 
 
-class ReminderChoiceContinuationV1(BaseModel):
+class ReminderChoiceContinuationBase(BaseModel):
     model_config = {"extra": "forbid"}
     offered_event_id: str = Field(min_length=1, max_length=240)
-    offered: ReminderChoiceOfferedV1
+    offered: Any
     original_instruction: str = Field(min_length=1, max_length=32000)
     original_evidence: list[dict[str, object]] = Field(min_length=1, max_length=8)
     selection: ReminderChoiceSelectionV1
 
 
-class ReminderChoiceGroundedV1(BaseModel):
+class ReminderChoiceContinuationV1(ReminderChoiceContinuationBase):
+    offered: ReminderChoiceOfferedV1
+
+
+class ReminderChoiceGroundedBase(BaseModel):
     """Fresh answer evidence augments, never rewrites, one offered assignment."""
 
     model_config = {"extra": "forbid"}
@@ -144,17 +155,17 @@ class ReminderChoiceGroundedV1(BaseModel):
     action_id: str = Field(min_length=1, max_length=240)
     request_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
     action_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
-    rule_id: Literal["current-human-request.apple-reminder-list-choice.v1"]
+    rule_id: str
     source_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
     skill_event_id: str = Field(min_length=1, max_length=240)
     action: dict[str, object]
     evidence: list[dict[str, object]] = Field(min_length=1, max_length=8)
     issued_at: AwareDatetime
     expires_at: AwareDatetime
-    continuation: ReminderChoiceContinuationV1
+    continuation: Any
 
     @model_validator(mode="after")
-    def one_task_lifetime(self) -> ReminderChoiceGroundedV1:
+    def one_task_lifetime(self) -> ReminderChoiceGroundedBase:
         from datetime import timedelta
 
         offered = self.continuation.offered
@@ -173,6 +184,11 @@ class ReminderChoiceGroundedV1(BaseModel):
                 "answer grounding must preserve one original task and expiry"
             )
         return self
+
+
+class ReminderChoiceGroundedV1(ReminderChoiceGroundedBase):
+    rule_id: Literal["current-human-request.apple-reminder-list-choice.v1"]
+    continuation: ReminderChoiceContinuationV1
 
 
 registry.register("cos.reminder.choice_grounded", 1, ReminderChoiceGroundedV1)

@@ -35,6 +35,7 @@ from adminme.products.openclaw.reminder_choice_work import (
     instruction_identity,
     selected_task_answer,
     selection_snapshot,
+    offered_payload,
 )
 from adminme.reminder_choices import (
     CHOICE_RULE,
@@ -45,6 +46,19 @@ from adminme.reminder_choices import (
 )
 from adminme.request_actions_control import request_actions_allowed
 from adminme.service_identities import COS_SERVICE_PRINCIPAL_ID
+
+from adminme.reminder_modes import MODE_OFFERED, MODE_RULE, mode_answer
+from adminme.events.schemas.reminder_modes import ReminderModeGroundedV1
+
+
+def grounding_payload(event: dict[str, Any]) -> Any:
+    model = (
+        ReminderModeGroundedV1
+        if event.get("type") == "cos.reminder.mode_grounded"
+        else ReminderChoiceGroundedV1
+    )
+    return model.model_validate(event["payload"])
+
 
 RULE = CHOICE_RULE
 GROUNDING_TYPE = "cos.reminder.choice_grounded"
@@ -68,7 +82,12 @@ async def current_choice(
     answer: dict[str, Any],
     action: dict[str, Any],
 ) -> None:
-    p = ReminderChoiceOfferedV1.model_validate(offered["payload"])
+    p = offered_payload(offered)
+    if offered["type"] == MODE_OFFERED:
+        from adminme.products.openclaw.reminder_mode_evidence import current_mode
+
+        await current_mode(runtime, member, offered, answer, action)
+        return
     await validate_original(runtime, member, offered)
     retained_answer, _, _ = await source_and_work_authority(
         runtime, member, answer["event_id"]
@@ -123,7 +142,7 @@ async def ground_reminder_choice(
 ) -> dict[str, Any]:
     from adminme.products.openclaw.request_authorization import canonical_evidence
 
-    p = ReminderChoiceOfferedV1.model_validate(offered["payload"])
+    p = offered_payload(offered)
     retained_original = await validate_original(runtime, member, offered)
     if original != retained_original:
         raise HTTPException(
@@ -139,7 +158,9 @@ async def ground_reminder_choice(
         raise HTTPException(
             403, "Continuation sources or immutable draft are mismatched"
         )
-    key = receipt_key(member.auth_member_id, GROUNDING_TYPE, p.action_id)
+    mode = offered["type"] == MODE_OFFERED
+    grounding_type = "cos.reminder.mode_grounded" if mode else GROUNDING_TYPE
+    key = receipt_key(member.auth_member_id, grounding_type, p.action_id)
     prior = await runtime.event_log.get_by_idempotency(member.tenant_id, key)
     if prior is not None:
         if (
@@ -173,7 +194,7 @@ async def ground_reminder_choice(
     )
     try:
         result = await runtime.run_skill_fn(
-            "ground_reminder_choice",
+            "ground_reminder_mode" if mode else "ground_reminder_choice",
             {
                 "original_instruction": original_text,
                 "original_submitted_at": original["payload"]["submitted_at"],
@@ -181,7 +202,11 @@ async def ground_reminder_choice(
                 "answer_submitted_at": answer["payload"]["submitted_at"],
                 "timezone": runtime.settings.instance.timezone,
                 "action": action,
-                "offered_choices": offered["payload"]["choices"],
+                **(
+                    {"presented_prompt": p.prompt}
+                    if mode
+                    else {"offered_choices": offered["payload"]["choices"]}
+                ),
             },
             SkillContext(
                 session=member,
@@ -243,14 +268,25 @@ async def ground_reminder_choice(
     await current_choice(runtime, member, offered, answer, action)
     snapshot, _ = await selected_task_answer(runtime, member, offered, answer)
     now = datetime.now(timezone.utc)
-    payload = ReminderChoiceGroundedV1.model_validate(
+    presentation = {}
+    if mode:
+        from adminme.products.openclaw.reminder_mode_evidence import presentation_for
+
+        shown = await presentation_for(runtime, member, offered)
+        presentation = {
+            "presentation_event_id": shown["event_id"],
+            "presentation": shown["payload"],
+        }
+    payload = (
+        ReminderModeGroundedV1 if mode else ReminderChoiceGroundedV1
+    ).model_validate(
         {
             "member_id": member.auth_member_id,
             "source_event_id": answer["event_id"],
             "action_id": p.action_id,
             "request_fingerprint": request_fingerprint,
             "action_fingerprint": digest(action),
-            "rule_id": RULE,
+            "rule_id": MODE_RULE if mode else RULE,
             "source_fingerprint": digest(answer_text),
             "skill_event_id": result.recorded_event_id,
             "action": action,
@@ -263,13 +299,14 @@ async def ground_reminder_choice(
                 "original_instruction": original_text,
                 "original_evidence": original_evidence,
                 "selection": snapshot.model_dump(mode="json"),
+                **presentation,
             },
         }
     )
     event_id, _ = await seam._append(
         runtime,
         member,
-        event_type=GROUNDING_TYPE,
+        event_type=grounding_type,
         source_account_id=member.auth_member_id,
         owner_scope=f"private:{member.auth_member_id}",
         visibility_scope=f"private:{member.auth_member_id}",
@@ -288,7 +325,7 @@ async def historical_choice_matches(event_log: Any, grounding: dict[str, Any]) -
     from adminme.products.openclaw.request_authorization import evidence_matches
 
     try:
-        p = ReminderChoiceGroundedV1.model_validate(grounding["payload"])
+        p = grounding_payload(grounding)
         c = p.continuation
         offer = await event_log.get(c.offered_event_id)
         original = await event_log.get(c.offered.original_source_event_id)
@@ -304,15 +341,37 @@ async def historical_choice_matches(event_log: Any, grounding: dict[str, Any]) -
             or target[0].offered_event_id != c.offered_event_id
         ):
             return False
-        selection = selected_choice(
-            c.offered,
-            target[1],
-            provider_account_id=c.offered.provider_account_id,
-            current_choices=c.offered.choices,
-            now=p.issued_at,
-        )
+        mode = offer["type"] == MODE_OFFERED
+        if mode:
+            from adminme.products.openclaw.reminder_mode_evidence import (
+                exact_mode_action,
+                presentation_matches,
+            )
+
+            shown = await event_log.get(c.presentation_event_id)
+            if (
+                shown is None
+                or shown["payload"] != c.presentation.model_dump(mode="json")
+                or not offer["event_id"] < shown["event_id"] < answer["event_id"]
+                or c.presentation.presented_at
+                > datetime.fromisoformat(answer["payload"]["submitted_at"])
+                or not await presentation_matches(event_log, offer, shown)
+                or mode_answer(target[1]) != "reminder_only"
+            ):
+                return False
+            expected_action = exact_mode_action(c.offered)
+        else:
+            selection = selected_choice(
+                c.offered,
+                target[1],
+                provider_account_id=c.offered.provider_account_id,
+                current_choices=c.offered.choices,
+                now=p.issued_at,
+            )
+            expected_action = exact_action(c.offered, selection.list_id)
         return bool(
-            grounding["type"] == GROUNDING_TYPE
+            grounding["type"]
+            == ("cos.reminder.mode_grounded" if mode else GROUNDING_TYPE)
             and grounding["schema_version"] == 1
             and grounding["actor_identity"] == COS_SERVICE_PRINCIPAL_ID
             and grounding["source_adapter"] == "openclaw-plugin"
@@ -322,7 +381,8 @@ async def historical_choice_matches(event_log: Any, grounding: dict[str, Any]) -
             == f"private:{p.member_id}"
             and grounding["causation_id"] == p.source_event_id
             and offer["tenant_id"] == tenant
-            and offer["type"] == "cos.reminder.choice_offered"
+            and offer["type"]
+            == (MODE_OFFERED if mode else "cos.reminder.choice_offered")
             and offer["schema_version"] == 1
             and offer["actor_identity"] == COS_SERVICE_PRINCIPAL_ID
             and offer["source_adapter"] == "openclaw-plugin"
@@ -350,7 +410,7 @@ async def historical_choice_matches(event_log: Any, grounding: dict[str, Any]) -
                 )
             )
             == c.offered.draft_fingerprint
-            and p.action == exact_action(c.offered, selection.list_id)
+            and p.action == expected_action
             and p.action_fingerprint == digest(p.action)
             and p.request_fingerprint
             == digest({"offered_event_id": c.offered_event_id, "action": p.action})
@@ -371,10 +431,29 @@ async def historical_choice_domain_matches(
     if not await historical_choice_matches(event_log, grounding):
         return False
     try:
-        p = ReminderChoiceGroundedV1.model_validate(grounding["payload"])
+        p = grounding_payload(grounding)
         pending = p.continuation.offered
         decision = domain["payload"]
         command = decision["command_payload"]
+        mode = grounding["type"] == "cos.reminder.mode_grounded"
+        if mode:
+            from adminme.cos_reminders_commands import CoSReminderIntent
+
+            intent = CoSReminderIntent.model_validate(command)
+            body_matches = (
+                intent.action() == p.action
+                and intent.source_event_id == p.source_event_id
+                and intent.authorization_expires_at == p.expires_at
+                and decision.get("target_external_id") is None
+            )
+        else:
+            body_matches = (
+                decision.get("target_external_id") == p.action["list_id"]
+                and command["title"] == pending.title
+                and command.get("notes") == pending.notes
+                and command["due"] == due_components(pending.due_at)
+                and command["list_external_id"] == p.action["list_id"]
+            )
         return bool(
             domain["tenant_id"] == grounding["tenant_id"]
             and domain["type"] == "member.provider_action.confirmed"
@@ -383,7 +462,8 @@ async def historical_choice_domain_matches(
             == domain["visibility_scope"]
             == f"private:{p.member_id}"
             and domain["actor_identity"] == domain["source_account_id"] == p.member_id
-            and domain["source_adapter"] == "openclaw-apple-reminder"
+            and domain["source_adapter"]
+            == ("openclaw-cos-apple-reminder" if mode else "openclaw-apple-reminder")
             and domain["causation_id"] == p.source_event_id
             and grounding["event_id"] < domain["event_id"]
             and decision["member_id"] == p.member_id
@@ -392,12 +472,8 @@ async def historical_choice_domain_matches(
             and decision["provider"] == "apple_reminders"
             and decision["operation"] == "create_reminder"
             and decision["provider_account_id"] == pending.provider_account_id
-            and decision.get("target_external_id") == p.action["list_id"]
             and decision.get("expected_provider_revision") is None
-            and command["title"] == pending.title
-            and command.get("notes") == pending.notes
-            and command["due"] == due_components(pending.due_at)
-            and command["list_external_id"] == p.action["list_id"]
+            and body_matches
         )
     except (KeyError, TypeError, ValueError):
         return False
@@ -414,7 +490,7 @@ async def validate_choice_authorization(
     from adminme.products.openclaw.service_work import current_private_instruction
 
     runtime = seam._runtime(request)
-    p = ReminderChoiceGroundedV1.model_validate(grounding["payload"])
+    p = grounding_payload(grounding)
     _, answer = await current_private_instruction(
         request,
         provenance,
@@ -427,6 +503,21 @@ async def validate_choice_authorization(
     assert offer is not None
     await current_choice(runtime, member, offer, answer, p.action)
     now = datetime.now(timezone.utc)
+    if grounding["type"] == "cos.reminder.mode_grounded":
+        from adminme.products.openclaw.reminder_mode_tools import require_answer_origin
+
+        require_answer_origin(p.continuation.offered, answer, provenance)
+        if not p.issued_at <= now < p.expires_at or not request_actions_allowed(
+            runtime, issued_at=p.issued_at.isoformat()
+        ):
+            raise HTTPException(409, "Reminder mode authority expired or was revoked")
+        return {
+            "request_authorization_event_id": grounding["event_id"],
+            "source_event_id": p.source_event_id,
+            "domain_approval_event_id": domain["event_id"],
+            "action_fingerprint": p.action_fingerprint,
+            "rule_id": MODE_RULE,
+        }
     pending = p.continuation.offered
     command = domain.get("payload", {}).get("command_payload", {})
     if (
@@ -476,7 +567,7 @@ async def require_current_choice_sources(
             409,
             "Reminder choice history or current source permission cannot be verified",
         )
-    p = ReminderChoiceGroundedV1.model_validate(grounding["payload"])
+    p = grounding_payload(grounding)
     if p.expires_at <= datetime.now(
         timezone.utc
     ) or p.continuation.offered.pending_expires_at <= datetime.now(timezone.utc):
@@ -505,11 +596,16 @@ async def require_choice_ticket_for_domain(
     """A choice-created domain can never fall back to a later manual approval."""
     from adminme.products.openclaw.reminder_choice_work import offered_by_action
 
-    if domain.get("source_adapter") != "openclaw-apple-reminder":
+    if domain.get("source_adapter") not in {
+        "openclaw-apple-reminder",
+        "openclaw-cos-apple-reminder",
+    }:
         return
     offered = await offered_by_action(runtime, member, domain["payload"]["action_id"])
     if offered is not None and (
-        authorization is None or authorization.get("rule_id") != RULE
+        authorization is None
+        or authorization.get("rule_id")
+        != (MODE_RULE if offered["type"] == MODE_OFFERED else RULE)
     ):
         raise HTTPException(
             403,

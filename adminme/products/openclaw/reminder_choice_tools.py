@@ -109,6 +109,13 @@ async def reminder_choice(
             "automatic_retry": False,
         }
     p = ReminderChoiceOfferedV1.model_validate(offered["payload"])
+    if offered["type"] == "cos.reminder.mode_offered":
+        return {
+            "state": "different_choice_kind",
+            "continuation_tool": "administrateme_cos_reminder_choice",
+            "task_id": offered["payload"]["task_id"],
+            "provider_effect_count": 0,
+        }
     async with runtime.settings_command_locks.setdefault(
         f"apple-reminder:{p.action_id}", asyncio.Lock()
     ):

@@ -9,6 +9,7 @@ import { registerService } from "./service.js";
 import { registerTools } from "./tools.js";
 import { registerWorkstationInventory } from "./workstation.js";
 import { registerMemberWorkTool } from "./member-work.js";
+import { registerReminderModeTool } from "./reminder-mode.js";
 import { registerCoSReminderTools } from "./cos-reminders.js";
 import { registerAppleReminderTools } from "./apple-reminders.js";
 import { registerSelfReminderTools } from "./self-reminders.js";
@@ -45,6 +46,7 @@ export default definePluginEntry({
     registerMemberWorkTool(api, runtime);
     registerAppleReminderTools(api, runtime);
     registerCoSReminderTools(api, runtime);
+    registerReminderModeTool(api, runtime);
     registerRequestedEmailTools(api, runtime);
     registerSelfReminderTools(api, runtime);
     registerServicePrivateTools(api, runtime);

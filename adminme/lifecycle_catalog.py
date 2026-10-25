@@ -1762,6 +1762,8 @@ _EVENT_FAMILY_PREFIXES: tuple[tuple[str, str], ...] = (
     ("service.delegation.", "service_delegation"),
     ("cos.work.", "cos_work"),
     ("cos.action.request_grounded", "language_evidence"),
+    ("cos.reminder.mode_grounded", "language_evidence"),
+    ("cos.reminder.mode_", "cos_work"),
     ("cos.reminder.choice_grounded", "language_evidence"),
     ("cos.reminder.choice_", "cos_work"),
     ("cos.conversation.", "openclaw"),

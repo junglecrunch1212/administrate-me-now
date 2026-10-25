@@ -3162,7 +3162,8 @@ async def _execute_pending_provider_action(
     own_reminder = pending_command["payload"].get("contract") == COS_REMINDER_CONTRACT
     if own_reminder and (
         request_authorization is None
-        or request_authorization.get("rule_id") != COS_REMINDER_RULE
+        or request_authorization.get("rule_id")
+        not in {COS_REMINDER_RULE, "current-human-request.cos-reminder-mode-choice.v1"}
     ):
         raise HTTPException(
             403, "CoS reminders require exact current request authority"

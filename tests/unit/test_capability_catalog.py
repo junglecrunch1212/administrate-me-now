@@ -480,6 +480,11 @@ def test_cos_owned_reminder_catalog_is_distinct_from_member_permission(
         "administrateme_confirm_apple_reminder"
         not in item["openclaw"]["declared_tools"]
     )
+    assert (
+        item["openclaw"]["clarification_rule"]
+        == "current-human-request.cos-reminder-mode-choice.v1"
+    )
+    assert item["openclaw"]["clarification_tool"] in item["openclaw"]["effective_tools"]
     runtime.settings.adapter_config["cos_apple_reminders_writes"]["enabled"] = False
     disabled = catalog_module.compose_member_catalog(
         runtime, session, settings_state={}

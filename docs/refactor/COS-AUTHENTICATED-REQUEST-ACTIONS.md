@@ -100,3 +100,35 @@ is introduced. Focused proof is `test_reminder_choice_continuation.py`, the choi
 unit tests and native request-policy tests; candidate execution belongs in CI.
 
 Pending-task selection uses the retained offer set at the fresh answer, not a model-provided task ID. One pending offer in the actual authenticated Gmail account/member/thread can disambiguate; otherwise require one pending offer overall or an exact unique title/ID prefix in the human answer. Duplicate titles require the ID. The signed candidate snapshot contains title hashes instead of copying other tasks’ titles into the current conversation; both policy engines compare literal human references. Historical replay verifies the snapshot against the original log cutoff, so later tasks or cancellations cannot change that answer’s meaning. Displayed choices still require current source authority.
+
+
+## Numbered CoS reminder clarification
+
+MODERNIZE: `administrateme_cos_reminder_choice` retains one new ambiguous
+CoS-reminder/email request using the existing private clarification task lifecycle.
+The typed offer fixes the original draft, due instant, CoS account/device/list and
+numbered meaning. The member receives its exact final prompt. Gmail and iMessage
+presentation requires the existing audited sent reply; portal presentation binds
+the signed native final answer to its authenticated run/session. Neither a tool
+result nor an assistant suggestion constitutes human authorization.
+
+A later authentic `1` selects only that actually presented unchanged reminder.
+Domain grounding uses separate original-human and answer evidence; native policy
+independently checks the signed presentation, task selection, fresh answer and
+exact action. Both sources and the current own-writer permission are rechecked
+before dispatch. `2` leaves an explicit unresolved email workflow: no reminder,
+email, timer or promised scheduled delivery is created. A number in another
+conversation requires an authored task reference; a model-supplied ID is not one.
+The original expiry and command identity never renew on replay or restart.
+
+The scoped proof is `test_reminder_mode_continuation.py`, the native hook fixture
+`openclaw_reminder_mode_probe.mjs`, and independent host-policy negatives. The
+isolated transport, model and EventKit boundaries are synthetic; they are not live
+member acceptance. The live affected check is one fresh genuine offered choice
+followed by the member's answer, one terminal own-reminder save/read-back and no
+new email/timer effect beyond the authorized conversation replies. Wrong mapping,
+missing presentation, wrong source, changed writer, observation mode or duplicate
+creation is a failure. After any new mode history, recover with the existing
+`bootstrap.request_actions disable` command above on the schema-aware runtime;
+do not roll back to a binary unaware of the retained mode event schemas. Existing
+acquisition, history and reply grants remain intact.

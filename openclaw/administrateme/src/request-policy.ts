@@ -6,13 +6,14 @@ import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry
 import { OPENCLAW_COMMIT, OPENCLAW_VERSION, type Provenance } from "./contract.js";
 import { approvalRequestFingerprint, canonical } from "./approval.js";
 import { peekReminderInput } from "./self-replies.js";
+import { REMINDER_MODE_RULE, validateReminderMode } from "./reminder-mode-policy.js";
 import { REMINDER_CHOICE_RULE, validateReminderChoice } from "./reminder-choice-policy.js";
 import type { PluginRuntime } from "./runtime.js";
 
 export const MEMBER_REMINDER_RULE = "current-human-request.apple-reminder-create.v1";
 export const COS_REMINDER_RULE = "current-human-request.cos-reminder-create.v1";
 export const COS_EMAIL_RULE = "current-human-request.cos-email-to-requester.v1";
-type RequestRule = typeof MEMBER_REMINDER_RULE | typeof COS_REMINDER_RULE | typeof COS_EMAIL_RULE | typeof REMINDER_CHOICE_RULE;
+type RequestRule = typeof MEMBER_REMINDER_RULE | typeof COS_REMINDER_RULE | typeof COS_EMAIL_RULE | typeof REMINDER_CHOICE_RULE | typeof REMINDER_MODE_RULE;
 const CONTRACT = "authenticated-request-v1";
 const TOOL = "administrateme_execute_pending_provider_action";
 const EMAIL_TOOL = "administrateme_cos_response";
@@ -56,8 +57,8 @@ function validateTicket(runtime: PluginRuntime, candidate: unknown, input: Input
       !timingSafeEqual(Buffer.from(expected), Buffer.from(signature)) ||
       !ticket.action || createHash("sha256").update(canonical(ticket.action)).digest("hex") !== ticket.action_fingerprint ||
       (expectedRule === COS_EMAIL_RULE ? !emailActionValid(ticket) :
-        ticket.action.provider !== "apple_reminders" || ticket.action.operation !== "create_reminder" || ticket.action.resource_owner !== (expectedRule === COS_REMINDER_RULE ? "service-principal:chief-of-staff" : "requester")) ||
-      (expectedRule === COS_REMINDER_RULE && (ticket.action.operating_principal !== "service-principal:chief-of-staff" ||
+        ticket.action.provider !== "apple_reminders" || ticket.action.operation !== "create_reminder" || ticket.action.resource_owner !== ([COS_REMINDER_RULE, REMINDER_MODE_RULE].includes(expectedRule) ? "service-principal:chief-of-staff" : "requester")) ||
+      ([COS_REMINDER_RULE, REMINDER_MODE_RULE].includes(expectedRule) && (ticket.action.operating_principal !== "service-principal:chief-of-staff" ||
         !["provider_account_id", "source_id", "list_id"].every((key) => typeof ticket.action[key] === "string" && ticket.action[key]) ||
         !["device_identity_sha256", "selection_sha256", "write_policy_sha256"].every((key) => /^[a-f0-9]{64}$/.test(String(ticket.action[key]))) ||
         !Number.isInteger(ticket.action.os_uid) || Number(ticket.action.os_uid) < 0)) ||
@@ -71,7 +72,8 @@ function validateTicket(runtime: PluginRuntime, candidate: unknown, input: Input
         span.start < 0 || span.end <= span.start || span.end > points.length || points.slice(span.start, span.end).join("") !== span.text)) {
     throw new Error("Current request policy evidence is stale or mismatched");
   }
-  if (expectedRule === REMINDER_CHOICE_RULE) validateReminderChoice(ticket, input);
+  if (expectedRule === REMINDER_MODE_RULE) validateReminderMode(ticket, input, secret(runtime));
+  else if (expectedRule === REMINDER_CHOICE_RULE) validateReminderChoice(ticket, input);
   else if (ticket.continuation !== undefined) throw new Error("Simple requests cannot borrow continuation authority");
   return ticket;
 }
@@ -100,8 +102,11 @@ export function rememberRequestAuthorization(runtime: PluginRuntime, result: unk
 export function rememberReminderChoiceAuthorization(runtime: PluginRuntime, result: unknown, input: Input, requested: Record<string, unknown>): void {
   if (!result || typeof result !== "object" || !("request_authorization" in result)) return;
   if (requested.action !== "answer") throw new Error("Status or cancellation cannot authorize reminder execution");
-  const ticket = validateTicket(runtime, (result as Record<string, unknown>).request_authorization, input, REMINDER_CHOICE_RULE);
-  validateReminderChoice(ticket, input, requested.task_id);
+  const candidate = (result as Record<string, unknown>).request_authorization as Ticket;
+  const mode = candidate?.rule_id === REMINDER_MODE_RULE;
+  const ticket = validateTicket(runtime, candidate, input, mode ? REMINDER_MODE_RULE : REMINDER_CHOICE_RULE);
+  if (mode) validateReminderMode(ticket, input, secret(runtime), requested.task_id);
+  else validateReminderChoice(ticket, input, requested.task_id);
   cacheTicket(runtime, ticket);
 }
 
@@ -122,7 +127,7 @@ export async function prepareRequestedApproval(runtime: PluginRuntime, toolName:
   if (!context.toolCallId) throw new Error("Current native tool identity is unavailable");
   const input = await peekReminderInput(runtime, context);
   if (!input) throw new Error("Current trusted request is unavailable");
-  if (email ? ticket.rule_id !== COS_EMAIL_RULE : ticket.rule_id !== MEMBER_REMINDER_RULE && ticket.rule_id !== COS_REMINDER_RULE && ticket.rule_id !== REMINDER_CHOICE_RULE) throw new Error("Unsupported current request rule for this tool");
+  if (email ? ticket.rule_id !== COS_EMAIL_RULE : ticket.rule_id !== MEMBER_REMINDER_RULE && ticket.rule_id !== COS_REMINDER_RULE && ticket.rule_id !== REMINDER_CHOICE_RULE && ticket.rule_id !== REMINDER_MODE_RULE) throw new Error("Unsupported current request rule for this tool");
   validateTicket(runtime, ticket, input, ticket.rule_id as RequestRule);
   const allowed = email ? ["approval_event_id", "request_id"] : ["domain_approval_event_id"];
   if (Object.keys(params).some((key) => !allowed.includes(key)) ||

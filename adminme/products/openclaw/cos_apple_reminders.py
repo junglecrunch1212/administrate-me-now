@@ -252,59 +252,15 @@ async def confirm(
                 )
             }
         )
-        now = EventEnvelope.now_utc_iso()
-        payload = {
-            "action_id": action_id,
-            "member_id": session.auth_member_id,
-            "provider": "apple_reminders",
-            "provider_account_id": selection.provider_account_id,
-            "operation": "create_reminder",
-            "target_external_id": None,
-            "expected_provider_revision": None,
-            "command_payload": intent.model_dump(mode="json"),
-            "request_fingerprint": fingerprint,
-            "confirmed_at": now,
-        }
-        # Member bridge permission binding is intentionally not reused here:
-        # the exact CoS-owned source is authorized by this separate typed rule.
-        await seam._guard(
+        domain = await confirm_intent(
             runtime,
             session,
-            "external_sync.write_requested",
-            {
-                "command_id": action_id,
-                "member_id": session.auth_member_id,
-                "provider": "apple_reminders",
-                "provider_account_id": selection.provider_account_id,
-                "operation": "create_reminder",
-                "target_external_id": None,
-                "expected_provider_revision": None,
-                "payload": intent.model_dump(mode="json"),
-                "requested_at": now,
-            },
+            source,
+            intent=intent,
+            action_id=action_id,
+            fingerprint=fingerprint,
         )
-        event_id = await runtime.events.write(
-            EventEnvelope(
-                event_at_ms=int(time.time() * 1000),
-                tenant_id=session.tenant_id,
-                type="member.provider_action.confirmed",
-                schema_version=1,
-                occurred_at=now,
-                source_adapter=SOURCE_ADAPTER,
-                source_account_id=session.auth_member_id,
-                owner_scope=f"private:{session.auth_member_id}",
-                visibility_scope=f"private:{session.auth_member_id}",
-                sensitivity=source["sensitivity"],
-                actor_identity=session.auth_member_id,
-                correlation_id=session.correlation_id,
-                causation_id=source["event_id"],
-                idempotency_key=key,
-                raw_ref=f"request-sha256:{fingerprint}",
-                payload=payload,
-            )
-        )
-        domain = await runtime.event_log.get(event_id)
-        assert domain is not None
+        event_id = domain["event_id"]
         await seam._record_tool_call(
             request,
             session,
@@ -319,6 +275,78 @@ async def confirm(
             "source_message_event_id": source["event_id"],
             "request_authorization": ticket(runtime, session, domain, grounded),
         }
+
+
+async def confirm_intent(
+    runtime: Any,
+    session: Any,
+    source: dict[str, Any],
+    *,
+    intent: CoSReminderIntent,
+    action_id: str,
+    fingerprint: str,
+) -> dict[str, Any]:
+    """Shared own-writer domain append after independently validated grounding.
+
+    Internal callers hold the action lock. This helper grants no authorization;
+    execution still requires the exact request ticket and independent host policy.
+    """
+    intent.require_current(runtime.settings.adapter_config)
+    key = f"provider-action:{session.auth_member_id}:{action_id}"
+    now = EventEnvelope.now_utc_iso()
+    payload = {
+        "action_id": action_id,
+        "member_id": session.auth_member_id,
+        "provider": "apple_reminders",
+        "provider_account_id": intent.selection.provider_account_id,
+        "operation": "create_reminder",
+        "target_external_id": None,
+        "expected_provider_revision": None,
+        "command_payload": intent.model_dump(mode="json"),
+        "request_fingerprint": fingerprint,
+        "confirmed_at": now,
+    }
+    # Member bridge permission binding is intentionally not reused here:
+    # the exact CoS-owned source is authorized by this separate typed rule.
+    await seam._guard(
+        runtime,
+        session,
+        "external_sync.write_requested",
+        {
+            "command_id": action_id,
+            "member_id": session.auth_member_id,
+            "provider": "apple_reminders",
+            "provider_account_id": intent.selection.provider_account_id,
+            "operation": "create_reminder",
+            "target_external_id": None,
+            "expected_provider_revision": None,
+            "payload": intent.model_dump(mode="json"),
+            "requested_at": now,
+        },
+    )
+    event_id = await runtime.events.write(
+        EventEnvelope(
+            event_at_ms=int(time.time() * 1000),
+            tenant_id=session.tenant_id,
+            type="member.provider_action.confirmed",
+            schema_version=1,
+            occurred_at=now,
+            source_adapter=SOURCE_ADAPTER,
+            source_account_id=session.auth_member_id,
+            owner_scope=f"private:{session.auth_member_id}",
+            visibility_scope=f"private:{session.auth_member_id}",
+            sensitivity=source["sensitivity"],
+            actor_identity=session.auth_member_id,
+            correlation_id=session.correlation_id,
+            causation_id=source["event_id"],
+            idempotency_key=key,
+            raw_ref=f"request-sha256:{fingerprint}",
+            payload=payload,
+        )
+    )
+    domain = await runtime.event_log.get(event_id)
+    assert domain is not None
+    return domain
 
 
 @router.post("/cos-apple-reminders/status")

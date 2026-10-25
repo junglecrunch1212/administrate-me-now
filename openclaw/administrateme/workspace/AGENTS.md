@@ -435,16 +435,22 @@ conversations. Confirmation alone does not execute the action.
 Older pending confirmations have no new request authority. Inspect and report their
 original due time, age and pending/overdue status; never release an old queue or
 silently change its due time. A new explicit instruction is needed to resume or
-change it. If the policy cannot ground the exact action, ask only for the missing
-intent or destination, rather than requesting generic approval.
+change it. For `request_clarification_required`, ask only about the stated ambiguous intent.
+For `request_authorization_unavailable`, report that request verification failed
+and no action was confirmed or executed. It is not evidence of account ambiguity,
+missing consent or an unclear request. Do not invent a destination choice, ask for
+permission again, or blindly repeat an explicit verification failure; retain the
+request identifier for diagnosis. Do not reuse it against a new message or bind
+new text to an old attempt. A short follow-up such as "Yes" does not repair failed
+request verification. An unavailable verification is not a transport timeout.
 Then use `administrateme_apple_reminder_status` with the same domain receipt.
 Only terminal `succeeded` proves creation; `accepted`, waiting for approval,
 pending, failed and unknown must be described accurately. Do not claim success
 from a confirmation, execution acceptance or a saved setting. A timeout or
 unknown result must be inspected using the same receipt; never generate a new
 request identifier to retry a possibly completed create. Preserve the identifier
-and exact payload on a confirmation retry; if no receipt was returned, repeat
-that same confirmation to recover it. This workflow creates an Apple
+and exact payload only when a transport timeout lost the confirmation response;
+recover that same confirmation instead of creating another. This workflow creates an Apple
 Reminder; it does not schedule a text or replace a requested text reminder.
 
 For an explicit request to put a reminder in your own CoS Apple work list, use
@@ -457,6 +463,16 @@ work list. Do not use this route merely because a member destination is unavaila
 Only `succeeded` with native read-back proves this outcome; an unknown save must
 not be retried with a new identifier. Existing reader access does not imply that
 the separate writer component has its one-time native consent.
+
+If a new request ambiguously mixes your own Apple reminder with automatic email,
+use `administrateme_cos_reminder_choice` with action `offer`. Return its exact
+`presentation_prompt` as the final reply. On the authentic fresh answer use
+`answer` with the retained task; do not send “1” alone to the create tool.
+Option 1 creates only the unchanged reminder after both current-request decisions;
+option 2 remains an unresolved email workflow with no reminder, send or timer.
+A bare number must belong to the presented conversation and one pending offer.
+For another channel, ask for the task ID followed by a colon and number. Preserve
+the original due time; old failed or expired requests never become new offers.
 
 For a current explicit request to email the requesting member now, use
 `administrateme_confirm_requested_email` with a stable request identifier and
@@ -505,6 +521,8 @@ step in ordinary language. Keep internal catalog, permission and recovery
 terminology out of the member's reply unless they ask for technical details.
 Do not claim scheduling or delivery from a saved record, a proposed workflow,
 or a timer whose registration was not confirmed.
+
+When several reminder choices are pending, a bare answer selects a task only through one pending offer in the actual authenticated email thread. Across channels, ask for the exact reminder title followed by a colon and list choice; duplicate titles require the task ID. A tool argument alone cannot choose for the member. Status remains available without treating a question as execution authority.
 
 
 <!-- source: bootstrap/openclaw/programs/reward_dispatch.md -->
@@ -631,5 +649,3 @@ For one route's account coordinates, evidence, scopes or recovery, request
 `view: details`, its section and exact `binding_id`; detail pages use field paths.
 A 409 means current state changed: start again at offset zero. Never infer
 omitted details or count a transcript truncation as a complete inventory read.
-
-When several reminder choices are pending, a bare answer selects a task only through one pending offer in the actual authenticated email thread. Across channels, ask for the exact reminder title followed by a colon and list choice; duplicate titles require the task ID. A tool argument alone cannot choose for the member. Status remains available without treating a question as execution authority.

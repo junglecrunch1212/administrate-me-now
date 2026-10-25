@@ -14,7 +14,7 @@ const object = (value: unknown): Record<string, unknown> => {
 const exactKeys = (value: Record<string, unknown>, keys: string[]) =>
   Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key));
 
-function spansMatch(text: string, raw: unknown): boolean {
+export function spansMatch(text: string, raw: unknown): boolean {
   const points = Array.from(text);
   return Array.isArray(raw) && raw.length >= 1 && raw.length <= 8 && raw.every((item) => {
     const span = object(item);
@@ -40,7 +40,7 @@ function conversation(raw: unknown): Record<string, unknown> | null {
 }
 
 /** A task_id argument may agree with the decision, but cannot make it. */
-function taskAnswer(raw: unknown, input: NativeInput, offered: Record<string, unknown>, offerId: unknown, issued: number): string {
+export function taskAnswer(raw: unknown, input: NativeInput, offered: Record<string, unknown>, offerId: unknown, issued: number): string {
   const snapshot = object(raw);
   const submitted = Date.parse(String(snapshot.answer_submitted_at));
   const native = input.provenance;
