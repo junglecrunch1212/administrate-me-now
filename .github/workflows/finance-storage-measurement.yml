@@ -1,0 +1,57 @@
+name: Concurrent synthetic Finance measurement
+on:
+  push:
+    branches: ['codex/finance-concurrent-8b8a0c2e']
+    paths:
+      - 'tests/fixtures/finance_storage_measurement.py'
+      - 'tests/fixtures/finance_storage_cases.py'
+      - 'tests/acceptance/test_finance_storage_measurement.py'
+      - 'tests/acceptance/test_finance_storage_isolation.py'
+      - '.github/workflows/finance-storage-measurement.yml'
+permissions:
+  contents: read
+concurrency:
+  group: finance-measurement-${{ github.ref }}-${{ github.sha }}
+  cancel-in-progress: false
+jobs:
+  measured-storage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      ADMINME_TEST_MODE: '1'
+      ADMINME_SYNTHETIC_STORAGE_MEASUREMENT: '1'
+      PYTHONPATH: bridge
+      PYTHONDONTWRITEBYTECODE: '1'
+      POETRY_VIRTUALENVS_IN_PROJECT: 'true'
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.14.7'
+      - run: pipx install poetry==2.4.1
+      - run: poetry sync --with dev --no-interaction
+      - name: Bind unchanged production source and static measurement checks
+        run: |
+          git rev-parse HEAD HEAD:adminme HEAD:poetry.lock
+          git diff --exit-code aa82a0b66061f95744c8958940ebe5531d0ee633 HEAD -- adminme pyproject.toml poetry.lock
+          .venv/bin/ruff check tests/fixtures/finance_storage_measurement.py tests/fixtures/finance_storage_cases.py tests/acceptance/test_finance_storage_measurement.py tests/acceptance/test_finance_storage_isolation.py
+          .venv/bin/ruff format --check tests/fixtures/finance_storage_measurement.py tests/fixtures/finance_storage_cases.py tests/acceptance/test_finance_storage_measurement.py tests/acceptance/test_finance_storage_isolation.py
+      - name: One fixed 180 second synthetic measurement with bounded cleanup
+        timeout-minutes: 8
+        env:
+          FINANCE_STORAGE_ARTIFACT_DIR: ${{ runner.temp }}/finance-storage-measurement
+        run: >-
+          exec .venv/bin/python -m pytest -q --runxfail --maxfail=1
+          --junitxml="${{ runner.temp }}/finance-storage-measurement/results.xml"
+          tests/acceptance/test_finance_storage_measurement.py
+      - name: Preserve successful or incomplete receipts and traces
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: finance-storage-measurement
+          path: ${{ runner.temp }}/finance-storage-measurement
+          if-no-files-found: error
+          retention-days: 7
