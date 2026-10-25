@@ -12,9 +12,6 @@ tests=(
   tests/unit/test_workstation_browser.py
   tests/acceptance/test_cos_workstation_handoff.py
   tests/acceptance/test_requested_email_action.py
-  tests/acceptance/test_cos_email_audit_context.py
-  tests/unit/test_source_assurance.py
-  tests/unit/test_observation_readiness_window.py
   tests/unit/products/openclaw/test_requested_email.py
   tests/unit/bootstrap/test_native_account_policy.py
   tests/acceptance/test_cos_owned_apple_reminder.py

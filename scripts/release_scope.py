@@ -333,6 +333,181 @@ COS_REMINDER_REQUIRED_PATHS = frozenset(
         "scripts/acceptance/cos-reminder-release.sh",
     }
 )
+UPDATER_SOURCE_ASSURANCE = "adminme/source_assurance.py"
+UPDATER_EFFECT_CONTEXT_COMPONENT_PATHS = frozenset(
+    {"bootstrap/effect_context_repair.py"}
+)
+UPDATER_EFFECT_CONTEXT_TEST_PATHS = frozenset(
+    {
+        "tests/unit/bootstrap/test_effect_context_repair.py",
+        "tests/acceptance/test_effect_context_repair_operations.py",
+        "tests/acceptance/test_cos_email_audit_context.py",
+        "tests/unit/test_source_assurance.py",
+        "tests/unit/test_observation_readiness_window.py",
+    }
+)
+UPDATER_EFFECT_CONTEXT_SHARED_REPLACEMENTS: dict[str, tuple[tuple[str, str], ...]] = {
+    "bootstrap/cli.py": (
+        (
+            (
+                '            child.add_argument("--submission-repair-manifest", type=Path)\n'
+                "            child.add_argument(\n"
+            ),
+            (
+                '            child.add_argument("--submission-repair-manifest", type=Path)\n'
+                '            child.add_argument("--effect-context-repair-plan", type=Path)\n'
+                "            child.add_argument(\n"
+            ),
+        ),
+        (
+            ("            ),\n        )\n"),
+            (
+                "            ),\n"
+                "            effect_context_repair_plan=(\n"
+                '                args.effect_context_repair_plan if args.command == "upgrade" else None\n'
+                "            ),\n"
+                "        )\n"
+            ),
+        ),
+    ),
+    "bootstrap/htr10_export.py": (
+        (
+            (
+                "    submission_repair_manifest: Path | None = None,\n"
+                "    test_mode: bool = False,\n"
+            ),
+            (
+                "    submission_repair_manifest: Path | None = None,\n"
+                "    effect_context_repair_plan: Path | None = None,\n"
+                "    test_mode: bool = False,\n"
+            ),
+        ),
+        (
+            (
+                "    repair = None\n"
+                "    if submission_repair_manifest is not None:\n"
+                "        from bootstrap.submission_repair import (\n"
+            ),
+            (
+                "    repair = None\n"
+                "    if effect_context_repair_plan is not None:\n"
+                "        from bootstrap.effect_context_repair import load_plan, verify_proof\n"
+                "        from bootstrap.source_identity import reviewed_candidate_commit\n"
+                "\n"
+                "        if submission_repair_manifest is not None or transition_public is not None:\n"
+                "            raise HTR10ExportError(\n"
+                '                "effect-context repair cannot combine deployment exceptions"\n'
+                "            )\n"
+                "        plan = load_plan(\n"
+                "            effect_context_repair_plan,\n"
+                "            paths,\n"
+                "            repository_root,\n"
+                "            candidate=reviewed_candidate_commit(repository_root),\n"
+                "            predecessor=capture_deployment_snapshot(paths).predecessor_commit,\n"
+                "            test_mode=test_mode,\n"
+                "        )\n"
+                "        await asyncio.to_thread(\n"
+                "            verify_proof,\n"
+                "            paths,\n"
+                "            repository_root,\n"
+                "            plan.effect_context_proof,\n"
+                "            diagnostics=diagnostics,\n"
+                "            test_mode=test_mode,\n"
+                "        )\n"
+                "    elif submission_repair_manifest is not None:\n"
+                "        from bootstrap.submission_repair import (\n"
+            ),
+        ),
+        (
+            (
+                '    parser.add_argument("--submission-repair-manifest", type=Path)\n'
+                "    parser.add_argument(\n"
+            ),
+            (
+                '    parser.add_argument("--submission-repair-manifest", type=Path)\n'
+                '    parser.add_argument("--effect-context-repair-plan", type=Path)\n'
+                "    parser.add_argument(\n"
+            ),
+        ),
+        (
+            (
+                "            submission_repair_manifest=args.submission_repair_manifest,\n"
+                '            test_mode=os.environ.get("ADMINME_TEST_MODE") == "1",\n'
+            ),
+            (
+                "            submission_repair_manifest=args.submission_repair_manifest,\n"
+                "            effect_context_repair_plan=args.effect_context_repair_plan,\n"
+                '            test_mode=os.environ.get("ADMINME_TEST_MODE") == "1",\n'
+            ),
+        ),
+    ),
+    "bootstrap/update.sh": (
+        (
+            (
+                '  submission_repair_manifest=""\n'
+                '  for argument in "${requested_args[@]}"; do\n'
+            ),
+            (
+                '  submission_repair_manifest=""\n'
+                '  effect_context_repair_plan=""\n'
+                '  for argument in "${requested_args[@]}"; do\n'
+            ),
+        ),
+        (
+            ("        ;;\n      --submission-repair-manifest=*)\n"),
+            (
+                "        ;;\n"
+                "      --effect-context-repair-plan=*)\n"
+                '        [[ -z "$effect_context_repair_plan" ]] || die "effect-context repair plan was repeated"\n'
+                '        effect_context_repair_plan="${argument#*=}"\n'
+                '        [[ "$effect_context_repair_plan" == /* && -f "$effect_context_repair_plan" ]] \\\n'
+                '          || die "effect-context repair plan must name an absolute private file"\n'
+                "        ;;\n"
+                "      --submission-repair-manifest=*)\n"
+            ),
+        ),
+        (
+            ('submission_repair_flag=""\nwhile [[ "${1:-}" == --* ]]; do\n'),
+            (
+                'submission_repair_flag=""\n'
+                'effect_context_repair_flag=""\n'
+                'while [[ "${1:-}" == --* ]]; do\n'
+            ),
+        ),
+        (
+            ("      ;;\n    --submission-repair-manifest=*)\n"),
+            (
+                "      ;;\n"
+                "    --effect-context-repair-plan=*)\n"
+                '      [[ -z "$effect_context_repair_flag" ]] || fail "effect-context repair plan was repeated"\n'
+                '      effect_context_repair_flag="$1"\n'
+                "      ;;\n"
+                "    --submission-repair-manifest=*)\n"
+            ),
+        ),
+        (
+            (
+                'upgrade_args=(upgrade "$candidate")\n'
+                'if [[ -n "$submission_repair_flag" ]]; then\n'
+            ),
+            (
+                'upgrade_args=(upgrade "$candidate")\n'
+                'if [[ -n "$effect_context_repair_flag" ]]; then\n'
+                '  upgrade_args+=("$effect_context_repair_flag")\n'
+                "fi\n"
+                'if [[ -n "$submission_repair_flag" ]]; then\n'
+            ),
+        ),
+    ),
+}
+UPDATER_EFFECT_CONTEXT_SHARED_PATHS = frozenset(
+    {UPDATER_SOURCE_ASSURANCE, *UPDATER_EFFECT_CONTEXT_SHARED_REPLACEMENTS}
+)
+UPDATER_EFFECT_CONTEXT_PATHS = (
+    UPDATER_EFFECT_CONTEXT_COMPONENT_PATHS
+    | UPDATER_EFFECT_CONTEXT_TEST_PATHS
+    | UPDATER_EFFECT_CONTEXT_SHARED_PATHS
+)
 UPDATER_COMPONENT_PATHS = frozenset(
     {
         "bootstrap/upgrade.py",
@@ -347,6 +522,7 @@ UPDATER_COMPONENT_PATHS = frozenset(
         "bootstrap/openclaw_tools.py",
     }
 )
+UPDATER_COMPONENT_PATHS |= UPDATER_EFFECT_CONTEXT_COMPONENT_PATHS
 UPDATER_TEST_PATHS = frozenset(
     {
         "tests/unit/bootstrap/test_source_identity.py",
@@ -368,6 +544,7 @@ UPDATER_TEST_PATHS = frozenset(
         "tests/acceptance/test_macos_bootstrap_operations.py",
     }
 )
+UPDATER_TEST_PATHS |= UPDATER_EFFECT_CONTEXT_TEST_PATHS
 UPDATER_CHECK_SCRIPT = "scripts/acceptance/updater-delivery-release.sh"
 UPDATER_OPTIONAL_MODULE_TESTS = {
     "bootstrap/prepared_runtime.py": "tests/unit/bootstrap/test_prepared_runtime.py",
@@ -376,13 +553,16 @@ UPDATER_OPTIONAL_MODULE_TESTS = {
 }
 UPDATER_REQUIRED_PATHS = (
     UPDATER_COMPONENT_PATHS | UPDATER_TEST_PATHS | {UPDATER_CHECK_SCRIPT}
-) - (UPDATER_OPTIONAL_MODULE_TESTS.keys() | UPDATER_OPTIONAL_MODULE_TESTS.values())
+) - (
+    UPDATER_OPTIONAL_MODULE_TESTS.keys()
+    | UPDATER_OPTIONAL_MODULE_TESTS.values()
+    | UPDATER_EFFECT_CONTEXT_PATHS
+)
 COS_SERVICE_WORK_APPLICATION = "adminme/runtime/application.py"
 COS_SERVICE_WORK_MEMBER = "adminme/products/member/main.py"
 COS_SERVICE_WORK_INGEST = "adminme/products/bridge/routers/ingest.py"
 COS_SERVICE_WORK_OBSERVATION = "adminme/lib/observation.py"
 COS_SERVICE_WORK_HISTORY = "adminme/historical_attribution.py"
-COS_SERVICE_WORK_SOURCE_ASSURANCE = "adminme/source_assurance.py"
 COS_SERVICE_WORK_CHECK_SCRIPT = "scripts/acceptance/cos-service-work-release.sh"
 COS_SERVICE_WORK_NATIVE_INSTALL = "scripts/acceptance/openclaw-source-install.sh"
 COS_SERVICE_WORK_COMPONENT_PATHS = frozenset(
@@ -393,7 +573,6 @@ COS_SERVICE_WORK_COMPONENT_PATHS = frozenset(
         COS_SERVICE_WORK_INGEST,
         COS_SERVICE_WORK_OBSERVATION,
         COS_SERVICE_WORK_HISTORY,
-        COS_SERVICE_WORK_SOURCE_ASSURANCE,
         "adminme/adapters/cos_apple_reminders.py",
         "adminme/adapters/cos_reminders_helper.py",
         "adminme/adapters/cos_reminders_write.py",
@@ -551,9 +730,6 @@ COS_SERVICE_WORK_TEST_PATHS = frozenset(
         "openclaw/administrateme/test/requested-email.test.ts",
         "openclaw/administrateme/scripts/requested-email-policy-probe.mjs",
         "tests/acceptance/test_requested_email_action.py",
-        "tests/acceptance/test_cos_email_audit_context.py",
-        "tests/unit/test_source_assurance.py",
-        "tests/unit/test_observation_readiness_window.py",
         "tests/unit/products/openclaw/test_requested_email.py",
         "openclaw/administrateme/test/conversation-input.test.ts",
         "tests/acceptance/test_workstation_inventory.py",
@@ -752,15 +928,20 @@ def choose_scope(
         and all(
             status in {"A", "M"}
             and (
-                path in UPDATER_COMPONENT_PATHS | UPDATER_TEST_PATHS | POLICY_PATHS
+                path
+                in UPDATER_COMPONENT_PATHS
+                | UPDATER_TEST_PATHS
+                | UPDATER_EFFECT_CONTEXT_SHARED_PATHS
+                | POLICY_PATHS
                 or path == UPDATER_CHECK_SCRIPT
                 or _prose(path)
             )
-            and path_modes.get(path) == {"100644"}
+            and path_modes.get(path) == {_updater_mode(path)}
             for status, path in changes
         )
         and any(
-            path in UPDATER_COMPONENT_PATHS or path == UPDATER_CHECK_SCRIPT
+            path in UPDATER_COMPONENT_PATHS | UPDATER_EFFECT_CONTEXT_SHARED_PATHS
+            or path == UPDATER_CHECK_SCRIPT
             for _, path in changes
         )
     ):
@@ -1068,13 +1249,53 @@ def _cos_recovery_dependency_fingerprint(entries: tuple[GitTreeEntry, ...]) -> s
     ).hexdigest()
 
 
-def _updater_dependency_fingerprint(entries: tuple[GitTreeEntry, ...]) -> str:
-    # This delivery controller boundary does not exempt toolchains, runtime,
-    # storage/crypto, permissions, provider code, or unknown tests. Bind every
-    # outside byte and mode in base, head and the exact-parent merge tree.
+def _updater_mode(path: str) -> str:
+    return "100755" if path == "bootstrap/update.sh" else "100644"
+
+
+def _updater_effect_context_shared_source(
+    path: str, source: str
+) -> tuple[str, bool] | None:
+    if path == UPDATER_SOURCE_ASSURANCE:
+        normalized = _updater_source_assurance(source)
+        return (
+            (normalized, "cos_instruction_references" in source) if normalized else None
+        )
+    replacements = UPDATER_EFFECT_CONTEXT_SHARED_REPLACEMENTS[path]
+    counts = [source.count(new) for _, new in replacements]
+    if any(counts) and counts != [1] * len(replacements):
+        return None
+    for old, new in replacements:
+        source = source.replace(new, old)
+    return hashlib.sha256(source.encode()).hexdigest(), bool(any(counts))
+
+
+def _updater_dependency_fingerprint(
+    repository: Path, revision: str, entries: tuple[GitTreeEntry, ...]
+) -> tuple[str, bool, bool] | None:
+    # Recovery controller changes do not exempt runtime/provider/accounting code.
+    # Shared entry points permit only the exact reviewed repair integration.
+    repair_active = bool(
+        UPDATER_EFFECT_CONTEXT_COMPONENT_PATHS & {entry.path for entry in entries}
+    )
+    shared_identities: list[tuple[str, str, str]] = []
+    wired_paths: set[str] = set()
+    for path in sorted(UPDATER_EFFECT_CONTEXT_SHARED_PATHS):
+        entry = next((entry for entry in entries if entry.path == path), None)
+        if entry is not None and entry.mode != _updater_mode(path):
+            return None
+        source = _git(repository, "show", f"{revision}:{path}") if entry else ""
+        normalized = _updater_effect_context_shared_source(path, source)
+        if normalized is None:
+            return None
+        if normalized[1]:
+            wired_paths.add(path)
+            repair_active = True
+        shared_identities.append((path, _updater_mode(path), normalized[0]))
     allowed = (
         UPDATER_COMPONENT_PATHS
         | UPDATER_TEST_PATHS
+        | UPDATER_EFFECT_CONTEXT_SHARED_PATHS
         | POLICY_PATHS
         | {UPDATER_CHECK_SCRIPT}
     )
@@ -1082,12 +1303,52 @@ def _updater_dependency_fingerprint(entries: tuple[GitTreeEntry, ...]) -> str:
         (entry.path, entry.mode, entry.object_id)
         for entry in entries
         if not (
-            entry.mode == "100644" and (entry.path in allowed or _prose(entry.path))
+            entry.mode == _updater_mode(entry.path)
+            and (entry.path in allowed or _prose(entry.path))
         )
     )
-    return hashlib.sha256(
-        json.dumps(coordinates, separators=(",", ":"), ensure_ascii=True).encode()
-    ).hexdigest()
+    coordinates.extend(shared_identities)
+    coordinates.sort()
+    return (
+        hashlib.sha256(
+            json.dumps(coordinates, separators=(",", ":"), ensure_ascii=True).encode()
+        ).hexdigest(),
+        repair_active,
+        wired_paths == UPDATER_EFFECT_CONTEXT_SHARED_PATHS,
+    )
+
+
+def _updater_source_assurance(source: str) -> str | None:
+    # Only the exact additive retained-email context hydration is in this lane.
+    # All other source-accounting and privacy behavior stays in the fingerprint.
+    addition = """    # Hydrate only the retained instruction/grounding explicitly named by the
+    # email approval. Their full envelopes are needed for owner, actor and
+    # source checks; unrelated private conversations remain metadata-only.
+    cos_instruction_references = {
+        str((event.get("payload") or {}).get(key) or "")
+        for event in cos_metadata
+        if event["type"] == COS_APPROVED
+        for key in {
+            "requested_email": (
+                "request_source_event_id",
+                "request_authorization_event_id",
+            ),
+            "authenticated_conversation": ("conversation_source_event_id",),
+        }.get((event.get("payload") or {}).get("authorization_method"), ())
+    } - {""}
+"""
+    old = 'event["event_id"] in cos_ids | cos_openclaw_ids | cos_standing_references'
+    new = """event["event_id"]
+            in cos_ids
+            | cos_openclaw_ids
+            | cos_standing_references
+            | cos_instruction_references"""
+    anchor = "    cos_events: list[dict[str, Any]] = []\n"
+    addition += anchor
+    if source.count(addition) != source.count(new) or source.count(new) > 1:
+        return None
+    normalized = source.replace(addition, anchor).replace(new, old)
+    return hashlib.sha256(normalized.encode()).hexdigest()
 
 
 def _remove_service_statements(body: list[ast.stmt], source: str) -> int | None:
@@ -1635,37 +1896,6 @@ def _service_work_ingest(source: str) -> str | None:
     ).hexdigest()
 
 
-def _service_work_source_assurance(source: str) -> str | None:
-    # Only the exact additive retained-email context hydration is in this lane.
-    # All other source-accounting and privacy behavior stays in the fingerprint.
-    addition = """    # Hydrate only the retained instruction/grounding explicitly named by the
-    # email approval. Their full envelopes are needed for owner, actor and
-    # source checks; unrelated private conversations remain metadata-only.
-    cos_instruction_references = {
-        str((event.get("payload") or {}).get(key) or "")
-        for event in cos_metadata
-        if event["type"] == COS_APPROVED
-        for key in {
-            "requested_email": (
-                "request_source_event_id",
-                "request_authorization_event_id",
-            ),
-            "authenticated_conversation": ("conversation_source_event_id",),
-        }.get((event.get("payload") or {}).get("authorization_method"), ())
-    } - {""}
-"""
-    old = 'event["event_id"] in cos_ids | cos_openclaw_ids | cos_standing_references'
-    new = """event["event_id"]
-            in cos_ids
-            | cos_openclaw_ids
-            | cos_standing_references
-            | cos_instruction_references"""
-    if source.count(addition) != source.count(new) or source.count(new) > 1:
-        return None
-    normalized = source.replace(addition, "").replace(new, old)
-    return hashlib.sha256(normalized.encode()).hexdigest()
-
-
 def _service_work_dependency_fingerprint(
     repository: Path, revision: str, entries: tuple[GitTreeEntry, ...]
 ) -> tuple[str, bool] | None:
@@ -1688,7 +1918,6 @@ def _service_work_dependency_fingerprint(
         (COS_SERVICE_WORK_INGEST, _service_work_ingest),
         (COS_SERVICE_WORK_OBSERVATION, _service_work_observation),
         (COS_SERVICE_WORK_HISTORY, _service_work_history),
-        (COS_SERVICE_WORK_SOURCE_ASSURANCE, _service_work_source_assurance),
     ):
         entry = next((entry for entry in entries if entry.path == path), None)
         if entry is not None and entry.mode != "100644":
@@ -1956,7 +2185,8 @@ def select_scope(
         setup_sources_present[revision] = setup is not None and (
             revision == base or (setup[1] and BRIDGE_SETUP_REQUIRED <= setup_paths)
         )
-        updater_fingerprints[revision] = _updater_dependency_fingerprint(entries)
+        updater = _updater_dependency_fingerprint(repository, revision, entries)
+        updater_fingerprints[revision] = updater[0] if updater else ""
         regular_paths = {entry.path for entry in entries if entry.mode == "100644"}
         member_google = _member_google_settings_dependency_fingerprint(
             repository, revision, entries
@@ -2000,8 +2230,16 @@ def select_scope(
         required_updater_paths = UPDATER_REQUIRED_PATHS - (
             {UPDATER_CHECK_SCRIPT} if revision == base else set()
         )
+        updater_paths = {
+            entry.path for entry in entries if entry.mode == _updater_mode(entry.path)
+        }
         updater_sources_present[revision] = (
-            required_updater_paths <= regular_paths
+            updater is not None
+            and required_updater_paths <= regular_paths
+            and (
+                not updater[1]
+                or (updater[2] and UPDATER_EFFECT_CONTEXT_PATHS <= updater_paths)
+            )
             and all(
                 module not in regular_paths or test in regular_paths
                 for module, test in UPDATER_OPTIONAL_MODULE_TESTS.items()

@@ -22,7 +22,6 @@ from scripts.release_scope import (
     COS_SERVICE_WORK_NATIVE_INSTALL,
     COS_SERVICE_WORK_OBSERVATION,
     COS_SERVICE_WORK_HISTORY,
-    COS_SERVICE_WORK_SOURCE_ASSURANCE,
     COS_SERVICE_WORK_COMPONENT_PATHS,
     COS_SERVICE_WORK_REQUIRED_PATHS,
     _service_work_application,
@@ -30,7 +29,13 @@ from scripts.release_scope import (
     _service_work_ingest,
     _service_work_observation,
     _service_work_history,
-    _service_work_source_assurance,
+    UPDATER_SOURCE_ASSURANCE,
+    UPDATER_EFFECT_CONTEXT_PATHS,
+    UPDATER_EFFECT_CONTEXT_SHARED_PATHS,
+    UPDATER_EFFECT_CONTEXT_SHARED_REPLACEMENTS,
+    _updater_effect_context_shared_source,
+    _updater_mode,
+    _updater_source_assurance,
     UPDATER_COMPONENT_PATHS,
     UPDATER_TEST_PATHS,
     UPDATER_REQUIRED_PATHS,
@@ -1688,7 +1693,9 @@ def test_updater_scope_binds_closed_paths_and_optional_feature_proof(
     for module, test in UPDATER_OPTIONAL_MODULE_TESTS.items():
         _commit(path, module, "# Reviewed optional delivery feature\n")
         head = _commit(path, test, "# Required feature proof\n")
-    for allowed in sorted(UPDATER_COMPONENT_PATHS | UPDATER_TEST_PATHS):
+    for allowed in sorted(
+        (UPDATER_COMPONENT_PATHS | UPDATER_TEST_PATHS) - UPDATER_EFFECT_CONTEXT_PATHS
+    ):
         head = _commit(path, allowed, "# Reviewed updater behavior\n")
     (path / "adminme/runtime.py").write_text("UNCOMMITTED = True\n")
     proof = select_scope(path, _event(base, head), checkout_sha=head)
@@ -1852,8 +1859,8 @@ def test_updater_worker_requires_recovery_and_supported_process_checks(
         "test_ci_release_gates.py",
         "prepared_runtime workspace_instructions storage_headroom",
         'test -f "tests/unit/bootstrap/test_$module.py"',
-        "poetry run mypy bootstrap bridge/adminme_bridge scripts/release_scope.py",
-        "poetry run pyright bootstrap scripts/release_scope.py",
+        "poetry run mypy bootstrap bridge/adminme_bridge adminme/source_assurance.py scripts/release_scope.py",
+        "poetry run pyright bootstrap adminme/source_assurance.py scripts/release_scope.py",
         "scripts/verify_invariants.sh",
         "poetry run ruff check",
         "poetry run ruff format --check",
@@ -3787,7 +3794,7 @@ def test_requested_email_closed_paths_use_existing_affected_lane(
 
 
 def _email_audit_sources() -> tuple[str, str]:
-    after = (ROOT / COS_SERVICE_WORK_SOURCE_ASSURANCE).read_text()
+    after = (ROOT / UPDATER_SOURCE_ASSURANCE).read_text()
     start = after.index("    # Hydrate only the retained instruction")
     end = after.index("    cos_events: list[dict[str, Any]] = []", start)
     before = after[:start] + after[end:]
@@ -3802,9 +3809,7 @@ def _email_audit_sources() -> tuple[str, str]:
 
 def test_email_context_scope_normalizes_only_exact_reference_hydration() -> None:
     before, after = _email_audit_sources()
-    assert _service_work_source_assurance(before) == _service_work_source_assurance(
-        after
-    )
+    assert _updater_source_assurance(before) == _updater_source_assurance(after)
     for changed in (
         after.replace('"request_source_event_id"', '"any_source_event_id"'),
         after.replace('"conversation_source_event_id"', '"message_id"'),
@@ -3818,38 +3823,122 @@ def test_email_context_scope_normalizes_only_exact_reference_hydration() -> None
         after.replace("full_event is None", "False"),
         after + "\nUNRELATED = True\n",
     ):
-        assert _service_work_source_assurance(
-            changed
-        ) != _service_work_source_assurance(before)
+        assert _updater_source_assurance(changed) != _updater_source_assurance(before)
+
+
+def _effect_context_shared_sources() -> dict[str, tuple[str, str]]:
+    sources = {UPDATER_SOURCE_ASSURANCE: _email_audit_sources()}
+    for path, replacements in UPDATER_EFFECT_CONTEXT_SHARED_REPLACEMENTS.items():
+        after = (ROOT / path).read_text()
+        before = after
+        for old, new in replacements:
+            assert before.count(new) == 1
+            before = before.replace(new, old)
+        sources[path] = before, after
+    return sources
+
+
+def _effect_context_candidate(
+    path: Path, missing: str | None = None
+) -> tuple[str, str]:
+    _updater_candidate(path)
+    sources = _effect_context_shared_sources()
+    for shared, (before, _after) in sources.items():
+        _commit(path, shared, before)
+        (path / shared).chmod(int(_updater_mode(shared)[-3:], 8))
+    _git(path, "add", "--all")
+    _git(path, "commit", "--allow-empty", "-m", "Existing shared entry points")
+    base = _git(path, "rev-parse", "HEAD")
+    for related in sorted(UPDATER_EFFECT_CONTEXT_PATHS - {missing}):
+        _commit(
+            path,
+            related,
+            sources[related][1]
+            if related in sources
+            else "# Reviewed repair and required proof\n",
+        )
+    return base, _git(path, "rev-parse", "HEAD")
+
+
+@pytest.mark.parametrize("shared", sorted(UPDATER_EFFECT_CONTEXT_SHARED_PATHS))
+def test_effect_context_entry_points_normalize_only_reviewed_hunks(shared: str) -> None:
+    before, after = _effect_context_shared_sources()[shared]
+    original = _updater_effect_context_shared_source(shared, before)
+    repaired = _updater_effect_context_shared_source(shared, after)
+    assert original is not None and repaired is not None
+    assert original == (repaired[0], False)
+    assert repaired[1] is True
+    # The precise optional proof argument is not a general exemption for these
+    # privacy/accounting, audit-export, or launcher entry points.
+    for changed in (
+        after + "\nUNRELATED = True\n",
+        after.replace("effect_context_repair_plan", "unreviewed_plan")
+        if shared != UPDATER_SOURCE_ASSURANCE
+        else after.replace("cos_instruction_references", "all_private_sources"),
+    ):
+        value = _updater_effect_context_shared_source(shared, changed)
+        assert value is None or value[0] != original[0]
+    if shared in UPDATER_EFFECT_CONTEXT_SHARED_REPLACEMENTS:
+        old, new = UPDATER_EFFECT_CONTEXT_SHARED_REPLACEMENTS[shared][0]
+        assert (
+            _updater_effect_context_shared_source(shared, after.replace(new, old))
+            is None
+        )
 
 
 @pytest.mark.parametrize("drift", ["none", "neighbor", "dependency", "mode"])
-def test_email_context_repair_uses_existing_service_lane_with_closed_scope(
+def test_email_context_repair_uses_existing_updater_lane_with_closed_scope(
     repository: tuple[Path, str], drift: str
 ) -> None:
     path, _ = repository
-    _service_work_candidate(path)
-    before, after = _email_audit_sources()
     _commit(path, "poetry.lock", "# fixed dependency\n")
-    base = _commit(path, COS_SERVICE_WORK_SOURCE_ASSURANCE, before)
-    head = _commit(path, COS_SERVICE_WORK_SOURCE_ASSURANCE, after)
+    base, head = _effect_context_candidate(path)
     if drift == "neighbor":
         head = _commit(
-            path, COS_SERVICE_WORK_SOURCE_ASSURANCE, after + "\nUNRELATED = True\n"
+            path,
+            UPDATER_SOURCE_ASSURANCE,
+            (path / UPDATER_SOURCE_ASSURANCE).read_text() + "\nUNRELATED = True\n",
         )
     elif drift == "dependency":
         head = _commit(path, "poetry.lock", "# changed dependency\n")
     elif drift == "mode":
-        (path / COS_SERVICE_WORK_SOURCE_ASSURANCE).chmod(0o755)
+        (path / UPDATER_SOURCE_ASSURANCE).chmod(0o755)
         _git(path, "add", "--all")
         _git(path, "commit", "-m", "Unsupported source mode")
         head = _git(path, "rev-parse", "HEAD")
     proof = select_scope(path, _event(base, head), checkout_sha=head)
-    assert proof["scope"] == ("cos-service-work" if drift == "none" else "system-wide")
-    script = (ROOT / COS_SERVICE_WORK_CHECK_SCRIPT).read_text()
+    assert proof["scope"] == ("updater-delivery" if drift == "none" else "system-wide")
+    script = (ROOT / UPDATER_CHECK_SCRIPT).read_text()
     for test in (
         "tests/acceptance/test_cos_email_audit_context.py",
         "tests/unit/test_source_assurance.py",
         "tests/unit/test_observation_readiness_window.py",
+        "tests/unit/bootstrap/test_effect_context_repair.py",
+        "tests/acceptance/test_effect_context_repair_operations.py",
     ):
         assert "  " + test in script.splitlines()
+
+
+@pytest.mark.parametrize("shared", sorted(UPDATER_EFFECT_CONTEXT_SHARED_PATHS))
+def test_effect_context_scope_rejects_unrelated_shared_entrypoint_edits(
+    repository: tuple[Path, str], shared: str
+) -> None:
+    path, _ = repository
+    base, _ = _effect_context_candidate(path)
+    head = _commit(path, shared, (path / shared).read_text() + "\nUNRELATED = True\n")
+    assert (
+        select_scope(path, _event(base, head), checkout_sha=head)["scope"]
+        == "system-wide"
+    )
+
+
+@pytest.mark.parametrize("missing", sorted(UPDATER_EFFECT_CONTEXT_PATHS))
+def test_new_effect_context_repair_requires_its_complete_proof(
+    repository: tuple[Path, str], missing: str
+) -> None:
+    path, _ = repository
+    base, head = _effect_context_candidate(path, missing)
+    assert (
+        select_scope(path, _event(base, head), checkout_sha=head)["scope"]
+        == "system-wide"
+    )
