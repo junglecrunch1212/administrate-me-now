@@ -14,6 +14,7 @@ from bootstrap.workspace_instructions import (
     WorkspaceInstructionsError,
     apply_transition,
     compile_instructions,
+    instruction_layout,
     prepare_transition,
     validate_transition,
 )
@@ -66,7 +67,24 @@ def test_compiler_matches_the_packaged_node_compiler(tmp_path: Path) -> None:
         env=environment,
         check=True,
     )
-    assert (tmp_path / "AGENTS.md").read_bytes() == compile_instructions(REPO)
+    compiled = compile_instructions(REPO)
+    assert (tmp_path / "AGENTS.md").read_bytes() == compiled
+    assert len(compiled) < 14000  # Reserve at least 6 KB for retained private layers.
+    assert compiled.index(b"Current authority") < compiled.index(
+        b"Complete requested workflows"
+    )
+    layout = instruction_layout(REPO)
+    assert layout is not None
+    for name in layout["background"]:
+        original = (REPO / "bootstrap/openclaw/programs" / name).read_bytes()
+        assert (tmp_path / "skill-references" / name).read_bytes() == original
+        assert (
+            REPO
+            / "openclaw/administrateme/skills/administrateme-household/programs"
+            / name
+        ).read_bytes() == original
+        assert original not in compiled
+        assert f"`programs/{name}`".encode() in compiled
 
 
 def test_updates_all_instructions_and_preserves_persona_and_member_overlays(
@@ -287,3 +305,119 @@ def test_updater_covers_workspaces_selected_by_production_member_topology(
         assert (
             compile_instructions(source) not in (workspace / "AGENTS.md").read_bytes()
         )
+
+
+def test_full_legacy_member_files_keep_workflow_guidance_inside_native_budget(
+    tmp_path: Path,
+) -> None:
+    from bootstrap.openclaw_activation import reconcile_member_topology
+
+    paths, source, _, files = fixture_workspace(tmp_path)
+    programs = source / "bootstrap/openclaw/programs"
+    (programs / "fixture.md").unlink()
+    for program in (REPO / "bootstrap/openclaw/programs").glob("*.md"):
+        (programs / program.name).write_bytes(program.read_bytes())
+    # A predecessor without the layout marker injects every complete program.
+    legacy = compile_instructions(source)
+    assert len(legacy) > 20000
+    files[0].write_bytes(b"Private template policy.\n" + legacy)
+    adapters = {**ADAPTERS, "member_chat_enabled_members": ["portal-fixture-member"]}
+    configuration = paths.instance_dir / "config"
+    configuration.mkdir(mode=0o700)
+    (configuration / "adapters.json").write_text(json.dumps(adapters))
+    assert reconcile_member_topology(paths)["member_agent_count"] == 2
+    gateway = json.loads(
+        (paths.instance_dir / "openclaw/runtime/openclaw.json").read_text()
+    )
+    # Exercise the paths the native agent actually loads, with distinct private
+    # layers and the entire six-kilobyte reserved overlay budget in each file.
+    overlays = {}
+    for row in gateway["agents"]["list"]:
+        file = Path(row["workspace"]) / "AGENTS.md"
+        marker = f"Private policy for {row['id']}.\n".encode()
+        prefix = marker + b"p" * (3000 - len(marker))
+        suffix = b"\nPrivate retained suffix.\n".ljust(3000, b"s")
+        file.write_bytes(prefix + legacy + suffix)
+        overlays[file] = (prefix, suffix)
+        assert file.read_bytes().index(b"minimal concise title") > 20000
+    all_files = [files[0], *overlays]
+    originals = {file: file.read_bytes() for file in all_files}
+    personas = {
+        file.parent / name: (file.parent / name).read_bytes()
+        for file in all_files
+        for name in ("SOUL.md", "USER.md")
+    }
+    transition = prepare_transition(
+        paths, source_release=source, target_release=REPO, adapter_config=adapters
+    )
+    assert {file: file.read_bytes() for file in all_files} == originals
+    apply_transition(paths, transition)
+    compact = compile_instructions(REPO)
+    for file, (prefix, suffix) in overlays.items():
+        rendered = file.read_bytes()
+        assert rendered == prefix + compact + suffix
+        assert len(rendered) <= 20000
+        assert legacy not in rendered
+        for guidance in (
+            b"Current authority and workstation identity",
+            b"minimal concise title",
+            b"administrateme_confirm_cos_apple_reminder",
+            b"administrateme_confirm_requested_email",
+            b"preserve the no-automatic-send restriction",
+            b"For a current request to read an authorized CoS browser resource",
+        ):
+            assert guidance in rendered[:20000]
+    assert all(file.read_bytes() == content for file, content in personas.items())
+    apply_transition(paths, transition, recover=True)
+    assert {file: file.read_bytes() for file in all_files} == originals
+
+
+def modern_target(target: Path) -> None:
+    (target / "bootstrap/openclaw/workspace-layout.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "max_composed_bytes": 20000,
+                "priority": ["fixture.md"],
+                "background": [],
+            }
+        )
+    )
+
+
+def test_budget_measures_each_full_composed_member_file_without_discarding_layers(
+    tmp_path: Path,
+) -> None:
+    paths, source, target, files = fixture_workspace(tmp_path)
+    modern_target(target)
+    files[1].write_bytes(files[1].read_bytes() + b"Private retained layer. " * 1000)
+    originals = [file.read_bytes() for file in files]
+    with pytest.raises(
+        WorkspaceInstructionsError, match="composed workspace instructions"
+    ):
+        prepare(paths, source, target)
+    assert [file.read_bytes() for file in files] == originals
+
+
+def test_modern_compilation_recovers_exact_legacy_bytes_and_private_layers(
+    tmp_path: Path,
+) -> None:
+    paths, source, target, files = fixture_workspace(tmp_path)
+    modern_target(target)
+    originals = [file.read_bytes() for file in files]
+    transition = prepare(paths, source, target)
+    apply_transition(paths, transition)
+    assert all(len(file.read_bytes()) <= 20000 for file in files)
+    apply_transition(paths, transition, recover=True)
+    assert [file.read_bytes() for file in files] == originals
+    assert instruction_layout(source) is None
+
+
+def test_layout_cannot_silently_omit_a_program(tmp_path: Path) -> None:
+    _, _, target, _ = fixture_workspace(tmp_path)
+    modern_target(target)
+    (target / "bootstrap/openclaw/programs/new_program.md").write_text(
+        "Retain this program.\n"
+    )
+    with pytest.raises(WorkspaceInstructionsError, match="omits or repeats"):
+        compile_instructions(target)

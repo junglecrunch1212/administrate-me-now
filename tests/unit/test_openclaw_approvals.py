@@ -303,3 +303,78 @@ def test_machine_policy_receipts_cannot_claim_human_approval_and_survive_restart
             )
     finally:
         restored.close()
+
+
+@pytest.mark.parametrize(
+    "tool,rule,allowed",
+    [
+        (
+            "administrateme_cos_response",
+            "current-human-request.cos-email-to-requester.v1",
+            True,
+        ),
+        (
+            "administrateme_execute_pending_provider_action",
+            "current-human-request.cos-email-to-requester.v1",
+            False,
+        ),
+        (
+            "administrateme_cos_response",
+            "current-human-request.apple-reminder-create.v1",
+            False,
+        ),
+        (
+            "administrateme_cos_response",
+            "current-human-request.cos-reminder-create.v1",
+            False,
+        ),
+    ],
+)
+def test_request_approval_rules_are_bound_to_their_exact_execution_tool(
+    tmp_path: Path, tool: str, rule: str, allowed: bool
+) -> None:
+    authorization = {
+        "source_event_id": "source-member-request",
+        "request_authorization_event_id": "grounded-member-request",
+        "domain_approval_event_id": "domain-member-request",
+        "action_fingerprint": FINGERPRINT,
+        "rule_id": rule,
+    }
+    signed = dict(
+        receipt_id="ocreq_closed-rule-fixture",
+        tool_name=tool,
+        request_fingerprint=FINGERPRINT,
+        issued_at_ms=1_000_000,
+        expires_at_ms=1_120_000,
+        openclaw_version=VERSION,
+        openclaw_commit=COMMIT,
+        authorization=authorization,
+    )
+    with_store = OpenClawApprovalStore(tmp_path / "approvals.sqlite3")
+    try:
+        if not allowed:
+            with pytest.raises(ApprovalReceiptError, match="binding is invalid"):
+                with_store.resolve(
+                    secret=SECRET,
+                    signature=sign_approval_receipt(SECRET, **signed),
+                    now_ms=1_000_001,
+                    **signed,
+                )
+        else:
+            receipt = with_store.resolve(
+                secret=SECRET,
+                signature=sign_approval_receipt(SECRET, **signed),
+                now_ms=1_000_001,
+                **signed,
+            )
+            assert receipt.authorization == authorization
+            consumed = with_store.consume(
+                receipt_id=signed["receipt_id"],
+                tool_name=tool,
+                request_fingerprint=FINGERPRINT,
+                member_id="member-fixture",
+                now_ms=1_000_002,
+            )
+            assert consumed.consumed_by_member_id == "member-fixture"
+    finally:
+        with_store.close()

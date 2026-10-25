@@ -18,10 +18,26 @@ if (personaPack.kind !== "persona" || personaPack.id !== personaId || typeof per
 }
 const programRoot = path.join(repoRoot, "bootstrap", "openclaw", "programs");
 const programNames = (await readdir(programRoot)).filter((name) => name.endsWith(".md")).sort();
+const layout = JSON.parse(await readFile(path.join(repoRoot, "bootstrap/openclaw/workspace-layout.json"), "utf8"));
+const names = [...layout.priority, ...layout.background];
+if (layout.version !== 1 || !Number.isInteger(layout.max_composed_bytes) || layout.max_composed_bytes < 1000 || layout.max_composed_bytes > 20000
+  || layout.priority.length === 0 || names.some((name) => typeof name !== "string" || !/^[a-z][a-z0-9_]*\.md$/.test(name))
+  || new Set(names).size !== names.length || JSON.stringify([...names].sort()) !== JSON.stringify(programNames)) {
+  throw new Error("Invalid or incomplete workspace instruction layout");
+}
 const programs = await Promise.all(
-  programNames.map(async (name) => `\n<!-- source: bootstrap/openclaw/programs/${name} -->\n${await readFile(path.join(programRoot, name), "utf8")}`),
+  layout.priority.map(async (name) => `\n<!-- source: bootstrap/openclaw/programs/${name} -->\n${await readFile(path.join(programRoot, name), "utf8")}`),
 );
 const compiledPrograms = programs.join("\n").trimEnd();
+const referenceIndex = "\n# Background program references\n\n"
+  + "On a matching standing-order trigger, read the exact program below in the installed administrateme-household skill's programs/ directory (relative to its SKILL.md). These retained programs govern their background workflows; they do not replace the current-request authority above.\n\n"
+  + layout.background.map((name) => `- \`programs/${name}\`\n`).join("");
+const compiled = `# AdministrateMe standing orders\n\nGenerated deterministically from version-controlled program sources. Scheduling remains in OpenClaw automations; these instructions do not create a second scheduler.\n${compiledPrograms}\n${referenceIndex}`;
+if (Buffer.byteLength(compiled, "utf8") > layout.max_composed_bytes) throw new Error("Compiled instructions exceed the native context budget");
+// Tests use an isolated output directory and never rewrite packaged references.
+const references = process.env.ADMINME_WORKSPACE_OUTPUT ? path.join(workspace, "skill-references") : path.join(pluginRoot, "skills/administrateme-household/programs");
+await mkdir(references, { recursive: true });
+for (const name of layout.background) await writeFile(path.join(references, name), await readFile(path.join(programRoot, name)));
 
 await mkdir(workspace, { recursive: true });
 await writeFile(
@@ -38,7 +54,7 @@ await writeFile(
 );
 await writeFile(
   path.join(workspace, "AGENTS.md"),
-  `# AdministrateMe standing orders\n\nGenerated deterministically from version-controlled program sources. Scheduling remains in OpenClaw automations; these instructions do not create a second scheduler.\n${compiledPrograms}\n`,
+  compiled,
 );
 await writeFile(
   path.join(workspace, "standing-orders.md"),

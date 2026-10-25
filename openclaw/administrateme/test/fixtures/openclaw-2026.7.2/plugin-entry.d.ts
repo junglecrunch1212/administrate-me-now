@@ -177,8 +177,10 @@ export type OpenClawPluginApi = {
   pluginConfig?: Record<string, unknown>;
   config: Record<string, unknown>;
   runtime: {
+    config: { current: () => Record<string, unknown> };
     subagent?: {
-      run: (params: { sessionKey: string; message: string; deliver?: boolean; idempotencyKey?: string }) => Promise<{ runId: string }>;
+      run: (params: { sessionKey: string; message: string; deliver?: boolean; lane?: string; idempotencyKey?: string }) => Promise<{ runId: string }>;
+      waitForRun: (params: { runId: string; timeoutMs?: number }) => Promise<{ status: "ok" | "error" | "timeout"; error?: string }>;
     };
     channel: {
       outbound: {
@@ -204,6 +206,10 @@ export type OpenClawPluginApi = {
     opts?: { name?: string; names?: string[]; optional?: boolean },
   ) => void;
   registerCommand: (command: OpenClawPluginCommandDefinition) => void;
+  registerAgentToolResultMiddleware: (
+    handler: (event: { toolCallId: string; toolName: string; args: Record<string, unknown>; isError?: boolean; result: ToolResult }, context: PluginHookAgentContext & { runtime: "openclaw" | "codex" }) => Promise<{ result: ToolResult } | void> | { result: ToolResult } | void,
+    options?: { matcher?: string[]; runtimes?: Array<"openclaw" | "codex"> },
+  ) => void;
   registerGatewayMethod: (
     method: string,
     handler: (opts: GatewayHandlerOptions) => void | Promise<void>,
@@ -214,6 +220,8 @@ export type OpenClawPluginApi = {
     // src/plugins/hook-types.ts at the exact pinned commit: synchronous hooks.
     (hook: "tool_result_persist", handler: (event: { toolName?: string; toolCallId?: string; message: Record<string, unknown>; isSynthetic?: boolean }, context: { agentId?: string; sessionKey?: string; toolName?: string; toolCallId?: string }) => { message?: Record<string, unknown> } | void): void;
     (hook: "before_message_write", handler: (event: { message: Record<string, unknown>; sessionKey?: string; agentId?: string }, context: { agentId?: string; sessionKey?: string }) => { block?: boolean; message?: Record<string, unknown> } | void): void;
+    (hook: "before_prompt_build", handler: (event: { prompt: string; messages: unknown[] }, context: PluginHookAgentContext) => { toolsAllow?: string[] } | void | Promise<{ toolsAllow?: string[] } | void>): void;
+    (hook: "after_tool_call", handler: (event: { toolName: string; params: Record<string, unknown>; runId?: string; toolCallId?: string; result?: unknown; error?: string; durationMs?: number }, context: Record<string, unknown>) => void | Promise<void>): void;
     (hook: "before_agent_reply", handler: (event: { cleanedBody: string }, context: PluginHookAgentContext) => void | Promise<void>, options?: { eligibleTriggers?: readonly ["user", ...Array<"user" | "cron" | "heartbeat">] }): void;
     (
       hook: "agent_end",

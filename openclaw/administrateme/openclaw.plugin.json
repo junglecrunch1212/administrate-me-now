@@ -29,6 +29,8 @@
     { "name": "adminme-forward", "kind": "runtime-slash" }
   ],
   "contracts": {
+    "agentToolResultMiddleware": ["openclaw", "codex"],
+    "nativeAccountApps": "disabled",
     "serviceWorkspaceFiles": ["AGENTS.md", "IDENTITY.md"],
     "tools": [
       "administrateme_finance_bindings",
@@ -64,13 +66,16 @@
       "administrateme_apple_reminder_status",
       "administrateme_confirm_cos_apple_reminder",
       "administrateme_cos_apple_reminder_status",
+      "administrateme_confirm_requested_email",
+      "administrateme_requested_email_status",
       "administrateme_self_reminder",
       "administrateme_self_reminder_fire",
       "administrateme_service_private_work",
       "administrateme_service_private_work_state",
       "administrateme_service_private_state",
       "administrateme_service_context",
-      "administrateme_workstation_inventory"
+      "administrateme_workstation_inventory",
+      "administrateme_workstation_work"
     ]
   },
   "toolMetadata": {
@@ -103,6 +108,8 @@
     "administrateme_service_follow_up": { "optional": true },
     "administrateme_confirm_apple_reminder": { "optional": true },
     "administrateme_confirm_cos_apple_reminder": { "optional": true },
+    "administrateme_confirm_requested_email": { "optional": true },
+    "administrateme_requested_email_status": { "optional": true },
     "administrateme_cos_apple_reminder_status": { "optional": true },
     "administrateme_apple_reminder_status": { "optional": true },
     "administrateme_self_reminder": { "optional": true },
@@ -111,7 +118,8 @@
     "administrateme_service_private_work_state": { "optional": true },
     "administrateme_service_private_state": { "optional": true },
     "administrateme_service_context": { "optional": true },
-    "administrateme_workstation_inventory": { "optional": true }
+    "administrateme_workstation_inventory": { "optional": true },
+    "administrateme_workstation_work": { "optional": true }
   },
   "dashboard": {
     "dataBindings": [

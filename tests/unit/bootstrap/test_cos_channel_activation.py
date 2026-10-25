@@ -1641,6 +1641,8 @@ def test_real_plugin_replacement_preserves_maintenance_restoration(
         "administrateme"
     ]
     assert before["config"]["forwardIntakeAccounts"]
+    expected = copy.deepcopy(before)
+    expected["hooks"]["allowPromptInjection"] = True
     gateway_before = gateway_path.read_bytes()
     plan = _prepare_maintenance(controller, request)
     assert gateway_path.read_bytes() == gateway_before
@@ -1653,7 +1655,7 @@ def test_real_plugin_replacement_preserves_maintenance_restoration(
     def validate(gateway: dict[str, Any]) -> None:
         # The actual failed production boundary: all enrollment and authority
         # survives native uninstall before configuration validation or restoration.
-        assert gateway["plugins"]["entries"]["administrateme"] == before
+        assert gateway["plugins"]["entries"]["administrateme"] == expected
 
     commands = _destructive_plugin_cli(paths, candidate, monkeypatch, validate=validate)
     rebind = prepare_rebind(
@@ -1716,7 +1718,7 @@ def test_real_plugin_replacement_preserves_maintenance_restoration(
     after = json.loads(gateway_path.read_bytes())["plugins"]["entries"][
         "administrateme"
     ]
-    assert after == before
+    assert after == expected
 
 
 @pytest.mark.parametrize("operation", ["pause", "restore"])

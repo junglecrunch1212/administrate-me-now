@@ -1,16 +1,4 @@
-"""Standing-order program-file canary.
-
-Asserts every .md file in bootstrap/openclaw/programs/ has the six
-required section headers per [cheatsheet Q3] (Scope / Triggers /
-Approval gate / Escalation / Execution steps / What NOT to do). Per
-[D1] Corollary, bootstrap §8 (prompt 16) concatenates these into
-`~/Chief/AGENTS.md` — section-header presence is the contract.
-
-10c-ii filled in morning_digest.md and paralysis_detection.md;
-10c-iii fills in reminder_dispatch.md, crm_surface.md, and
-custody_brief.md alongside their pipeline packs. All six standing-
-order programs are fully populated as of 10c-iii commit 1.
-"""
+"""Retained background programs remain complete and loadable on their triggers."""
 
 from __future__ import annotations
 
@@ -41,13 +29,15 @@ EXPECTED_PROGRAMS = {
 
 def test_all_six_program_files_exist() -> None:
     found = {p.stem for p in PROGRAMS_DIR.glob("*.md")}
-    assert found == EXPECTED_PROGRAMS, (
-        f"expected exactly {sorted(EXPECTED_PROGRAMS)}; found {sorted(found)}"
-    )
+    assert found == EXPECTED_PROGRAMS | {
+        "requested_workflows",
+        "workstation_inventory",
+        "workstation_work",
+    }, f"expected exactly {sorted(EXPECTED_PROGRAMS)}; found {sorted(found)}"
 
 
 def test_every_program_file_has_required_sections() -> None:
-    for md_path in sorted(PROGRAMS_DIR.glob("*.md")):
+    for md_path in sorted(PROGRAMS_DIR / f"{name}.md" for name in EXPECTED_PROGRAMS):
         text = md_path.read_text()
         for header in REQUIRED_SECTIONS:
             assert header in text, (

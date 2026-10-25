@@ -726,7 +726,7 @@ export function registerTools(api: OpenClawPluginApi, runtime: PluginRuntime): v
     },
     {
       name: "administrateme_cos_response",
-      description: "Execute one exact member-approved plain-text CoS response. Requires a current member approval event; recipient listing alone never authorizes disclosure or sending. Unknown delivery is never retried.",
+      description: "Execute one exact plain-text CoS response. Use the approval_event_id from administrateme_confirm_requested_email for a current explicit email-to-requester instruction; OpenClaw and the domain independently authorize that source-bound action without another permission question. Legacy exact member approvals keep their own approval path. Recipient listing alone never authorizes disclosure or sending. Only terminal sent proves delivery; unknown delivery is never retried.",
       parameters: Type.Object({
         request_id: Type.String({ minLength: 8, maxLength: 120 }),
         approval_event_id: Type.String({ minLength: 1, maxLength: 240 }),
