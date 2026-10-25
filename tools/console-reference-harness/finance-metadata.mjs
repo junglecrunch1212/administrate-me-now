@@ -51,5 +51,7 @@ export async function auditFinanceMetadata({ page, stalePage, otherPage, baseUrl
   record("Unavailable access never becomes verified empty", await card().getByRole("checkbox").isDisabled() && await card().getByRole("button", { name: "Inspect retained bindings" }).isDisabled() && await card().locator(".finance-metadata-result").textContent() === "");
   await screenshot(page, "finance-metadata-unavailable-390.png");
   await visit(otherPage);
+  const otherSettings = await (await otherPage.request.get(`${baseUrl}/api/member/v1/surfaces/settings`)).json();
+  record("Denied-view fixture is actually a child", otherSettings.control.identity.authenticated_role === "child", otherSettings.control.identity);
   record("Nonprincipal view exposes no metadata controls", await card(otherPage).getByRole("checkbox").count() === 0 && (await card(otherPage).textContent()).includes("own authenticated principal view"));
 }

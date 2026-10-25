@@ -2029,7 +2029,7 @@ async function run() {
     if (financeMetadataOnly) {
       const owner = await newContext(browser, identities.principal, { width: 1440, height: 1000 });
       const stale = await newContext(browser, identities.principal, { width: 1440, height: 1000 });
-      const other = await newContext(browser, identities.adult, { width: 1440, height: 1000 });
+      const other = await newContext(browser, identities.child, { width: 1440, height: 1000 });
       await auditFinanceMetadata({ page: owner.page, stalePage: stale.page, otherPage: other.page, baseUrl: server.baseUrl, record, screenshot, auditAccessibility, expectHandledFailure, sourceVersion: source.asset_version });
       await closePageContext(other); await closePageContext(stale); await closePageContext(owner);
     }
