@@ -14,6 +14,7 @@ from typing import Any
 
 from fastapi import HTTPException, Request
 
+from adminme.events.log import EventLogError
 from adminme.request_actions_control import request_actions_allowed
 from adminme.service_identities import COS_SERVICE_PRINCIPAL_ID
 from adminme.lib.session import Session
@@ -22,6 +23,7 @@ from adminme.lib.skill_runner import (
     OpenClawResponseMalformed,
     OpenClawTimeout,
     OpenClawUnreachable,
+    SkillInputInvalid,
     SkillOutputInvalid,
     SkillScopeInsufficient,
     SkillSensitivityRefused,
@@ -57,6 +59,31 @@ def evidence_matches(text: str, evidence: Any) -> bool:
             for span in evidence
         )
     )
+
+
+def canonical_evidence(text: str, quotes: Any) -> list[dict[str, Any]] | None:
+    """Resolve quote-only model output to canonical retained code-point spans.
+
+    No fuzzy matching, invented offsets, duplicate coverage or arbitrary choice
+    between repeated occurrences. Existing signed span receipts stay unchanged.
+    """
+    if not isinstance(quotes, list) or not 1 <= len(quotes) <= 8:
+        return None
+    spans: list[dict[str, Any]] = []
+    for row in quotes:
+        if not isinstance(row, dict) or set(row) != {"text"}:
+            return None
+        quote = row["text"]
+        if not isinstance(quote, str) or not quote.strip():
+            return None
+        start = text.find(quote)
+        if start < 0 or text.find(quote, start + 1) != -1:
+            return None
+        end = start + len(quote)
+        if any(start < span["end"] and span["start"] < end for span in spans):
+            return None
+        spans.append({"start": start, "end": end, "text": quote})
+    return sorted(spans, key=lambda span: span["start"])
 
 
 async def ground_action(
@@ -104,6 +131,16 @@ async def ground_action(
         return prior
     text = source["payload"]["text"]
     try:
+        # A failed invocation has no successful result. Its old source causation
+        # must not let a new message spend that same action identity again.
+        # This exact delimited member/action/skill prefix uses the existing
+        # tenant/idempotency index, reads at most 32 receipts, and fails closed
+        # on overflow. A pack update does not turn an old failure into authority.
+        failed = await runtime.event_log.get_by_idempotency_prefix(
+            session.tenant_id, f"skill:failed:{key}:skill:ground_requested_action:"
+        )
+        if failed:
+            raise SkillInputInvalid("request identity already has failed grounding")
         result = await runtime.run_skill_fn(
             "ground_requested_action",
             {
@@ -124,13 +161,18 @@ async def ground_action(
             input_sensitivities={"instruction": source["sensitivity"]},
         )
     except (
+        EventLogError,
+        ValueError,
         OpenClawResponseMalformed,
         OpenClawTimeout,
         OpenClawUnreachable,
+        SkillInputInvalid,
         SkillOutputInvalid,
         SkillScopeInsufficient,
         SkillSensitivityRefused,
     ) as exc:
+        # An existing invocation cannot be rebound to new message text or input.
+        # Preserve its receipt/failure and expose a closed failure, never HTTP 500.
         raise HTTPException(
             409,
             {
@@ -138,16 +180,27 @@ async def ground_action(
                 "reason": "The exact request could not be verified; no action was confirmed or executed.",
             },
         ) from exc
-    if (
-        result.output.get("match") != "matched"
-        or not evidence_matches(text, result.output.get("evidence"))
-        or not result.recorded_event_id
-    ):
+    if result.output.get("match") in {"not_requested", "ambiguous"}:
         raise HTTPException(
             409,
             {
                 "code": "request_clarification_required",
                 "reason": "The proposed action does not have clear grounded request evidence.",
+            },
+        )
+    evidence = canonical_evidence(text, result.output.get("evidence"))
+    if (
+        result.output.get("match") != "matched"
+        or evidence is None
+        or not result.recorded_event_id
+    ):
+        # An extraction/protocol failure does not establish unclear human intent,
+        # another account choice, or a provider permission problem.
+        raise HTTPException(
+            409,
+            {
+                "code": "request_authorization_unavailable",
+                "reason": "The request evidence could not be verified; no action was confirmed or executed.",
             },
         )
     now = datetime.now(timezone.utc)
@@ -161,7 +214,7 @@ async def ground_action(
         "source_fingerprint": fingerprint(text),
         "skill_event_id": result.recorded_event_id,
         "action": action,
-        "evidence": result.output["evidence"],
+        "evidence": evidence,
         "issued_at": now.isoformat(),
         "expires_at": (now + timedelta(minutes=10)).isoformat(),
     }

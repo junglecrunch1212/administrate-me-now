@@ -13,12 +13,14 @@ from pathlib import Path
 import time
 from typing import Any
 
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 import pytest
 
 from adminme.cos_response_assurance import cos_provider_effect_counts
 from adminme.daemons.adapter_supervisor import _ManagedAdapter
 from adminme.products.openclaw.request_authorization import canonical
+from adminme.products.openclaw.conversation_reply import _reply_sender
 from adminme.runtime.application import create_application
 from adminme.service_identities import COS_SERVICE_PRINCIPAL_ID
 from tests.acceptance.test_authenticated_conversation_channels import (
@@ -50,6 +52,27 @@ def configured(path: Path) -> Any:
             channel.update(
                 state="healthy", observation_active=False, sending_enabled=True
             )
+    # Current reviewed source route, without starting a real provider adapter.
+    # The credential-free send fixture is installed separately below.
+    config["adapters"].append(
+        {
+            "kind": "messaging-gmail-api",
+            "enabled": False,
+            "config": {
+                "service_principal_id": COS_SERVICE_PRINCIPAL_ID,
+                "provider_account_id": EMAIL_ACCOUNT,
+                "user_email": EMAIL_ACCOUNT,
+                "channel_id": "channel:chief-of-staff:gmail",
+                "trusted_sender_routes": [
+                    {
+                        "exact_from_identifier": "member-a@example.invalid",
+                        "route_key": "route:" + "1" * 64,
+                        "authentication_policy": "receiver_aligned_sender",
+                    }
+                ],
+            },
+        }
+    )
     return replace(value, adapter_config=config)
 
 
@@ -125,11 +148,16 @@ def reply_body(
     }
 
 
+@pytest.mark.parametrize("display_name", [False, True])
 @pytest.mark.parametrize(
     "ambiguous,disabled", [(False, False), (True, False), (False, True)]
 )
 def test_actual_gmail_thread_reply_and_restart_never_duplicate(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, ambiguous: bool, disabled: bool
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    ambiguous: bool,
+    disabled: bool,
+    display_name: bool,
 ) -> None:
     monkeypatch.setenv("ADMINME_TEST_MODE", "1")
 
@@ -168,7 +196,13 @@ def test_actual_gmail_thread_reply_and_restart_never_duplicate(
         assert allowed.status_code == 202, allowed.text
         _normal_operation(client)
         install_gmail(runtime, service, disabled=disabled)
-        original = gmail_observation(client, "direct-reply-input")
+        original = gmail_observation(
+            client,
+            "direct-reply-input",
+            from_header='"Fixture Member, A" <member-a@example.invalid>'
+            if display_name
+            else "member-a@example.invalid",
+        )
         source = next(
             row
             for row in client.portal.call(
@@ -218,3 +252,67 @@ def test_actual_gmail_thread_reply_and_restart_never_duplicate(
 
 async def history(runtime: Any) -> list[dict[str, Any]]:
     return [event async for event in runtime.event_log.read_since()]
+
+
+def test_reply_sender_requires_current_exact_enrolled_route(tmp_path: Path) -> None:
+    with TestClient(create_application(configured(tmp_path))) as client:
+        _grant(client)
+        _normal_operation(client)
+        runtime = client.app.state.runtime
+        original_id = gmail_observation(
+            client,
+            "strict-sender-input",
+            from_header='"Fixture Member, A" <member-a@example.invalid>',
+        )
+        original = client.portal.call(runtime.event_log.get, original_id)
+        assert _reply_sender(runtime, original, MEMBER_A) == "member-a@example.invalid"
+        # Header syntax never replaces the provider-authenticated source binding.
+        invalid = [
+            {"from_identifier": "not-a-mailbox"},
+            {"from_identifier": "<member-a@example.invalid"},
+            {"from_identifier": "member-a@example.invalid, other@example.invalid"},
+            {"from_identifier": "Group: member-a@example.invalid;"},
+            {
+                "from_identifier": "Name <member-a@example.invalid>\r\nBcc: outsider@example.invalid"
+            },
+            {"from_identifier": "Wrong <other@example.invalid>"},
+            {"from_identifier": "Case <Member-a@example.invalid>"},
+            {"authenticated_member_route": False},
+            {"trusted_route_key": "route:" + "2" * 64},
+            {"route_assurance": "unverified"},
+            {"reply_to_identifier": "other@example.invalid"},
+            {"reply_to_identifier": "member-a@example.invalid, other@example.invalid"},
+        ]
+        for changes in invalid:
+            forged = copy.deepcopy(original)
+            forged["payload"].update(changes)
+            if "from_identifier" in changes:
+                forged["payload"]["reply_to_identifier"] = changes["from_identifier"]
+            with pytest.raises(HTTPException) as error:
+                _reply_sender(runtime, forged, MEMBER_A)
+            assert error.value.status_code == 403, changes
+        source = next(
+            row
+            for row in client.portal.call(
+                _events, runtime, "cos.conversation.instruction"
+            )
+            if row["payload"]["source_message_event_id"] == original_id
+        )
+        adapter_config = runtime.settings.adapter_config["adapters"][0]["config"]
+        route = adapter_config["trusted_sender_routes"][0]
+        for field, changed in [
+            ("exact_from_identifier", "other@example.invalid"),
+            ("authentication_policy", "exact_dkim_identity"),
+            ("route_key", "route:" + "2" * 64),
+        ]:
+            before = route[field]
+            route[field] = changed
+            response = client.post(REPLY, headers=AUTH, json=reply_body(source))
+            assert response.status_code == 403, response.text
+            route[field] = before
+        adapter_config["trusted_sender_routes"].append(dict(route))
+        assert (
+            client.post(REPLY, headers=AUTH, json=reply_body(source)).status_code == 403
+        )
+        assert client.portal.call(_events, runtime, "cos.response.approved") == []
+        assert client.portal.call(_events, runtime, "cos.response.attempted") == []
