@@ -339,6 +339,7 @@ UPDATER_COMPONENT_PATHS = frozenset(
         "bootstrap/source_identity.py",
         "bootstrap/prepared_runtime.py",
         "bootstrap/workspace_instructions.py",
+        "bootstrap/storage_headroom.py",
         "bootstrap/activation_transaction.py",
         "bootstrap/cos_channel_activation.py",
         "bootstrap/candidate_readiness.py",
@@ -351,6 +352,7 @@ UPDATER_TEST_PATHS = frozenset(
         "tests/unit/bootstrap/test_source_identity.py",
         "tests/unit/bootstrap/test_prepared_runtime.py",
         "tests/unit/bootstrap/test_workspace_instructions.py",
+        "tests/unit/bootstrap/test_storage_headroom.py",
         "tests/unit/bootstrap/test_activation_transaction.py",
         "tests/acceptance/test_forwarded_submission_repair_operations.py",
         "tests/unit/bootstrap/test_cos_channel_activation.py",
@@ -370,6 +372,7 @@ UPDATER_CHECK_SCRIPT = "scripts/acceptance/updater-delivery-release.sh"
 UPDATER_OPTIONAL_MODULE_TESTS = {
     "bootstrap/prepared_runtime.py": "tests/unit/bootstrap/test_prepared_runtime.py",
     "bootstrap/workspace_instructions.py": "tests/unit/bootstrap/test_workspace_instructions.py",
+    "bootstrap/storage_headroom.py": "tests/unit/bootstrap/test_storage_headroom.py",
 }
 UPDATER_REQUIRED_PATHS = (
     UPDATER_COMPONENT_PATHS | UPDATER_TEST_PATHS | {UPDATER_CHECK_SCRIPT}

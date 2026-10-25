@@ -1848,7 +1848,7 @@ def test_updater_worker_requires_recovery_and_supported_process_checks(
         "test_cos_live_maintenance.py",
         "test_macos_bootstrap_operations.py::test_credential_free_bootstrap_doctor_backup_restore_round_trip",
         "test_ci_release_gates.py",
-        "prepared_runtime workspace_instructions",
+        "prepared_runtime workspace_instructions storage_headroom",
         'test -f "tests/unit/bootstrap/test_$module.py"',
         "poetry run mypy bootstrap bridge/adminme_bridge scripts/release_scope.py",
         "poetry run pyright bootstrap scripts/release_scope.py",
