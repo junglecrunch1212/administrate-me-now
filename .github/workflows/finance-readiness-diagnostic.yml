@@ -1,0 +1,53 @@
+name: Isolated Finance readiness regression
+on:
+  push:
+    branches: ['codex/finance-readiness-95b29d46']
+    paths:
+      - 'tests/integration/test_runtime_application.py'
+      - '.github/workflows/finance-readiness-diagnostic.yml'
+permissions:
+  contents: read
+concurrency:
+  group: finance-readiness-diagnostic-${{ github.ref }}-${{ github.sha }}
+  cancel-in-progress: false
+jobs:
+  readiness:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      ADMINME_TEST_MODE: '1'
+      PYTHONPATH: bridge
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.14.7'
+      - run: pipx install poetry==2.4.1
+      - run: poetry sync --with dev --no-interaction
+      - name: Verify source and fixed readiness selectors once
+        timeout-minutes: 3
+        run: |
+          git rev-parse HEAD
+          git rev-parse HEAD:adminme HEAD:poetry.lock
+          poetry run ruff check tests/integration/test_runtime_application.py
+          poetry run ruff format --check tests/integration/test_runtime_application.py
+          poetry run pytest -q -s --maxfail=1 --runxfail --junitxml="${{ runner.temp }}/readiness.xml" \
+            tests/integration/test_runtime_application.py::test_strict_deployment_readiness_is_shared_by_ready_and_settings \
+            tests/integration/test_runtime_application.py::test_strict_readiness_tracks_real_health_checkpoint_transition \
+            tests/integration/test_runtime_application.py::test_strict_readiness_identifies_stale_source_refresh_as_settlement \
+            tests/integration/test_runtime_application.py::test_source_assurance_refresh_never_blocks_readiness \
+            tests/integration/test_runtime_application.py::test_settled_current_source_assurance_proof_does_not_rescan_on_age \
+            tests/integration/test_runtime_application.py::test_pending_source_assurance_proof_rechecks_on_grace_clock \
+            tests/integration/test_runtime_application.py::test_over_age_source_assurance_proof_degrades_during_refresh \
+            tests/integration/test_runtime_application.py::test_failed_source_assurance_refresh_degrades_without_retry_storm
+      - name: Retain exact focused result
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: finance-readiness-regression
+          path: ${{ runner.temp }}/readiness.xml
+          if-no-files-found: error
+          retention-days: 7
