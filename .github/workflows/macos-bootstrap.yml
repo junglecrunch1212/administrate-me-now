@@ -129,6 +129,50 @@ jobs:
           test "$actual_sha" = "$GITHUB_SHA"
           printf 'sha=%s\n' "$actual_sha" >> "$GITHUB_OUTPUT"
 
+  finance-metadata-validation:
+    name: Finance owner metadata (macos)
+    needs: [release-scope]
+    if: ${{ needs.release-scope.outputs.scope == 'finance-metadata' }}
+    runs-on: macos-14
+    timeout-minutes: 40
+    env:
+      ADMINME_TEST_MODE: '1'
+      PYTHONPATH: bridge
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTEST_ADDOPTS: '-o tmp_path_retention_policy=failed'
+    outputs:
+      validated_sha: ${{ steps.validated.outputs.sha }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.14.7'
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24.19.0'
+      - name: Install locked metadata check environment
+        run: |
+          python -m pip install 'poetry==2.4.1'
+          poetry sync --with dev --no-interaction
+      - name: Validate bounded owner metadata and rendering
+        run: bash scripts/acceptance/finance-metadata-release.sh macos
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: ${{ !cancelled() }}
+        with:
+          name: finance-metadata-macos
+          path: ${{ runner.temp }}/finance-metadata
+          if-no-files-found: error
+          retention-days: 7
+      - name: Bind successful validation to this revision
+        id: validated
+        run: |
+          actual_sha="$(git rev-parse HEAD)"
+          test "$actual_sha" = "$GITHUB_SHA"
+          printf 'sha=%s\n' "$actual_sha" >> "$GITHUB_OUTPUT"
+
   cos-service-work-validation:
     name: CoS service-private work (macos)
     needs: [release-scope]
@@ -1056,7 +1100,7 @@ jobs:
 
   credential-free-rehearsal:
     name: credential-free-rehearsal
-    needs: [release-scope, documentation-validation, bridge-helper-validation, bridge-development, google-connections-validation, cos-recovery-history-validation, cos-reminder-validation, updater-delivery-validation, cos-service-work-validation, system-rehearsal, bridge-installed-runtime]
+    needs: [release-scope, documentation-validation, bridge-helper-validation, bridge-development, google-connections-validation, cos-recovery-history-validation, cos-reminder-validation, updater-delivery-validation, finance-metadata-validation, cos-service-work-validation, system-rehearsal, bridge-installed-runtime]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     timeout-minutes: 10

@@ -137,8 +137,11 @@ export function registerServicePrivateTools(api: OpenClawPluginApi, runtime: Plu
     },
     {
       name: SERVICE_PRIVATE_TOOL_NAMES[3],
-      description: "Read authorized household facts and metadata plus your own acquired Google Calendar/Tasks current facts and Gmail, including unrouted mail. Effective policy permits headers or bounded plaintext snippets. Retain source references; no HTML, attachments or outside disclosure rights.",
+      description: "Read authorized household facts and metadata plus your own acquired Google Calendar/Tasks, Apple Reminders and Gmail. Use source_kind calendar (authorized member and CoS calendars), google_tasks or apple_reminders (CoS-owned items only) to discover current planning revisions without scanning mail or knowing event IDs. Omit it for the existing mixed scan, or use exact source_event_ids instead; do not combine a selector with explicit IDs. Start without a cursor when changing selection, then retain the same selection while paging. Current revision does not mean upcoming or exhaustive coverage. Effective policy permits headers or bounded plaintext snippets. Retain source references; no HTML, attachments or outside disclosure rights.",
       parameters: Type.Object({
+        source_kind: Type.Optional(Type.Union([
+          Type.Literal("calendar"), Type.Literal("google_tasks"), Type.Literal("apple_reminders"),
+        ])),
         source_event_ids: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 240 }), { maxItems: 20 })),
         after_event_id: Type.Optional(Type.String({ minLength: 1, maxLength: 240 })),
         limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 50, default: 20 })),
