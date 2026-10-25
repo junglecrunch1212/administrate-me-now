@@ -886,18 +886,35 @@ jobs:
         with:
           python-version: "3.14.7"
 
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - name: Install archived predecessor's exact Node for retained validation
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "24.19.0"
+
+      - name: Bind retained Node executable for the historical fixture
+        run: |
+          retained_node="$(node -p 'process.execPath')"
+          test "$("$retained_node" --version)" = "v24.19.0"
+          printf 'ADMINME_RETAINED_NODE_EXECUTABLE=%s\n' "$retained_node" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "24.22.1"
           cache: npm
           cache-dependency-path: |
             openclaw/administrateme/package-lock.json
             tools/console-reference-harness/package-lock.json
 
+      - name: Verify target Node remains selected
+        run: test "$(node --version)" = "v24.22.1"
+
       - name: Install exact locked Python environment
         run: |
           python -m pip install "poetry==2.4.1"
           poetry sync --with dev --no-interaction
+
+      - name: Validate native upgrade and public recovery boundaries
+        run: bash scripts/acceptance/openclaw-upgrade-boundaries.sh
 
       # Prove the new channel boundary before the longer recovery rehearsals.
       - name: Validate active CoS maintenance and observation windows
@@ -936,7 +953,16 @@ jobs:
           npm test --prefix openclaw/administrateme
 
       - name: Build and verify the exact reviewed OpenClaw source
-        run: bash scripts/acceptance/openclaw-source-install.sh
+        run: bash scripts/acceptance/openclaw-source-install.sh --native-upgrade
+
+      - name: Preserve native upgrade qualification evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: native-upgrade-qualification
+          path: ${{ runner.temp }}/adminme-native-upgrade-evidence
+          if-no-files-found: warn
+          retention-days: 7
 
       - name: Preserve isolated Gateway approval probe diagnostics
         if: ${{ always() && !github.event.pull_request.draft }}

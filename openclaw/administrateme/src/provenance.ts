@@ -1,11 +1,10 @@
+import type { GatewayClient, PluginHookMessageContext } from "./sdk-types.js";
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { conversationToolProvenance } from "./conversation-input.js";
 import type { PluginRuntime } from "./runtime.js";
 import type {
-  GatewayClient,
   OpenClawPluginToolContext,
   PluginCommandContext,
-  PluginHookMessageContext,
   PluginHookMessageReceivedEvent,
 } from "openclaw/plugin-sdk/plugin-entry";
 import {
@@ -122,9 +121,13 @@ export function provenanceFromMessage(
   }
   const result = base("bridge", required(event.senderId ?? context.senderId, "message sender"), context.channelId);
   result.correlation_id = event.runId ?? context.runId ?? randomUUID();
+  if (event.sessionKey && context.sessionKey && event.sessionKey !== context.sessionKey) {
+    throw new Error("AdministrateMe native session provenance is contradictory");
+  }
   const sessionKey = event.sessionKey ?? context.sessionKey;
   if (sessionKey) result.session_key = sessionKey;
-  if (context.agentId) result.agent_id = context.agentId;
+  // Native message hooks expose no agentId. The current-input binding derives
+  // it only from the existing exact, allowlisted private iMessage session.
   if (context.accountId) result.account_id = context.accountId;
   const messageId = event.messageId ?? context.messageId;
   if (messageId) result.message_id = messageId;

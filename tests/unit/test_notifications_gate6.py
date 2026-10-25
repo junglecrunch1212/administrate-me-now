@@ -219,8 +219,8 @@ def test_openclaw_result_endpoint_is_scoped_idempotent_and_sends_nothing(
         "thread_id": None,
         "correlation_id": "corr-result",
         "call_kind": "tool",
-        "openclaw_version": "2026.7.2",
-        "openclaw_commit": "ce67ffb70e83e5ebb56ea02e814e577153f84f61",
+        "openclaw_version": "2026.10.7",
+        "openclaw_commit": "157d8c2bc3ea2fa183afdc11088e69690bf8e64e",
     }
     body = {
         "attempt_id": "attempt-endpoint-1",

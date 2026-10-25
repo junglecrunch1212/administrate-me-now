@@ -1,5 +1,5 @@
 {
-  "openclaw_commit": "ce67ffb70e83e5ebb56ea02e814e577153f84f61",
+  "openclaw_commit": "157d8c2bc3ea2fa183afdc11088e69690bf8e64e",
   "cases": [
     {"text": "Bring the passport.", "allowed": true},
     {"text": "Meet  at  noon.", "allowed": true},

@@ -1,3 +1,4 @@
+import type { GatewayHandlerOptions } from "../src/sdk-types.js";
 import { readFile } from "node:fs/promises";
 import { createHmac, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
@@ -5,7 +6,6 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   AnyAgentTool,
-  GatewayHandlerOptions,
   OpenClawPluginApi,
   OpenClawPluginCommandDefinition,
   OpenClawPluginService,
@@ -17,8 +17,8 @@ import { OPENCLAW_COMMIT, OPENCLAW_VERSION } from "../src/contract.js";
 import { AdministrateMeTransport, TransportError } from "../src/transport.js";
 import { readPluginConfig } from "../src/config.js";
 import { COS_SERVICE_PRINCIPAL_ID, serviceAgentId, serviceSessionKey } from "../src/service-private.js";
-import { fixtureApprovalRuntimes } from "./fixtures/openclaw-2026.7.2/approval-runtime.js";
-import * as approvalRuntimeFixture from "./fixtures/openclaw-2026.7.2/approval-runtime.js";
+import { fixtureApprovalRuntimes } from "./fixtures/openclaw-2026.10.7/approval-runtime.js";
+import * as approvalRuntimeFixture from "./fixtures/openclaw-2026.10.7/approval-runtime.js";
 import type { PluginApprovalRequest } from "openclaw/plugin-sdk/approval-runtime";
 
 type ToolFactory = (context: OpenClawPluginToolContext) => AnyAgentTool | AnyAgentTool[];
@@ -504,6 +504,26 @@ describe("native OpenClaw contract fixture", () => {
     expect(requestBody(healthFetch, 3)).toMatchObject({ state: "unavailable" });
   });
 
+  it("continues health retry when the native logger omits optional debug", async () => {
+    vi.useFakeTimers();
+    const healthFetch = vi.fn()
+      .mockRejectedValueOnce(new TypeError("loopback runtime unavailable"))
+      .mockRejectedValueOnce(new TypeError("still unavailable"))
+      .mockResolvedValue(jsonResponse({ event_id: "ev_health", state: "healthy" }));
+    vi.stubGlobal("fetch", healthFetch);
+    const runtime = fakeApi();
+    delete runtime.api.logger.debug;
+    const service = runtime.services[0]!;
+    service.start();
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(healthFetch).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(healthFetch).toHaveBeenCalledTimes(3);
+    expect(runtime.api.logger.info).toHaveBeenCalledWith(expect.stringContaining("plugin ready"));
+    await service.stop();
+  });
+
   it("cancels pending health reconciliation when the plugin stops", async () => {
     vi.useFakeTimers();
     const healthFetch = vi
@@ -529,6 +549,17 @@ describe("native OpenClaw contract fixture", () => {
     expect([...runtime.gateways]).toHaveLength(14);
     expect([...runtime.tools]).toHaveLength(40);
     expect(runtime.services).toHaveLength(0);
+  });
+
+  it("rejects non-object native arguments for every registered tool before any transport", async () => {
+    const runtime = fakeApi();
+    for (const [name, factory] of runtime.tools) {
+      const tool = factory(toolContext()) as AnyAgentTool;
+      for (const input of [undefined, null, [], true, 1, "malformed"]) {
+        await expect(tool.execute(`invalid-${name}`, input)).rejects.toThrow("tool arguments must be an object");
+      }
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("sends a typed tool request with full trusted provenance and no operator token body", async () => {

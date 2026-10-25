@@ -41,6 +41,9 @@ def main() -> None:
     )
     environment["ADMINME_OPENCLAW_SHARED_SECRET"] = shared
     environment["OPENCLAW_GATEWAY_TOKEN"] = shared
+    # AdministrateMe owns the immutable source selection and recovery journal.
+    # The Gateway may report an update, but must not replace or restart itself.
+    environment["OPENCLAW_SUPERVISOR_MODE"] = "external"
     environment["ADMINISTRATEME_COS_IMSG_GUARD_CONFIG"] = str(
         paths.instance_dir / "config" / "cos-imsg-guard.json"
     )

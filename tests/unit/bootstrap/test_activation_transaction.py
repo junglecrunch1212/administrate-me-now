@@ -14,6 +14,7 @@ import pytest
 from bootstrap.activation_transaction import (
     ActivationJournal,
     ActivationJournalError,
+    sha256_json,
 )
 from bootstrap.contracts import DeploymentPaths, atomic_write
 from bootstrap.deployment_budget import (
@@ -1012,7 +1013,7 @@ def test_rollback_refuses_ambiguous_committed_history_before_selector_work(
 ) -> None:
     paths = _paths(tmp_path)
     stub_uninitialized_intake(monkeypatch, paths)
-    _pointer_payload, pointer, _readiness_payload = _documents(paths)
+    _pointer_payload, pointer, readiness_payload = _documents(paths)
     candidate = paths.app_dir / "releases" / CANDIDATE_COMMIT
     current = {
         "path": str(candidate),
@@ -1023,6 +1024,11 @@ def test_rollback_refuses_ambiguous_committed_history_before_selector_work(
     atomic_write(
         paths.app_dir / "current-release.json",
         current_payload,
+        mode=0o600,
+    )
+    atomic_write(
+        paths.instance_dir / "config/deployment-readiness.json",
+        readiness_payload,
         mode=0o600,
     )
     owner = ActivationJournal(paths)
@@ -1152,6 +1158,9 @@ def test_explicit_rollback_restores_predecessor_settings_control_bytes(
         "rollback",
         "disk_before",
         "disk_after",
+        "native_success",
+        "native_failure",
+        "native_crash",
     ],
 )
 def test_transactional_activation_orders_fresh_rehearsal_before_selectors(
@@ -1256,6 +1265,7 @@ def test_transactional_activation_orders_fresh_rehearsal_before_selectors(
                 "configuration_fingerprint": "a" * 64,
             },
             "activation_evidence": {"candidate_live_doctor": "pending_post_switch"},
+            "backup_rollback": {"automatic_rollback_eligible": True},
         },
     )
     monkeypatch.setattr(
@@ -1406,6 +1416,143 @@ def test_transactional_activation_orders_fresh_rehearsal_before_selectors(
         assert all(path.read_bytes() == original for path, original in controls.items())
         return
 
+    if workspace_case.startswith("native_"):
+        from bootstrap import native_recovery, openclaw_migration
+
+        native_runtime = paths.instance_dir / "openclaw/runtime"
+        native_runtime.mkdir(mode=0o700)
+        atomic_write(
+            native_runtime / "openclaw.json",
+            json.dumps(
+                {
+                    "agents": {
+                        "entries": {"main": {"workspace": str(workspace)}},
+                        "ownership": "explicit",
+                    }
+                }
+            ).encode(),
+        )
+        parent_value = _journal_value(paths)
+        failed_release = paths.app_dir / "releases" / ("f" * 40)
+        (failed_release / "bootstrap").mkdir(mode=0o700, parents=True)
+        (failed_release / "bootstrap/versions.json").write_bytes(
+            (release / "bootstrap/versions.json").read_bytes()
+        )
+        failed_programs = failed_release / "bootstrap/openclaw/programs"
+        failed_programs.mkdir(parents=True)
+        (failed_programs / "fixture.md").write_text("Failed target instructions.\n")
+        parent_value.update(
+            candidate_commit="f" * 40,
+            target_commit="f" * 40,
+            candidate_path=str(failed_release),
+            target_path=str(failed_release),
+        )
+        parent_value = manager.activation_journal.create(parent_value)
+        parent_value = manager.activation_journal.transition(
+            parent_value, "services_quiesced"
+        )
+        parent = manager.activation_journal.transition(
+            parent_value,
+            "native_forward_repair_required",
+            openclaw_migration={
+                **openclaw_migration.capture(paths, parent_value),
+                "state": "contained",
+                "candidate_admitted": True,
+            },
+        )
+        plan = {
+            "parent_transaction_id": parent["transaction_id"],
+            "parent_journal_sha256": sha256_json(parent),
+            "candidate_commit": CANDIDATE_COMMIT,
+            "failed_target_commit": "f" * 40,
+        }
+        manager.native_recovery_plan = paths.backup_dir / "native-plan.json"
+        monkeypatch.setattr(native_recovery, "load", lambda *_a, **_k: plan)
+
+        def native_doctor(_paths, _release, _journal, *, publish):
+            events.append("action:native_doctor")
+            publish(
+                {
+                    "settled": True,
+                    "result_path": "/tmp/openclaw/openclaw-update-doctor-1-00000000-0000-4000-8000-000000000001.json",
+                    "nonce": "00000000-0000-4000-8000-000000000002",
+                    "pid": 123,
+                    "returncode": 0,
+                    "classification": "ok",
+                    "result_sha256": "e" * 64,
+                }
+            )
+
+        monkeypatch.setattr(openclaw_migration, "run_doctor", native_doctor)
+        monkeypatch.setattr(
+            openclaw_migration, "record_configuration", lambda *_a, **_k: "d" * 64
+        )
+        if workspace_case == "native_failure":
+
+            def unhealthy(_release, **_kwargs):
+                events.append("action:doctor_failed")
+                return {
+                    "status": "failed",
+                    "checks": [{"name": "actual_successor_boundary", "ok": False}],
+                }
+
+            monkeypatch.setattr(manager, "_post_switch_doctor", unhealthy)
+            with pytest.raises(
+                UpgradeError, match="schema-aware state remains contained"
+            ):
+                manager.activate(candidate)
+        elif workspace_case == "native_crash":
+
+            class NativeInterrupted(BaseException):
+                pass
+
+            def interrupt_native(phase):
+                if phase == "workspace_instructions_selected":
+                    raise NativeInterrupted()
+
+            monkeypatch.setattr(
+                manager, "_test_crash_after_journal_phase", interrupt_native
+            )
+            with pytest.raises(NativeInterrupted):
+                manager.activate(candidate)
+            with pytest.raises(
+                UpgradeError, match="schema-aware forward repair required"
+            ):
+                manager._recover_interrupted_transaction(candidate)  # noqa: SLF001
+        else:
+            result = manager.activate(candidate)
+            assert result["status"] == "upgraded"
+            assert result["rollback_available"] is False
+            assert result["rollback_eligibility"]["eligible"] is False
+            assert not manager.activation_journal.path.exists()
+            final = json.loads(readiness_path.read_bytes())
+            assert final["backup_rollback"]["automatic_rollback_eligible"] is False
+            assert final["activation_evidence"]["candidate_live_doctor"] is True
+        if workspace_case != "native_success":
+            retained = manager.activation_journal.load()
+            assert retained["phase"] == "native_forward_repair_required"
+            assert retained["native_recovery"] == native_recovery.binding(plan)
+            assert retained["openclaw_migration"]["candidate_admitted"] is (
+                workspace_case == "native_failure"
+            )
+            assert "action:doctor" not in events
+        assert (
+            json.loads(
+                (
+                    manager.activation_journal.history
+                    / f"{parent['transaction_id']}.json"
+                ).read_text()
+            )
+            == parent
+        )
+        assert (
+            events.index("action:native_doctor") < events.index("action:plugin")
+            if "action:plugin" in events
+            else True
+        )
+        assert events.count("action:openclaw") == 1
+        return
+
     if workspace_case == "failure":
 
         def fail_candidate_doctor(selected, **_kwargs):
@@ -1522,3 +1669,157 @@ def test_transactional_activation_orders_fresh_rehearsal_before_selectors(
         == "b" * 64
     )
     assert not manager.activation_journal.path.exists()
+
+
+@pytest.mark.parametrize("state", ["changed", "unknown_custody", "candidate_admitted"])
+def test_native_migration_recovery_never_selects_old_source_after_uncertain_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, state: str
+) -> None:
+    from bootstrap import openclaw_migration
+
+    paths = _paths(tmp_path)
+    stub_uninitialized_intake(monkeypatch, paths)
+    native = paths.instance_dir / "openclaw/runtime"
+    native.mkdir(parents=True, mode=0o700)
+    atomic_write(
+        native / "openclaw.json", b'{"agents":{"list":[{"id":"main"}]}}', mode=0o600
+    )
+    owner = ActivationJournal(paths)
+    journal = owner.create(_journal_value(paths))
+    receipt = openclaw_migration.capture(paths, journal)
+    if state == "changed":
+        atomic_write(
+            native / "foreign.sqlite", b"foreign native generation", mode=0o600
+        )
+    else:
+        settled = state == "candidate_admitted"
+        receipt.update(
+            state="candidate_admitted" if settled else "doctor_starting",
+            candidate_admitted=settled,
+            doctor={
+                "settled": settled,
+                "result_path": "/tmp/openclaw/openclaw-update-doctor-1-00000000-0000-4000-8000-000000000001.json",
+                "nonce": "00000000-0000-4000-8000-000000000002",
+                "pid": 12345,
+                "returncode": 0 if settled else None,
+                "classification": "ok" if settled else None,
+                **({"result_sha256": "a" * 64} if settled else {}),
+            },
+        )
+    journal = owner.transition(
+        journal, "native_migration_captured", openclaw_migration=receipt
+    )
+    manager = UpgradeManager(paths, root=tmp_path, test_mode=True)
+    calls: list[str] = []
+    manager.services = SimpleNamespace(stop=lambda: calls.append("stop"))
+    monkeypatch.setattr(
+        manager,
+        "_install_reviewed_openclaw",
+        lambda *_: calls.append("unsafe-selector"),
+    )
+    with pytest.raises(UpgradeError, match="schema-aware forward repair required"):
+        manager._recover_interrupted_transaction()  # noqa: SLF001
+    retained = owner.load()
+    assert retained is not None
+    assert retained["phase"] == "native_forward_repair_required"
+    assert retained["openclaw_migration"]["state"] == "contained"
+    assert retained["initial_pointer"] == journal["initial_pointer"]
+    assert calls == ["stop"]
+    if state == "changed":
+        assert (native / "foreign.sqlite").read_bytes() == b"foreign native generation"
+
+
+def test_native_admission_receipt_is_monotonic_even_when_contained(
+    tmp_path: Path,
+) -> None:
+    from bootstrap import openclaw_migration
+
+    paths = _paths(tmp_path)
+    native = paths.instance_dir / "openclaw/runtime"
+    atomic_write(native / "openclaw.json", b'{"agents":{"list":[{"id":"main"}]}}')
+    owner = ActivationJournal(paths)
+    journal = owner.create(_journal_value(paths))
+    receipt = openclaw_migration.capture(paths, journal)
+    receipt.update(state="contained", candidate_admitted=True)
+    journal = owner.transition(
+        journal, "native_forward_repair_required", openclaw_migration=receipt
+    )
+    with pytest.raises(
+        ActivationJournalError, match="admission evidence cannot be cleared"
+    ):
+        owner.transition(
+            journal,
+            "native_forward_repair_required",
+            openclaw_migration={**receipt, "candidate_admitted": False},
+        )
+    assert owner.load()["openclaw_migration"]["candidate_admitted"] is True
+
+
+def test_public_rollback_rejects_native_format_reversal_before_selecting_or_stopping(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    paths = _paths(tmp_path)
+    journal = _journal_value(paths)
+    previous = {"commit": PREDECESSOR_COMMIT, "path": journal["predecessor_path"]}
+    current = {
+        "commit": CANDIDATE_COMMIT,
+        "path": journal["target_path"],
+        "previous": previous,
+    }
+    manager = UpgradeManager(paths, root=tmp_path, test_mode=True)
+    monkeypatch.setattr(
+        manager,
+        "_release_pointer_state",
+        lambda: (current, Path(journal["target_path"]), set(), "digest", []),
+    )
+    monkeypatch.setattr(
+        "bootstrap.upgrade.openclaw_migration.required", lambda *_: True
+    )
+    calls: list[str] = []
+    manager.services = SimpleNamespace(stop=lambda: calls.append("stop"))
+    monkeypatch.setattr(
+        manager,
+        "_validate_instance_candidate",
+        lambda *_args, **_kwargs: calls.append("compatibility"),
+    )
+    with pytest.raises(UpgradeError, match="public rollback cannot select"):
+        manager._rollback_transactional_locked()  # noqa: SLF001
+    assert calls == []
+
+
+def test_public_rollback_does_not_select_known_failed_same_format_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    paths = _paths(tmp_path)
+    journal = _journal_value(paths)
+    current = {
+        "commit": CANDIDATE_COMMIT,
+        "path": journal["target_path"],
+        "previous": {
+            "commit": PREDECESSOR_COMMIT,
+            "path": journal["predecessor_path"],
+        },
+    }
+    manager = UpgradeManager(paths, root=tmp_path, test_mode=True)
+    monkeypatch.setattr(
+        manager,
+        "_release_pointer_state",
+        lambda: (current, Path(journal["target_path"]), set(), "digest", []),
+    )
+    monkeypatch.setattr(
+        "bootstrap.upgrade.openclaw_migration.required", lambda *_: False
+    )
+    atomic_write(
+        paths.instance_dir / "config/deployment-readiness.json",
+        b'{"native_forward_recovery":{"recovery_mode":"protected-corrected-artifact"}}',
+    )
+    calls: list[str] = []
+    manager.services = SimpleNamespace(stop=lambda: calls.append("stop"))
+    monkeypatch.setattr(
+        manager,
+        "_validate_instance_candidate",
+        lambda *_args, **_kwargs: calls.append("compatibility"),
+    )
+    with pytest.raises(UpgradeError, match="failed native target"):
+        manager._rollback_transactional_locked()  # noqa: SLF001
+    assert calls == []

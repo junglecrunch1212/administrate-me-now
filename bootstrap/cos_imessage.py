@@ -20,6 +20,7 @@ from typing import Any, Sequence
 import urllib.request
 import zipfile
 
+from adminme.openclaw_roster import agent_rows, replace_agent_rows
 from adminme.service_identities import COS_SERVICE_PRINCIPAL_ID
 from bootstrap.contracts import DeploymentPaths, atomic_write
 
@@ -99,9 +100,12 @@ def prepare_channel(
         {"channelId": "imessage", "accountId": account_id}
     ]
     result["plugins"]["entries"].setdefault("imessage", {})["enabled"] = True
-    for agent in result.get("agents", {}).get("list", []):
+    agents = agent_rows(result)
+    for agent in agents:
         if str(agent.get("id", "")).startswith("adminme-"):
             agent["tools"] = {"allow": list(MEMBER_TOOLS)}
+    if agents:
+        replace_agent_rows(result, agents, canonical=False)
     return result
 
 
@@ -220,7 +224,7 @@ def validate_prepared_channel(
         raise ValueError("CoS iMessage intake routing is not enabled")
     member_agents = [
         row
-        for row in openclaw_config.get("agents", {}).get("list", [])
+        for row in agent_rows(openclaw_config)
         if str(row.get("id", "")).startswith("adminme-")
     ]
     if not member_agents or any(

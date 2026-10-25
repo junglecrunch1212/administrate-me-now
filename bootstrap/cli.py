@@ -200,6 +200,7 @@ def build_parser() -> argparse.ArgumentParser:
             child.add_argument("--test-reset-manifest", type=Path)
             child.add_argument("--submission-repair-manifest", type=Path)
             child.add_argument("--effect-context-repair-plan", type=Path)
+            child.add_argument("--native-recovery-plan", type=Path)
             child.add_argument(
                 "--pending-attestation-id",
                 help=(
@@ -614,6 +615,9 @@ def main(argv: list[str] | None = None) -> int:
             ),
             effect_context_repair_plan=(
                 args.effect_context_repair_plan if args.command == "upgrade" else None
+            ),
+            native_recovery_plan=(
+                args.native_recovery_plan if args.command == "upgrade" else None
             ),
         )
         if args.command == "test-reset-select":

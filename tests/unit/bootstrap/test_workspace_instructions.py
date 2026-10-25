@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from adminme.openclaw_roster import canonical_agent_rows
 from adminme.openclaw_topology import member_agent_id
 from bootstrap.contracts import DeploymentPaths
 from bootstrap.workspace_instructions import (
@@ -280,6 +281,30 @@ def test_recovery_preserves_unknown_later_edits_and_refuses_to_claim_success(
     assert files[1].read_bytes() == b"Unexpected later content.\n"
 
 
+def _migrated_member_roster(paths: DeploymentPaths) -> None:
+    # This target-writer fixture starts after native Doctor materialized ownership;
+    # the retained-state acceptance separately exercises the real native migration.
+    root = paths.instance_dir / "openclaw"
+    runtime = root / "runtime"
+    runtime.mkdir(mode=0o700)
+    (runtime / "openclaw.json").write_text(
+        json.dumps(
+            {
+                "agents": {
+                    "ownership": "explicit",
+                    "entries": {
+                        member_agent_id(MEMBER): {
+                            "workspace": str(
+                                root / "member-workspaces" / member_agent_id(MEMBER)
+                            )
+                        }
+                    },
+                }
+            }
+        )
+    )
+
+
 def test_updater_covers_workspaces_selected_by_production_member_topology(
     tmp_path: Path,
 ) -> None:
@@ -290,12 +315,15 @@ def test_updater_covers_workspaces_selected_by_production_member_topology(
     configuration = paths.instance_dir / "config"
     configuration.mkdir(mode=0o700)
     (configuration / "adapters.json").write_text(json.dumps(adapters))
+    _migrated_member_roster(paths)
     topology = reconcile_member_topology(paths)
     assert topology["member_agent_count"] == 2
     gateway = json.loads(
         (paths.instance_dir / "openclaw/runtime/openclaw.json").read_text()
     )
-    actual_workspaces = [Path(row["workspace"]) for row in gateway["agents"]["list"]]
+    actual_workspaces = [
+        Path(row["workspace"]) for row in canonical_agent_rows(gateway)
+    ]
     plan = prepare_transition(
         paths, source_release=source, target_release=target, adapter_config=adapters
     )
@@ -325,6 +353,7 @@ def test_full_legacy_member_files_keep_workflow_guidance_inside_native_budget(
     configuration = paths.instance_dir / "config"
     configuration.mkdir(mode=0o700)
     (configuration / "adapters.json").write_text(json.dumps(adapters))
+    _migrated_member_roster(paths)
     assert reconcile_member_topology(paths)["member_agent_count"] == 2
     gateway = json.loads(
         (paths.instance_dir / "openclaw/runtime/openclaw.json").read_text()
@@ -332,7 +361,7 @@ def test_full_legacy_member_files_keep_workflow_guidance_inside_native_budget(
     # Exercise the paths the native agent actually loads, with distinct private
     # layers and the entire six-kilobyte reserved overlay budget in each file.
     overlays = {}
-    for row in gateway["agents"]["list"]:
+    for row in canonical_agent_rows(gateway):
         file = Path(row["workspace"]) / "AGENTS.md"
         marker = f"Private policy for {row['id']}.\n".encode()
         prefix = marker + b"p" * (3000 - len(marker))
@@ -421,3 +450,51 @@ def test_layout_cannot_silently_omit_a_program(tmp_path: Path) -> None:
     )
     with pytest.raises(WorkspaceInstructionsError, match="omits or repeats"):
         compile_instructions(target)
+
+
+def test_native_continuation_composes_exact_partial_selection_and_keeps_private_overlays(
+    tmp_path: Path,
+) -> None:
+    paths, source, failed, files = fixture_workspace(tmp_path)
+    corrected = tmp_path / "corrected"
+    programs = corrected / "bootstrap/openclaw/programs"
+    programs.mkdir(parents=True)
+    (programs / "fixture.md").write_text("Corrected instructions.\n")
+    # A process interruption left one file on each exact known source version.
+    files[0].write_bytes(
+        files[0]
+        .read_bytes()
+        .replace(compile_instructions(source), compile_instructions(failed))
+    )
+    with pytest.raises(WorkspaceInstructionsError, match="differ"):
+        prepare_transition(
+            paths,
+            source_release=source,
+            target_release=corrected,
+            adapter_config=ADAPTERS,
+        )
+    transition = prepare_transition(
+        paths,
+        source_release=source,
+        contained_source_release=failed,
+        target_release=corrected,
+        adapter_config=ADAPTERS,
+    )
+    apply_transition(paths, transition)
+    for file in files:
+        assert (
+            file.read_bytes()
+            == b"Private prefix.\n"
+            + compile_instructions(corrected)
+            + b"\nPrivate suffix.\n"
+        )
+        assert (file.parent / "SOUL.md").read_bytes() == b"Persona overlay.\n"
+    files[-1].write_bytes(b"Unknown instructions.\n")
+    with pytest.raises(WorkspaceInstructionsError, match="differ"):
+        prepare_transition(
+            paths,
+            source_release=source,
+            contained_source_release=failed,
+            target_release=corrected,
+            adapter_config=ADAPTERS,
+        )

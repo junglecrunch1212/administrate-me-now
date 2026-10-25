@@ -3836,9 +3836,126 @@ def test_email_context_scope_normalizes_only_exact_reference_hydration() -> None
 
 
 def _effect_context_shared_sources() -> dict[str, tuple[str, str]]:
+    # Frozen post-P1 excerpts from protected f3b305bf19b4e59279d9e0155fabb3b171aa93e6.
+    # These are literal normalizer fixtures, not executable bootstrap files.
+    # Do not derive them from current entrypoints or the replacement table:
+    # later native-recovery changes must not rewrite this historical contract.
+    historical_after = {
+        "bootstrap/cli.py": (
+            # Historical source lines 198-209.
+            '        elif name == "upgrade":\n'
+            '            child.add_argument("candidate", type=Path)\n'
+            '            child.add_argument("--test-reset-manifest", type=Path)\n'
+            '            child.add_argument("--submission-repair-manifest", type=Path)\n'
+            '            child.add_argument("--effect-context-repair-plan", type=Path)\n'
+            "            child.add_argument(\n"
+            '                "--pending-attestation-id",\n'
+            "                help=(\n"
+            '                    "consume one exact candidate-pending readiness artifact "\n'
+            '                    "during the journaled activation"\n'
+            "                ),\n"
+            "            )\n"
+            "\n"
+            # Historical source lines 612-618.
+            "            submission_repair_manifest=(\n"
+            '                args.submission_repair_manifest if args.command == "upgrade" else None\n'
+            "            ),\n"
+            "            effect_context_repair_plan=(\n"
+            '                args.effect_context_repair_plan if args.command == "upgrade" else None\n'
+            "            ),\n"
+            "        )\n"
+        ),
+        "bootstrap/htr10_export.py": (
+            # Historical source lines 259-262.
+            "    submission_repair_manifest: Path | None = None,\n"
+            "    effect_context_repair_plan: Path | None = None,\n"
+            "    test_mode: bool = False,\n"
+            ") -> dict[str, Any]:\n"
+            "\n"
+            # Historical source lines 317-344.
+            "    repair = None\n"
+            "    if effect_context_repair_plan is not None:\n"
+            "        from bootstrap.effect_context_repair import load_plan, verify_proof\n"
+            "        from bootstrap.source_identity import reviewed_candidate_commit\n"
+            "\n"
+            "        if submission_repair_manifest is not None or transition_public is not None:\n"
+            "            raise HTR10ExportError(\n"
+            '                "effect-context repair cannot combine deployment exceptions"\n'
+            "            )\n"
+            "        plan = load_plan(\n"
+            "            effect_context_repair_plan,\n"
+            "            paths,\n"
+            "            repository_root,\n"
+            "            candidate=reviewed_candidate_commit(repository_root),\n"
+            "            predecessor=capture_deployment_snapshot(paths).predecessor_commit,\n"
+            "            test_mode=test_mode,\n"
+            "        )\n"
+            "        await asyncio.to_thread(\n"
+            "            verify_proof,\n"
+            "            paths,\n"
+            "            repository_root,\n"
+            "            plan.effect_context_proof,\n"
+            "            diagnostics=diagnostics,\n"
+            "            test_mode=test_mode,\n"
+            "        )\n"
+            "    elif submission_repair_manifest is not None:\n"
+            "        from bootstrap.submission_repair import (\n"
+            "            load_submission_repair_manifest,\n"
+            "\n"
+            # Historical source lines 481-484.
+            '    parser.add_argument("--submission-repair-manifest", type=Path)\n'
+            '    parser.add_argument("--effect-context-repair-plan", type=Path)\n'
+            "    parser.add_argument(\n"
+            '        "--approve-provider-binding-migration",\n'
+            "\n"
+            # Historical source lines 504-506.
+            "            submission_repair_manifest=args.submission_repair_manifest,\n"
+            "            effect_context_repair_plan=args.effect_context_repair_plan,\n"
+            '            test_mode=os.environ.get("ADMINME_TEST_MODE") == "1",\n'
+        ),
+        "bootstrap/update.sh": (
+            # Historical source lines 49-52.
+            '  submission_repair_manifest=""\n'
+            '  effect_context_repair_plan=""\n'
+            '  for argument in "${requested_args[@]}"; do\n'
+            '    case "$argument" in\n'
+            "\n"
+            # Historical source lines 60-67.
+            "        ;;\n"
+            "      --effect-context-repair-plan=*)\n"
+            '        [[ -z "$effect_context_repair_plan" ]] || die "effect-context repair plan was repeated"\n'
+            '        effect_context_repair_plan="${argument#*=}"\n'
+            '        [[ "$effect_context_repair_plan" == /* && -f "$effect_context_repair_plan" ]] \\\n'
+            '          || die "effect-context repair plan must name an absolute private file"\n'
+            "        ;;\n"
+            "      --submission-repair-manifest=*)\n"
+            "\n"
+            # Historical source lines 144-147.
+            'submission_repair_flag=""\n'
+            'effect_context_repair_flag=""\n'
+            'while [[ "${1:-}" == --* ]]; do\n'
+            '  case "$1" in\n'
+            "\n"
+            # Historical source lines 167-172.
+            "      ;;\n"
+            "    --effect-context-repair-plan=*)\n"
+            '      [[ -z "$effect_context_repair_flag" ]] || fail "effect-context repair plan was repeated"\n'
+            '      effect_context_repair_flag="$1"\n'
+            "      ;;\n"
+            "    --submission-repair-manifest=*)\n"
+            "\n"
+            # Historical source lines 367-371.
+            'upgrade_args=(upgrade "$candidate")\n'
+            'if [[ -n "$effect_context_repair_flag" ]]; then\n'
+            '  upgrade_args+=("$effect_context_repair_flag")\n'
+            "fi\n"
+            'if [[ -n "$submission_repair_flag" ]]; then\n'
+        ),
+    }
+    assert historical_after.keys() == UPDATER_EFFECT_CONTEXT_SHARED_REPLACEMENTS.keys()
     sources = {UPDATER_SOURCE_ASSURANCE: _email_audit_sources()}
     for path, replacements in UPDATER_EFFECT_CONTEXT_SHARED_REPLACEMENTS.items():
-        after = (ROOT / path).read_text()
+        after = historical_after[path]
         before = after
         for old, new in replacements:
             assert before.count(new) == 1

@@ -74,7 +74,7 @@ from adminme.events.log import EventLog
 from adminme.events.writer import EventWriter
 from adminme.lib.instance_config import load_instance_config
 from adminme.lib.observation import ObservationManager
-from bootstrap.activation_transaction import ActivationJournalError
+from bootstrap.activation_transaction import ActivationJournal, ActivationJournalError
 from bootstrap.backup_restore import (
     BackupManager,
     _MAX_BACKUP_BYTES,
@@ -1070,7 +1070,10 @@ class CoSChannelActivator:
                 from bootstrap.openclaw_activation import prepare_service_topology
 
                 expected_gateway = prepare_service_topology(
-                    gateway, self.paths, self.repository
+                    gateway,
+                    self.paths,
+                    self.repository,
+                    legacy_preparation="list" in gateway.get("agents", {}),
                 )
             plan = MaintenanceRestorationPlan(
                 **request.model_dump(mode="json", exclude={"sender_proofs"}),
@@ -1148,7 +1151,19 @@ class CoSChannelActivator:
             raise CoSActivationError(
                 "maintenance restoration plan expired or has invalid proof times"
             )
-        if commit != (plan.target_commit if restoring else plan.predecessor_commit):
+        native_successor = None
+        if restoring and commit != plan.target_commit:
+            try:
+                native_successor = ActivationJournal(self.paths).native_successor(
+                    target_commit=commit,
+                    original_target=plan.target_commit,
+                    original_predecessor=plan.predecessor_commit,
+                )
+            except (ActivationJournalError, ValueError, OSError) as exc:
+                raise CoSActivationError(
+                    "maintenance restoration has no exact native successor"
+                ) from exc
+        elif not restoring and commit != plan.predecessor_commit:
             raise CoSActivationError(
                 "maintenance restoration belongs to another release"
             )
@@ -1229,7 +1244,12 @@ class CoSChannelActivator:
                 != plan.gateway_sha256
                 or (
                     _maintenance_gateway_fingerprint(
-                        prepare_service_topology(gateway, self.paths, self.repository),
+                        prepare_service_topology(
+                            gateway,
+                            self.paths,
+                            self.repository,
+                            legacy_preparation="list" in gateway.get("agents", {}),
+                        ),
                         release,
                     )
                     if gateway is not None
@@ -1288,10 +1308,14 @@ class CoSChannelActivator:
                 self.paths, root=self.repository, test_mode=self.test_mode
             )
             try:
-                deployment = updater.activation_journal.committed_activation(
-                    target_commit=plan.target_commit,
-                    predecessor_commit=plan.predecessor_commit,
-                )
+                if native_successor is not None:
+                    deployment, original_deployment = native_successor
+                else:
+                    deployment = updater.activation_journal.committed_activation(
+                        target_commit=plan.target_commit,
+                        predecessor_commit=plan.predecessor_commit,
+                    )
+                    original_deployment = deployment
             except ActivationJournalError as exc:
                 raise CoSActivationError(
                     "maintenance requires the exact completed updater transaction"
@@ -1308,7 +1332,7 @@ class CoSChannelActivator:
                 },
             }
             current_binding = {
-                "release_commit": plan.target_commit,
+                "release_commit": commit,
                 **{
                     key: snapshot[key]
                     for key in (
@@ -1319,9 +1343,11 @@ class CoSChannelActivator:
                 },
             }
             if (
-                deployment.get("initial_pointer_sha256")
+                original_deployment.get("initial_pointer_sha256")
                 != plan.deployment_snapshot["pointer_sha256"]
-                or (deployment.get("initial_readiness") or {}).get("deployment_binding")
+                or (original_deployment.get("initial_readiness") or {}).get(
+                    "deployment_binding"
+                )
                 != prior_binding
                 or (deployment.get("active_readiness") or {}).get("deployment_binding")
                 != current_binding
@@ -1346,6 +1372,45 @@ class CoSChannelActivator:
                 expected_guard.update(
                     wrapper_path=str(wrapper), wrapper_sha256=_sha(wrapper.read_bytes())
                 )
+            expected_gateway_fingerprint = plan.gateway_compatibility_sha256
+            if original_deployment.get("openclaw_migration") is not None:
+                from bootstrap.openclaw_activation import prepare_service_topology
+                from bootstrap.openclaw_migration import (
+                    NativeMigrationError,
+                    configuration_transition,
+                    configuration_origin,
+                )
+
+                try:
+                    transition = configuration_transition(
+                        self.paths, configuration_origin(self.paths, deployment)
+                    )
+                except (OSError, ValueError, NativeMigrationError) as exc:
+                    raise CoSActivationError(
+                        "native migration receipt is unavailable or changed"
+                    ) from exc
+                prior_release = Path(original_deployment["predecessor_path"])
+                prepared_source = prepare_service_topology(
+                    transition["source"],
+                    self.paths,
+                    release,
+                    legacy_preparation="list" in transition["source"].get("agents", {}),
+                )
+                if (
+                    _maintenance_gateway_fingerprint(prepared_source, prior_release)
+                    != plan.gateway_compatibility_sha256
+                ):
+                    raise CoSActivationError(
+                        "native migration source does not match the maintenance plan"
+                    )
+                # The original plan remains immutable. Only its exact recorded
+                # native transition can explain the new roster/default fields.
+                prepared_native = prepare_service_topology(
+                    transition["result"], self.paths, release
+                )
+                expected_gateway_fingerprint = _maintenance_gateway_fingerprint(
+                    prepared_native, prior_release
+                )
             if (
                 controls["guard"] != expected_guard
                 or (
@@ -1353,7 +1418,7 @@ class CoSChannelActivator:
                     if gateway is not None
                     else None
                 )
-                != plan.gateway_compatibility_sha256
+                != expected_gateway_fingerprint
             ):
                 raise CoSActivationError(
                     "maintenance gateway routing or configuration drifted"

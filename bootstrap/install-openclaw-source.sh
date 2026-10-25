@@ -7,6 +7,7 @@ REPOSITORY_ROOT="$(cd "$SCRIPT_DIR/.." && pwd -P)"
 INSTANCE_ROOT=""
 PYTHON_BIN=""
 STAGING_DIR=""
+VERSION_PROBE_DIR=""
 
 fail() {
   echo "AdministrateMe OpenClaw install: $1" >&2
@@ -14,6 +15,11 @@ fail() {
 }
 
 cleanup() {
+  if [[ -n "$VERSION_PROBE_DIR" && -d "$VERSION_PROBE_DIR" ]]; then
+    case "$VERSION_PROBE_DIR" in
+      "$INSTANCE_ROOT"/app/openclaw/.version-probe.*) rm -rf "$VERSION_PROBE_DIR" ;;
+    esac
+  fi
   if [[ -n "$STAGING_DIR" && -d "$STAGING_DIR" ]]; then
     case "$STAGING_DIR" in
       "$INSTANCE_ROOT"/app/openclaw/.staging.*) rm -rf "$STAGING_DIR" ;;
@@ -74,6 +80,12 @@ archive="$download_dir/openclaw-$OPENCLAW_COMMIT.tar.gz"
 bin_dir="$INSTANCE_ROOT/bin"
 receipt="$INSTANCE_ROOT/state/openclaw/source-install.json"
 mkdir -p "$openclaw_parent" "$download_dir" "$bin_dir" "$(dirname "$receipt")"
+# Build/version probes must never discover an active or retained native database.
+# Real retained-state migration is owned by the stopped-service updater step.
+VERSION_PROBE_DIR="$(mktemp -d "$openclaw_parent/.version-probe.XXXXXX")"
+export OPENCLAW_STATE_DIR="$VERSION_PROBE_DIR"
+export OPENCLAW_CONFIG_PATH="$VERSION_PROBE_DIR/openclaw.json"
+export OPENCLAW_SUPERVISOR_MODE=external
 
 validate_source() {
   local candidate="$1"

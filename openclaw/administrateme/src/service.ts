@@ -42,7 +42,7 @@ export function registerService(api: OpenClawPluginApi, runtime: PluginRuntime):
       ] ?? 30_000;
       const message = `AdministrateMe health report unavailable; retrying in ${delay}ms (state=${state}${status})`;
       if (attempt === 0) api.logger.warn(message);
-      else api.logger.debug(message);
+      else api.logger.debug?.(message);
       attempt += 1;
       scheduleHealth(delay);
     }

@@ -7,6 +7,7 @@ import type {
 } from "openclaw/plugin-sdk/plugin-entry";
 import { provenanceFromTool } from "./provenance.js";
 import { toolResult } from "./result.js";
+import { assertToolInput } from "./tool-input.js";
 import { trackSession, type PluginRuntime } from "./runtime.js";
 import { waitForApprovalPublication } from "./approval.js";
 
@@ -103,7 +104,7 @@ function makeTool(
   definition: {
     name: string;
     description: string;
-    parameters: unknown;
+    parameters: AnyAgentTool["parameters"];
     path: string | ((params: Record<string, unknown>) => string);
     pathParam?: string;
     standingOrder?: boolean;
@@ -115,17 +116,17 @@ function makeTool(
     description: definition.description,
     parameters: definition.parameters,
     async execute(id, params) {
-      const provenance = requestExecutionProvenance(runtime, id, params as Record<string, unknown>, context) ?? provenanceFromTool(
+      assertToolInput(params);
+      const provenance = requestExecutionProvenance(runtime, id, params, context) ?? provenanceFromTool(
         context,
         definition.standingOrder ? "standing_order" : "tool",
         runtime.transport.config.sharedSecretEnv,
         runtime,
       );
       trackSession(runtime, provenance);
-      const typedParams = params as Record<string, unknown>;
       const invocationParams: Record<string, unknown> = definition.standingOrder
-        ? { ...typedParams, trigger_id: id }
-        : { ...typedParams };
+        ? { ...params, trigger_id: id }
+        : { ...params };
       const path =
         typeof definition.path === "function"
           ? definition.path(invocationParams)

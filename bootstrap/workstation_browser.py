@@ -15,6 +15,7 @@ from pathlib import Path
 from datetime import datetime, timezone
 from typing import Any
 
+from adminme.openclaw_roster import agent_rows
 from adminme.openclaw_topology import service_agent_id
 from adminme.service_identities import COS_SERVICE_PRINCIPAL_ID
 from adminme.workstation_browser import (
@@ -202,7 +203,7 @@ def prepare_native_patch(
             patch["plugins"]["allow"] = prepared["plugins"]["allow"]
         tools = native_service_tools(prepared, paths, release)
         if tools:
-            agents = original.get("agents", {}).get("list", [])
+            agents = agent_rows(original)
             matches = [
                 row
                 for row in agents
@@ -219,14 +220,13 @@ def prepare_native_patch(
                 raise ValueError(
                     "the CoS worker needs an explicit existing tool allowlist"
                 )
-            patch["agents"] = {
-                "list": [
-                    {
-                        "id": matches[0]["id"],
-                        "tools": {"allow": list(dict.fromkeys([*allowed, *tools]))},
-                    }
-                ]
-            }
+            tool_patch = {"allow": list(dict.fromkeys([*allowed, *tools]))}
+            if "entries" in original["agents"]:
+                patch["agents"] = {"entries": {matches[0]["id"]: {"tools": tool_patch}}}
+            else:
+                patch["agents"] = {
+                    "list": [{"id": matches[0]["id"], "tools": tool_patch}]
+                }
     return {
         "baseHash": snapshot["hash"],
         "raw": json.dumps(patch, separators=(",", ":")),

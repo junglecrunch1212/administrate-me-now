@@ -1,10 +1,8 @@
+import type { PluginHookAgentContext, PluginHookMessageContext, PluginHookModelCallEvent } from "./sdk-types.js";
 import { prepareRequestedApproval } from "./request-policy.js";
 import type {
   OpenClawPluginApi,
-  PluginHookAgentContext,
-  PluginHookMessageContext,
   PluginHookMessageReceivedEvent,
-  PluginHookModelCallEvent,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { createHash } from "node:crypto";
 import { PLUGIN_ID, SIDE_EFFECT_TOOL_NAMES, type BridgeEventKind } from "./contract.js";

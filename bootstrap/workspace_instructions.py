@@ -271,10 +271,14 @@ def prepare_transition(
     source_release: Path,
     target_release: Path,
     adapter_config: dict[str, Any],
+    contained_source_release: Path | None = None,
 ) -> dict[str, Any] | None:
     before_generated = compile_instructions(source_release)
     after_generated = compile_instructions(target_release)
-    if before_generated == after_generated:
+    allowed_sources = {before_generated}
+    if contained_source_release is not None:
+        allowed_sources.add(compile_instructions(contained_source_release))
+    if allowed_sources == {after_generated}:
         return None
     members = set(
         (adapter_config.get("openclaw_actor_identities") or {}).values()
@@ -287,12 +291,13 @@ def prepare_transition(
     for coordinate in coordinates:
         with _workspace(paths, coordinate) as descriptor:
             payload, mode = _read(descriptor)
-        if payload.count(before_generated) != 1:
+        matches = [source for source in allowed_sources if payload.count(source) == 1]
+        if len(matches) != 1:
             raise WorkspaceInstructionsError(
                 "workspace generated instructions differ from the active release; "
                 "preserve and reconcile the custom instructions before maintenance"
             )
-        selected = payload.replace(before_generated, after_generated, 1)
+        selected = payload.replace(matches[0], after_generated, 1)
         validate_composed_instructions(target_release, selected)
         files.append(
             {

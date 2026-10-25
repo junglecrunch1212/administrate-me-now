@@ -96,7 +96,7 @@ try {
   await writeFile(path.join(plugin, "package.json"), JSON.stringify({ name: "@administrateme/reminder-gateway-probe", type: "module", version: "1.0.0", openclaw: { extensions: ["./index.mjs"] } }));
   await writeFile(path.join(plugin, "openclaw.plugin.json"), JSON.stringify({ id: "administrateme", activation: { onStartup: true }, contracts: { tools: ["administrateme_self_reminder", "administrateme_self_reminder_fire", "administrateme_probe_schedule"] }, configSchema: { type: "object", additionalProperties: false, properties: {} } }));
   await writeFile(configPath, JSON.stringify({ gateway: { mode: "local", bind: "loopback", port, auth: { mode: "token", token }, controlUi: { enabled: false }, reload: { mode: "off" } },
-    agents: { defaults: { workspace: path.join(state, "workspace"), heartbeat: { every: "0m" } }, list: [{ id: agent, tools: { allow: ["administrateme"] } }] },
+    agents: { defaults: { workspace: path.join(state, "workspace"), heartbeat: { every: "0m" } }, entries: { [agent]: { tools: { allow: ["administrateme"] } } } },
     plugins: { allow: ["administrateme"], load: { paths: [plugin] }, slots: { memory: "none" }, entries: { administrateme: { enabled: true } } },
     channels: {}, cron: { enabled: true, triggers: { enabled: true } }, browser: { enabled: false }, discovery: { mdns: { mode: "off" } }, update: { checkOnStart: false, auto: { enabled: false } }, logging: { file: path.join(state, "gateway.log") } }), { mode: 0o600 });
   let request = await start();

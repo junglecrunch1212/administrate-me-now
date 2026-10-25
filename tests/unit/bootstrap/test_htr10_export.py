@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -54,8 +55,15 @@ def test_reviewed_binding_audit_view_uses_already_active_configuration(
 @pytest.mark.parametrize(
     "placement", ["between", "prior", "current", "unknown_between"]
 )
+@pytest.mark.parametrize(
+    ("native_contained", "retained_wal"), [(False, False), (True, False), (True, True)]
+)
 async def test_export_audits_every_observation_interval_without_reclassifying_live_effects(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, placement: str
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    placement: str,
+    native_contained: bool,
+    retained_wal: bool,
 ) -> None:
     monkeypatch.setenv("ADMINME_TEST_MODE", "1")
     fixed_now = datetime(2026, 10, 21, tzinfo=timezone.utc)
@@ -70,8 +78,15 @@ async def test_export_audits_every_observation_interval_without_reclassifying_li
             )
 
     monkeypatch.setattr(htr10_export, "datetime", FixtureClock)
-    paths = DeploymentPaths.from_root(tmp_path / "deployment")
-    paths.create()
+    if native_contained:
+        from tests.unit.bootstrap.test_native_recovery import (
+            fixture as contained_fixture,
+        )
+
+        paths, _candidate, _parent = contained_fixture(tmp_path, monkeypatch)
+    else:
+        paths = DeploymentPaths.from_root(tmp_path / "deployment")
+        paths.create()
     key = b"w" * 32
     reference = secret_store(paths, test_mode=True).put("event-log", key)
     current = {
@@ -109,16 +124,107 @@ async def test_export_audits_every_observation_interval_without_reclassifying_li
         "runtime_diagnostics",
         lambda _self: {"ready": True, "observation_active": True, "capabilities": {}},
     )
-    log = EventLog(paths.instance_dir / "events" / "events.db", key)
+    plan_reads = []
+    if native_contained:
+        from bootstrap import native_recovery
+
+        original_load = native_recovery.load
+
+        def retained_plan(*args, **kwargs):
+            try:
+                value = original_load(*args, **kwargs)
+            except native_recovery.NativeRecoveryError:
+                observed = original_inventory()
+                changed = sorted(
+                    name
+                    for name in original.keys() | observed.keys()
+                    if original.get(name) != observed.get(name)
+                )
+                assert not changed, (
+                    f"original audit file generations changed: {changed}"
+                )
+                raise
+            plan_reads.append(value)
+            return value
+
+        monkeypatch.setattr(native_recovery, "load", retained_plan)
+
+        def no_live_health(_self):
+            raise AssertionError("contained export must not claim live health")
+
+        monkeypatch.setattr(
+            htr10_export.ServiceManager, "runtime_diagnostics", no_live_health
+        )
+    database = paths.instance_dir / "events" / "events.db"
+    wal = database.with_name("events.db-wal")
+    log = EventLog(database, key)
+    retained_bytes = None
+    base_bytes: bytes | None = None
     try:
+        if retained_wal:
+            # Preserve a genuinely committed encrypted WAL with the whole effect
+            # chain absent from the base DB. No writer remains during admission.
+            assert await log.count() == 0
+            await log._run_locked(  # noqa: SLF001
+                lambda: log._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchall()  # noqa: SLF001
+            )
+            base_bytes = database.read_bytes()
         for event in _chain("unknown" if placement == "unknown_between" else "sent"):
             if event["type"] in {"cos.response.approved", "cos.response.attempted"}:
                 event.update(
                     source_adapter="openclaw-plugin", source_account_id="cos-response"
                 )
             await log.append(EventEnvelope(**event))
+        if retained_wal:
+            assert base_bytes is not None
+            assert database.read_bytes() == base_bytes
+            retained_bytes = (base_bytes, wal.read_bytes())
+            assert len(retained_bytes[1]) > 32
     finally:
         await log.close()
+    if retained_bytes is not None:
+        atomic_write(database, retained_bytes[0])
+        atomic_write(wal, retained_bytes[1])
+    repository = Path(__file__).resolve().parents[3]
+    plan_path = None
+    if native_contained:
+        from bootstrap import native_recovery
+
+        plan_path = paths.backup_dir / "plan.json"
+        atomic_write(
+            plan_path,
+            json.dumps(
+                native_recovery.prepare(paths, repository, test_mode=True)
+            ).encode(),
+        )
+
+    def original_inventory():
+        return {
+            path.name: (
+                path.stat().st_ino,
+                path.stat().st_size,
+                path.stat().st_mtime_ns,
+                path.stat().st_ctime_ns,
+                hashlib.sha256(path.read_bytes()).hexdigest(),
+            )
+            for path in database.parent.iterdir()
+        }
+
+    original = original_inventory()
+    readers = []
+
+    def observed_reader(path, *args, **kwargs):
+        assert kwargs["read_only"] is True
+        if native_contained:
+            assert not path.is_relative_to(paths.instance_dir)
+            assert path.parent.stat().st_mode & 0o777 == 0o700
+            assert path.stat().st_mode & 0o777 == 0o600
+        else:
+            assert path == database
+        readers.append(path)
+        return EventLog(path, *args, **kwargs)
+
+    monkeypatch.setattr(htr10_export, "EventLog", observed_reader)
     historical = paths.backup_dir / "historical.json"
     source = paths.backup_dir / "source.json"
     await htr10_export.export_htr10_audits(
@@ -128,7 +234,22 @@ async def test_export_audits_every_observation_interval_without_reclassifying_li
         source_output=source,
         ownership_reviewed=True,
         test_mode=True,
+        native_recovery_plan=plan_path,
     )
+    assert len(readers) == 1
+    if native_contained:
+        observed = original_inventory()
+        changed = sorted(
+            name
+            for name in original.keys() | observed.keys()
+            if original.get(name) != observed.get(name)
+        )
+        assert not changed, f"original audit file generations changed: {changed}"
+        assert not readers[0].parent.exists()
+    assert len(plan_reads) == (2 if native_contained else 0)
+    if native_contained:
+        assert plan_reads[0] == plan_reads[1]
+        assert plan_reads[0]["automatic_rollback_eligible"] is False
     audit = json.loads(source.read_bytes())
     assert json.loads(historical.read_bytes())["state"] == "healthy"
     effects = audit["provider_effects"]

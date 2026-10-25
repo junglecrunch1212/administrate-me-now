@@ -96,6 +96,82 @@ def backup_rollback_ready(backup: dict[str, Any]) -> bool:
     )
 
 
+def native_forward_recovery_ready(evidence: dict[str, Any]) -> bool:
+    """Native format changes use retained state and a protected correction.
+
+    This alternative changes only the recovery dimension. Every identity,
+    source/effect, runtime and current configuration check still applies.
+    """
+    proof = evidence.get("native_forward_recovery") or {}
+    backup = evidence.get("backup_rollback") or {}
+    activation = evidence.get("activation_evidence") or {}
+
+    def hex_value(value: object, length: int) -> bool:
+        return (
+            isinstance(value, str)
+            and len(value) == length
+            and all(c in "0123456789abcdef" for c in value)
+        )
+
+    return bool(
+        set(proof)
+        == {
+            "contract",
+            "release_commit",
+            "transaction_id",
+            "origin_transaction_id",
+            "pending_attestation_sha256",
+            "prior_target_health_proven",
+            "native_state_retained",
+            "domain_history_retained",
+            "automatic_rollback_eligible",
+            "recovery_mode",
+            "content_exposed",
+        }
+        and proof.get("contract") == "deployment-native-forward-recovery-v1"
+        and proof.get("release_commit")
+        == (evidence.get("deployment_binding") or {}).get("release_commit")
+        and hex_value(proof.get("release_commit"), 40)
+        and all(
+            hex_value(proof.get(key), 32)
+            for key in ("transaction_id", "origin_transaction_id")
+        )
+        and proof.get("pending_attestation_sha256")
+        == activation.get("candidate_pending_attestation_sha256")
+        and proof.get("prior_target_health_proven") is False
+        and proof.get("native_state_retained") is True
+        and proof.get("domain_history_retained") is True
+        and proof.get("automatic_rollback_eligible") is False
+        and proof.get("content_exposed") is False
+        and proof.get("recovery_mode") == "protected-corrected-artifact"
+        and backup.get("automatic_rollback_eligible") is False
+        and all(
+            backup.get(key) is True
+            for key in (
+                "encrypted_backup_authenticated",
+                "restore_rehearsed",
+                "prior_release_retained",
+            )
+        )
+        and _recent_iso(backup.get("tested_at"))
+        and activation.get("contract") == "deployment-activation-evidence-v1"
+        and activation.get("crash_recoverable_replacement") is True
+        and (
+            activation.get("candidate_live_doctor") is True
+            or activation.get("candidate_live_doctor") == "pending_post_switch"
+        )
+        and all(
+            hex_value(activation.get(key), 64)
+            for key in (
+                "candidate_pending_attestation_sha256",
+                "fresh_backup_artifact_sha256",
+                "fresh_rehearsal_receipt_sha256",
+                "predecessor_rollback_eligibility_sha256",
+            )
+        )
+    )
+
+
 def ordinary_activation_backup_ready(evidence: dict[str, Any]) -> bool:
     """Recognize proof emitted by a fresh ordinary journaled activation."""
     activation = evidence.get("activation_evidence") or {}
@@ -504,13 +580,17 @@ def evaluate_deployment_readiness(
         )
 
     backup = deployment_evidence.get("backup_rollback") or {}
-    backup_ok = backup_rollback_ready(backup)
+    forward_ready = native_forward_recovery_ready(deployment_evidence)
+    backup_ok = backup_rollback_ready(backup) or forward_ready
     dimensions["backup_rollback"] = _dimension(
         "healthy" if backup_ok else "blocked",
-        "authenticated backup, disposable restore, and rollback predecessor are ready"
+        "authenticated backup and retained native state support protected forward recovery"
+        if forward_ready
+        else "authenticated backup, disposable restore, and rollback predecessor are ready"
         if backup_ok
         else "backup authentication, restore rehearsal, or rollback evidence is missing",
         evidence={
+            "native_forward_recovery": forward_ready,
             "encrypted_backup_authenticated": backup.get(
                 "encrypted_backup_authenticated"
             )

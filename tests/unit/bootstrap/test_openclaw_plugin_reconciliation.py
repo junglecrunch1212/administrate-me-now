@@ -11,6 +11,7 @@ from typing import Any, Callable
 import jsonschema
 import pytest
 
+from adminme.openclaw_roster import agent_rows
 from adminme.openclaw_topology import (
     SERVICE_PRIVATE_INSTRUCTIONS,
     SERVICE_PRIVATE_TOOLS,
@@ -145,16 +146,19 @@ def test_reconcile_replaces_stale_registration_and_proves_runtime_source(
         json.dumps(
             {
                 "agents": {
-                    "list": [
-                        {"id": "operator", "default": True},
-                        {"id": "adminme-stale0000000000"},
-                    ]
+                    "ownership": "explicit",
+                    "entries": {"operator": {}, "adminme-stale0000000000": {}},
+                    "defaults": {"systemAgent": {"agentId": "operator"}},
                 },
                 "bindings": [
                     {"agentId": "operator", "match": {"channel": "cli"}},
                     {
                         "agentId": "adminme-stale0000000000",
-                        "match": {"channel": "stale"},
+                        "match": {
+                            "channel": "stale",
+                            "accountId": "stale-account",
+                            "peer": {"kind": "direct", "id": "stale-peer"},
+                        },
                     },
                 ],
                 "plugins": {
@@ -249,7 +253,8 @@ def test_reconcile_replaces_stale_registration_and_proves_runtime_source(
     }
     if service_supported:
         expected_agents.add(service_agent_id(COS_SERVICE_PRINCIPAL_ID))
-    assert {row["id"] for row in stored["agents"]["list"]} == expected_agents
+    assert "list" not in stored["agents"]
+    assert {row["id"] for row in agent_rows(stored)} == expected_agents
     assert status["service_topology"]["service_agent_count"] == int(service_supported)
     if service_supported:
         assert entry["config"]["serviceWorkEnabled"] is False
@@ -276,14 +281,15 @@ def test_reconcile_replaces_stale_registration_and_proves_runtime_source(
         restored = json.loads((runtime_dir / "openclaw.json").read_text())
         assert restored["plugins"]["entries"] == stored["plugins"]["entries"]
         assert all(
-            not row["id"].startswith("am-service-")
-            for row in restored["agents"]["list"]
+            not row["id"].startswith("am-service-") for row in agent_rows(restored)
         )
 
 
+@pytest.mark.parametrize("canonical", [False, True])
 def test_reconcile_legacy_plugin_removes_only_unsupported_candidate_topology(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    canonical: bool,
 ) -> None:
     paths = DeploymentPaths.from_root(tmp_path / "instance")
     release = tmp_path / "releases" / "predecessor"
@@ -338,6 +344,15 @@ def test_reconcile_legacy_plugin_removes_only_unsupported_candidate_topology(
         ),
         encoding="utf-8",
     )
+    if canonical:
+        current = json.loads(target.read_text())
+        rows = current["agents"].pop("list")
+        current["agents"]["ownership"] = "explicit"
+        current["agents"]["entries"] = {
+            row["id"]: {k: v for k, v in row.items() if k not in {"id", "default"}}
+            for row in rows
+        }
+        target.write_text(json.dumps(current))
     target.chmod(0o600)
     monkeypatch.setattr(
         "bootstrap.openclaw_tools.resolve_reviewed_openclaw",
@@ -351,7 +366,12 @@ def test_reconcile_legacy_plugin_removes_only_unsupported_candidate_topology(
         commands.append(command)
         if command[1:3] == ["plugins", "uninstall"]:
             preinstall = json.loads(target.read_text("utf-8"))
-            assert preinstall["agents"]["list"] == [{"default": True, "id": "operator"}]
+            assert ("entries" in preinstall["agents"]) is canonical
+            assert agent_rows(preinstall) == (
+                [{"id": "operator"}]
+                if canonical
+                else [{"default": True, "id": "operator"}]
+            )
             assert preinstall["bindings"] == [
                 {"agentId": "operator", "match": {"channel": "cli"}}
             ]
@@ -384,7 +404,10 @@ def test_reconcile_legacy_plugin_removes_only_unsupported_candidate_topology(
         "content_exposed": False,
     }
     stored = json.loads(target.read_text("utf-8"))
-    assert stored["agents"]["list"] == [{"default": True, "id": "operator"}]
+    assert ("entries" in stored["agents"]) is canonical
+    assert agent_rows(stored) == (
+        [{"id": "operator"}] if canonical else [{"default": True, "id": "operator"}]
+    )
     assert stored["bindings"] == [{"agentId": "operator", "match": {"channel": "cli"}}]
     assert stored["plugins"]["entries"]["administrateme"] == {
         "config": {"baseUrl": "http://127.0.0.1:3330"}

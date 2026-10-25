@@ -135,7 +135,7 @@ print(json.dumps([overview, detail, next_page]))
           actor_id: expected.actor_id, channel_id: expected.channel_id, account_id: expected.account_id,
           agent_id: expected.agent_id, session_key: expected.session_key, message_id: expected.message_id,
           call_kind: "tool", correlation_id: body.provenance.correlation_id,
-          openclaw_version: "2026.7.2", openclaw_commit: "ce67ffb70e83e5ebb56ea02e814e577153f84f61",
+          openclaw_version: "2026.10.7", openclaw_commit: "157d8c2bc3ea2fa183afdc11088e69690bf8e64e",
           ...(expected.thread_id ? { thread_id: expected.thread_id } : {}),
         });
         assert.equal(body.openclaw_approval_receipt_id, undefined, "status or same-conversation output fabricated a human allow-once");

@@ -88,7 +88,11 @@ def test_verified_tab_refresh_uses_current_revision_and_can_revoke_without_evide
         provision(config, {**policy, "revision": 4}, expected_revision=3)
 
 
-def test_native_patch_uses_hash_guard_and_only_browser_and_existing_cos_agent(tmp_path):
+@pytest.mark.parametrize("canonical", [False, True])
+def test_native_patch_uses_hash_guard_and_only_browser_and_existing_cos_agent(
+    tmp_path,
+    canonical,
+):
     from adminme.openclaw_topology import SERVICE_PRIVATE_TOOLS, service_agent_id
     from adminme.service_identities import COS_SERVICE_PRINCIPAL_ID
     from bootstrap.contracts import DeploymentPaths
@@ -143,13 +147,22 @@ def test_native_patch_uses_hash_guard_and_only_browser_and_existing_cos_agent(tm
         },
         "gateway": {"auth": {"token": "synthetic-secret-never-in-patch"}},
     }
+    if canonical:
+        rows = original["agents"].pop("list")
+        original["agents"]["ownership"] = "explicit"
+        original["agents"]["entries"] = {
+            row["id"]: {k: v for k, v in row.items() if k != "id"} for row in rows
+        }
     snapshot = {"valid": True, "hash": "a" * 64, "config": original}
     params = prepare_native_patch(snapshot, paths, release)
     patch = json.loads(params["raw"])
     assert params["baseHash"] == snapshot["hash"]
-    assert patch["agents"]["list"] == [
-        {"id": agent, "tools": {"allow": [*SERVICE_PRIVATE_TOOLS, "browser"]}}
-    ]
+    expected_tools = {"allow": [*SERVICE_PRIVATE_TOOLS, "browser"]}
+    assert patch["agents"] == (
+        {"entries": {agent: {"tools": expected_tools}}}
+        if canonical
+        else {"list": [{"id": agent, "tools": expected_tools}]}
+    )
     assert "synthetic-secret" not in json.dumps(params)
     assert patch["browser"]["allowSystemProfileImport"] is False
     assert patch["plugins"] == {"entries": {"browser": {"enabled": True}}}

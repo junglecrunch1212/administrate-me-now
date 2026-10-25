@@ -13,6 +13,7 @@ import asyncio
 import hashlib
 import json
 import os
+from contextlib import nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -258,8 +259,14 @@ async def export_htr10_audits(
     ownership_reviewed: bool,
     submission_repair_manifest: Path | None = None,
     effect_context_repair_plan: Path | None = None,
+    native_recovery_plan: Path | None = None,
     test_mode: bool = False,
 ) -> dict[str, Any]:
+    from bootstrap.native_recovery import (
+        audit_event_log_copy,
+        load as load_native_recovery,
+    )
+
     if ownership_reviewed is not True:
         raise HTR10ExportError("provider-binding transition approval is required")
     historical_output = ensure_within(historical_output, paths.backup_dir)
@@ -311,53 +318,73 @@ async def export_htr10_audits(
             principal.service_principal_id for principal in service_principals
         },
     )
-    diagnostics = ServiceManager(paths, test_mode=test_mode).runtime_diagnostics()
-    if not isinstance(diagnostics, dict):
-        raise HTR10ExportError("active runtime readiness is unavailable")
+    native_plan = None
     repair = None
-    if effect_context_repair_plan is not None:
-        from bootstrap.effect_context_repair import load_plan, verify_proof
-        from bootstrap.source_identity import reviewed_candidate_commit
-
-        if submission_repair_manifest is not None or transition_public is not None:
+    if native_recovery_plan is not None:
+        if (
+            effect_context_repair_plan is not None
+            or submission_repair_manifest is not None
+            or transition_public is not None
+        ):
             raise HTR10ExportError(
-                "effect-context repair cannot combine deployment exceptions"
+                "native recovery cannot combine deployment exceptions"
             )
-        plan = load_plan(
-            effect_context_repair_plan,
-            paths,
-            repository_root,
-            candidate=reviewed_candidate_commit(repository_root),
-            predecessor=capture_deployment_snapshot(paths).predecessor_commit,
-            test_mode=test_mode,
+        native_plan = load_native_recovery(
+            paths, repository_root, native_recovery_plan, test_mode=test_mode
         )
-        await asyncio.to_thread(
-            verify_proof,
-            paths,
-            repository_root,
-            plan.effect_context_proof,
-            diagnostics=diagnostics,
-            test_mode=test_mode,
-        )
-    elif submission_repair_manifest is not None:
-        from bootstrap.submission_repair import (
-            load_submission_repair_manifest,
-            validate_submission_repair_diagnostics,
-        )
+        # No live-health substitute: only the full retained source/effect audit
+        # runs below. The successor must prove live readiness after startup.
+        diagnostics: dict[str, Any] = {}
+    else:
+        live_diagnostics = ServiceManager(
+            paths, test_mode=test_mode
+        ).runtime_diagnostics()
+        if not isinstance(live_diagnostics, dict):
+            raise HTR10ExportError("active runtime readiness is unavailable")
+        diagnostics = live_diagnostics
+        if effect_context_repair_plan is not None:
+            from bootstrap.effect_context_repair import load_plan, verify_proof
+            from bootstrap.source_identity import reviewed_candidate_commit
 
-        repair = load_submission_repair_manifest(
-            submission_repair_manifest,
-            candidate=repository_root,
-            active_commit=capture_deployment_snapshot(paths).predecessor_commit,
-            test_mode=test_mode,
-        )
-        validate_submission_repair_diagnostics(
-            repair, diagnostics, observation_active=True
-        )
-    elif not _runtime_supports_read_only_repair_audit(diagnostics):
-        raise HTR10ExportError("active runtime readiness is unavailable")
-    if diagnostics.get("observation_active") is not True and not test_mode:
-        raise HTR10ExportError("observation mode is not active")
+            if submission_repair_manifest is not None or transition_public is not None:
+                raise HTR10ExportError(
+                    "effect-context repair cannot combine deployment exceptions"
+                )
+            plan = load_plan(
+                effect_context_repair_plan,
+                paths,
+                repository_root,
+                candidate=reviewed_candidate_commit(repository_root),
+                predecessor=capture_deployment_snapshot(paths).predecessor_commit,
+                test_mode=test_mode,
+            )
+            await asyncio.to_thread(
+                verify_proof,
+                paths,
+                repository_root,
+                plan.effect_context_proof,
+                diagnostics=diagnostics,
+                test_mode=test_mode,
+            )
+        elif submission_repair_manifest is not None:
+            from bootstrap.submission_repair import (
+                load_submission_repair_manifest,
+                validate_submission_repair_diagnostics,
+            )
+
+            repair = load_submission_repair_manifest(
+                submission_repair_manifest,
+                candidate=repository_root,
+                active_commit=capture_deployment_snapshot(paths).predecessor_commit,
+                test_mode=test_mode,
+            )
+            validate_submission_repair_diagnostics(
+                repair, diagnostics, observation_active=True
+            )
+        elif not _runtime_supports_read_only_repair_audit(diagnostics):
+            raise HTR10ExportError("active runtime readiness is unavailable")
+        if diagnostics.get("observation_active") is not True and not test_mode:
+            raise HTR10ExportError("observation mode is not active")
     capabilities = {
         str(key): value
         for key, value in (diagnostics.get("capabilities") or {}).items()
@@ -382,67 +409,76 @@ async def export_htr10_audits(
     if not isinstance(event_reference, str) or not event_reference:
         raise HTR10ExportError("event-log credential reference is unavailable")
     event_key = secret_store(paths, test_mode=test_mode).get(event_reference)
-    event_log = EventLog(
-        paths.instance_dir / "events" / "events.db",
-        event_key,
-        read_only=True,
+    source_database = paths.instance_dir / "events" / "events.db"
+    audit_context = (
+        audit_event_log_copy(paths)
+        if native_plan is not None
+        else nullcontext(source_database)
     )
-    try:
-        watermark = await event_log.latest_event_id()
-        historical = await audit_historical_attribution(
-            event_log,
-            repository_root=repository_root,
-            provider_bindings=bindings,
-            hash_key=hashlib.sha256(
-                b"administrateme-htr10-attribution-v1\0" + event_key
-            ).digest(),
-            through_event_id=watermark,
+    with audit_context as audit_path:
+        event_log = EventLog(
+            audit_path,
+            event_key,
+            read_only=True,
         )
-        assurance = await audit_source_assurance(
-            event_log,
-            repository_root=repository_root,
-            capabilities=capabilities,
-            through_event_id=watermark,
-            provider_effect_window_started_at=window["started_at"],
-            provider_effect_window_ended_at=window.get("ended_at"),
-        )
-        prior_audits = []
-        for prior in window_evidence["prior_provider_effect_windows"]:
-            prior_assurance = await audit_source_assurance(
+        try:
+            watermark = await event_log.latest_event_id()
+            historical = await audit_historical_attribution(
+                event_log,
+                repository_root=repository_root,
+                provider_bindings=bindings,
+                hash_key=hashlib.sha256(
+                    b"administrateme-htr10-attribution-v1\0" + event_key
+                ).digest(),
+                through_event_id=watermark,
+            )
+            assurance = await audit_source_assurance(
                 event_log,
                 repository_root=repository_root,
                 capabilities=capabilities,
                 through_event_id=watermark,
-                provider_effect_window_started_at=prior["started_at"],
-                provider_effect_window_ended_at=prior["ended_at"],
+                provider_effect_window_started_at=window["started_at"],
+                provider_effect_window_ended_at=window.get("ended_at"),
             )
-            prior_audits.append(
-                prior_assurance["provider_effects"]["observation_window"]
-            )
-        if prior_audits:
-            assurance["provider_effects"]["prior_observation_windows"] = prior_audits
-        assurance["provider_effect_windows"] = window_evidence
-        if repair is not None:
-            from bootstrap.submission_repair import (
-                audit_submission_repair,
-                repair_binding,
-                validate_submission_repair_audit,
-            )
+            prior_audits = []
+            for prior in window_evidence["prior_provider_effect_windows"]:
+                prior_assurance = await audit_source_assurance(
+                    event_log,
+                    repository_root=repository_root,
+                    capabilities=capabilities,
+                    through_event_id=watermark,
+                    provider_effect_window_started_at=prior["started_at"],
+                    provider_effect_window_ended_at=prior["ended_at"],
+                )
+                prior_audits.append(
+                    prior_assurance["provider_effects"]["observation_window"]
+                )
+            if prior_audits:
+                assurance["provider_effects"]["prior_observation_windows"] = (
+                    prior_audits
+                )
+            assurance["provider_effect_windows"] = window_evidence
+            if repair is not None:
+                from bootstrap.submission_repair import (
+                    audit_submission_repair,
+                    repair_binding,
+                    validate_submission_repair_audit,
+                )
 
-            # This is evidence for an exact repair, never a healthy-source
-            # attestation. Keep the failed audit and all interval counts intact.
-            repair_audit = await audit_submission_repair(
-                event_log,
-                repair,
-                repository_root=repository_root,
-                through_event_id=watermark,
-            )
-            validate_submission_repair_audit(repair, assurance)
-            assurance["submission_repair"] = repair_binding(repair)
-            assurance["submission_repair_audit"] = repair_audit
-            historical["submission_repair"] = repair_binding(repair)
-    finally:
-        await event_log.close()
+                # This is evidence for an exact repair, never a healthy-source
+                # attestation. Keep the failed audit and all interval counts intact.
+                repair_audit = await audit_submission_repair(
+                    event_log,
+                    repair,
+                    repository_root=repository_root,
+                    through_event_id=watermark,
+                )
+                validate_submission_repair_audit(repair, assurance)
+                assurance["submission_repair"] = repair_binding(repair)
+                assurance["submission_repair_audit"] = repair_audit
+                historical["submission_repair"] = repair_binding(repair)
+        finally:
+            await event_log.close()
     transition_sha256 = (
         hashlib.sha256(
             json.dumps(
@@ -454,6 +490,15 @@ async def export_htr10_audits(
     )
     historical["provider_binding_transition_sha256"] = transition_sha256
     assurance["provider_binding_transition_sha256"] = transition_sha256
+    if native_plan is not None:
+        assert native_recovery_plan is not None
+        if (
+            load_native_recovery(
+                paths, repository_root, native_recovery_plan, test_mode=test_mode
+            )
+            != native_plan
+        ):
+            raise HTR10ExportError("contained state changed during retained audit")
     _write_new_private(historical_output, historical)
     try:
         _write_new_private(source_output, assurance)
@@ -480,6 +525,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--source-output", type=Path, required=True)
     parser.add_argument("--submission-repair-manifest", type=Path)
     parser.add_argument("--effect-context-repair-plan", type=Path)
+    parser.add_argument("--native-recovery-plan", type=Path)
     parser.add_argument(
         "--approve-provider-binding-migration",
         action="store_true",
@@ -503,6 +549,7 @@ def main(argv: list[str] | None = None) -> int:
             ownership_reviewed=args.approve_provider_binding_migration,
             submission_repair_manifest=args.submission_repair_manifest,
             effect_context_repair_plan=args.effect_context_repair_plan,
+            native_recovery_plan=args.native_recovery_plan,
             test_mode=os.environ.get("ADMINME_TEST_MODE") == "1",
         )
     )

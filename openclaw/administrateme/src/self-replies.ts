@@ -1,5 +1,6 @@
+import type { PluginHookAgentContext } from "./sdk-types.js";
 import { createHash } from "node:crypto";
-import type { OpenClawPluginApi, PluginHookAgentContext } from "openclaw/plugin-sdk/plugin-entry";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { Provenance } from "./contract.js";
 import type { PluginRuntime } from "./runtime.js";
 import { bindConversationTool, takeConversationInput, peekConversationInput } from "./conversation-input.js";

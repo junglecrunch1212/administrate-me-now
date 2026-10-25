@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from adminme.openclaw_roster import agent_rows, replace_agent_rows
+
 import asyncio
 import copy
 import hashlib
@@ -1024,7 +1026,19 @@ def _maintenance_controller(
             f"imessage|{guard['account_id']}|{phone}": MEMBER_A
         }
         gateway = {
-            "agents": {"list": [{"id": member_agent_id(MEMBER_A)}]},
+            "agents": {
+                "ownership": "explicit",
+                "entries": {
+                    member_agent_id(MEMBER_A): {
+                        "workspace": str(
+                            controller.paths.instance_dir
+                            / "openclaw/member-workspaces"
+                            / member_agent_id(MEMBER_A)
+                        )
+                    }
+                },
+                "defaults": {"systemAgent": {"agentId": member_agent_id(MEMBER_A)}},
+            },
             "models": {"retained": "fixture"},
         }
         _write(
@@ -1529,7 +1543,7 @@ def test_workspace_preflight_refuses_custom_generated_instructions_before_mainte
     assert controller.services.runtime_diagnostics()["observation_active"] is False
 
 
-def test_successor_reconciliation_recovers_lost_default_before_ordinary_activation(
+def test_successor_reconciliation_preserves_native_owner_before_ordinary_activation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from adminme.openclaw_topology import member_agent_id
@@ -1546,27 +1560,27 @@ def test_successor_reconciliation_recovers_lost_default_before_ordinary_activati
     controller.pause_maintenance(plan)
     gateway_path = paths.instance_dir / "openclaw/runtime/openclaw.json"
     gateway = json.loads(gateway_path.read_bytes())
-    member = next(
-        row
-        for row in gateway["agents"]["list"]
-        if row["id"] == member_agent_id(MEMBER_A)
-    )
-    assert member.pop("default") is True
+    owner = copy.deepcopy(gateway["agents"]["defaults"]["systemAgent"])
+    assert owner == {"agentId": member_agent_id(MEMBER_A)}
+    assert all("default" not in row for row in agent_rows(gateway))
+
+    # Target writers preserve the native Doctor's explicit owner. They must not
+    # reinterpret an obsolete default marker or silently choose a replacement.
+    invalid = copy.deepcopy(gateway)
+    invalid["agents"]["entries"][member_agent_id(MEMBER_A)]["default"] = True
+    _write(gateway_path, invalid)
+    with pytest.raises(RuntimeError, match="requires a migrated native roster"):
+        reconcile_member_topology(paths)
+    assert json.loads(gateway_path.read_bytes()) == invalid
     _write(gateway_path, gateway)
 
-    # Model the supported successor's reconciliation from the failed observed
-    # state, then ordinary activation. The old maintenance plan is not reused.
+    # Reconcile the valid post-Doctor successor, then use ordinary activation.
+    # The old maintenance plan is not reused for this separate activation.
     reconcile_member_topology(paths)
     reconcile_service_topology(paths, ROOT)
     current = json.loads(gateway_path.read_bytes())
-    assert (
-        next(
-            row
-            for row in current["agents"]["list"]
-            if row["id"] == member_agent_id(MEMBER_A)
-        )["default"]
-        is True
-    )
+    assert current["agents"]["defaults"]["systemAgent"] == owner
+    assert all("default" not in row for row in agent_rows(current))
     monkeypatch.setattr(controller, "_selection", lambda: ("c" * 40, ROOT))
     restored = request.model_copy(
         update={
@@ -1672,22 +1686,18 @@ def test_real_plugin_replacement_preserves_maintenance_restoration(
     assert reconcile_administrateme_plugin(paths, candidate)["ok"] is True
     assert any(command[1:3] == ["plugins", "uninstall"] for command in commands)
     installed = json.loads(gateway_path.read_bytes())
-    assert (
-        next(
-            row
-            for row in installed["agents"]["list"]
-            if row["id"] == member_agent_id(MEMBER_A)
-        )["default"]
-        is True
+    assert installed["agents"]["defaults"]["systemAgent"]["agentId"] == member_agent_id(
+        MEMBER_A
     )
+    assert all("default" not in row for row in agent_rows(installed))
+    rows = agent_rows(installed)
     service = next(
-        row
-        for row in installed["agents"]["list"]
-        if row["id"] == service_agent_id(COS_SERVICE_PRINCIPAL_ID)
+        row for row in rows if row["id"] == service_agent_id(COS_SERVICE_PRINCIPAL_ID)
     )
     assert service["tools"] == {"allow": list(SERVICE_PRIVATE_TOOLS)}
     monkeypatch.setattr(controller, "_selection", lambda: ("b" * 40, candidate))
     if mutation is not None:
+        unmodified = copy.deepcopy(installed)
         if mutation == "service_allowlist":
             service["tools"]["allow"].append("administrateme_service_work")
         elif mutation == "service_workspace":
@@ -1695,15 +1705,15 @@ def test_real_plugin_replacement_preserves_maintenance_restoration(
         elif mutation == "service_agent":
             service["id"] = "am-service-unreviewed"
         else:
-            member = next(
-                row
-                for row in installed["agents"]["list"]
-                if row["id"] == member_agent_id(MEMBER_A)
-            )
+            member = next(row for row in rows if row["id"] == member_agent_id(MEMBER_A))
             member.setdefault("tools", {}).setdefault("allow", []).append(
                 "unreviewed-provider-tool"
             )
+        # agent_rows is a lossless read view, not live references into entries.
+        # Persist the intended corruption before testing the real admission gate.
+        replace_agent_rows(installed, rows)
         _write(gateway_path, installed)
+        assert json.loads(gateway_path.read_bytes()) == installed != unmodified
         stops = controller.services.stops
         with pytest.raises(
             CoSActivationError, match="routing or configuration drifted"

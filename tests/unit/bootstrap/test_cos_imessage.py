@@ -9,6 +9,7 @@ from typing import Any
 
 import pytest
 
+from adminme.openclaw_roster import agent_rows, replace_agent_rows
 from adminme.service_identities import COS_SERVICE_PRINCIPAL_ID
 from bootstrap.cos_imessage import (
     ARCHIVE_SHA256,
@@ -92,17 +93,26 @@ def _previous() -> dict[str, Any]:
     }
 
 
+@pytest.mark.parametrize("canonical", [False, True])
 def test_preparation_is_pure_exact_guarded_and_preserves_unrelated_config(
     tmp_path: Path,
+    canonical: bool,
 ) -> None:
     previous = _previous()
+    if canonical:
+        rows = previous["agents"].pop("list")
+        previous["agents"]["ownership"] = "explicit"
+        previous["agents"]["entries"] = {
+            row["id"]: {k: v for k, v in row.items() if k != "id"} for row in rows
+        }
     original = copy.deepcopy(previous)
     guard = _guard(tmp_path)
     result = prepare_channel(previous, guard, allowed_senders=[*SENDERS, SENDERS[0]])
     assert previous == original
     assert result["unrelated"] == previous["unrelated"]
-    assert result["agents"]["list"][1] == previous["agents"]["list"][1]
-    assert result["agents"]["list"][0]["tools"] == {"allow": MEMBER_TOOLS}
+    assert ("entries" in result["agents"]) is canonical
+    assert agent_rows(result)[1] == agent_rows(previous)[1]
+    assert agent_rows(result)[0]["tools"] == {"allow": MEMBER_TOOLS}
     imessage = result["channels"]["imessage"]
     assert set(imessage) == {"enabled", "defaultAccount", "accounts"}
     assert set(imessage["accounts"]) == {ACCOUNT}
@@ -208,11 +218,19 @@ def test_validator_rejects_unguarded_or_broadened_account(
         validate_prepared_channel(prepared, guard, adapter_config=_adapters())
 
 
+@pytest.mark.parametrize("canonical", [False, True])
 def test_validator_checks_each_action_identity_route_and_member_tool(
     tmp_path: Path,
+    canonical: bool,
 ) -> None:
     guard = _guard(tmp_path)
     prepared = prepare_channel(_previous(), guard, allowed_senders=SENDERS)
+    if canonical:
+        rows = prepared["agents"].pop("list")
+        prepared["agents"]["ownership"] = "explicit"
+        prepared["agents"]["entries"] = {
+            row["id"]: {k: v for k, v in row.items() if k != "id"} for row in rows
+        }
     for action in DISABLED_ACTIONS:
         changed = copy.deepcopy(prepared)
         changed["channels"]["imessage"]["accounts"][ACCOUNT]["actions"][action] = True
@@ -231,7 +249,9 @@ def test_validator_checks_each_action_identity_route_and_member_tool(
     with pytest.raises(ValueError, match="member identity map"):
         validate_prepared_channel(prepared, guard, adapter_config=extra_identity)
     unguarded = copy.deepcopy(prepared)
-    unguarded["agents"]["list"][0]["tools"]["allow"].append("exec")
+    rows = agent_rows(unguarded)
+    rows[0]["tools"]["allow"].append("exec")
+    replace_agent_rows(unguarded, rows, canonical=False)
     with pytest.raises(ValueError, match="bypass"):
         validate_prepared_channel(unguarded, guard, adapter_config=_adapters())
     route = copy.deepcopy(prepared)

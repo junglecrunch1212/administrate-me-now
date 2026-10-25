@@ -93,6 +93,7 @@ try {
     SessionKey: "agent:adminme-0123456789abcdef:imessage:fixture:direct:+12025550101", // fixture:tenant_data:ok
   });
   const incoming = hookSdk.toPluginMessageReceivedEvent(canonical);
+  assert.equal(Object.hasOwn(hookSdk.toPluginMessageContext(canonical), "agentId"), false);
   assert.equal(incoming.runId, undefined);
   assert.equal(incoming.messageId, "native-fixture");
   const crypto = await import("node:crypto");
@@ -242,10 +243,11 @@ print(json.dumps([enabled, entry["hooks"]]))
   const { canonical: approvalCanonical } = await import(pathToFileURL(path.join(appleDirectory, "approval.js")).href);
   const { createHookRunner } = await jiti.import(path.join(sourceRoot, "src/plugins/hooks.ts"));
   const appleMessage = "Add a reminder to my Apple Reminders to call my mom at 9:30 AM today";
-  const appleInbound = hookSdk.toPluginMessageReceivedEvent(hookSdk.deriveInboundMessageHookContext({
+  const appleCanonical = hookSdk.deriveInboundMessageHookContext({
     From: incoming.senderId, SenderId: incoming.senderId, Body: appleMessage,
     Provider: "imessage", AccountId: "fixture", MessageSid: "native-apple-fixture", SessionKey: incoming.sessionKey,
-  }));
+  });
+  const appleInbound = hookSdk.toPluginMessageReceivedEvent(appleCanonical);
   const appleCommand = { title: "Call my mom", due_at: "2026-10-24T09:30:00-04:00", list_id: "fixture-list", request_id: "native-apple-request" };
   const appleCalls = [];
   let appleState = "pending";
@@ -255,7 +257,7 @@ print(json.dumps([enabled, entry["hooks"]]))
     async request(endpoint, value) {
       appleCalls.push({ endpoint, value });
       assert.equal(value.provenance.actor_id, incoming.senderId);
-      assert.equal(value.provenance.agent_id, agent);
+      assert.equal(value.provenance.agent_id, endpoint.endsWith("/forward") ? undefined : agent);
       assert.equal(value.provenance.message_id, "native-apple-fixture");
       assert.equal(value.provenance.session_key, incoming.sessionKey);
       if (endpoint.endsWith("/forward")) return { intent_event_id: "native-apple-source" };
@@ -280,7 +282,7 @@ print(json.dumps([enabled, entry["hooks"]]))
   registerAppleReminderTools(appleApi, appleRuntime);
   const nativeHook = (name) => appleRegistration.state.registry.typedHooks.find((row) => row.hookName === name).handler;
   const appleContext = { runId: "native-apple-run", agentId: agent, sessionKey: incoming.sessionKey };
-  await nativeHook("message_received")(appleInbound, { agentId: agent, sessionKey: incoming.sessionKey, channelId: "imessage", accountId: "fixture" });
+  await nativeHook("message_received")(appleInbound, hookSdk.toPluginMessageContext(appleCanonical));
   const appleEnvelope = buildReplyPromptEnvelope({ ctx: {}, sessionCtx: {}, baseBody: appleMessage,
     hasUserBody: true, inboundUserContext: "", isBareSessionReset: false, startupAction: "new", systemEventBlocks: ["Synthetic host status context"] });
   await nativeHook("before_agent_reply")({ cleanedBody: appleEnvelope.queuedBody }, appleContext);
@@ -349,7 +351,7 @@ print(json.dumps([enabled, entry["hooks"]]))
         ].join("|")).digest("hex"));
         return { recorded: true };
       }
-      assert.equal(value.provenance.agent_id, policyAgent);
+      assert.equal(value.provenance.agent_id, endpoint.endsWith("/forward") ? undefined : policyAgent);
       assert.equal(value.provenance.actor_id, incoming.senderId);
       assert.equal(value.provenance.session_key, policySession);
       if (endpoint.endsWith("/forward")) return { intent_event_id: value.provenance.message_id === "native-request-input" ? "native-request-source" : "native-other-source" };
@@ -378,10 +380,10 @@ print(json.dumps([enabled, entry["hooks"]]))
   const policyHook = (name) => policyRegistration.state.registry.typedHooks.find((row) => row.hookName === name).handler;
   const runner = createHookRunner(policyRegistration.state.registry, { catchErrors: false });
   const deliverPolicyInput = async (messageId, content) => {
-    const received = hookSdk.toPluginMessageReceivedEvent(hookSdk.deriveInboundMessageHookContext({
+    const canonicalInput = hookSdk.deriveInboundMessageHookContext({
       From: incoming.senderId, SenderId: incoming.senderId, Body: content, Provider: "imessage", AccountId: "fixture", MessageSid: messageId, SessionKey: policySession,
-    }));
-    await policyHook("message_received")(received, { agentId: policyAgent, sessionKey: policySession, channelId: "imessage", accountId: "fixture" });
+    });
+    await policyHook("message_received")(hookSdk.toPluginMessageReceivedEvent(canonicalInput), hookSdk.toPluginMessageContext(canonicalInput));
     await policyHook("before_agent_reply")({ cleanedBody: content }, policyContext);
   };
   await deliverPolicyInput("native-request-input", policyText);

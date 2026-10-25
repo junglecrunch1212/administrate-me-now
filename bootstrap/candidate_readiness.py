@@ -1196,6 +1196,7 @@ def build_pending_attestation(
     skipped_member_device_checks: tuple[str, ...] = (),
     approve_provider_binding_migration: bool = False,
     submission_repair_manifest: Path | None = None,
+    native_recovery_plan: Path | None = None,
     now: datetime | None = None,
     attestation_id: str | None = None,
 ) -> tuple[dict[str, Any], DeploymentSnapshot]:
@@ -1215,6 +1216,25 @@ def build_pending_attestation(
         raise CandidateReadinessError("candidate source identity is invalid") from exc
     if candidate_commit != expected_candidate_commit:
         raise CandidateReadinessError("candidate does not match the approved commit")
+    native_binding = None
+    if native_recovery_plan is not None:
+        from bootstrap.native_recovery import (
+            binding as recovery_binding,
+            load as load_recovery,
+        )
+
+        if submission_repair_manifest is not None or approve_provider_binding_migration:
+            raise CandidateReadinessError(
+                "native recovery cannot combine deployment exceptions"
+            )
+        native_binding = recovery_binding(
+            load_recovery(
+                paths,
+                candidate_root,
+                native_recovery_plan,
+                test_mode=os.environ.get("ADMINME_TEST_MODE") == "1",
+            )
+        )
     snapshot = capture_deployment_snapshot(paths)
     transition = _binding_transition(paths, approved=approve_provider_binding_migration)
     transition_public = transition.public() if transition is not None else None
@@ -1349,6 +1369,7 @@ def build_pending_attestation(
             "preliminary_backup_artifact_sha256": artifact_sha256,
             "preliminary_rehearsal_watermark_sha256": watermark_sha256,
         },
+        **({"native_recovery": native_binding} if native_binding else {}),
         "recovery_inputs": {
             "receipt": ensure_within(rehearsal_receipt, paths.backup_dir)
             .relative_to(paths.backup_dir.resolve())
@@ -1419,6 +1440,14 @@ def validate_pending_attestation(
         "activation_boundary",
         "content_exposed",
     }
+    if "native_recovery" in value:
+        from bootstrap.native_recovery import valid_binding
+
+        required.add("native_recovery")
+        if not valid_binding(value["native_recovery"]) or value["native_recovery"][
+            "candidate_commit"
+        ] != (value.get("deployment_binding") or {}).get("candidate_commit"):
+            raise CandidateReadinessError("pending native recovery binding is invalid")
     if "recovery_inputs" in value:
         required.add("recovery_inputs")
         inputs = value["recovery_inputs"]
@@ -1632,6 +1661,7 @@ def load_pending_attestation_for_activation(
     candidate_commit: str,
     approve_provider_binding_migration: bool = False,
     submission_repair_manifest: Path | None = None,
+    native_recovery_plan: Path | None = None,
     now: datetime | None = None,
 ) -> tuple[dict[str, Any], str, DeploymentSnapshot]:
     """Load one explicit pending artifact and rebind it to current coordinates.
@@ -1681,7 +1711,30 @@ def load_pending_attestation_for_activation(
         raise CandidateReadinessError(
             "pending submission repair requires its exact explicit manifest"
         )
+    native_binding = None
+    if native_recovery_plan is not None:
+        from bootstrap.native_recovery import (
+            binding as recovery_binding,
+            load as load_recovery,
+        )
+
+        if submission_repair_manifest is not None or approve_provider_binding_migration:
+            raise CandidateReadinessError(
+                "native recovery cannot combine deployment exceptions"
+            )
+        native_binding = recovery_binding(
+            load_recovery(
+                paths,
+                candidate_root,
+                native_recovery_plan,
+                test_mode=os.environ.get("ADMINME_TEST_MODE") == "1",
+            )
+        )
     snapshot = capture_deployment_snapshot(paths)
+    if value.get("native_recovery") != native_binding:
+        raise CandidateReadinessError(
+            "pending native recovery requires its exact current plan"
+        )
     expected = snapshot.public()
     for field, observed in expected.items():
         if binding.get(field) != observed:
@@ -2110,6 +2163,7 @@ def record_pending_attestation(
     skipped_member_device_checks: tuple[str, ...] = (),
     approve_provider_binding_migration: bool = False,
     submission_repair_manifest: Path | None = None,
+    native_recovery_plan: Path | None = None,
     now: datetime | None = None,
     attestation_id: str | None = None,
 ) -> dict[str, Any]:
@@ -2128,6 +2182,7 @@ def record_pending_attestation(
             skipped_member_device_checks=skipped_member_device_checks,
             approve_provider_binding_migration=approve_provider_binding_migration,
             submission_repair_manifest=submission_repair_manifest,
+            native_recovery_plan=native_recovery_plan,
             now=fixed_now,
             attestation_id=fixed_attestation_id,
         )
@@ -2147,6 +2202,7 @@ def record_pending_attestation(
                 skipped_member_device_checks=skipped_member_device_checks,
                 approve_provider_binding_migration=(approve_provider_binding_migration),
                 submission_repair_manifest=submission_repair_manifest,
+                native_recovery_plan=native_recovery_plan,
                 now=fixed_now,
                 attestation_id=fixed_attestation_id,
             )
@@ -2179,6 +2235,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--preliminary-backup-artifact", type=Path, required=True)
     parser.add_argument("--htr-10-review", type=Path, required=True)
     parser.add_argument("--submission-repair-manifest", type=Path)
+    parser.add_argument("--native-recovery-plan", type=Path)
     parser.add_argument(
         "--skip-member-device-check",
         action="append",
@@ -2237,6 +2294,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.approve_provider_binding_migration
             ),
             submission_repair_manifest=args.submission_repair_manifest,
+            native_recovery_plan=args.native_recovery_plan,
         )
     except Exception as exc:
         print(

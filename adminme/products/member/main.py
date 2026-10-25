@@ -4994,9 +4994,9 @@ async def _execute_lifecycle(
                     thread_id=None,
                     correlation_id=session.correlation_id or body.request_id,
                     call_kind="tool",
-                    openclaw_version=cast(Literal["2026.7.2"], OPENCLAW_VERSION),
+                    openclaw_version=cast(Literal["2026.10.7"], OPENCLAW_VERSION),
                     openclaw_commit=cast(
-                        Literal["ce67ffb70e83e5ebb56ea02e814e577153f84f61"],
+                        Literal["157d8c2bc3ea2fa183afdc11088e69690bf8e64e"],
                         OPENCLAW_COMMIT,
                     ),
                 ),
