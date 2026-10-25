@@ -1,0 +1,727 @@
+{
+  "$id": "urn:administrateme:household-books.accepted-publication.v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "accepted_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "accepted_journal_revision_ids": {
+      "items": {
+        "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,95}$",
+        "type": "string"
+      },
+      "maxItems": 20000,
+      "type": "array"
+    },
+    "audience_policy_id": {
+      "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,95}$",
+      "type": "string"
+    },
+    "audience_policy_version": {
+      "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,95}$",
+      "type": "string"
+    },
+    "book_id": {
+      "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,95}$",
+      "type": "string"
+    },
+    "cash_projection": {
+      "additionalProperties": false,
+      "description": "Optional unchanged dated Books engine export. No monthly average substitution. Current, expected and chosen scenarios must each include all five horizons.",
+      "properties": {
+        "as_of_date": {
+          "format": "date",
+          "type": "string"
+        },
+        "chosen_floor_minor": {
+          "maximum": 9000000000000000,
+          "minimum": -9000000000000000,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "currency": {
+          "pattern": "^[A-Z]{3}$",
+          "type": "string"
+        },
+        "mandatory_flow_coverage": {
+          "enum": [
+            "complete",
+            "partial",
+            "unknown"
+          ]
+        },
+        "model_id": {
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,95}$",
+          "type": "string"
+        },
+        "model_version": {
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,95}$",
+          "type": "string"
+        },
+        "opening_liquid_minor": {
+          "maximum": 9000000000000000,
+          "minimum": -9000000000000000,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "opening_reconciled": {
+          "type": "boolean"
+        },
+        "scenarios": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "cash_events": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "amount_minor": {
+                      "maximum": 9000000000000000,
+                      "minimum": 0,
+                      "type": [
+                        "integer",
+                        "null"
+                      ]
+                    },
+                    "cash_event_id": {
+                      "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,95}$",
+                      "type": "string"
+                    },
+                    "certainty": {
+                      "enum": [
+                        "confirmed",
+                        "expected",
+                        "chosen",
+                        "unknown"
+                      ]
+                    },
+                    "direction": {
+                      "enum": [
+                        "inflow",
+                        "outflow"
+                      ]
+                    },
+                    "earliest_date": {
+                      "format": "date",
+                      "type": "string"
+                    },
+                    "evidence_ids": {
+                      "items": {
+                        "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,95}$",
+                        "type": "string"
+                      },
+                      "maxItems": 20,
+                      "type": "array"
+                    },
+                    "kind": {
+                      "enum": [
+                        "income",
+                        "purchase",
+                        "bill",
+                        "transfer",
+                        "debt_principal",
+                        "interest",
+                        "lease",
+                        "refund",
+                        "expected_reimbursement",
+                        "received_reimbursement",
+                        "optional_reserve"
+                      ]
+                    },
+                    "latest_date": {
+                      "format": "date",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "cash_event_id",
+                    "earliest_date",
+                    "latest_date",
+                    "direction",
+                    "amount_minor",
+                    "kind",
+                    "certainty",
+                    "evidence_ids"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 1000,
+                "type": "array"
+              },
+              "horizons": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "closing_minor": {
+                      "maximum": 9000000000000000,
+                      "minimum": -9000000000000000,
+                      "type": [
+                        "integer",
+                        "null"
+                      ]
+                    },
+                    "days": {
+                      "enum": [
+                        7,
+                        30,
+                        90,
+                        180,
+                        365
+                      ]
+                    },
+                    "end_date": {
+                      "format": "date",
+                      "type": "string"
+                    },
+                    "evidence_ids": {
+                      "items": {
+                        "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,95}$",
+                        "type": "string"
+                      },
+                      "maxItems": 20,
+                      "type": "array"
+                    },
+                    "first_shortage_date": {
+                      "anyOf": [
+                        {
+                          "format": "date",
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "first_surplus_date": {
+                      "anyOf": [
+                        {
+                          "format": "date",
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "minimum_minor": {
+                      "maximum": 9000000000000000,
+                      "minimum": -9000000000000000,
+                      "type": [
+                        "integer",
+                        "null"
+                      ]
+                    },
+                    "release_state": {
+                      "enum": [
+                        "qualified",
+                        "unavailable"
+                      ]
+                    },
+                    "required_evidence": {
+                      "items": {
+                        "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,95}$",
+                        "type": "string"
+                      },
+                      "maxItems": 20,
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "days",
+                    "end_date",
+                    "closing_minor",
+                    "minimum_minor",
+                    "first_shortage_date",
+                    "first_surplus_date",
+                    "release_state",
+                    "required_evidence",
+                    "evidence_ids"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 5,
+                "type": "array"
+              },
+              "scenario_id": {
+                "enum": [
+                  "current",
+                  "expected",
+                  "chosen"
+                ]
+              }
+            },
+            "required": [
+              "scenario_id",
+              "horizons",
+              "cash_events"
+            ],
+            "type": "object"
+          },
+          "maxItems": 3,
+          "type": "array"
+        },
+        "timezone": {
+          "maxLength": 64,
+          "type": "string"
+        }
+      },
+      "required": [
+        "as_of_date",
+        "currency",
+        "timezone",
+        "model_id",
+        "model_version",
+        "opening_liquid_minor",
+        "opening_reconciled",
+        "mandatory_flow_coverage",
+        "chosen_floor_minor",
+        "scenarios"
+      ],
+      "type": "object"
+    },
+    "content_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "type": "string"
+    },
+    "contract": {
+      "const": "household-books.accepted-publication.v1"
+    },
+    "entity_id": {
+      "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,95}$",
+      "type": "string"
+    },
+    "entity_kind": {
+      "const": "household"
+    },
+    "excluded_pending_revision_ids": {
+      "items": {
+        "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,95}$",
+        "type": "string"
+      },
+      "maxItems": 20000,
+      "type": "array"
+    },
+    "owner_id": {
+      "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,95}$",
+      "type": "string"
+    },
+    "planning_input_version": {
+      "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,95}$",
+      "type": "string"
+    },
+    "planning_model_id": {
+      "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,95}$",
+      "type": "string"
+    },
+    "planning_model_version": {
+      "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,95}$",
+      "type": "string"
+    },
+    "prior_publication_id": {
+      "anyOf": [
+        {
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,95}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "publication_id": {
+      "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,95}$",
+      "type": "string"
+    },
+    "published_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "quality_issues": {
+      "items": {
+        "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,95}$",
+        "type": "string"
+      },
+      "maxItems": 100,
+      "type": "array"
+    },
+    "recovery_state": {
+      "enum": [
+        "clear",
+        "paused"
+      ]
+    },
+    "reports": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "basis": {
+            "enum": [
+              "accounting_actual",
+              "cash_movement",
+              "observed_value",
+              "cost_reference",
+              "chosen_budget",
+              "forecast",
+              "intended_obligation"
+            ]
+          },
+          "metrics": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "allocation": {
+                  "enum": [
+                    "sole",
+                    "reviewed_share"
+                  ]
+                },
+                "basis": {
+                  "enum": [
+                    "accounting_actual",
+                    "cash_movement",
+                    "observed_value",
+                    "cost_reference",
+                    "chosen_budget",
+                    "forecast",
+                    "intended_obligation"
+                  ]
+                },
+                "currency": {
+                  "pattern": "^[A-Z]{3}$",
+                  "type": "string"
+                },
+                "evidence_ids": {
+                  "items": {
+                    "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,95}$",
+                    "type": "string"
+                  },
+                  "maxItems": 20,
+                  "type": "array"
+                },
+                "inclusion_policy_id": {
+                  "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,95}$",
+                  "type": "string"
+                },
+                "metric_id": {
+                  "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,95}$",
+                  "type": "string"
+                },
+                "owner_id": {
+                  "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,95}$",
+                  "type": "string"
+                },
+                "period_end": {
+                  "format": "date",
+                  "type": "string"
+                },
+                "period_start": {
+                  "format": "date",
+                  "type": "string"
+                },
+                "quality": {
+                  "enum": [
+                    "accepted",
+                    "qualified",
+                    "unknown"
+                  ]
+                },
+                "revision_ids": {
+                  "items": {
+                    "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,95}$",
+                    "type": "string"
+                  },
+                  "maxItems": 20000,
+                  "type": "array"
+                },
+                "scenario_id": {
+                  "anyOf": [
+                    {
+                      "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,95}$",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "unit": {
+                  "enum": [
+                    "minor_units"
+                  ]
+                },
+                "value_minor": {
+                  "maximum": 9000000000000000,
+                  "minimum": -9000000000000000,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "metric_id",
+                "value_minor",
+                "currency",
+                "unit",
+                "basis",
+                "period_start",
+                "period_end",
+                "owner_id",
+                "allocation",
+                "inclusion_policy_id",
+                "quality",
+                "evidence_ids",
+                "revision_ids",
+                "scenario_id"
+              ],
+              "type": "object"
+            },
+            "maxItems": 1000,
+            "type": "array"
+          },
+          "model_id": {
+            "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,95}$",
+            "type": "string"
+          },
+          "model_version": {
+            "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,95}$",
+            "type": "string"
+          },
+          "period_end": {
+            "format": "date",
+            "type": "string"
+          },
+          "period_start": {
+            "format": "date",
+            "type": "string"
+          },
+          "quality": {
+            "additionalProperties": false,
+            "properties": {
+              "classification": {
+                "enum": [
+                  "complete",
+                  "partial",
+                  "unknown",
+                  "invalid"
+                ]
+              },
+              "coverage": {
+                "enum": [
+                  "complete",
+                  "partial",
+                  "unknown",
+                  "invalid"
+                ]
+              },
+              "freshness": {
+                "enum": [
+                  "complete",
+                  "partial",
+                  "unknown",
+                  "invalid"
+                ]
+              },
+              "model_validity": {
+                "enum": [
+                  "complete",
+                  "partial",
+                  "unknown",
+                  "invalid"
+                ]
+              },
+              "reconciliation": {
+                "enum": [
+                  "complete",
+                  "partial",
+                  "unknown",
+                  "invalid"
+                ]
+              }
+            },
+            "required": [
+              "coverage",
+              "reconciliation",
+              "freshness",
+              "classification",
+              "model_validity"
+            ],
+            "type": "object"
+          },
+          "release_state": {
+            "enum": [
+              "ready",
+              "qualified",
+              "unavailable"
+            ]
+          },
+          "report_id": {
+            "enum": [
+              "actuals",
+              "cash",
+              "budget",
+              "observed_net",
+              "balance_sheet",
+              "scenarios",
+              "quality"
+            ]
+          },
+          "required_evidence": {
+            "items": {
+              "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,95}$",
+              "type": "string"
+            },
+            "maxItems": 20,
+            "type": "array"
+          }
+        },
+        "required": [
+          "report_id",
+          "release_state",
+          "basis",
+          "period_start",
+          "period_end",
+          "model_id",
+          "model_version",
+          "quality",
+          "required_evidence",
+          "metrics"
+        ],
+        "type": "object"
+      },
+      "maxItems": 7,
+      "type": "array"
+    },
+    "schema_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "type": "string"
+    },
+    "source_coverage": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "accepted_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "account_id": {
+            "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,95}$",
+            "type": "string"
+          },
+          "coverage": {
+            "enum": [
+              "complete",
+              "partial",
+              "unknown"
+            ]
+          },
+          "observed_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "opening_state": {
+            "enum": [
+              "reconciled",
+              "missing",
+              "observed"
+            ]
+          },
+          "source_id": {
+            "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,95}$",
+            "type": "string"
+          },
+          "valuation_date": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "source_id",
+          "account_id",
+          "observed_at",
+          "accepted_at",
+          "coverage",
+          "opening_state",
+          "valuation_date"
+        ],
+        "type": "object"
+      },
+      "maxItems": 1000,
+      "type": "array"
+    },
+    "source_references": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "access": {
+            "const": "owner_only"
+          },
+          "evidence_id": {
+            "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,95}$",
+            "type": "string"
+          },
+          "source_kind": {
+            "enum": [
+              "accepted_books",
+              "statement",
+              "policy",
+              "reviewed_input"
+            ]
+          }
+        },
+        "required": [
+          "evidence_id",
+          "source_kind",
+          "access"
+        ],
+        "type": "object"
+      },
+      "maxItems": 1000,
+      "type": "array"
+    },
+    "tenant_id": {
+      "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,95}$",
+      "type": "string"
+    }
+  },
+  "required": [
+    "contract",
+    "schema_sha256",
+    "content_sha256",
+    "tenant_id",
+    "book_id",
+    "entity_id",
+    "entity_kind",
+    "owner_id",
+    "audience_policy_id",
+    "audience_policy_version",
+    "publication_id",
+    "prior_publication_id",
+    "published_at",
+    "accepted_at",
+    "accepted_journal_revision_ids",
+    "excluded_pending_revision_ids",
+    "recovery_state",
+    "source_coverage",
+    "planning_input_version",
+    "planning_model_id",
+    "planning_model_version",
+    "source_references",
+    "quality_issues",
+    "reports"
+  ],
+  "type": "object"
+}
