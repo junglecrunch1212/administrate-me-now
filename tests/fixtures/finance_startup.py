@@ -113,6 +113,7 @@ def launch(arguments):
         "measured_lifetime",
         "phased_lifetime",
         "focused_lifetime",
+        "allocation_lifetime",
     }:
         raise ValueError("synthetic_launcher_arguments")
     root = Path(arguments[1])
@@ -126,7 +127,7 @@ def launch(arguments):
     tenant = "tenant-" + store_name(nonce)
     write_json(sys.stdout.buffer, {"fixture_coordinates": 1, "tenant": tenant})
 
-    if arguments[0] in {"phased_lifetime", "focused_lifetime"}:
+    if arguments[0] in {"phased_lifetime", "focused_lifetime", "allocation_lifetime"}:
         if startup_instruction(sys.stdin.buffer) == "stop":
             write_json(sys.stdout.buffer, {"stopped": True, "tenant": tenant})
             return
@@ -142,6 +143,7 @@ def launch(arguments):
             namespace_nonce=nonce,
             announced_tenant=tenant,
             focused=arguments[0] == "focused_lifetime",
+            allocation=arguments[0] == "allocation_lifetime",
         )
     )
 

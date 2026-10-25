@@ -141,6 +141,7 @@ def main(mode, directory):
     if sys.platform != "linux" or mode not in {
         "full",
         "focused-import",
+        "allocation-profile",
         "setup",
         "setup-stop-before",
         "setup-stop-packets",

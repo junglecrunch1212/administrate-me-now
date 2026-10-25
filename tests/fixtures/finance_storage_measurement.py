@@ -64,10 +64,18 @@ def instrument(storage, patches, trace):
         @functools.wraps(original)
         async def wrapped(*args, **kwargs):
             trace.mark("storage.start", operation=name)
+            profile = storage.runtime_allocation_profile
+            measured = profile is not None and name != "apply"
+            if measured:
+                profile.mark(str(REQUEST.get()) + ":" + name + ":before")
             try:
                 return await original(*args, **kwargs)
             finally:
                 trace.mark("storage.end", operation=name)
+                if measured:
+                    profile.mark(
+                        str(REQUEST.get()) + ":" + name + ":after", top=name == "close"
+                    )
 
         patches.setattr(storage, name, wrapped)
 
@@ -140,14 +148,25 @@ async def snapshot(runtime, storage):
         }
         for name, state in runtime.bus._subscribers.items()
     }
+    if storage.allocation_profile_enabled:
+        result["allocation_profiles"] = storage.allocation_profiles
+        result["runtime_allocation_profile"] = (
+            storage.runtime_allocation_profile.snapshot()
+        )
     result["measured_at"] = time.monotonic()
     return result
 
 
 async def serve(
-    root: Path, *, namespace_nonce: str, announced_tenant: str, focused=False
+    root: Path,
+    *,
+    namespace_nonce: str,
+    announced_tenant: str,
+    focused=False,
+    allocation=False,
 ):
     storage = SyntheticStorage(root, namespace_nonce=namespace_nonce)
+    storage.allocation_profile_enabled = allocation
     patches = pytest.MonkeyPatch()
     trace = Trace(root)
     trace.mark("runtime.start")
@@ -221,6 +240,10 @@ async def serve(
             (runtime.projections._parties_executor, "authority"),
         ):
             instrument_executor(executor, name, patches, trace)
+        if allocation:
+            from tests.fixtures.finance_allocation_diagnostics import AllocationProfile
+
+            storage.runtime_allocation_profile = AllocationProfile("main_runtime")
         trace.mark("runtime.ready")
         write_json(
             sys.stdout.buffer,

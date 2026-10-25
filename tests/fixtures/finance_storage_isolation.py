@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, replace
+from contextlib import nullcontext
 import hashlib
 import os
 from pathlib import Path
@@ -101,6 +102,9 @@ class SyntheticStorage:
         self.applied = []
         self.boundaries = []
         self.preparation_diagnostics = []
+        self.allocation_profile_enabled = False
+        self.allocation_profiles = []
+        self.runtime_allocation_profile = None
         self.quarantined = False
 
     def settings(self):
@@ -130,7 +134,15 @@ class SyntheticStorage:
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             cwd="/",
-            env={"LANG": "C.UTF-8", "LC_ALL": "C.UTF-8"},
+            env={
+                "LANG": "C.UTF-8",
+                "LC_ALL": "C.UTF-8",
+                **(
+                    {"ADMINME_SYNTHETIC_ALLOCATION_PROFILE": "1"}
+                    if self.allocation_profile_enabled
+                    else {}
+                ),
+            },
             close_fds=True,
         )
         process = self.process
@@ -190,7 +202,9 @@ class SyntheticStorage:
             if process.poll() is None and graceful:
                 try:
                     self._send({"op": "close"})
-                    self._receive()
+                    terminal = self._receive()
+                    if self.allocation_profile_enabled:
+                        self.allocation_profiles.append(terminal["allocation_profile"])
                 except (ValueError, OSError, PublicationError):
                     pass
             try:
@@ -545,6 +559,12 @@ async def executor():
     money.execute("PRAGMA cache_size=-512").close()
     money.execute("PRAGMA foreign_keys=ON").close()
     del key
+    profile = None
+    if os.environ.get("ADMINME_SYNTHETIC_ALLOCATION_PROFILE") == "1":
+        from tests.fixtures.finance_allocation_diagnostics import AllocationProfile
+
+        profile = AllocationProfile("isolated_storage_executor")
+        profile.instrument_storage()
     birth, seq = hello["birth"], 0
     write_control(
         outgoing, {"protocol": PROTOCOL, "artifact": artifact_digest(), "birth": birth}
@@ -594,7 +614,13 @@ async def executor():
             op = command.get("op")
             try:
                 if op == "close":
-                    reply("result", result=True)
+                    if profile:
+                        profile.mark("before_close", top=True)
+                        reply(
+                            "result", result=True, allocation_profile=profile.snapshot()
+                        )
+                    else:
+                        reply("result", result=True)
                     return
                 if op == "prepare":
                     if stored:
@@ -671,6 +697,12 @@ async def executor():
                         worker_child.prepare(command)
                     if metadata is None or not stored or info is not None:
                         raise ValueError("synthetic_preparation_incomplete")
+                    if profile:
+                        profile.mark(
+                            "encoded_batch_materialized",
+                            roots=(("validated_event_batch", stored),),
+                            top=True,
+                        )
 
                     def prior_ids():
                         return {
@@ -745,6 +777,8 @@ async def executor():
                     if command.get("fault") == "event_after_commit":
                         os._exit(72)
                     stored.clear()
+                    if profile:
+                        profile.mark("committed_batch_cleared", top=True)
                     reply("result", result=ids)
                 elif op == "recover":
                     refs = [EventReference(**value) for value in command["references"]]
@@ -795,12 +829,32 @@ async def executor():
                             row[k] != v for k, v in coordinates.items()
                         ):
                             raise ValueError("synthetic_apply_scope_denied")
-                        return _row_to_event(row)
+                        with (
+                            profile.stage("event_row_decode")
+                            if profile
+                            else nullcontext()
+                        ):
+                            return _row_to_event(row)
 
                     envelope = await log._run_on_connection_thread(read)
+                    large = coordinates["type"] in {
+                        "finance.publication_accepted",
+                        "finance.projection_verified",
+                    }
+                    if profile and large:
+                        profile.mark(
+                            "decoded_" + coordinates["type"],
+                            roots=(("owned_envelope", envelope),),
+                            top=True,
+                        )
                     money.execute("BEGIN IMMEDIATE").close()
                     try:
-                        handlers.apply_event(envelope, money)
+                        with (
+                            profile.stage("money_apply:" + coordinates["type"])
+                            if profile
+                            else nullcontext()
+                        ):
+                            handlers.apply_event(envelope, money)
                         if command.get("fault") == "money_before_commit":
                             os._exit(73)
                         money.execute("COMMIT").close()
@@ -810,6 +864,10 @@ async def executor():
                     if command.get("fault") == "money_after_commit":
                         os._exit(74)
                     del envelope
+                    if profile and large:
+                        profile.mark(
+                            "applied_released_" + coordinates["type"], top=True
+                        )
                     reply("result", result=coordinates["event_id"])
                 else:
                     raise ValueError("synthetic_operation_denied")
