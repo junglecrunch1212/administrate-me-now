@@ -830,6 +830,170 @@ class EventLog:
         )
         return list(self._conn.execute(sql, params))
 
+    async def read_finance_metadata_control(
+        self, tenant_id: str, owner_id: str
+    ) -> dict[str, Any] | None:
+        """One bounded latest operational control on the already-open worker."""
+        if not tenant_id or not owner_id:
+            raise ValueError("exact tenant and owner are required")
+        return await self._run_locked(
+            self._read_finance_metadata_control, tenant_id, owner_id
+        )
+
+    def _read_finance_metadata_control(
+        self, tenant_id: str, owner_id: str
+    ) -> dict[str, Any] | None:
+        deadline = time.monotonic() + 0.1
+        steps = 0
+
+        def bounded() -> int:
+            nonlocal steps
+            steps += 1000
+            return int(steps > 100_000 or time.monotonic() > deadline)
+
+        self._conn.set_progress_handler(bounded, 1000)
+        try:
+            row = self._conn.execute(
+                "SELECT event_id,schema_version,actor_identity,visibility_scope,"
+                "CASE WHEN length(CAST(payload AS BLOB))<=4096 THEN payload END AS payload "
+                "FROM events WHERE tenant_id=? AND owner_scope=? "
+                "AND type='settings.finance_metadata_changed' ORDER BY event_id DESC LIMIT 1",
+                (tenant_id, f"private:{owner_id}"),
+            ).fetchone()
+            if row is None:
+                return None
+            value = dict(row)
+            value["payload"] = json.loads(value["payload"])
+            return value
+        except (sqlcipher3.DatabaseError, TypeError, ValueError):
+            raise RuntimeError("finance_metadata_control_unavailable") from None
+        finally:
+            self._conn.set_progress_handler(None, 0)
+
+    async def read_finance_binding_metadata(
+        self, tenant_id: str, owner_id: str
+    ) -> dict[str, Any]:
+        """Fixed owner-only scalar projection on the already-open log connection.
+
+        No payload leaves the SQL worker. One transaction fixes the watermark;
+        row/byte/VM/time bounds fail closed instead of claiming empty history.
+        This storage primitive grants no authority; callers authenticate first.
+        """
+        if not tenant_id or not owner_id:
+            raise ValueError("exact tenant and owner are required")
+        return await self._run_locked(
+            self._read_finance_binding_metadata, tenant_id, owner_id
+        )
+
+    def _read_finance_binding_metadata(
+        self, tenant_id: str, owner_id: str
+    ) -> dict[str, Any]:
+        scope = f"private:{owner_id}"
+        types = ("finance.publication_accepted", "finance.projection_verified")
+        where = "tenant_id=? AND owner_scope=? AND type IN (?,?)"
+        args = (tenant_id, scope, *types)
+        result: dict[str, Any] = {
+            "state": "history_incomplete",
+            "through_event_id": None,
+            "rows": [],
+        }
+        deadline = time.monotonic() + 0.1
+        steps = 0
+
+        def bounded() -> int:
+            nonlocal steps
+            steps += 1000
+            return int(steps > 100_000 or time.monotonic() > deadline)
+
+        fields = (
+            "tenant_id",
+            "owner_id",
+            "book_id",
+            "entity_id",
+            "audience_policy_id",
+            "audience_policy_version",
+            "content_sha256",
+            "publication_id",
+            "prior_publication_id",
+            "projection_id",
+            "prior_projection_id",
+            "accounting_publication_id",
+            "accounting_content_sha256",
+        )
+        self._conn.set_progress_handler(bounded, 1000)
+        try:
+            self._conn.execute("BEGIN")
+            head = self._conn.execute(
+                "SELECT event_id FROM events WHERE "
+                + where
+                + " ORDER BY event_id DESC LIMIT 1",
+                args,
+            ).fetchone()
+            result["through_event_id"] = head[0] if head else None
+            headers = list(
+                self._conn.execute(
+                    "SELECT event_id,type,schema_version,visibility_scope,"
+                    "length(CAST(payload AS BLOB)) AS payload_bytes FROM events WHERE "
+                    + where
+                    + " ORDER BY event_id ASC LIMIT 257",
+                    args,
+                )
+            )
+            if (
+                len(headers) > 256
+                or sum(h["payload_bytes"] for h in headers) > 33_554_432
+            ):
+                result["reason"] = "history_scan_limit"
+                return result
+            if any(h["schema_version"] != 1 for h in headers):
+                result.update(
+                    state="schema_unavailable", reason="unsupported_event_version"
+                )
+                return result
+            if any(h["visibility_scope"] != scope for h in headers):
+                result["reason"] = "history_scope_mismatch"
+                return result
+            for header in headers:
+                root = "publication" if header["type"] == types[0] else "projection"
+                columns: list[str] = []
+                for field in fields:
+                    path = f"$.{root}.{field}"
+                    # Bound even corrupted scalar data before crossing the worker.
+                    columns.extend(
+                        (
+                            f"substr(json_extract(payload, '{path}'),1,161) AS {field}",
+                            f"json_type(payload, '{path}') AS {field}_type",
+                        )
+                    )
+                row = self._conn.execute(
+                    "SELECT " + ",".join(columns) + " FROM events WHERE event_id=? "
+                    "AND tenant_id=? AND owner_scope=?",
+                    (header["event_id"], tenant_id, scope),
+                ).fetchone()
+                result["rows"].append(
+                    {
+                        "event_id": header["event_id"],
+                        "type": header["type"],
+                        **dict(row),
+                    }
+                )
+                if time.monotonic() > deadline:
+                    result["rows"] = []
+                    result["reason"] = "history_scan_limit"
+                    return result
+            result["state"] = "complete"
+            return result
+        except sqlcipher3.DatabaseError:
+            # No database diagnostics or partially extracted coordinates escape.
+            result.update(
+                state="history_incomplete", rows=[], reason="history_read_unavailable"
+            )
+            return result
+        finally:
+            self._conn.set_progress_handler(None, 0)
+            if self._conn.in_transaction:
+                self._conn.execute("ROLLBACK")
+
     async def get(self, event_id: str) -> dict[str, Any] | None:
         row = await self._run_locked(self._get_one, event_id)
         return _row_to_event(row) if row else None
