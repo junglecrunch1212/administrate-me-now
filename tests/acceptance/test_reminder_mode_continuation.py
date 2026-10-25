@@ -208,6 +208,7 @@ def presentation(
     bad_signature: bool = False,
     receipt_owner: str | None = None,
     receipt_source=None,
+    issued_at_ms: int | None = None,
 ):
     runtime = client.app.state.runtime
     result_id = (
@@ -221,7 +222,7 @@ def presentation(
             receipt_owner,
         )
     )
-    issued = int(time.time() * 1000)
+    issued = int(time.time() * 1000) if issued_at_ms is None else issued_at_ms
     proof = {
         "source_message_event_id": source["source_message_event_id"],
         "offered_event_id": offered["choice_event_id"],
@@ -348,6 +349,143 @@ def test_presented_number_continues_original_request_once(
                 command,
                 through=result["event_id"],
             )
+        )
+
+
+def test_earlier_same_second_answer_cannot_enter_execution_history(
+    tmp_path, monkeypatch
+):
+    from adminme.products.openclaw import reminder_mode_tools
+    from adminme.products.openclaw.reminder_choice_authorization import (
+        historical_choice_matches,
+    )
+    from adminme.products.openclaw.reminder_choice_work import selection_snapshot
+
+    with environment(tmp_path, monkeypatch) as (client, native, _):
+        runtime = client.app.state.runtime
+        source, _, offered = offer(client, "portal")
+        early = instruction(client, "portal", "before-mode-presentation", "1")
+        early_event = client.portal.call(
+            runtime.event_log.get, early["source_message_event_id"]
+        )
+        offer_event = client.portal.call(
+            runtime.event_log.get, offered["choice_event_id"]
+        )
+        submitted = early_event["payload"]["submitted_at"]
+        presented_at = max(
+            datetime.fromisoformat(submitted),
+            datetime.fromisoformat(offer_event["payload"]["offered_at"]),
+        )
+        if presented_at.microsecond == 0:
+            presented_at += timedelta(microseconds=1)
+        assert presented_at.replace(microsecond=0) == datetime.fromisoformat(submitted)
+
+        class PresentationClock(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return presented_at.astimezone(tz)
+
+        with monkeypatch.context() as clock:
+            clock.setattr(reminder_mode_tools, "datetime", PresentationClock)
+            shown = presentation(
+                client,
+                source,
+                offered,
+                issued_at_ms=int(presented_at.timestamp() * 1000),
+            )
+        assert shown.status_code == 200, shown.text
+        assert early_event["event_id"] < shown.json()["presentation_event_id"]
+        rejected = client.post(
+            PATH,
+            headers=AUTH,
+            json={**early, "action": "answer", "task_id": offered["task_id"]},
+        )
+        assert rejected.status_code == 409, rejected.text
+
+        with monkeypatch.context() as clock:
+            clock.setattr(EventEnvelope, "now_utc_iso", staticmethod(lambda: submitted))
+            answer = instruction(client, "portal", "after-mode-presentation", "1")
+        confirmed = client.post(
+            PATH,
+            headers=AUTH,
+            json={**answer, "action": "answer", "task_id": offered["task_id"]},
+        )
+        assert confirmed.status_code == 200, confirmed.text
+        receipt = confirmed.json()
+        grounding_id = receipt["request_authorization"]["grounding_event_id"]
+        grounded = client.portal.call(runtime.event_log.get, grounding_id)
+        assert client.portal.call(
+            historical_choice_matches, runtime.event_log, grounded
+        )
+        # A fabricated continuation must not substitute the real earlier source,
+        # even when it carries the same text and timestamp second.
+        earlier = copy.deepcopy(grounded)
+        earlier["causation_id"] = early_event["event_id"]
+        earlier["payload"]["source_event_id"] = early_event["event_id"]
+        snapshot = client.portal.call(
+            selection_snapshot,
+            runtime.event_log,
+            grounded["tenant_id"],
+            MEMBER_A,
+            early_event,
+        )
+        earlier["payload"]["continuation"]["selection"] = snapshot.model_dump(
+            mode="json"
+        )
+        assert not client.portal.call(
+            historical_choice_matches, runtime.event_log, earlier
+        )
+        execution = policy_receipt(client, answer, receipt)
+        original_get = runtime.event_log.get
+
+        async def substituted_history(event_id):
+            return earlier if event_id == grounding_id else await original_get(event_id)
+
+        with monkeypatch.context() as history:
+            history.setattr(runtime.event_log, "get", substituted_history)
+            rejected = client.post(EXECUTE, headers=AUTH, json=execution)
+        assert rejected.status_code in {403, 409}, rejected.text
+        assert native.saves == 0
+        assert (
+            client.portal.call(_events, runtime, "external_sync.write_requested") == []
+        )
+
+
+@pytest.mark.parametrize("channel", ["imessage", "gmail", "portal"])
+@pytest.mark.parametrize("action", ["status", "answer"])
+def test_mode_task_redirects_from_list_choice_without_effects(
+    tmp_path, monkeypatch, channel, action
+):
+    with environment(tmp_path, monkeypatch) as (client, native, calls):
+        runtime = client.app.state.runtime
+        source, _, offered = offer(client, channel)
+        shown = presentation(client, source, offered)
+        assert shown.status_code == 200, shown.text
+        before_replies = client.portal.call(_events, runtime, "cos.response.approved")
+        answer = instruction(client, channel, "wrong-list-tool-" + action, "1")
+        result = client.post(
+            "/api/openclaw/v1/tools/apple-reminder-choice",
+            headers=AUTH,
+            json={**answer, "action": action, "task_id": offered["task_id"]},
+        )
+        assert result.status_code == 200, result.text
+        assert result.json() == {
+            "state": "different_choice_kind",
+            "continuation_tool": "administrateme_cos_reminder_choice",
+            "task_id": offered["task_id"],
+            "provider_effect_count": 0,
+        }
+        assert calls == [] and native.saves == 0
+        for event_type in (
+            "member.provider_action.confirmed",
+            "external_sync.write_requested",
+            "cos.reminder.requested",
+            "cos.email.request_grounded",
+        ):
+            assert client.portal.call(_events, runtime, event_type) == []
+        assert (
+            client.portal.call(_events, runtime, "cos.response.approved")
+            == before_replies
         )
 
 

@@ -353,7 +353,8 @@ async def historical_choice_matches(event_log: Any, grounding: dict[str, Any]) -
                 shown is None
                 or shown["payload"] != c.presentation.model_dump(mode="json")
                 or not offer["event_id"] < shown["event_id"] < answer["event_id"]
-                or c.presentation.presented_at
+                # Intake retains whole seconds; the event order above remains strict.
+                or c.presentation.presented_at.replace(microsecond=0)
                 > datetime.fromisoformat(answer["payload"]["submitted_at"])
                 or not await presentation_matches(event_log, offer, shown)
                 or mode_answer(target[1]) != "reminder_only"
