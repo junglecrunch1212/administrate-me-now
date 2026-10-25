@@ -45,7 +45,7 @@ try {
   const loadedGuidance = await readFile(path.join(compiledWorkspace, "AGENTS.md"), "utf8");
   for (const instruction of ["minimal concise title", "preserve the no-automatic-send restriction",
     "Do not add", "not the affirmative reminder creation", "do not call an email/send or timer tool",
-    "rejected proposal alone does not prove a missing title or permission"]) {
+    "does not prove a missing title/permission"]) {
     assert.ok(loadedGuidance.includes(instruction), `Compiled workflow omits ${instruction}`);
   }
   const modulePath = path.join(directory, "pinned-format.mjs");
