@@ -225,7 +225,22 @@ recording the original retention observations, this diagnostic additionally
 requests `PRAGMA shrink_memory` on the owned event-log and Money connection
 threads, recording each connection's unchanged cache settings and before/after
 RSS. These post-measurement probes never replace acceptance measurements, close
-connections, or change persistent state or production behavior.
+connections, or change persistent state or production behavior. The same opt-in
+profile records glibc arena used/free bytes and one final test-only allocator
+trim, preserving all original retention results. Receipt verification, connection
+queueing, SQL insert/commit and authority-check spans distinguish waiting from
+execution. Trimmed RSS and instrumented latency are never qualification evidence.
+
+Event-log subscriber lag counts and latest IDs use one parent-owned read-only
+SQLCipher connection, one owner thread and a 256 KiB metadata page-cache target.
+Each query reads committed WAL state and closes its cursor; there is no cached
+lag or grant. Its SQL authorizer permits only event IDs/types and counts, denying
+payloads and mutations. The original writer/payload connection still owns all
+approval reads, ordered atomic appends and both native authority checks. Closing
+rejects new metadata reads and drains accepted native work on its owner thread,
+including cancellation. Read-only backup inspection keeps its original single
+connection. This removes demonstrated count-query waits behind Finance commits;
+it does not claim to repair allocator retention or qualify the native workload.
 
 Dated structural validation retains at most 32 successful receipts containing
 only the pinned-schema and complete canonical-payload hashes. Every reuse hashes

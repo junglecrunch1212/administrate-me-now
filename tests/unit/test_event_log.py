@@ -31,6 +31,7 @@ from adminme.events.log import (
     IdempotencyConflict,
     new_correlation_id,
 )
+from adminme.events.metadata_reader import EventMetadataReader
 from adminme.events.registry import registry
 
 TEST_KEY = b"k" * 32
@@ -1224,3 +1225,205 @@ async def test_byte_capped_short_page_continues_through_actual_watermark(log):
         ids.append(await log.append(envelope))
     rows = await _collect(log, types=["test.large_page"], through=ids[-1])
     assert [row["event_id"] for row in rows] == ids
+
+
+@pytest.mark.parametrize("rollback", [False, True])
+async def test_metadata_reads_committed_state_while_writer_waits_at_commit(
+    log: EventLog, monkeypatch: pytest.MonkeyPatch, rollback: bool
+) -> None:
+    first = await log.append(_event(1, type="foo"))
+    latest = await log.append(_event(2, type="bar"))
+    reached_commit = threading.Event()
+    release_commit = threading.Event()
+    insert_rows = log._insert_rows  # noqa: SLF001 - native transaction boundary
+    checks = 0
+
+    def guard() -> None:
+        nonlocal checks
+        checks += 1
+        if checks == 2:
+            reached_commit.set()
+            if not release_commit.wait(10):
+                raise RuntimeError("test did not release commit")
+            if rollback:
+                raise RuntimeError("authority revoked before commit")
+
+    def held_insert(rows):
+        return insert_rows(rows, commit_guard=guard)
+
+    monkeypatch.setattr(log, "_insert_rows", held_insert)
+    writing = asyncio.create_task(log.append(_event(3, type="foo")))
+    try:
+        assert await asyncio.to_thread(reached_commit.wait, 2)
+        # These queries must finish while the real writer transaction/lock is
+        # held, and must never expose its uncommitted row.
+        assert await asyncio.wait_for(log.latest_event_id(), 2) == latest
+        assert await asyncio.wait_for(log.latest_event_id(types=["foo"]), 2) == first
+        assert await asyncio.wait_for(log.count_since(None), 2) == 2
+        assert await asyncio.wait_for(log.count_since(first, types=["bar"]), 2) == 1
+        assert await asyncio.wait_for(log.count_since(latest, types=["foo"]), 2) == 0
+    finally:
+        release_commit.set()
+        results = await asyncio.gather(writing, return_exceptions=True)
+    assert checks == 2
+    if rollback:
+        assert isinstance(results[0], RuntimeError)
+        assert "authority revoked" in str(results[0])
+        assert await log.latest_event_id() == latest
+        assert await log.count_since(latest) == 0
+    else:
+        assert isinstance(results[0], str)
+        assert await log.latest_event_id() == results[0]
+        assert await log.count_since(latest, types=["foo"]) == 1
+
+
+async def test_metadata_reader_denies_payloads_and_mutations(log: EventLog) -> None:
+    await log.append(_event(1))
+    reader = log._metadata_reader  # noqa: SLF001 - native read boundary
+    assert reader is not None
+    assert await reader.count_since(None, None) == 1
+    for sql in (
+        "SELECT payload FROM events",
+        "SELECT source_account_id FROM events",
+        "SELECT owner_scope FROM events",
+        "SELECT name FROM sqlite_master",
+        "PRAGMA query_only=OFF",
+        "PRAGMA key",
+        "ATTACH DATABASE ':memory:' AS other",
+        "UPDATE events SET type='foo'",
+        "DELETE FROM events",
+        "DROP TABLE events",
+        "SELECT random()",
+    ):
+        with pytest.raises(sqlcipher3.DatabaseError):
+            await reader._run(sql, ())  # noqa: SLF001 - adversarial SQL
+    assert await log.count() == 1
+
+
+async def test_metadata_open_queries_and_close_share_owner_thread(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    observed: dict[str, int] = {}
+    original_open = EventMetadataReader._open_connection  # noqa: SLF001
+
+    class TrackedConnection:
+        def __init__(self, connection):
+            self.connection = connection
+
+        def cursor(self):
+            observed["query"] = threading.get_ident()
+            return self.connection.cursor()
+
+        def close(self):
+            observed["close"] = threading.get_ident()
+            self.connection.close()
+
+    def tracked_open(path, key):
+        observed["open"] = threading.get_ident()
+        return TrackedConnection(original_open(path, key))
+
+    monkeypatch.setattr(
+        EventMetadataReader, "_open_connection", staticmethod(tracked_open)
+    )
+    log = EventLog(tmp_path / "metadata-thread.db", TEST_KEY)
+    try:
+        await log.append(_event(1))
+        assert await log.count_since(None) == 1
+        assert await log.latest_event_id() is not None
+        writer_thread = await log._run_locked(threading.get_ident)  # noqa: SLF001
+    finally:
+        await log.close()
+    assert observed["open"] == observed["query"] == observed["close"]
+    assert observed["open"] not in {writer_thread, threading.get_ident()}
+    assert observed["open"] not in {thread.ident for thread in threading.enumerate()}
+
+
+async def test_cancelled_metadata_query_and_close_drain_native_work(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    log = EventLog(tmp_path / "metadata-cancel.db", TEST_KEY)
+    reader = log._metadata_reader  # noqa: SLF001 - native cancellation boundary
+    assert reader is not None
+    query = reader._query  # noqa: SLF001
+    submitted = asyncio.Event()
+    started = threading.Event()
+    release = threading.Event()
+    worker: int | None = None
+
+    def held_query(sql, params):
+        nonlocal worker
+        worker = threading.get_ident()
+        started.set()
+        if not release.wait(10):
+            raise RuntimeError("test did not release metadata read")
+        return query(sql, params)
+
+    original_close = reader.submit_close
+
+    def tracked_close():
+        result = original_close()
+        submitted.set()
+        return result
+
+    monkeypatch.setattr(reader, "_query", held_query)
+    monkeypatch.setattr(reader, "submit_close", tracked_close)
+    reading = asyncio.create_task(log.count_since(None))
+    timer = threading.Timer(0.05, release.set)
+    try:
+        assert await asyncio.to_thread(started.wait, 2)
+        reading.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await reading
+        closing = asyncio.create_task(log.close())
+        await asyncio.wait_for(submitted.wait(), 2)
+        with pytest.raises(EventLogError, match="closed"):
+            await log.latest_event_id()
+        with pytest.raises(EventLogError, match="closed"):
+            await log.count_since(None)
+        closing.cancel()
+        # Shutdown joins the native owner; release from outside the event loop.
+        timer.start()
+        with pytest.raises(asyncio.CancelledError):
+            await closing
+    finally:
+        release.set()
+        if timer.ident is not None:
+            timer.join(1)
+        await log.close()
+    assert worker not in {thread.ident for thread in threading.enumerate()}
+
+
+def test_metadata_initialization_failure_closes_both_workers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    observed: dict[str, int] = {}
+    original_connect = sqlcipher3.connect
+
+    class RejectedMetadataConnection:
+        def __init__(self, connection):
+            self.connection = connection
+
+        def execute(self, *args):
+            return self.connection.execute(*args)
+
+        def set_authorizer(self, callback):
+            observed["open"] = threading.get_ident()
+            raise RuntimeError("metadata setup failed")
+
+        def close(self):
+            observed["close"] = threading.get_ident()
+            self.connection.close()
+
+    def connect(target, **kwargs):
+        connection = original_connect(target, **kwargs)
+        if kwargs.get("uri"):
+            return RejectedMetadataConnection(connection)
+        return connection
+
+    monkeypatch.setattr(sqlcipher3, "connect", connect)
+    with pytest.raises(RuntimeError, match="metadata setup failed"):
+        EventLog(tmp_path / "metadata-rejected.db", TEST_KEY)
+    assert observed["open"] == observed["close"]
+    assert not any(
+        thread.name.startswith("adminme-event-log") for thread in threading.enumerate()
+    )

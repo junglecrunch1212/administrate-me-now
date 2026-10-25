@@ -25,11 +25,13 @@ schema development).
 
 Async model: ``sqlcipher3`` is a synchronous DB-API driver and there
 is no drop-in async SQLCipher for Python today (D14). We keep a single
-connection guarded by an ``asyncio.Lock`` and pin its creation, migration,
-reads, writes, and close to one dedicated worker thread. SQLCipher's native
+writer/payload connection guarded by an ``asyncio.Lock`` and pin its creation,
+migration, reads, writes, and close to one dedicated worker thread. SQLCipher's native
 connection must not migrate among the default executor's worker threads even
 when those calls are serialized. Reads and writes therefore remain off the
-event loop without allowing native cross-thread connection use.
+event loop without allowing native cross-thread connection use. Live committed
+ID/count metadata uses a separate read-only connection and owner thread so
+subscriber health reads do not wait behind large atomic commits.
 
 Signature: ``append(envelope, *, correlation_id=None, causation_id=None)``
 per D8 addition 2 — correlation_id and causation_id are explicit keyword
@@ -61,6 +63,7 @@ from adminme.events.invariants import (
     EnvelopeInvariantError,
     validate_envelope_invariants,
 )
+from adminme.events.metadata_reader import EventMetadataReader
 from adminme.events.registry import (
     EventValidationError,
     SchemaNotFound,
@@ -206,6 +209,7 @@ class EventLog:
             max_workers=1,
             thread_name_prefix="adminme-event-log",
         )
+        self._metadata_reader: EventMetadataReader | None = None
         try:
             self._conn = self._executor.submit(self._open_connection).result()
             self._lock = asyncio.Lock()
@@ -222,6 +226,10 @@ class EventLog:
                 self._metadata_index_hint_for_schema
             ).result()
             ensure_autoloaded()
+            if not self._read_only:
+                self._metadata_reader = EventMetadataReader(
+                    self._db_path, self._key_pragma
+                )
         except BaseException:
             connection = getattr(self, "_conn", None)
             if connection is not None:
@@ -335,23 +343,30 @@ class EventLog:
     async def close(self) -> None:
         # Closing a SQLCipher connection on another thread, or while an
         # in-flight call owns it, can crash in native code. The same lock and
-        # dedicated worker guard every operation, so close is queued behind
-        # in-flight work and repeated shutdown is harmless.
+        # dedicated workers guard their own connections, so each close is
+        # queued behind in-flight work and repeated shutdown is harmless.
         should_shutdown = False
         close_call: concurrent.futures.Future[Any] | None = None
+        metadata_close: concurrent.futures.Future[None] | None = None
         caller_cancelled = False
         try:
             async with self._lock:
                 if self._closed:
                     return
                 should_shutdown = True
+                # Stop metadata admission before either worker starts closing.
+                self._closed = True
                 try:
                     # Submit synchronously before the first cancellation point.
                     # A cancelled operation may still occupy this worker, so the
                     # close must remain queued rather than being cancelled during
                     # executor shutdown.
+                    if self._metadata_reader is not None:
+                        metadata_close = self._metadata_reader.submit_close()
                     close_call = self._executor.submit(self._conn.close)
                     await asyncio.shield(asyncio.wrap_future(close_call))
+                    if metadata_close is not None:
+                        await asyncio.shield(asyncio.wrap_future(metadata_close))
                 except asyncio.CancelledError:
                     caller_cancelled = True
                     raise
@@ -360,6 +375,16 @@ class EventLog:
         finally:
             if should_shutdown:
                 self._executor.shutdown(wait=True, cancel_futures=False)
+                if self._metadata_reader is not None:
+                    self._metadata_reader.shutdown()
+                if metadata_close is not None:
+                    # Observe failures even if the writer close/caller failed.
+                    try:
+                        metadata_close.result()
+                    except Exception:
+                        _log.exception("native event metadata close failed")
+                        if not caller_cancelled:
+                            raise
                 if caller_cancelled and close_call is not None:
                     try:
                         close_call.result()
@@ -1415,6 +1440,11 @@ class EventLog:
         )
 
     async def latest_event_id(self, *, types: list[str] | None = None) -> str | None:
+        self._ensure_open()
+        if self._metadata_reader is not None:
+            return await self._metadata_reader.latest_event_id(
+                tuple(types) if types else None
+            )
         return await self._run_locked(
             self._latest_event_id, tuple(types) if types else None
         )
@@ -1444,6 +1474,11 @@ class EventLog:
         *,
         types: list[str] | None = None,
     ) -> int:
+        self._ensure_open()
+        if self._metadata_reader is not None:
+            return await self._metadata_reader.count_since(
+                cursor, tuple(types) if types else None
+            )
         return await self._run_locked(
             self._count_since,
             cursor,
