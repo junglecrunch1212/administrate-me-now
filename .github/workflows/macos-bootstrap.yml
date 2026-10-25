@@ -886,6 +886,17 @@ jobs:
         with:
           python-version: "3.14.7"
 
+      - name: Install archived predecessor's exact Node for retained validation
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "24.19.0"
+
+      - name: Bind retained Node executable for the historical fixture
+        run: |
+          retained_node="$(node -p 'process.execPath')"
+          test "$("$retained_node" --version)" = "v24.19.0"
+          printf 'ADMINME_RETAINED_NODE_EXECUTABLE=%s\n' "$retained_node" >> "$GITHUB_ENV"
+
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "24.22.1"
@@ -893,6 +904,9 @@ jobs:
           cache-dependency-path: |
             openclaw/administrateme/package-lock.json
             tools/console-reference-harness/package-lock.json
+
+      - name: Verify target Node remains selected
+        run: test "$(node --version)" = "v24.22.1"
 
       - name: Install exact locked Python environment
         run: |

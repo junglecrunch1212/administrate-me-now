@@ -809,8 +809,14 @@ def test_reviewed_retained_patch_proves_source_runtime_and_production_replay(
     (venv_bin / "python").symlink_to(python)
     for name in ("node_modules", "dist"):
         (predecessor / "openclaw" / "administrateme" / name).mkdir(mode=0o700)
-    poetry_path, node_path = shutil.which("poetry"), shutil.which("node")
+    poetry_path = shutil.which("poetry")
+    # The archived manifest keeps its exact Node pin while the candidate build
+    # uses its own newer pin. A supplied coordinate never falls back to PATH.
+    node_path = os.environ.get("ADMINME_RETAINED_NODE_EXECUTABLE")
+    if node_path is None:
+        node_path = shutil.which("node")
     assert poetry_path and node_path
+    assert Path(node_path).is_absolute()
     manager = UpgradeManager(
         DeploymentPaths.from_root(tmp_path / "deployment"), root=ROOT, test_mode=False
     )
