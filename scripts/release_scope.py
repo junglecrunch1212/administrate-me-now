@@ -819,7 +819,7 @@ FINANCE_METADATA_TEST_PATHS = frozenset(
 FINANCE_METADATA_SHARED = {
     "adminme/events/log.py": (
         "a0cf622784c33d84fad36fc476142d6eaca3d1c3d25ce55139e1634ae55c4c5a",
-        "abd7446347f5c693e90f24dbcb3ef386bee57a585fd06e4f45ad2f67f0329bb8",
+        "ffc821917482f035a0cd4d25814935e5941312252f62f6bb38b145a0efa4f847",
     ),
     "adminme/runtime/application.py": (
         "e18879b1016ecfdd808fc608dc7e24a92339e60fe857f3ae9d28e72aed15c299",

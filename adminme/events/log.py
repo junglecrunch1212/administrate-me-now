@@ -865,7 +865,7 @@ class EventLog:
             value = dict(row)
             value["payload"] = json.loads(value["payload"])
             return value
-        except (sqlcipher3.DatabaseError, TypeError, ValueError):
+        except (getattr(sqlcipher3, "DatabaseError"), TypeError, ValueError):
             raise RuntimeError("finance_metadata_control_unavailable") from None
         finally:
             self._conn.set_progress_handler(None, 0)
@@ -983,7 +983,7 @@ class EventLog:
                     return result
             result["state"] = "complete"
             return result
-        except sqlcipher3.DatabaseError:
+        except getattr(sqlcipher3, "DatabaseError"):
             # No database diagnostics or partially extracted coordinates escape.
             result.update(
                 state="history_incomplete", rows=[], reason="history_read_unavailable"
