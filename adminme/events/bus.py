@@ -56,6 +56,7 @@ class _SubscriberState:
     delivery_concurrency: int
     checkpoint: str | None
     degraded: bool
+    raw_payload_types: frozenset[str] = frozenset()
     consecutive_failures: int = 0
     last_success_at_ms: int | None = None
     last_failure_at_ms: int | None = None
@@ -137,6 +138,7 @@ class EventBus:
         consumer_version: str | None = None,
         replay_on_version_change: bool = False,
         delivery_concurrency: int = 1,
+        raw_payload_types: frozenset[str] = frozenset(),
     ) -> None:
         if self._running:
             raise RuntimeError("subscribe() must be called before start()")
@@ -229,6 +231,7 @@ class EventBus:
             callback=callback,
             consumer_version=consumer_version,
             delivery_concurrency=delivery_concurrency,
+            raw_payload_types=raw_payload_types,
             checkpoint=checkpoint,
             degraded=degraded,
             consecutive_failures=failures,
@@ -389,6 +392,7 @@ class EventBus:
                 state.checkpoint,
                 types=state.types_filter,
                 limit=READ_BATCH_SIZE,
+                raw_payload_types=state.raw_payload_types,
             ):
                 if self._stopping.is_set() or not self._running:
                     return

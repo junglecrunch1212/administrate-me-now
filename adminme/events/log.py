@@ -477,6 +477,13 @@ class EventLog:
                 f"payload is not JSON-serializable: {exc}"
             ) from exc
 
+        return self._row_with_payload(
+            envelope, payload_json, effective_correlation, effective_causation
+        )
+
+    def _row_with_payload(
+        self, envelope, payload_json, effective_correlation, effective_causation
+    ):
         event_at_ms = int(envelope.event_at_ms or time.time() * 1000)
         if envelope.event_id:
             event_id = envelope.event_id
@@ -513,6 +520,52 @@ class EventLog:
             envelope.idempotency_key,
         )
         return row, event_id
+
+    async def _append_finance_batch(
+        self, tenant_id, owner_id, book_id, events, *, correlation_id=None
+    ):
+        """Internal worker receipts only; ordinary append retains full validation.
+
+        The worker fully validates these exact immutable bytes. Envelope
+        identity is constructed here from the parent's current owner authority.
+        No HTTP field can opt out of the normal schema-validation seam.
+        """
+        from adminme.finance.worker import ValidatedFinanceEvent
+
+        rows = []
+        for event in events:
+            if not isinstance(event, ValidatedFinanceEvent):
+                raise AppendValidationError("finance worker receipt required")
+            event.verify()
+            if (event.tenant_id, event.owner_id, event.book_id) != (
+                tenant_id,
+                owner_id,
+                book_id,
+            ):
+                raise AppendValidationError("finance worker receipt identity mismatch")
+            envelope = EventEnvelope(
+                event_at_ms=int(time.time() * 1000),
+                tenant_id=tenant_id,
+                type=event.type,
+                schema_version=1,
+                occurred_at=EventEnvelope.now_utc_iso(),
+                source_adapter=event.source_adapter,
+                source_account_id=book_id,
+                owner_scope=f"private:{owner_id}",
+                visibility_scope=f"private:{owner_id}",
+                sensitivity="privileged",
+                actor_identity=owner_id,
+                idempotency_key=event.idempotency_key,
+                payload={},
+            )
+            validate_envelope_invariants(envelope)
+            row, _ = self._row_with_payload(
+                envelope, event.payload_json, correlation_id, None
+            )
+            rows.append(row)
+        async with self._lock:
+            self._ensure_open()
+            return await self._run_on_connection_thread(self._insert_rows, rows)
 
     def _insert_rows(self, rows: list[tuple[Any, ...]]) -> list[str]:
         cur = self._conn.cursor()
@@ -589,6 +642,7 @@ class EventLog:
         limit: int = 1000,
         owner_scope: str | None = None,
         types: list[str] | None = None,
+        raw_payload_types: frozenset[str] = frozenset(),
     ) -> AsyncIterator[dict[str, Any]]:
         if limit <= 0:
             raise ValueError("limit must be positive")
@@ -611,11 +665,15 @@ class EventLog:
             read_page = self._read_page
             if not rows:
                 return
-            for row in rows:
-                yield _row_to_event(row)
             last = rows[-1]["event_id"]
-            if len(rows) < batch_size:
-                return
+            for row in rows:
+                if row["type"] in raw_payload_types:
+                    yield _row_to_event(row, raw_payload=True)
+                else:
+                    yield await asyncio.to_thread(_row_to_event, row)
+            # A byte-limited page can be shorter than the row limit without
+            # being EOF. Resume by its actual final id, preserving filters.
+            rows.clear()
 
     async def read_metadata_since(
         self,
@@ -773,7 +831,17 @@ class EventLog:
         sql += " ORDER BY event_id ASC LIMIT ?"
         params.append(limit)
         cur = self._conn.cursor()
-        return list(cur.execute(sql, params))
+        rows = []
+        byte_count = 0
+        try:
+            for row in cur.execute(sql, params):
+                rows.append(row)
+                byte_count += len(row["payload"])
+                if byte_count >= 1024 * 1024:
+                    break
+            return rows
+        finally:
+            cur.close()
 
     def _read_metadata_page(
         self,
@@ -1396,7 +1464,7 @@ _SELECT_COLUMNS = (
 )
 
 
-def _row_to_event(row: sqlcipher3.Row) -> dict[str, Any]:
+def _row_to_event(row: sqlcipher3.Row, *, raw_payload: bool = False) -> dict[str, Any]:
     """Return the full 15-column envelope shape (plus the legacy `version`
     and `source` MVP fields for backwards compatibility during the prompt-04
     transition). Prompt 05+ callers should read `schema_version` directly."""
@@ -1417,7 +1485,11 @@ def _row_to_event(row: sqlcipher3.Row) -> dict[str, Any]:
         "correlation_id": row["correlation_id"],
         "causation_id": row["causation_id"],
         "source": json.loads(row["source"]) if row["source"] is not None else None,
-        "payload": json.loads(row["payload"]),
+        **(
+            {"_payload_json": row["payload"]}
+            if raw_payload
+            else {"payload": json.loads(row["payload"])}
+        ),
         "raw_ref": row["raw_ref"],
         "actor_identity": row["actor_identity"],
         "idempotency_key": row["idempotency_key"],

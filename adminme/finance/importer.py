@@ -35,7 +35,7 @@ def _key(p: dict[str, Any]) -> str:
 
 
 async def _settled(runtime: Any) -> None:
-    for _ in range(100):
+    for _ in range(500):
         state = await runtime.bus.subscriber_status("projection:money")
         if state["lag_count"] == 0:
             return

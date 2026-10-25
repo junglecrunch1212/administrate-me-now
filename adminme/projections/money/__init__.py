@@ -42,7 +42,12 @@ class MoneyProjection(Projection):
     schema_path = Path(__file__).parent / "schema.sql"
 
     def apply(self, envelope: dict[str, Any], conn: Any) -> None:
-        handlers.apply_event(envelope, conn)
+        if "_payload_json" in envelope:
+            from adminme.finance.worker import apply_committed
+
+            apply_committed(envelope, conn)
+        else:
+            handlers.apply_event(envelope, conn)
 
     def migrate_schema(self, conn: Any) -> None:
         additions = {

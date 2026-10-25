@@ -111,9 +111,10 @@ book binding and separate Books-dashboard / CoS-analysis permissions at
 `/api/member/v1/settings/finance`. Both default off. CoS additionally requires
 the existing private-context read grant; the Finance control never creates or
 widens generic delegations. Current owner/book authority is re-read after tool
-retrieval and audit, before disclosure. A pending owner-control change waits for
-an admitted import's validation/archive critical section; once revocation is
-committed, subsequent disclosure is denied. An unavailable or malformed owner
+retrieval and audit, before disclosure. A pending owner-control change waits only for an already-admitted atomic
+append. Upload and validation do not hold the owner lock; fresh approval, role,
+control and head checks precede the commit. Once revocation is committed,
+subsequent disclosure is denied. An unavailable or malformed owner
 control makes that owner's Finance dashboard
 explicitly unavailable rather than substituting legacy totals, without preventing
 other owners' Finance or unrelated household services from starting. A verified
@@ -129,6 +130,38 @@ resolve paths/URLs, edit the Sheet or enable a refresh schedule. One global impo
 admission bounds body/decoder concurrency; decoding is off the HTTP loop and
 admission remains held until cancelled native work has settled.
 
+**MODERNIZE** import execution under the event/projection ownership contract:
+stream the closed packet through 64 KiB frames to one short-lived calculation
+child at a time. Full exact-byte, schema, lineage and independent-evidence
+validation stays mandatory. The parent receives immutable encoded events with
+process-local receipts bound to type, tenant, owner, book, source, idempotency key
+and payload hash; its ordinary append API still validates payloads normally.
+One authorized atomic append publishes the accepted event batch. Parent-owned
+keys, handles, current authority, durable audit and event order never move to the
+child. Preparation and the two large Money applications use sequential child
+lifetimes; this is no new service, scheduler or provider capability.
+
+Money's existing encrypted writer has one dedicated serialized thread for open,
+reads, transactions, replay, snapshot, publication and close. Cross-projection
+queries retain fences; Money callbacks cannot invert the general/authority-worker
+wait order. Projection children receive actual committed event bytes. Their
+bounded SQL channel permits only twenty fixed Money statements with exact
+owner/book/tenant parameters; a parent-side authorizer denies transaction control,
+other tables, functions, PRAGMAs, DDL and attachments. The parent commits or rolls
+back the whole Money transaction and the bus advances only its successful prefix.
+Replay uses the same full proof checks and actual archived bytes. Event pages are
+byte-bounded without treating a short page as EOF.
+
+Each child uses the same pinned Python with isolated import paths, a credential-free
+environment, private stdio pipes, CORE=0 and a 60-second CPU limit. Parent watchdogs
+bound preparation to 60 seconds and projection application to 30 seconds. Owned
+termination has a three-second grace followed by kill/reap; missing terminal or
+forced teardown is incomplete evidence. This is process separation, **not an OS
+sandbox or hard RAM/disk quota**. No child opens a database, plaintext staging file,
+provider or network connection. The changed Mini scope (one added Money thread,
+one temporary child with its usage thread, and sequential child lifetimes) must
+be reviewed before any native lab; the earlier scope is not reused.
+
 Accounting and dated projection remain independent immutable events. An accepted
 accounting import followed by a rejected dated projection returns an explicit
 incomplete receipt. Conflicts never replace the last good head, and retrying exact
@@ -142,9 +175,12 @@ of at least 18 MiB plus a dated payload of at least 6,020,614 bytes, preserving
 the synthetic shared-inventory geometry (3,307 variants, 3,215 source IDs and
 38,382 context references) with valid long identifiers. It records
 provenance, envelope, dated and encoded request sizes independently; measures
-upload, decoding, validation, archival, current/peak/retained runtime RSS, CPU,
+upload, decoding, validation, archival, current/peak/retained runtime RSS, aggregate parent-plus-child RSS and CPU,
 core request cadence and the owner-control critical section/revocation wait;
-and checks exact terminal receipts, unchanged independent grants and cleanup.
+and checks exact terminal receipts, unchanged independent grants and every child
+exit/cleanup. The resource probe measures revocation after the atomic commit;
+separate functional tests cover revocation during validation and cancellation.
+Both sampled aggregate RSS and a conservative sum-of-peaks bound are retained.
 Its 90-second CPU, cooperative 512 MiB RSS and 180-second wall watchdog are
 hosted diagnostic containment, not a replacement acceptance policy. One short
 import with a single concurrent core request does not qualify sustained query

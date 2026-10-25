@@ -81,6 +81,14 @@ jobs:
         run: >-
           poetry run pytest -q
           'tests/acceptance/test_source_currentness_revision.py::test_currentness_interrupted_publication_retains_authority_and_attempts[unchanged-revision]'
+      - name: Bounded Finance worker and owner import smoke
+        timeout-minutes: 3
+        run: >-
+          poetry run pytest -q
+          tests/unit/test_finance_worker.py
+          tests/acceptance/test_finance_money_worker.py
+          tests/acceptance/test_finance_activation.py::test_persisted_activation_import_disclosure_restart_and_disable
+          tests/acceptance/test_finance_activation.py::test_partial_dated_import_and_conflicting_accounting_preserve_last_good_head
       - name: Finance synthetic process and numerical checks
         run: >-
           poetry run pytest -q --runxfail
@@ -92,6 +100,8 @@ jobs:
           tests/unit/test_observation.py
           tests/unit/test_skill_wrapper.py
           tests/unit/test_historical_attribution.py
+          tests/unit/test_finance_worker.py
+          tests/acceptance/test_finance_money_worker.py
           tests/unit/test_finance_capabilities.py
           tests/unit/test_finance_resources.py
           tests/unit/test_finance_resource_diagnostic.py

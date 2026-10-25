@@ -54,7 +54,8 @@ SERVER_WALL_SECONDS = 180
 def _server(root, listener, channel, telemetry, allocation_profile=False):
     resource.setrlimit(resource.RLIMIT_CPU, (SERVER_CPU_SECONDS, SERVER_CPU_SECONDS))
     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
-    from adminme.finance import importer, planning_store, provenance_store
+    from adminme.finance.worker import worker_usage
+    from adminme.events.writer import EventWriter
     from adminme.products.member import finance_import
 
     started = time.monotonic()
@@ -72,6 +73,7 @@ def _server(root, listener, channel, telemetry, allocation_profile=False):
             "cpu_seconds": usage.ru_utime + usage.ru_stime,
             "peak_rss_bytes": usage.ru_maxrss * 1024,
             **_memory_snapshot(),
+            "finance_workers": worker_usage(),
             **(
                 {
                     "traced_python_bytes": tracemalloc.get_traced_memory()[0],
@@ -83,6 +85,18 @@ def _server(root, listener, channel, telemetry, allocation_profile=False):
             ),
             **extra,
         }
+        reaped = resource.getrusage(resource.RUSAGE_CHILDREN)
+        row["reaped_child_cpu_seconds"] = reaped.ru_utime + reaped.ru_stime
+        child = row["finance_workers"]["active"] or {}
+        row["aggregate_rss_bytes"] = row["VmRSS_bytes"] + child.get("rss_bytes", 0)
+        row["aggregate_cpu_seconds"] = (
+            row["cpu_seconds"]
+            + max(
+                row["finance_workers"]["completed_cpu_seconds"],
+                row["reaped_child_cpu_seconds"],
+            )
+            + child.get("cpu_seconds", 0)
+        )
         with write_lock, telemetry.open("a") as stream:
             stream.write(json.dumps(row, sort_keys=True) + "\n")
         return row
@@ -107,24 +121,13 @@ def _server(root, listener, channel, telemetry, allocation_profile=False):
 
         return wrapped
 
-    # Observation only: same arguments, return values, validators and exceptions.
-    finance_import.decode_package = sync_stage(finance_import.decode_package, "decode")
-    importer.verify_package = sync_stage(importer.verify_package, "verify_provenance")
-    importer.archive_package = async_stage(
-        importer.archive_package, "encrypted_archive"
+    # Observe the production boundaries; child work remains in aggregate
+    # telemetry and is never relabelled as parent CPU or missing work.
+    finance_import.prepare_import = async_stage(
+        finance_import.prepare_import, "prepare_import"
     )
-    planning_store.validate_projection = sync_stage(
-        planning_store.validate_projection, "dated_validation"
-    )
-    provenance_store.verify_archived = sync_stage(
-        provenance_store.verify_archived, "verify_archived_provenance"
-    )
-    planning_store._anchored = sync_stage(planning_store._anchored, "dated_anchor")
-    from adminme.projections.money import handlers
-
-    handlers.apply_projection = sync_stage(handlers.apply_projection, "apply_dated")
-    handlers.apply_publication = sync_stage(
-        handlers.apply_publication, "apply_accounting"
+    EventWriter._write_finance_batch = async_stage(
+        EventWriter._write_finance_batch, "atomic_finance_commit"
     )
     original_lock = finance_import.control_lock
 
@@ -323,7 +326,8 @@ def _server(root, listener, channel, telemetry, allocation_profile=False):
         while not stop.wait(0.05):
             current = sample()
             if (
-                current["VmRSS_bytes"] > SERVER_RSS_BYTES
+                current["aggregate_rss_bytes"] > SERVER_RSS_BYTES
+                or current["aggregate_cpu_seconds"] > SERVER_CPU_SECONDS
                 or time.monotonic() - started > SERVER_WALL_SECONDS
             ):
                 violations.append("cooperative_runtime_resource_limit")
@@ -361,13 +365,11 @@ async def _receive(channel, timeout=30):
     return channel.recv()
 
 
-async def _stage(path, name, timeout=30):
+async def _stage(path, name, timeout=30, event="start"):
     async with asyncio.timeout(timeout):
         while True:
             found = [
-                r
-                for r in _records(path)
-                if r["event"] == "start" and r["stage"] == name
+                r for r in _records(path) if r["event"] == event and r["stage"] == name
             ]
             if found:
                 return found[-1]
@@ -567,7 +569,10 @@ async def _measure_import(tmp_path, *, allocation_profile):
             )
             report["upload_admission_probe_hold_seconds"] = time.monotonic() - began
             release_upload.set()
-            await _stage(telemetry, "verify_provenance", 45)
+            await _stage(telemetry, "atomic_finance_commit", 60, event="end")
+            report["revocation_phase"] = (
+                "after_atomic_commit_during_projection_settlement"
+            )
 
             async def revoke():
                 started_at = time.monotonic()
@@ -738,6 +743,19 @@ async def _measure_import(tmp_path, *, allocation_profile):
             (r["peak_rss_bytes"] for r in rows), default=0
         )
         report["server_cpu_seconds"] = max((r["cpu_seconds"] for r in rows), default=0)
+        report["aggregate_cpu_seconds"] = max(
+            (r["aggregate_cpu_seconds"] for r in rows), default=0
+        )
+        report["aggregate_sampled_peak_rss_bytes"] = max(
+            (r["aggregate_rss_bytes"] for r in rows), default=0
+        )
+        workers = rows[-1]["finance_workers"] if rows else {}
+        report["finance_workers"] = workers
+        # Conservative peak bound also includes a short child peak between
+        # samples; it deliberately does not subtract or hide the interpreter.
+        report["aggregate_peak_rss_upper_bound_bytes"] = report[
+            "server_peak_rss_bytes"
+        ] + workers.get("peak_child_rss_bytes", 0)
         usage = resource.getrusage(resource.RUSAGE_SELF)
         report["caller"] = {
             "peak_rss_bytes": usage.ru_maxrss * 1024,
@@ -769,23 +787,24 @@ async def _measure_import(tmp_path, *, allocation_profile):
                 receipt["payload"]["projection_event_id"]
                 == report["import_result"]["dated"]["event_id"]
             )
-            critical = report["stages"]["owner_control_critical_section"]
             assert (
-                critical["start"]["at"]
-                <= report["owner_revocation_started_at"]
-                < critical["end"]["at"]
-            ), "revocation observation missed the import critical section"
+                report["owner_revocation_started_at"]
+                >= report["stages"]["atomic_finance_commit"]["end"]["at"]
+            )
+            assert workers["active"] is None and workers["failed_count"] == 0
+            assert workers["completed_count"] == 3
+            assert all(
+                row["complete"] and row["exitcode"] == 0 for row in workers["lifetimes"]
+            )
             assert report["cleanup"]["instance_removed"]
-            assert report["server_peak_rss_bytes"] <= SERVER_RSS_BYTES
-            assert report["server_cpu_seconds"] <= SERVER_CPU_SECONDS
+            assert report["aggregate_peak_rss_upper_bound_bytes"] <= SERVER_RSS_BYTES
+            assert report["aggregate_cpu_seconds"] <= SERVER_CPU_SECONDS
             assert all(
                 "end" in report["stages"].get(name, {})
                 for name in (
                     "upload",
-                    "decode",
-                    "verify_provenance",
-                    "encrypted_archive",
-                    "dated_validation",
+                    "prepare_import",
+                    "atomic_finance_commit",
                     "owner_control_critical_section",
                 )
             )

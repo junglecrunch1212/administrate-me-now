@@ -17,9 +17,9 @@ from adminme.events.schemas.finance_import import (
 )
 from adminme.finance.access_control import control_lock, policy_for_session
 from adminme.finance.closed_import import decode_package
-from adminme.finance.importer import import_publication
+from adminme.finance.importer import _settled
 from adminme.finance.import_work import await_settled, run_cpu
-from adminme.finance.planning_store import import_projection
+from adminme.finance.worker import prepare_import
 from adminme.finance.publication import PublicationError
 from adminme.lib.session import Session
 from adminme.products.auth import session_from_request
@@ -222,47 +222,106 @@ async def import_approved_package(
     async with lock:
         await current_control(runtime, session)
         approval = await _approval(runtime, session, approval_id)
-        limit = approval.manifest.encoded_body_limit()
         if request.headers.get("content-type", "").split(";")[0] != "application/json":
             raise HTTPException(415, "finance_import_json_required")
         accounting = dated = None
         entered_ingress = False
-        data = bytearray()
+        prepared = None
+        publication_lock = getattr(runtime, "_finance_publication_lock", None)
+        if publication_lock is None:
+            publication_lock = runtime._finance_publication_lock = asyncio.Lock()
+        if publication_lock.locked():
+            raise HTTPException(409, "finance_import_busy")
         try:
-            async with asyncio.timeout(30):
-                async for chunk in request.stream():
-                    if len(data) + len(chunk) > limit:
-                        raise PublicationError("finance_import_body_limit")
-                    data.extend(chunk)
-            publication, projection, package = await _decode_settled(
-                data, approval.manifest
-            )
-            require_owner(request, session)
-            if (
-                publication["tenant_id"] != session.tenant_id
-                or publication["owner_id"] != session.auth_member_id
-            ):
-                raise PublicationError("finance_import_owner_mismatch")
-            # A slow upload/decoder must not prevent the owner from revoking
-            # access. Acquire the owner lock only for the bounded event writes,
-            # then re-read approval and policy after the unlocked decoding phase.
-            async with control_lock(runtime, session):
-                await current_control(runtime, session)
-                await _guard_member_write(
-                    runtime,
-                    session,
-                    "finance.publication_accepted",
-                    {"operation": "import_exact_owner_approved_books"},
+            async with publication_lock:
+                await _settled(runtime)
+                # Full package/proof/schema validation and immutable payload
+                # encoding happen without the owner's revocation lock.
+                prepared = await prepare_import(
+                    request, runtime, session, approval.manifest
                 )
                 require_owner(request, session)
-                await _approval(runtime, session, approval_id)
-                entered_ingress = True
-                accounting = await import_publication(
-                    runtime, session, publication, provenance_package=package
-                )
-                if projection is not None:
-                    dated = await import_projection(runtime, session, projection)
+                async with control_lock(runtime, session):
+                    await current_control(runtime, session)
+                    await _guard_member_write(
+                        runtime,
+                        session,
+                        "finance.publication_accepted",
+                        {"operation": "import_exact_owner_approved_books"},
+                    )
+                    require_owner(request, session)
+                    await _approval(runtime, session, approval_id)
+
+                    def heads(conn):
+                        key = (
+                            session.tenant_id,
+                            session.auth_member_id,
+                            approval.manifest.binding.book_id,
+                        )
+                        result = []
+                        for table, column in (
+                            ("finance_publication_heads", "publication_id"),
+                            ("finance_dated_projection_heads", "projection_id"),
+                        ):
+                            row = conn.execute(
+                                f"SELECT {column} FROM {table} WHERE tenant_id=? AND owner_id=? AND book_id=?",
+                                key,
+                            ).fetchone()
+                            result.append(row[0] if row else None)
+                        return result
+
+                    if (
+                        await runtime.projections.read("money", heads)
+                        != prepared.metadata["expected_heads"]
+                    ):
+                        raise PublicationError("finance_import_head_changed")
+                    # One transaction is the linearization point. Cancellation
+                    # settles it and records exact accepted ids before audit.
+                    entered_ingress = True
+
+                    async def authorize_commit():
+                        await _approval(runtime, session, approval_id)
+                        require_owner(request, session)
+
+                    async def commit():
+                        nonlocal accounting, dated
+                        assert prepared is not None
+                        ids = await runtime.events._write_finance_batch(
+                            session.tenant_id,
+                            session.auth_member_id,
+                            approval.manifest.binding.book_id,
+                            prepared.events,
+                            before_commit=authorize_commit,
+                            correlation_id=session.correlation_id,
+                        )
+                        for event, event_id in zip(prepared.events, ids, strict=True):
+                            if event.type == "finance.publication_accepted":
+                                accounting = {
+                                    "state": "accepted",
+                                    "event_id": event_id,
+                                    "publication_id": prepared.metadata[
+                                        "publication_id"
+                                    ],
+                                    "idempotent": prepared.metadata["expected_heads"][0]
+                                    == prepared.metadata["publication_id"],
+                                    "provider_effect_count": 0,
+                                }
+                            elif event.type == "finance.projection_verified":
+                                dated = {
+                                    "state": "verified",
+                                    "event_id": event_id,
+                                    "projection_id": prepared.metadata["projection_id"],
+                                    "idempotent": prepared.metadata["expected_heads"][1]
+                                    == prepared.metadata["projection_id"],
+                                    "provider_effect_count": 0,
+                                }
+
+                    await await_settled(commit())
+                prepared.events.clear()
+                await _settled(runtime)
                 require_owner(request, session)
+                if prepared.metadata.get("dated_error"):
+                    raise PublicationError(prepared.metadata["dated_error"])
                 audit_id = await _audit(
                     runtime,
                     session,
@@ -300,7 +359,14 @@ async def import_approved_package(
             # An ambiguous append or rejected dated output cannot undo accepted
             # accounting. Preserve the last good heads and return explicit scope.
             raise HTTPException(
-                409 if entered_ingress else 422,
+                409
+                if entered_ingress
+                or reason
+                in {
+                    "publication_identity_or_prior_conflict",
+                    "publication_prior_conflict",
+                }
+                else 422,
                 {
                     "state": outcome,
                     "reason": reason,
@@ -341,4 +407,5 @@ async def import_approved_package(
             )
             raise
         finally:
-            data.clear()
+            if prepared is not None:
+                prepared.events.clear()

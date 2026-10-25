@@ -116,5 +116,28 @@ class EventWriter(EventSink):
             )
             return event_ids
 
+    async def _write_finance_batch(
+        self,
+        tenant_id,
+        owner_id,
+        book_id,
+        events,
+        *,
+        before_commit,
+        correlation_id=None,
+    ):
+        async with self._write_lock:
+            if not self._accepting:
+                raise EventWriterClosed("runtime is not accepting event writes")
+            await before_commit()
+            ids = await self._event_log._append_finance_batch(
+                tenant_id, owner_id, book_id, events, correlation_id=correlation_id
+            )
+            if ids:
+                await self._bus.notify(
+                    ids[-1], event_types=frozenset(e.type for e in events)
+                )
+            return ids
+
 
 __all__ = ["EventSink", "EventWriter", "EventWriterClosed"]

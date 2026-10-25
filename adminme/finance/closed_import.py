@@ -6,6 +6,7 @@ import base64
 import hashlib
 import json
 from typing import Any
+from dataclasses import dataclass
 
 from adminme.events.schemas.finance_import import FinanceImportManifest, ImportBlobPin
 from adminme.finance.dated_projection import validate_projection
@@ -30,7 +31,19 @@ def _object(pairs):
     return value
 
 
+@dataclass(frozen=True)
+class _RawComponent:
+    """Internal streaming decoder output; cannot be supplied through JSON."""
+
+    value: bytes
+
+
 def _decode(value: Any, pin: ImportBlobPin) -> bytes:
+    if isinstance(value, _RawComponent):
+        raw = value.value
+        if len(raw) != pin.bytes or hashlib.sha256(raw).hexdigest() != pin.sha256:
+            raise PublicationError("finance_import_component_hash")
+        return raw
     if not isinstance(value, str) or len(value) != 4 * ((pin.bytes + 2) // 3):
         raise PublicationError("finance_import_component_size")
     try:
@@ -66,6 +79,15 @@ def decode_package(
         packet = json.loads(body, object_pairs_hook=_object)
         if isinstance(body, bytearray):
             body.clear()
+        return _decode_packet(packet, manifest)
+    except PublicationError:
+        raise
+    except (KeyError, TypeError, ValueError, UnicodeError, RecursionError):
+        raise PublicationError("finance_import_packet_invalid") from None
+
+
+def _decode_packet(packet, manifest):
+    try:
         if not isinstance(packet, dict) or set(packet) != {
             "publication",
             "projection",

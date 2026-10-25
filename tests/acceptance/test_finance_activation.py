@@ -593,7 +593,7 @@ def test_one_owner_control_failure_does_not_abort_runtime(
 def test_cancelled_decoder_keeps_admission_until_settled_and_never_imports(
     tmp_path, monkeypatch, interruption
 ):
-    from adminme.products.member import finance_import
+    from adminme.finance import worker
 
     settings = configured(tmp_path)
     p, d, package = fixture(settings.instance.tenant_id)
@@ -602,22 +602,23 @@ def test_cancelled_decoder_keeps_admission_until_settled_and_never_imports(
         control(client, manifest["binding"])
         approval = approve(client, manifest)
         release = threading.Event()
-        held_buffers = []
-        original = finance_import.decode_package
+        owned = []
+        original = worker.FinanceWorker.receive
         if interruption == "timeout":
-            monkeypatch.setattr(finance_import, "DECODE_SECONDS", 0.01)
+            monkeypatch.setattr(worker, "PREPARE_SECONDS", 0.01)
 
         async def scenario():
             started = asyncio.Event()
             loop = asyncio.get_running_loop()
 
-            def blocked(data, approved):
-                held_buffers.append(data)
-                loop.call_soon_threadsafe(started.set)
-                assert release.wait(10), "test decoder was not released"
-                return original(data, approved)
+            def blocked(child):
+                if not owned:
+                    owned.append(child)
+                    loop.call_soon_threadsafe(started.set)
+                    assert release.wait(10), "owned worker was not released"
+                return original(child)
 
-            monkeypatch.setattr(finance_import, "decode_package", blocked)
+            monkeypatch.setattr(worker.FinanceWorker, "receive", blocked)
             async with httpx.AsyncClient(
                 transport=httpx.ASGITransport(app=client.app),
                 base_url="http://synthetic",
@@ -631,7 +632,6 @@ def test_cancelled_decoder_keeps_admission_until_settled_and_never_imports(
                         first.cancel()
                         await asyncio.sleep(0)
                         first.cancel()
-                        await asyncio.sleep(0)
                     elif interruption == "timeout":
                         await asyncio.sleep(0.05)
                     else:
@@ -658,8 +658,7 @@ def test_cancelled_decoder_keeps_admission_until_settled_and_never_imports(
                         second.status_code == 409
                         and second.json()["detail"] == "finance_import_busy"
                     )
-                    assert len(held_buffers) == 1
-                    # Other household requests remain serviceable during decode.
+                    assert len(owned) == 1
                     assert (
                         await http.get(CONTROL, headers=OTHER_HEADERS)
                     ).status_code == 200
@@ -673,7 +672,8 @@ def test_cancelled_decoder_keeps_admission_until_settled_and_never_imports(
                         assert response.status_code in (
                             {422} if interruption == "timeout" else {403, 409}
                         ), response.text
-                assert len(held_buffers[0]) == 0
+                assert owned[0].closed and owned[0].process.poll() is not None
+                assert worker.worker_usage()["active"] is None
                 assert not client.app.state.runtime.settings_command_locks[
                     "finance-closed-package-import"
                 ].locked()
