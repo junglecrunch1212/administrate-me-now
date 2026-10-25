@@ -6,7 +6,14 @@ import math
 
 
 def startup_evidence(path, inspected_at):
-    result = {"complete": False, "bytes": 0, "rows": 0, "faults": []}
+    result = {
+        "complete": False,
+        "bytes": 0,
+        "rows": 0,
+        "faults": [],
+        "last_tick_at": None,
+        "last_tick_age_seconds": None,
+    }
     digest = hashlib.sha256()
     ready, tick, boundary = None, None, None
     spans, handlers, executors = [], [], set()
@@ -30,6 +37,14 @@ def startup_evidence(path, inspected_at):
                     ready = row["at"]
                 elif kind == "loop.delay":
                     tick = row["at"]
+                    if not math.isfinite(inspected_at):
+                        raise ValueError("inspection_coordinates")
+                    result.update(
+                        last_tick_at=tick,
+                        last_tick_age_seconds=inspected_at - tick,
+                    )
+                    if tick > inspected_at:
+                        raise ValueError("loop_tick_coordinates")
                 elif kind in {"readback.start", "readback.end"}:
                     if not (
                         row["rss_bytes"] > 0
@@ -63,8 +78,8 @@ def startup_evidence(path, inspected_at):
             result["faults"].append("completed_inspect_prefix_missing_or_invalid")
         if ready is None or not math.isfinite(inspected_at) or ready > inspected_at:
             result["faults"].append("ready_missing_or_invalid")
-        if tick is None or not 0 <= inspected_at - tick <= 0.2:
-            result["faults"].append("recent_loop_tick_missing")
+        # No early tick is required and its age is diagnostic only. The unchanged
+        # terminal observer receipt requires ticks and a complete probe lifetime.
         expected = [
             [name, kind]
             for name in ("metadata_snapshot", "event_digest", "heads")

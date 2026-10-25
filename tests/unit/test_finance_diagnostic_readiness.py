@@ -37,14 +37,12 @@ def rows():
 
 @pytest.mark.parametrize(
     "fault",
-    [None, "ready", "tick", "handler", "executor", "readback", "resource", "boundary"],
+    [None, "ready", "handler", "executor", "readback", "resource", "boundary"],
 )
 def test_first_inspect_requires_actual_observer_evidence(tmp_path, fault):
     values = rows()
     if fault == "ready":
         values[0]["kind"] = "unrelated"
-    elif fault == "tick":
-        values[1]["at"] = 9
     elif fault == "handler":
         values[3]["route"] = "setup"
     elif fault == "executor":
@@ -61,6 +59,35 @@ def test_first_inspect_requires_actual_observer_evidence(tmp_path, fault):
     assert result["complete"] is (fault is None)
     assert bool(result["faults"]) is (fault is not None)
     assert result["rows"] == len(values)
+
+
+@pytest.mark.parametrize(
+    "tick", ["absent", "delayed", "current", "nan", "inf", "future"]
+)
+def test_early_tick_age_is_diagnostic_with_valid_coordinates(tmp_path, tick):
+    values = rows()
+    if tick == "absent":
+        values[1]["kind"] = "unrelated"
+    else:
+        values[1]["at"] = {
+            "delayed": 9,
+            "current": 10,
+            "nan": float("nan"),
+            "inf": float("inf"),
+            "future": 11,
+        }[tick]
+    path = tmp_path / "trace.jsonl"
+    path.write_text("".join(json.dumps(row) + "\n" for row in values))
+    result = startup_evidence(path, 10.1)
+    valid = tick in {"absent", "delayed", "current"}
+    assert result["complete"] is valid
+    assert bool(result["faults"]) is (not valid)
+    if tick == "absent":
+        assert result["last_tick_at"] is None
+        assert result["last_tick_age_seconds"] is None
+    elif tick in {"delayed", "current", "future"}:
+        assert result["last_tick_at"] == values[1]["at"]
+        assert result["last_tick_age_seconds"] == pytest.approx(10.1 - values[1]["at"])
 
 
 @pytest.mark.parametrize("tail", ["future_tick", "partial_row"])

@@ -45,7 +45,7 @@ jobs:
           }
           actual=set(subprocess.check_output(['git','diff','--name-only',baseline,'HEAD'],text=True).splitlines())
           assert actual==expected,actual
-          pins={'tests/fixtures/finance_diagnostic_readiness.py': '1d14d3468ff347a25d57a7bd545ddca5951aa38baa403634fac4e5dfb0b2c8a0', 'tests/unit/test_finance_diagnostic_readiness.py': '0329ef70c37d4fb6e7cb8038c37b6c4dde494c228027d3514c7c5016482031aa', 'tests/acceptance/test_finance_staging_measurement.py': 'c363b611b7c979e3d05182c10742641d7ad75bd245f48ea07efdf71f676f6f71'}
+          pins={'tests/fixtures/finance_diagnostic_readiness.py': '42cfff4e70f492a1aedc35f7e4527c0fb6061bffd16a2fc925e21db01d1c0307', 'tests/unit/test_finance_diagnostic_readiness.py': 'ed2d770cb7b8f3ec3ec1a8cccc98ce6ebfe2a1ad9e04a1e9fdbb273907c76801', 'tests/acceptance/test_finance_staging_measurement.py': 'c363b611b7c979e3d05182c10742641d7ad75bd245f48ea07efdf71f676f6f71'}
           for p,h in pins.items():assert hashlib.sha256(pathlib.Path(p).read_bytes()).hexdigest()==h,p
           assert subprocess.check_output(['git','rev-parse','HEAD:adminme'],text=True).strip()=='1873e65d8a36d8af74ed5608b49b62dac6934d73'
           assert subprocess.check_output(['git','rev-parse','HEAD:poetry.lock'],text=True).strip()=='cc2102f6e9dd2fd029bd636566806493c1df91dc'
@@ -81,11 +81,11 @@ jobs:
           import collections, json, os, pathlib, xml.etree.ElementTree as E
           root=pathlib.Path(os.environ['FINANCE_MEASUREMENT_PINS'])
           rows=E.parse(root/'preflight.xml').findall('.//testcase')
-          expected={'test_first_inspect_requires_actual_observer_evidence':8,'test_gate_uses_only_completed_first_inspect_prefix':2,'test_unavailable_or_unbounded_trace_cannot_pass':3}
+          expected={'test_first_inspect_requires_actual_observer_evidence':7,'test_early_tick_age_is_diagnostic_with_valid_coordinates':6,'test_gate_uses_only_completed_first_inspect_prefix':2,'test_unavailable_or_unbounded_trace_cannot_pass':3}
           counts=collections.Counter(c.attrib.get('name','').split('[',1)[0] for c in rows)
           clean=all(not any(c.find(k) is not None for k in ('failure','error','skipped')) for c in rows)
-          exact=len(rows)==13 and len({c.attrib.get('name') for c in rows})==13 and counts==expected and all(c.attrib.get('classname')=='tests.unit.test_finance_diagnostic_readiness' for c in rows)
-          result={'expected':13,'executed':len(rows),'counts':dict(counts),'exact_selection':exact,'zero_failed_error_skipped':clean,'permits_representative_step':bool(exact and clean)}
+          exact=len(rows)==18 and len({c.attrib.get('name') for c in rows})==18 and counts==expected and all(c.attrib.get('classname')=='tests.unit.test_finance_diagnostic_readiness' for c in rows)
+          result={'expected':18,'executed':len(rows),'counts':dict(counts),'exact_selection':exact,'zero_failed_error_skipped':clean,'permits_representative_step':bool(exact and clean)}
           (root/'preflight-result.json').write_text(json.dumps(result,indent=2)+'\n')
           assert result['permits_representative_step'],'incomplete preflight; representative diagnostic must not start'
           PY_CHECK
@@ -112,7 +112,7 @@ jobs:
               except E.ParseError:return []
           def outcome(rows,expected):
               return {'expected':expected,'executed':len(rows),'passed':sum(not any(c.find(k) is not None for k in ('failure','error','skipped')) for c in rows),'failed':sum(any(c.find(k) is not None for k in ('failure','error')) for c in rows),'skipped':sum(c.find('skipped') is not None for c in rows),'names':[c.attrib.get('name') for c in rows]}
-          unit=outcome(cases(pins/'preflight.xml'),13)
+          unit=outcome(cases(pins/'preflight.xml'),18)
           measurement=outcome(cases(root/'results.xml'),1)
           scratch=pathlib.Path(os.environ['RUNNER_TEMP'])/'finance-readiness-unit'
           if scratch.exists():shutil.rmtree(scratch)
@@ -130,7 +130,7 @@ jobs:
           (output/'artifact-manifest.json').write_text(manifest)
           if bounded:
               for p in files:shutil.copyfile(p,output/p.name)
-          complete=unit['passed']==13 and not unit['failed'] and not unit['skipped'] and measurement['passed']==1 and not measurement['failed'] and not measurement['skipped']
+          complete=unit['passed']==18 and not unit['failed'] and not unit['skipped'] and measurement['passed']==1 and not measurement['failed'] and not measurement['skipped']
           if not bounded or not complete:sys.exit('bounded representative diagnostic failed or incomplete; raw evidence retained when within cap, no qualification')
           PY_CHECK
       - name: Upload representative diagnostic receipts
