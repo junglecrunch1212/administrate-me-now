@@ -91,7 +91,7 @@ class CommitAttribution:
         self.counts = {}
         self.dropped = 0
 
-    def record(self, kind, began, *, cpu=None, context=None):
+    def record(self, kind, began, *, cpu=None, context=None, facts=None):
         ended = time.monotonic()
         row = {
             "kind": kind,
@@ -101,6 +101,7 @@ class CommitAttribution:
             "thread_cpu_seconds": None if cpu is None else time.thread_time() - cpu,
             "thread": threading.get_ident(),
             "context": request_kind.get() if context is None else context,
+            **(facts or {}),
         }
         # Write after taking both clocks. Async spans intentionally omit CPU:
         # other tasks can execute while that coroutine is suspended.
@@ -268,6 +269,107 @@ class CommitAttribution:
 
         log._row_with_payload = row
 
+        # Observe the current dedicated metadata path without changing its
+        # admission, future, owner thread, SQL authorizer or cancellation rules.
+        reader = log._metadata_reader
+        assert reader is not None
+
+        class TimedMetadataExecutor:
+            def __init__(self, original):
+                self.original = original
+
+            def submit(self, function, *args, **kwargs):
+                if not probe.enabled:
+                    return self.original.submit(function, *args, **kwargs)
+                began = time.monotonic()
+                context = request_kind.get()
+
+                def run():
+                    probe.record("metadata_queue", began, context=context)
+                    return probe.sync(
+                        "metadata_execute", function, *args, context=context, **kwargs
+                    )
+
+                return self.original.submit(run)
+
+            def __getattr__(self, name):
+                return getattr(self.original, name)
+
+        reader._executor = TimedMetadataExecutor(reader._executor)
+        original_metadata_run = reader._run
+
+        async def metadata_run(sql, params):
+            return await probe.async_call(
+                "metadata_await", original_metadata_run, sql, params
+            )
+
+        reader._run = metadata_run
+
+        # Separate native SQL CPU, parent IPC CPU/waits and each event's apply
+        # interval. Labels are fixed operation/type names; never log inputs.
+        from adminme.finance import worker
+
+        original_sql = worker._sql
+
+        def sql(*args, **kwargs):
+            return probe.sync("money_native_sql", original_sql, *args, **kwargs)
+
+        worker._sql = sql
+        original_apply = worker.MoneyCalculation.apply
+
+        def apply(calculation, envelope, conn):
+            return probe.sync(
+                "money_apply:" + envelope["type"],
+                original_apply,
+                calculation,
+                envelope,
+                conn,
+            )
+
+        worker.MoneyCalculation.apply = apply
+
+        def observe_worker_method(name):
+            original = getattr(worker.FinanceWorker, name)
+
+            def wrapped(instance, *args, **kwargs):
+                if not probe.enabled:
+                    return original(instance, *args, **kwargs)
+                began, cpu = time.monotonic(), time.thread_time()
+                result = None
+                try:
+                    result = original(instance, *args, **kwargs)
+                    return result
+                finally:
+                    message = (
+                        result
+                        if name in {"receive", "raw"}
+                        else args[0]
+                        if args
+                        else None
+                    )
+                    facts = {}
+                    if isinstance(message, dict):
+                        facts["message_kind"] = message.get("kind", "control")
+                        values = message.get("parameters", message.get("rows", []))
+                        if isinstance(values, (list, tuple)):
+                            facts["parameter_rows_or_values"] = len(values)
+                            facts["parameter_text_characters"] = sum(
+                                len(value)
+                                for item in values
+                                for value in (
+                                    item if isinstance(item, (list, tuple)) else [item]
+                                )
+                                if isinstance(value, str)
+                            )
+                    elif isinstance(message, (str, bytes)):
+                        facts["frame_characters_or_bytes"] = len(message)
+                    probe.record("worker_" + name, began, cpu=cpu, facts=facts)
+
+            setattr(worker.FinanceWorker, name, wrapped)
+
+        for name in ("receive", "raw", "send", "send_bytes", "send_text"):
+            observe_worker_method(name)
+
     def finish(self):
         self.enabled = False
         with self.lock:
@@ -280,6 +382,16 @@ class CommitAttribution:
             "native_authority_check_2",
         ):
             assert self.counts.get(kind) == 1, (kind, self.counts)
+        for kind in (
+            "metadata_queue",
+            "metadata_execute",
+            "metadata_await",
+            "worker_receive",
+            "money_native_sql",
+            "money_apply:finance.projection_verified",
+            "event_loop_tick_20ms",
+        ):
+            assert self.counts.get(kind, 0) > 0, (kind, self.counts)
         return {
             "diagnostic_only": True,
             "records": self.count,
@@ -287,6 +399,9 @@ class CommitAttribution:
             "dropped": self.dropped,
             "async_cpu": "omitted; async wall spans include waits",
             "sync_cpu": "current native thread only, spans may be nested",
+            "event_loop_tick_target_seconds": 0.02,
+            "metadata_await": "includes executor queue, native execution and coroutine resumption",
+            "production_sql_protocol_authority_changed": False,
         }
 
     def close(self):

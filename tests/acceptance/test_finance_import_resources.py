@@ -65,6 +65,9 @@ def _server(root, listener, channel, telemetry, allocation_profile=False):
     allocation_baseline = None
     allocator_baseline = None
     allocator = attribution = None
+    trace_python = (
+        allocation_profile and os.getenv("ADMINME_FINANCE_IMPORT_PYTHON_TRACE") == "1"
+    )
     if allocation_profile:
         from tests.fixtures.finance_import_attribution import (
             AllocatorProbe,
@@ -96,6 +99,16 @@ def _server(root, listener, channel, telemetry, allocation_profile=False):
             ),
             **extra,
         }
+        if (
+            allocator is not None
+            and attribution is not None
+            and attribution.enabled
+            and event in {"start", "end"}
+            and stage in {"prepare_import", "atomic_finance_commit"}
+        ):
+            # Four bounded native snapshots; their diagnostic overhead is not
+            # part of the preserved uninstrumented acceptance measurement.
+            row["native_allocator"] = allocator.snapshot(stage + "_" + event)
         reaped = resource.getrusage(resource.RUSAGE_CHILDREN)
         row["reaped_child_cpu_seconds"] = reaped.ru_utime + reaped.ru_stime
         child = row["finance_workers"]["active"] or {}
@@ -172,12 +185,13 @@ def _server(root, listener, channel, telemetry, allocation_profile=False):
                             server.should_exit = True
                             return
                         if command == "begin_allocation_profile":
-                            assert allocation_profile and allocation_baseline is None
+                            assert allocation_profile and allocator_baseline is None
                             assert allocator is not None and attribution is not None
                             allocator_baseline = allocator.snapshot("before_import")
                             attribution.enabled = True
-                            tracemalloc.start(1)
-                            allocation_baseline = tracemalloc.take_snapshot()
+                            if trace_python:
+                                tracemalloc.start(1)
+                                allocation_baseline = tracemalloc.take_snapshot()
                             channel.send({"allocation_profile_started": True})
                         if command == "snapshot":
                             before = sample("snapshot", "retained_before_gc")
@@ -216,47 +230,53 @@ def _server(root, listener, channel, telemetry, allocation_profile=False):
                                 - drain_started,
                                 "after_subscriber_drain_gc": drained,
                             }
-                            if allocation_baseline is not None:
+                            if allocator_baseline is not None:
                                 assert allocator is not None and attribution is not None
                                 allocator_retained = allocator.snapshot("after_drain")
-                                allocation_now = tracemalloc.take_snapshot()
+                                retained["python_tracing_enabled"] = trace_python
+                                if allocation_baseline is not None:
+                                    allocation_now = tracemalloc.take_snapshot()
 
-                                def detail(stat):
-                                    return {
-                                        "location": str(stat.traceback[0]),
-                                        "bytes": stat.size,
-                                        "count": stat.count,
-                                        "bytes_diff": getattr(stat, "size_diff", None),
-                                        "count_diff": getattr(stat, "count_diff", None),
+                                    def detail(stat):
+                                        return {
+                                            "location": str(stat.traceback[0]),
+                                            "bytes": stat.size,
+                                            "count": stat.count,
+                                            "bytes_diff": getattr(
+                                                stat, "size_diff", None
+                                            ),
+                                            "count_diff": getattr(
+                                                stat, "count_diff", None
+                                            ),
+                                        }
+
+                                    retained["allocation_profile"] = {
+                                        "diagnostic_only": True,
+                                        "tracing_depth": 1,
+                                        "python_tracked_bytes": sum(
+                                            x.size
+                                            for x in allocation_now.statistics("lineno")
+                                        ),
+                                        "baseline_python_tracked_bytes": sum(
+                                            x.size
+                                            for x in allocation_baseline.statistics(
+                                                "lineno"
+                                            )
+                                        ),
+                                        "largest_live_allocations": [
+                                            detail(x)
+                                            for x in allocation_now.statistics(
+                                                "lineno"
+                                            )[:40]
+                                        ],
+                                        "largest_retained_differences": [
+                                            detail(x)
+                                            for x in allocation_now.compare_to(
+                                                allocation_baseline, "lineno"
+                                            )[:40]
+                                        ],
+                                        "native_allocations_and_allocator_free_pages": "not attributed by tracemalloc",
                                     }
-
-                                retained["allocation_profile"] = {
-                                    "diagnostic_only": True,
-                                    "tracing_depth": 1,
-                                    "python_tracked_bytes": sum(
-                                        x.size
-                                        for x in allocation_now.statistics("lineno")
-                                    ),
-                                    "baseline_python_tracked_bytes": sum(
-                                        x.size
-                                        for x in allocation_baseline.statistics(
-                                            "lineno"
-                                        )
-                                    ),
-                                    "largest_live_allocations": [
-                                        detail(x)
-                                        for x in allocation_now.statistics("lineno")[
-                                            :40
-                                        ]
-                                    ],
-                                    "largest_retained_differences": [
-                                        detail(x)
-                                        for x in allocation_now.compare_to(
-                                            allocation_baseline, "lineno"
-                                        )[:40]
-                                    ],
-                                    "native_allocations_and_allocator_free_pages": "not attributed by tracemalloc",
-                                }
                                 # A separate causal probe, after every original
                                 # retention observation. Never use these values
                                 # to qualify the unmodified production workload.
@@ -357,7 +377,12 @@ def _server(root, listener, channel, telemetry, allocation_profile=False):
                                     "rss_after_trim": after_trim["VmRSS_bytes"],
                                 }
                             channel.send({"snapshot": retained})
+                    tick_started = time.monotonic()
                     await asyncio.sleep(0.02)
+                    if attribution is not None and attribution.enabled:
+                        attribution.record(
+                            "event_loop_tick_20ms", tick_started, context="observer"
+                        )
 
             command_task = asyncio.create_task(commands())
             actor, session_key = runtime.member_chat_binding(PRINCIPAL)
@@ -550,6 +575,8 @@ async def _measure_import(tmp_path, *, allocation_profile):
         "environment": "hosted-linux",
         "native_qualification": False,
         "allocation_profile": allocation_profile,
+        "python_tracing_enabled": allocation_profile
+        and os.getenv("ADMINME_FINANCE_IMPORT_PYTHON_TRACE") == "1",
         "allocation_overhead_excluded_from_acceptance": allocation_profile,
         "diagnostic_containment_not_acceptance_policy": True,
         "sustained_load_qualification": False,
