@@ -21,13 +21,16 @@ import pytest
 
 from adminme.adapters.cos_channel_acquisition import CONFIG_KEY as COS_ACQUISITION
 from adminme.adapters.disposable_test_acquisition import CONFIG_KEY as TEST_ACQUISITION
-from adminme.historical_attribution import audit_historical_attribution
+from adminme.historical_attribution import (
+    _cos_response_owner_matches,
+    audit_historical_attribution,
+)
 from adminme.provider_bindings import validate_historical_provider_bindings
 from adminme.service_identities import COS_SERVICE_PRINCIPAL_ID
 from adminme.runtime.application import create_application
 from adminme.source_assurance import audit_source_assurance
 from bootstrap import htr10_export
-from bootstrap.candidate_readiness import record_htr10_review
+from bootstrap.candidate_readiness import ACTIVE_CONTRACT, record_htr10_review
 from bootstrap.contracts import DeploymentPaths, atomic_write
 from bootstrap.secrets import secret_store
 from tests.acceptance.test_authenticated_conversation_reply import (
@@ -199,6 +202,18 @@ def test_real_source_audit_and_readiness_retain_email_chain_after_restart(
             send_once(client, service, channel)
             assert_retained_effect(published_assurance(client))
             assert_historical_email(client)
+
+            async def exact_attempt() -> str:
+                rows = [
+                    event
+                    async for event in client.app.state.runtime.event_log.read_since(
+                        types=["cos.response.attempted"]
+                    )
+                ]
+                assert len(rows) == 1
+                return rows[0]["event_id"]
+
+            attempt_id = client.portal.call(exact_attempt)
         finally:
             client.portal.call(model.aclose)
     # Reopen the encrypted retained history without initiating another action.
@@ -212,6 +227,9 @@ def test_real_source_audit_and_readiness_retain_email_chain_after_restart(
         # Disabling a service enrollment intentionally removes its current
         # provider binding; the retained internal email ownership still validates.
         historical = historical_audit(client)
+        assert client.portal.call(
+            _cos_response_owner_matches, client.app.state.runtime.event_log, attempt_id
+        )
         assert (
             sum(
                 row["event_count"]
@@ -426,9 +444,10 @@ def test_genuine_email_history_crosses_real_htr_export_and_review(
                 config_dir / "deployment-readiness.json",
                 json.dumps(
                     {
+                        "contract": ACTIVE_CONTRACT,
                         "provider_effect_window": {
                             "started_at": datetime.now(timezone.utc).isoformat()
-                        }
+                        },
                     }
                 ).encode(),
             )
