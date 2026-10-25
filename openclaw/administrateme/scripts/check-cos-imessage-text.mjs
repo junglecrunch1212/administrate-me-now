@@ -44,8 +44,9 @@ try {
   });
   const loadedGuidance = await readFile(path.join(compiledWorkspace, "AGENTS.md"), "utf8");
   for (const instruction of ["minimal concise title", "preserve the no-automatic-send restriction",
-    "Do not add", "not the affirmative reminder creation", "do not call an email/send or timer tool",
-    "does not prove a missing title/permission"]) {
+    "Add no sender, provider, recipient or purpose", "not negate affirmative reminder creation",
+    "Option 2 keeps email unresolved: no reminder, email or timer",
+    "does not prove a missing title or permission"]) {
     assert.ok(loadedGuidance.includes(instruction), `Compiled workflow omits ${instruction}`);
   }
   const modulePath = path.join(directory, "pinned-format.mjs");
