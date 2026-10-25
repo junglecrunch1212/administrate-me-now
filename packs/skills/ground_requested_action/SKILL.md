@@ -1,7 +1,7 @@
 ---
 name: ground_requested_action
 namespace: adminme
-version: 1.0.2
+version: 1.0.3
 description: Compare one proposed action with one authenticated human instruction; produce grounded evidence, never permission.
 input_schema: ./schemas/input.schema.json
 output_schema: ./schemas/output.schema.json
@@ -23,7 +23,13 @@ This skill supplies semantic evidence to independent policy engines. It cannot
 choose identities, grant permissions or execute actions. Both engines still
 validate the trusted source, exact action, current authority and expiry.
 
-Version 1.0.2 returns strict quote-only evidence (`{"text": "exact quote"}`).
+Version 1.0.3 distinguishes the requested reminder operation from the content
+being remembered and applies negative constraints to their named operation.
+An omitted title permits a minimal current-instruction paraphrase, not invented
+details from earlier turns. Explicit titles remain exact; a reminder about an
+email never supplies authority to send it. This changes semantic guidance only.
+
+Evidence remains strict quote-only (`{"text": "exact quote"}`).
 Deterministic code accepts only unique exact, non-overlapping occurrences and
 computes Unicode code-point spans before recording/signing the existing domain
 receipt. Existing retained span receipts are unchanged. Unusable extraction is
