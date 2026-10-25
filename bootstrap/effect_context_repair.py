@@ -14,7 +14,7 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 from datetime import datetime, timezone
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -351,7 +351,7 @@ def _audit_windows(
         def inside(
             event: dict[str, Any],
             *,
-            window_start: datetime = start,
+            window_start: datetime = cast(datetime, start),
             window_end: datetime | None = end,
         ) -> bool:
             return _event_at_or_after(event, window_start) and (
