@@ -98,6 +98,7 @@ def main():
                 "freshness"
             ]
             states = client.portal.call(consumers, client.app.state.runtime)
+            assert states, "consumer set is empty"
             assert freshness["refresh_error_type"] is None, body
             settled = all(
                 v
@@ -119,6 +120,10 @@ def main():
                     response.status_code == 200
                     and body["service_ready"] is True
                     and body["event_ingest_ready"] is True
+                ), body
+                assert (
+                    body["capabilities"]["policy:source-assurance"]["state"]
+                    == "healthy"
                 ), body
                 live = client.get("/api/system/live")
                 assert live.status_code == 200
@@ -213,6 +218,7 @@ def main():
                 assert_preserved(original, before)
                 if phase == "predecessor":
                     names = runtime.projections.projection_names()
+                    assert names, "projection set is empty"
                     before_projections = {
                         name: client.portal.call(
                             runtime.projections.read, name, projection_digest
