@@ -2739,7 +2739,7 @@ class UpgradeManager:
                             ),
                             "effect_context_plan_sha256": effect_plan.digest(),
                         }
-                        if effect_proof is not None
+                        if effect_plan is not None and effect_proof is not None
                         else {}
                     ),
                     **(

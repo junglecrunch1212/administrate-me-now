@@ -593,7 +593,7 @@ async def audit_source_assurance(
                 "request_authorization_event_id",
             ),
             "authenticated_conversation": ("conversation_source_event_id",),
-        }.get((event.get("payload") or {}).get("authorization_method"), ())
+        }.get(str((event.get("payload") or {}).get("authorization_method") or ""), ())
     } - {""}
     cos_events: list[dict[str, Any]] = []
     for event in cos_metadata:

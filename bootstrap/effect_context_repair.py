@@ -311,7 +311,9 @@ def _effect_counts(
     """Reuse production effect validators on one closed envelope snapshot."""
     from adminme.source_assurance import _provider_effect_counts
 
-    requests, terminals, reconciliations = [], {}, {}
+    requests: list[dict[str, Any]] = []
+    terminals: dict[str, list[dict[str, Any]]] = {}
+    reconciliations: dict[str, list[dict[str, Any]]] = {}
     for event in events:
         if include is not None and not include(event):
             continue
