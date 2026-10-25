@@ -107,9 +107,28 @@ export async function proveReminderMode({ pluginDirectory, nativeRegistration, p
       const stage = { action: "offer", title: draft.title, due_at: due, request_id: offered.request_id };
       assert.notEqual((await runner.runBeforeToolCall({ toolName: tool, toolCallId: "stage-mode", params: stage }, context))?.block, true);
       await tools.get(tool)(context).execute("stage-mode", stage);
-      const messages = [{ role: "user", content: original }, { role: "assistant", content: offered.prompt, phase: "final", stopReason: "stop" }];
-      for (const handler of hooks("agent_end")) await handler({ success: true, runId: context.runId, messages }, context);
+      // Match the protected user transport metadata in the pinned native proof.
+      // Exact body text alone must never stand in for the current iMessage ID.
+      const userMessage = { role: "user", content: original,
+        ...(channel === "imessage" ? { __openclaw: { transport: { channel, messageId: "ev-mode-1" } } } : {}) };
+      const finish = async (user) => {
+        const messages = [user, { role: "assistant", content: offered.prompt, phase: "final", stopReason: "stop" }];
+        for (const handler of hooks("agent_end")) await handler({ success: true, runId: context.runId, messages }, context);
+      };
+      if (channel === "imessage") {
+        for (const user of [
+          { role: "user", content: original },
+          { ...userMessage, __openclaw: { transport: { channel, messageId: "ev-mode-unrelated" } } },
+        ]) {
+          await finish(user);
+          assert.equal(presentation, undefined);
+          assert.equal(calls.filter((row) => row.endpoint.endsWith("/self-reply") || row.endpoint.endsWith("/cos-reminder-choice/presented")).length, 0,
+            "An unbound final transcript authorized a reply or reminder presentation");
+        }
+      }
+      await finish(userMessage);
       assert.ok(presentation, `actual ${channel} final hook did not retain presentation`);
+      if (channel === "imessage") assert.equal(calls.filter((row) => row.endpoint.endsWith("/self-reply")).length, 1);
       assert.equal(calls.filter((row) => row.endpoint.endsWith("/cos-reminder-choice/presented")).length, 1);
       await deliver("ev-mode-4", "1");
       const answer = { action: "answer", task_id: offered.task_id };
