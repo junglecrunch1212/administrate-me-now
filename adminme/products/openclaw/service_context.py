@@ -9,7 +9,7 @@ attachments stay out.
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import HTTPException
 
@@ -221,6 +221,38 @@ FACT_FIELDS = {
         }
     ),
 }
+
+
+ContextSourceKind = Literal["calendar", "google_tasks", "apple_reminders"]
+_ITEM_SOURCE_TYPES = (
+    "list_item.added",
+    "list_item.updated",
+    "list_item.completed",
+    "list_item.uncompleted",
+)
+CONTEXT_SOURCE_TYPES: dict[ContextSourceKind, tuple[str, ...]] = {
+    "calendar": ("calendar.event_added", "calendar.event_updated"),
+    "google_tasks": _ITEM_SOURCE_TYPES,
+    "apple_reminders": _ITEM_SOURCE_TYPES,
+}
+
+
+def context_source_types(source_kind: ContextSourceKind | None) -> list[str]:
+    """Exclude unrelated event families before the encrypted scan is read."""
+    return list(
+        FACT_FIELDS if source_kind is None else CONTEXT_SOURCE_TYPES[source_kind]
+    )
+
+
+def context_source_matches(
+    event: dict[str, Any], source_kind: ContextSourceKind | None
+) -> bool:
+    """A selection narrows discovery, never the existing source authority checks."""
+    if source_kind is None:
+        return True
+    return event["type"] in CONTEXT_SOURCE_TYPES[source_kind] and (
+        source_kind == "calendar" or event["payload"].get("provider") == source_kind
+    )
 
 
 def active_contexts(
