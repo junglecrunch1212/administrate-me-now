@@ -92,8 +92,27 @@ class StartupFrames:
         return value
 
 
+def startup_instruction(stream):
+    value = json.loads(
+        read_frame(stream, STARTUP_LIMIT), object_pairs_hook=unique_object
+    )
+    if not isinstance(value, dict) or len(value) != 1:
+        raise ValueError("synthetic_startup_instruction")
+    name = next(iter(value))
+    if (
+        name not in {"launch", "stop"}
+        or type(value[name]) is not int
+        or value[name] != 1
+    ):
+        raise ValueError("synthetic_startup_instruction")
+    return name
+
+
 def launch(arguments):
-    if len(arguments) != 2 or arguments[0] != "measured_lifetime":
+    if len(arguments) != 2 or arguments[0] not in {
+        "measured_lifetime",
+        "phased_lifetime",
+    }:
         raise ValueError("synthetic_launcher_arguments")
     root = Path(arguments[1])
     if not root.is_absolute() or root.is_symlink() or not root.is_dir():
@@ -105,6 +124,11 @@ def launch(arguments):
     nonce = secrets.token_hex(8)
     tenant = "tenant-" + store_name(nonce)
     write_json(sys.stdout.buffer, {"fixture_coordinates": 1, "tenant": tenant})
+
+    if arguments[0] == "phased_lifetime":
+        if startup_instruction(sys.stdin.buffer) == "stop":
+            write_json(sys.stdout.buffer, {"stopped": True, "tenant": tenant})
+            return
 
     # No directory/key is accepted over the pipe or command line. The existing
     # constructor still exclusively creates storage and generates its test key.

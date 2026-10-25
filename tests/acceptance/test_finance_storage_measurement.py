@@ -10,6 +10,7 @@ import hashlib
 import json
 import os
 import platform
+import signal
 import sys
 import threading
 import time
@@ -34,6 +35,8 @@ from tests.acceptance.test_openclaw_native_seam import DEMO_HEADERS, PRINCIPAL
 from tests.fixtures.finance_import_load import sized_package
 from tests.fixtures.finance_planning import seal
 from tests.fixtures.finance_startup import StartupFrames
+from tests.fixtures import finance_watchdog as watchdog
+from adminme.finance.worker_protocol import write_json, read_json
 from tests.fixtures.finance_provenance import seal_publication
 
 pytestmark = pytest.mark.skipif(
@@ -43,21 +46,56 @@ pytestmark = pytest.mark.skipif(
 )
 
 SCHEDULE = (
-    ("warm_core", 10, 20, 0),
-    ("baseline_i", 20, 35, 0),
-    ("imports", 35, 70, 0),
-    ("warm_loaded", 70, 80, 10),
-    ("baseline_a", 80, 110, 0),
-    ("mixed", 110, 140, 10),
-    ("baseline_b", 140, 170, 0),
+    ("warm_core", 30, 40, 0),
+    ("baseline_i", 40, 55, 0),
+    ("imports", 55, 90, 0),
+    ("warm_loaded", 90, 100, 10),
+    ("baseline_a", 100, 130, 0),
+    ("mixed", 130, 160, 10),
+    ("baseline_b", 160, 190, 0),
 )
 CORE_PATH = "/api/member/v1/surfaces/reminders"
 PLANNING_PATH = "/api/member/v1/finance/planning"
 
 
+def planned_requests(started):
+    return [
+        {
+            "id": f"{name}:{kind}:{slot}",
+            "phase": name,
+            "kind": kind,
+            "slot": slot,
+            "scheduled": started + start + slot / hz,
+        }
+        for name, start, end, planning_hz in SCHEDULE
+        for kind, hz in (("core", 20), ("planning", planning_hz))
+        if hz
+        for slot in range(int((end - start - 1) * hz))
+    ]
+
+
+def complete_request_evidence(report):
+    observed = {r["id"]: r for r in report["requests"]}
+    assert len(observed) == len(report["requests"]), "duplicate request evidence"
+    report["request_evidence"] = [
+        observed.get(
+            row["id"],
+            {
+                **row,
+                "started": None,
+                "milliseconds": None,
+                "error": "not_started_after_abort",
+            },
+        )
+        for row in report["planned_requests"]
+    ]
+
+
 class MeasuredRun(OwnedRun):
     runtime_script = "finance_startup.py"
     runtime_case = "measured_lifetime"
+    setup_deadline = 10
+    setup_complete_deadline = 10
 
     def __init__(self, root, *, name="measured_lifetime"):
         self.sample_lock = threading.Lock()
@@ -81,7 +119,7 @@ class MeasuredRun(OwnedRun):
     def setup_check(self):
         if self.setup_stop.is_set():
             raise RuntimeError("synthetic_setup_cancelled")
-        if time.monotonic() >= self.started + 10:
+        if time.monotonic() >= self.started + self.setup_deadline:
             raise TimeoutError("fixed synthetic setup deadline")
 
     @contextmanager
@@ -107,7 +145,7 @@ class MeasuredRun(OwnedRun):
                 sample = self.sample()
                 violations = [
                     key
-                    for key, value in LIMITS.items()
+                    for key, value in self.limits.items()
                     if key in sample
                     and sample[key] > value
                     and (key != "work_seconds" or self.work_end is None)
@@ -156,6 +194,100 @@ class MeasuredRun(OwnedRun):
         self.record["work_finished_at"] = self.work_end
         self.record["work_elapsed_seconds"] = self.work_end - self.started
         self.record["work_terminal_sample"] = self.sample()
+
+
+class PhasedRun(MeasuredRun):
+    runtime_case = "phased_lifetime"
+    limits = {**LIMITS, "work_seconds": 200}
+    setup_deadline = 15
+    setup_complete_deadline = 30
+
+    def __init__(self, root, *, name="measured_lifetime"):
+        self.supervisor_pid = int(os.environ["FINANCE_WATCHDOG_PID"])
+        self.supervisor_birth = int(os.environ["FINANCE_WATCHDOG_BIRTH"])
+        self.clock_start = float(os.environ["FINANCE_WATCHDOG_STARTED"])
+        self.runtime_released = False
+        self.runtime_cpu = 0.0
+        parent = watchdog.process_row(self.supervisor_pid)
+        assert parent and parent["start_ticks"] == self.supervisor_birth
+        assert os.getppid() == self.supervisor_pid
+        super().__init__(root, name=name)
+        row = watchdog.process_row(self.runtime_pid)
+        watchdog.notify("runtime", pid=self.runtime_pid, birth=row["start_ticks"])
+        task = asyncio.current_task()
+        asyncio.get_running_loop().add_signal_handler(signal.SIGUSR1, task.cancel)
+        self.record["watchdog"] = {
+            "pid": self.supervisor_pid,
+            "birth": self.supervisor_birth,
+        }
+
+    def sample(self):
+        with self.sample_lock:
+            parent = watchdog.process_row(self.supervisor_pid)
+            assert parent and parent["start_ticks"] == self.supervisor_birth
+            row = watchdog.sample(
+                self.supervisor_pid,
+                self.runtime_pid,
+                os.getpid(),
+                [self.output],
+                self.runtime_cpu,
+            )
+            self.runtime_cpu = row["runtime_executor_cpu_seconds"]
+            self.known.update(
+                {
+                    p["pid"]: p["start_ticks"]
+                    for p in row["pids"]
+                    if p["pid"] not in {os.getpid(), self.supervisor_pid}
+                }
+            )
+            row["work_seconds"] = row["at"] - self.started
+            self.record["samples"].append(row)
+            return row
+
+    def release_runtime(self):
+        with self.pipe_lock:
+            assert not self.runtime_released and self.startup.count == 1
+            write_json(self.process.stdin, {"launch": 1})
+            self.runtime_released = True
+            self.setup_mark("runtime.released")
+
+    def stop_launcher(self):
+        with self.pipe_lock:
+            assert not self.runtime_released
+            if self.startup.count == 0:
+                self.startup.read(self.process.stdout)
+            write_json(self.process.stdin, {"stop": 1})
+            value = read_json(self.process.stdout, 2048)
+            assert value == {"stopped": True, "tenant": self.startup.tenant}
+            return value
+
+    def finish_work(self):
+        super().finish_work()
+        watchdog.notify("work_finished", at=self.work_end)
+
+
+async def phased_packets(run, active):
+    await run.setup_boundary("before_coordinates")
+    coordinates = await run.call(None)
+    await run.setup_boundary("coordinates")
+    packets = await bounded_work(
+        run, active, run.thread(prepare_packets, run, coordinates), 15
+    )
+    run.setup_mark("fixture.ready_before_release")
+    await run.setup_boundary("packets_ready")
+    remaining = run.started + 15 - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError("fixture missed fixed preparation deadline")
+    await asyncio.sleep(remaining)
+    run.setup_deadline = 30
+    await run.thread(run.release_runtime)
+    await run.setup_boundary("runtime_released")
+    ready = await run.call(None)
+    assert ready["tenant"] == coordinates["tenant"]
+    await run.setup_boundary("http_ready")
+    run.setup_mark("branches.joined")
+    await run.setup_boundary("joined")
+    return ready, *packets
 
 
 def settled(state):
@@ -439,7 +571,12 @@ async def setup_runtime(run, active):
         next_wire,
         selection,
         expected,
-    ) = await bounded_work(run, active, setup(), 10)
+    ) = await bounded_work(
+        run,
+        active,
+        phased_packets(run, active) if isinstance(run, PhasedRun) else setup(),
+        run.setup_complete_deadline,
+    )
     with run.setup_stage("controller.client"):
         client = run.client = httpx.AsyncClient(
             base_url=ready["url"],
@@ -486,7 +623,9 @@ async def setup_runtime(run, active):
         return ids, state
 
     with run.setup_stage("runtime.controls_and_settlement"):
-        approvals, state = await bounded_work(run, active, controls(), 10)
+        approvals, state = await bounded_work(
+            run, active, controls(), run.setup_complete_deadline
+        )
     run.setup_mark("setup.completed")
     report["setup"] = {
         "finished": time.monotonic(),
@@ -516,7 +655,11 @@ async def cleanup_run(run, active, *, shutdown_sent=False):
     for task in active:
         task.cancel()
     try:
-        async with asyncio.timeout(max(4, run.started + 10 - time.monotonic())):
+        async with asyncio.timeout(
+            min(
+                15, max(4, run.started + run.setup_complete_deadline - time.monotonic())
+            )
+        ):
             if active:
                 await asyncio.gather(*active, return_exceptions=True)
             if run.calls:
@@ -524,6 +667,13 @@ async def cleanup_run(run, active, *, shutdown_sent=False):
                     *(asyncio.shield(call) for call in list(run.calls)),
                     return_exceptions=True,
                 )
+            if (
+                isinstance(run, PhasedRun)
+                and not run.runtime_released
+                and run.process.poll() is None
+            ):
+                report["cleanup_shutdown"] = await run.thread(run.stop_launcher)
+                shutdown_sent = True
             if not shutdown_sent and run.process.poll() is None:
                 # A cancelled setup may leave the second startup frame
                 # unread. Consume it before issuing a control command.
@@ -557,12 +707,13 @@ async def cleanup_run(run, active, *, shutdown_sent=False):
 
 
 async def test_fixed_schedule_representative_storage_measurement(tmp_path):
-    run = MeasuredRun(tmp_path / "measured")
+    run = PhasedRun(tmp_path / "measured")
     report = run.record
     report.update(
         schedule=SCHEDULE,
         phases=[],
         requests=[],
+        planned_requests=planned_requests(run.started),
         imports=[],
         faults=[],
         source_tree="9e739956d85316dff9b54880914e576268fe56fb",
@@ -730,6 +881,10 @@ async def test_fixed_schedule_representative_storage_measurement(tmp_path):
                                     "horizon_days": (7, 30, 90, 365)[slot % 4],
                                     "offset": 50 * (slot % 5),
                                 }
+                            row["path"] = (
+                                PLANNING_PATH if kind == "planning" else CORE_PATH
+                            )
+                            row["parameters"] = params
                             response = await client.get(
                                 PLANNING_PATH if kind == "planning" else CORE_PATH,
                                 headers={**DEMO_HEADERS, "X-Measurement-Id": row["id"]},
@@ -857,7 +1012,7 @@ async def test_fixed_schedule_representative_storage_measurement(tmp_path):
             await run.call("shutdown")
             shutdown_sent = True
 
-        await bounded(finish(), 180)
+        await bounded(finish(), 200)
         report["state"] = "correctness_passed"
         completed = True
     except BaseException as exc:
@@ -872,13 +1027,14 @@ async def test_fixed_schedule_representative_storage_measurement(tmp_path):
             await cleanup_run(run, active, shutdown_sent=shutdown_sent)
         finally:
             try:
+                complete_request_evidence(report)
                 summarize(report)
             except BaseException as exc:
                 report["summary_error"] = type(exc).__name__
             (run.output / (run.name + ".json")).write_text(
                 json.dumps(report, indent=2) + "\n"
             )
-        assert not completed or report["work_elapsed_seconds"] <= 180
+        assert not completed or report["work_elapsed_seconds"] <= 200
 
 
 def summarize(report):

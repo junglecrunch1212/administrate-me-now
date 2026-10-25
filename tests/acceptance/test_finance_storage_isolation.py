@@ -74,6 +74,8 @@ def process_row(pid):
 class OwnedRun:
     runtime_script = "finance_storage_cases.py"
     runtime_case = None
+    clock_start = None
+    limits = LIMITS
 
     def __init__(self, name, root):
         resource.setrlimit(resource.RLIMIT_CPU, (180, 180))
@@ -88,7 +90,7 @@ class OwnedRun:
             "synthetic_only": True,
             "production_or_native_qualification": False,
             "containment_not_acceptance": True,
-            "limits": LIMITS,
+            "limits": self.limits,
             "cpu_enforcement": "per-process RLIMIT_CPU plus aggregate owned-tree stop",
             "ram_disk_enforcement": "cooperative sampled stop, not an OS sandbox",
             "samples": [],
@@ -96,7 +98,9 @@ class OwnedRun:
             "state": "incomplete",
         }
         self.stop = threading.Event()
-        self.started = time.monotonic()
+        self.started = (
+            self.clock_start if self.clock_start is not None else time.monotonic()
+        )
         self.known = {}
         self.process = None
         self.error_file = (self.output / (name + ".stderr.txt")).open("wb")
@@ -259,7 +263,7 @@ class OwnedRun:
             self.record["cleanup"]["scratch_removed"] = not self.root.exists()
             self.record["maxima"] = {
                 key: max((s[key] for s in self.record["samples"]), default=0)
-                for key in LIMITS
+                for key in self.limits
                 if key != "cleanup_seconds"
             }
         finally:
