@@ -50,11 +50,14 @@ export async function auditFinanceMetadata({ page, stalePage, otherPage, baseUrl
   await status().filter({ hasText: "Access could not be verified" }).waitFor();
   record("Unavailable access never becomes verified empty", await card().getByRole("checkbox").isDisabled() && await card().getByRole("button", { name: "Inspect retained bindings" }).isDisabled() && await card().locator(".finance-metadata-result").textContent() === "");
   await screenshot(page, "finance-metadata-unavailable-390.png");
-  await otherPage.goto(`${baseUrl}/member/settings?section=cos-work`, { waitUntil: "networkidle" });
-  const otherSettings = await (await otherPage.request.get(`${baseUrl}/api/member/v1/surfaces/settings`)).json();
-  record("Denied-view fixture is actually a child", otherSettings.control.identity.authenticated_role === "child", otherSettings.control.identity);
-  const absent = await card(otherPage).count() === 0;
-  record("Nonprincipal view exposes no metadata controls", absent || (await card(otherPage).getByRole("checkbox").count() === 0 && (await card(otherPage).textContent()).includes("own authenticated principal view")));
+  const bootstrap = await otherPage.request.get(`${baseUrl}/api/member/v1/bootstrap`);
+  const child = await bootstrap.json();
+  record("Denied-view fixture is actually a child in its own context", bootstrap.ok() && child.member.authenticated_role === "child" && !child.member.viewing_as && child.member.authenticated_id === child.member.id && child.trust.actions_as === child.trust.reads_as, child.member);
+  await otherPage.goto(`${baseUrl}/member/today`, { waitUntil: "networkidle" });
+  await otherPage.getByRole("heading", { name: "Today", exact: true }).waitFor();
+  record("Child navigation exposes no Settings or metadata controls", await card(otherPage).count() === 0 && await otherPage.locator('#primary-nav a[href="/member/settings"]').count() === 0);
+  const deniedSettings = await otherPage.request.get(`${baseUrl}/api/member/v1/surfaces/settings`);
+  record("Actual child Settings surface remains unavailable", deniedSettings.status() === 404, deniedSettings.status());
   const denied = await otherPage.request.get(`${baseUrl}${endpoint}`);
   record("Actual child metadata endpoint remains forbidden", denied.status() === 403, denied.status());
 }
