@@ -42,6 +42,18 @@ jobs:
           git rev-parse HEAD HEAD:adminme HEAD:poetry.lock > "$FINANCE_METADATA_ARTIFACT_DIR/source-pins.txt"
           set -o pipefail
           .venv/bin/python -m pytest -q --runxfail --durations=10 --junitxml="$FINANCE_METADATA_ARTIFACT_DIR/results.xml" tests/acceptance/test_finance_metadata_owner.py tests/acceptance/test_finance_metadata_history.py 2>&1 | tee "$FINANCE_METADATA_ARTIFACT_DIR/pytest.txt"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24'
+      - name: Focused synthetic metadata member rendering
+        timeout-minutes: 8
+        env:
+          ADMINME_GATE7_FINANCE_METADATA_ONLY: '1'
+          ADMINME_GATE7_PYTHON: ${{ github.workspace }}/.venv/bin/python
+          ADMINME_GATE7_EVIDENCE_DIR: ${{ runner.temp }}/finance-metadata/browser
+        run: |
+          npm ci --prefix tools/console-reference-harness --ignore-scripts
+          npm run test:gate7 --prefix tools/console-reference-harness
       - name: Preserve focused results
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
