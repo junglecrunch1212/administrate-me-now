@@ -23,14 +23,23 @@ from adminme.source_assurance import audit_source_assurance
 from bootstrap import cos_channel_activation as operation
 from bootstrap import effect_context_repair as repair
 from bootstrap import upgrade
+from bootstrap.candidate_readiness import CandidateReadinessError
 from bootstrap.contracts import atomic_write
 from bootstrap.secrets import secret_store
 from bootstrap.upgrade import UpgradeError, UpgradeManager
 from tests.acceptance import test_requested_email_action as email
 from tests.acceptance.test_cos_live_maintenance import maintenance_runtime
-from tests.acceptance.test_forwarded_submission_repair_operations import _doctor
+from tests.acceptance.test_forwarded_submission_repair_operations import (
+    _doctor as _legacy_doctor,
+)
 from tests.acceptance.test_forwarded_channel_intake import ROOT
 from tests.unit.bootstrap.test_cos_channel_activation import _audit
+
+
+def _doctor(services):
+    report = _legacy_doctor(services)
+    report["status"] = "healthy" if all(r["ok"] for r in report["checks"]) else "failed"
+    return report
 
 
 def _old_runtime_reader(monkeypatch):
@@ -301,7 +310,16 @@ def _prepare_upgrade(
     return manager, candidate, pointer_path
 
 
-@pytest.mark.parametrize("outcome", ["healthy_candidate", "failed_candidate"])
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        "healthy_candidate",
+        "successor_candidate",
+        "failed_candidate",
+        "interrupted_containment",
+        "failed_original_recovery",
+    ],
+)
 def test_real_email_containment_upgrade_and_schema_aware_fallback(
     tmp_path, monkeypatch, outcome
 ):
@@ -309,6 +327,44 @@ def test_real_email_containment_upgrade_and_schema_aware_fallback(
     with maintenance_runtime(tmp_path, monkeypatch, allow_degraded=True) as fixture:
         controller, _activate, _pause, services, settings, gmail, config = fixture
         request = _sent_fixture(fixture, monkeypatch)
+        if outcome == "successor_candidate":
+            # Match the disposable OS/source snapshot to the updater's actual
+            # pointer and readiness journal, so restoration validates that journal.
+            pointer = controller.paths.app_dir / "current-release.json"
+            predecessor = controller.paths.app_dir / "releases" / ("a" * 40)
+            atomic_write(
+                pointer,
+                json.dumps(
+                    {"path": str(predecessor), "commit": "a" * 40, "previous": None}
+                ).encode(),
+            )
+            snapshot = controller._bound_snapshot("a" * 40)
+            binding = json.loads((config / "deployment-readiness.json").read_bytes())[
+                "deployment_binding"
+            ]
+            snapshot.update(
+                {
+                    k: binding[k]
+                    for k in (
+                        "instance_fingerprint",
+                        "host_fingerprint",
+                        "configuration_fingerprint",
+                    )
+                }
+            )
+            snapshot["pointer_sha256"] = hashlib.sha256(
+                pointer.read_bytes()
+            ).hexdigest()
+            monkeypatch.setattr(
+                controller,
+                "_bound_snapshot",
+                lambda commit: {**snapshot, "predecessor_commit": commit},
+            )
+            monkeypatch.setattr(
+                operation,
+                "capture_deployment_snapshot",
+                lambda _paths: SimpleNamespace(public=lambda: copy.deepcopy(snapshot)),
+            )
         before = services.settle()
         repair.validate_diagnostics(before, observation=False)
         policy_before = asyncio.run(_audit(controller))[0]
@@ -332,7 +388,148 @@ def test_real_email_containment_upgrade_and_schema_aware_fallback(
             text="Show my current work.",
         )
         services.settle()
-        contained = controller.pause_maintenance(plan)
+        if outcome == "interrupted_containment":
+            validator = repair.validate_diagnostics
+
+            def defective_status(value, *, observation, doctor=None):
+                if doctor is not None and doctor["status"] == "failed":
+                    raise repair.EffectContextRepairError(
+                        "repair Doctor has unrelated failures"
+                    )
+                return validator(value, observation=observation, doctor=doctor)
+
+            with monkeypatch.context() as patch:
+                patch.setattr(repair, "validate_diagnostics", defective_status)
+                with pytest.raises(repair.EffectContextRepairError, match="Doctor"):
+                    controller.pause_maintenance(plan)
+            interrupted = json.loads(controller.journal_path.read_bytes())
+            assert interrupted["phase"] == "verifying"
+            receipts = list(
+                (controller.paths.app_dir / "effect-context-repair").glob(
+                    "doctor-*.json"
+                )
+            )
+            assert (
+                len(receipts) == 1
+                and json.loads(receipts[0].read_bytes())["status"] == "failed"
+            )
+            assert "doctor" not in interrupted
+            controls_at_failure = {
+                p: (config / p).read_bytes()
+                for p in (
+                    "runtime.yaml",
+                    "observation.json",
+                    "deployment-readiness.json",
+                )
+            }
+            events_at_failure = asyncio.run(_audit(controller))[1]
+            monkeypatch.setattr(
+                controller,
+                "_observation_selection",
+                lambda: (plan.predecessor_commit, ROOT, "c" * 40),
+            )
+            with pytest.raises(operation.CoSActivationError, match="another source"):
+                controller.recover()
+            lineage = []
+
+            def ancestor(repository, commit, *, retained_by_commit):
+                lineage.append((commit, retained_by_commit))
+                assert (
+                    repository == ROOT
+                    and commit == plan.target_commit
+                    and retained_by_commit == "c" * 40
+                )
+
+            monkeypatch.setattr(operation, "load_git_tree", ancestor)
+            # No journal edits or extra side effects are permitted on refusal.
+            for field, value in (
+                ("phase", "prepared"),
+                ("controller_commit", "d" * 40),
+                ("owner_member_id", "other-fixture-member"),
+                ("maintenance_plan_sha256", "0" * 64),
+                ("operation", "activate"),
+            ):
+                changed = copy.deepcopy(interrupted)
+                changed[field] = value
+                atomic_write(controller.journal_path, json.dumps(changed).encode())
+                with pytest.raises(
+                    operation.CoSActivationError, match="exact unexpired"
+                ):
+                    controller.recover_effect_context_controller(plan)
+            atomic_write(controller.journal_path, json.dumps(interrupted).encode())
+            expired = plan.model_copy(
+                update={
+                    "expires_at": (
+                        datetime.now(timezone.utc) - timedelta(seconds=1)
+                    ).isoformat()
+                }
+            )
+            with pytest.raises(operation.CoSActivationError, match="exact unexpired"):
+                controller.recover_effect_context_controller(expired)
+            with monkeypatch.context() as patch:
+                from bootstrap.source_identity import SourceIdentityError
+
+                def unrelated(*_args, **_kwargs):
+                    raise SourceIdentityError("not retained by reviewed candidate")
+
+                patch.setattr(operation, "load_git_tree", unrelated)
+                with pytest.raises(SourceIdentityError, match="not retained"):
+                    controller.recover_effect_context_controller(plan)
+            for filename, field, value, error in (
+                (
+                    "adapters.json",
+                    "unexpected_config",
+                    True,
+                    "authority or configuration",
+                ),
+                ("observation.json", "active", False, "observation boundary"),
+                ("request-actions-control.json", "disabled", False, "revocation"),
+            ):
+                path = config / filename
+                original_bytes = path.read_bytes()
+                changed = json.loads(original_bytes)
+                changed[field] = value
+                atomic_write(path, json.dumps(changed).encode())
+                with pytest.raises(
+                    (operation.CoSActivationError, repair.EffectContextRepairError),
+                    match=error,
+                ):
+                    controller.recover_effect_context_controller(plan)
+                atomic_write(path, original_bytes)
+                assert json.loads(controller.journal_path.read_bytes()) == interrupted
+            lineage.clear()
+            contained = controller.recover_effect_context_controller(plan)
+            assert lineage == [(plan.target_commit, "c" * 40)]
+            history = json.loads(
+                (controller.directory / "history" / f"{plan.plan_id}.json").read_bytes()
+            )
+            assert history["controller_commit"] == plan.target_commit
+            assert (
+                history["effect_context_proof"] == interrupted["effect_context_proof"]
+            )
+            assert history["maintenance_plan_sha256"] == plan.digest()
+            assert (
+                history["effect_context_recovery_controller"]["controller_commit"]
+                == "c" * 40
+            )
+            assert all(
+                (config / p).read_bytes() == value
+                for p, value in controls_at_failure.items()
+            )
+            old_ids = [
+                e["event_id"]
+                for e in events_at_failure
+                if e["source_adapter"] == "cos-channel-operation"
+            ]
+            new_ids = [
+                e["event_id"]
+                for e in asyncio.run(_audit(controller))[1]
+                if e["source_adapter"] == "cos-channel-operation"
+            ]
+            assert new_ids == old_ids
+            assert not controller.journal_path.exists()
+        else:
+            contained = controller.pause_maintenance(plan)
         assert contained["status"] == "contained_degraded"
         diagnostic = services.settle()
         assert diagnostic["observation_active"] is True and diagnostic["ready"] is False
@@ -341,9 +538,134 @@ def test_real_email_containment_upgrade_and_schema_aware_fallback(
             (config / name).read_bytes() == payload
             for name, payload in controls.items()
         )
+        if outcome == "successor_candidate":
+            original = plan
+            original_bytes = plan_path.read_bytes()
+            history_path = controller.directory / "history" / f"{plan.plan_id}.json"
+            history_bytes = history_path.read_bytes()
+            monkeypatch.setattr(
+                controller,
+                "_observation_selection",
+                lambda: (original.predecessor_commit, ROOT, "c" * 40),
+            )
+
+            def ancestry(repository, commit, *, retained_by_commit):
+                assert (
+                    repository == ROOT
+                    and commit == original.target_commit
+                    and retained_by_commit == "c" * 40
+                )
+
+            monkeypatch.setattr(operation, "load_git_tree", ancestry)
+            monkeypatch.setattr("bootstrap.source_identity.load_git_tree", ancestry)
+            for filename, field, value in (
+                ("adapters.json", "unexpected_config", True),
+                ("observation.json", "active", False),
+                (
+                    "request-actions-control.json",
+                    "revoked_before",
+                    "2000-01-01T00:00:00Z",
+                ),
+            ):
+                path = config / filename
+                saved = path.read_bytes()
+                altered = json.loads(saved)
+                altered[field] = value
+                atomic_write(path, json.dumps(altered).encode())
+                with pytest.raises(
+                    (operation.CoSActivationError, repair.EffectContextRepairError)
+                ):
+                    controller.prepare_effect_context_successor(original)
+                atomic_write(path, saved)
+            for field, value in (
+                ("owner_member_id", "another-member"),
+                ("plan_id", "f" * 32),
+                ("expires_at", "2000-01-01T00:00:00Z"),
+            ):
+                with pytest.raises(
+                    (
+                        operation.CoSActivationError,
+                        repair.EffectContextRepairError,
+                        OSError,
+                        ValueError,
+                        CandidateReadinessError,
+                    )
+                ):
+                    controller.prepare_effect_context_successor(
+                        original.model_copy(update={field: value})
+                    )
+            atomic_write(controller.journal_path, b"{}")
+            with pytest.raises(operation.CoSActivationError, match="current operation"):
+                controller.prepare_effect_context_successor(original)
+            controller.journal_path.unlink()
+            plan = controller.prepare_effect_context_successor(original)
+            assert plan.plan_id == original.plan_id
+            assert (
+                plan.prepared_at == original.prepared_at
+                and plan.expires_at == original.expires_at
+            )
+            assert (
+                plan_path.read_bytes() == original_bytes
+                and history_path.read_bytes() == history_bytes
+            )
+            assert (
+                plan.model_copy(
+                    update={
+                        "target_commit": original.target_commit,
+                        "effect_context_proof": original.effect_context_proof,
+                    }
+                )
+                == original
+            )
+            receipt = (
+                controller.directory / "plan-continuations" / f"{plan.digest()}.json"
+            )
+            receipt_bytes = receipt.read_bytes()
+            assert receipt.stat().st_mode & 0o777 == 0o600
+            # Exact protected source and immutable changed-target receipt are
+            # exercised again by both load_plan and actual restoration below.
+            monkeypatch.setattr(
+                "bootstrap.source_identity.reviewed_candidate_commit",
+                lambda repository: "c" * 40 if repository == ROOT else "d" * 40,
+            )
+            repair.contained_plan_history(controller.paths, ROOT, plan, test_mode=False)
+            with pytest.raises(
+                repair.EffectContextRepairError, match="exact protected"
+            ):
+                repair.contained_plan_history(
+                    controller.paths, tmp_path, plan, test_mode=False
+                )
+            for field in (
+                "original_plan_sha256",
+                "successor_target_commit",
+                "successor_plan_sha256",
+            ):
+                changed = json.loads(receipt_bytes)
+                changed[field] = "0" * len(changed[field])
+                atomic_write(receipt, json.dumps(changed).encode())
+                with pytest.raises(
+                    repair.EffectContextRepairError, match="exact original"
+                ):
+                    repair.contained_plan_history(
+                        controller.paths, ROOT, plan, test_mode=False
+                    )
+            atomic_write(receipt, receipt_bytes)
+            assert controller.prepare_effect_context_successor(original) == plan
+            assert receipt.read_bytes() == receipt_bytes
+            plan_path = tmp_path / "successor-effect-plan.json"
+            atomic_write(plan_path, plan.model_dump_json().encode())
         manager, _candidate, pointer = _prepare_upgrade(
             controller, services, settings, plan, plan_path, monkeypatch, old
         )
+        loaded = repair.load_plan(
+            plan_path,
+            controller.paths,
+            ROOT,
+            candidate=plan.target_commit,
+            predecessor=plan.predecessor_commit,
+            test_mode=True,
+        )
+        assert loaded == plan
         # The public HTR export must not exempt an extra integrity fault merely
         # because this private repair plan is present. It emits no attestation.
         from bootstrap import htr10_export
@@ -381,8 +703,31 @@ def test_real_email_containment_upgrade_and_schema_aware_fallback(
                     )
                 )
         assert not historical.exists() and not exported.exists()
+        historical = controller.paths.backup_dir / "accepted-historical.json"
+        exported = controller.paths.backup_dir / "accepted-source.json"
+        result = asyncio.run(
+            htr10_export.export_htr10_audits(
+                controller.paths,
+                repository_root=ROOT,
+                historical_output=historical,
+                source_output=exported,
+                ownership_reviewed=True,
+                effect_context_repair_plan=plan_path,
+                test_mode=True,
+            )
+        )
+        assert result["historical_state"] == result["source_state"] == "healthy"
+        from bootstrap.candidate_readiness import record_htr10_review
+
+        review = record_htr10_review(
+            controller.paths,
+            historical_attribution=historical,
+            source_assurance=exported,
+            observed_at=datetime.now(timezone.utc).isoformat(),
+        )
+        assert review["provider_effect_integrity"] == "healthy"
         services.settle_on_start = False
-        if outcome == "failed_candidate":
+        if outcome in {"failed_candidate", "failed_original_recovery"}:
             original = manager._post_switch_doctor
 
             def fail_candidate(release, **kwargs):
@@ -391,8 +736,26 @@ def test_real_email_containment_upgrade_and_schema_aware_fallback(
                 return original(release, **kwargs)
 
             monkeypatch.setattr(manager, "_post_switch_doctor", fail_candidate)
-            with pytest.raises(UpgradeError, match="regression"):
-                manager.activate(ROOT)
+            if outcome == "failed_original_recovery":
+                # The original immutable candidate can fail its automatic fallback
+                # at the same old Doctor status check. Explicit later-controller
+                # rollback completes that journal without retargeting the plan.
+                def defective_wait(*_args, **_kwargs):
+                    raise repair.EffectContextRepairError(
+                        "repair Doctor has unrelated failures"
+                    )
+
+                with monkeypatch.context() as patch:
+                    patch.setattr(upgrade, "wait_effect_context", defective_wait)
+                    with pytest.raises(UpgradeError):
+                        manager.activate(ROOT)
+                assert manager.activation_journal.path.exists()
+                recovered = manager.rollback(recovery_repository=ROOT)
+                assert recovered["status"] == "recovered"
+                assert recovered["restored_readiness"] == "contained_degraded"
+            else:
+                with pytest.raises(UpgradeError, match="regression"):
+                    manager.activate(ROOT)
             assert json.loads(pointer.read_bytes())["commit"] == plan.predecessor_commit
             assert services.settle()["ready"] is False
             histories = [
@@ -405,6 +768,24 @@ def test_real_email_containment_upgrade_and_schema_aware_fallback(
             assert json.loads(pointer.read_bytes())["commit"] == plan.target_commit
             assert services.settle()["ready"] is True
         assert services.runtime_diagnostics()["observation_active"] is True
+        if outcome == "successor_candidate":
+            monkeypatch.setattr(
+                controller, "_selection", lambda: (plan.target_commit, ROOT)
+            )
+            # Production restoration validates the genuine committed updater
+            # journal, source identity and the same changed-target receipt.
+            receipt_bytes = receipt.read_bytes()
+            receipt.unlink()
+            with pytest.raises((OSError, ValueError, CandidateReadinessError)):
+                controller.activate(plan, enable_live=True)
+            atomic_write(receipt, receipt_bytes)
+            restored = controller.activate(plan, enable_live=True)
+            assert restored["observation_active"] is False
+            assert services.settle()["ready"] is True
+            assert history_path.read_bytes() == history_bytes
+            assert (
+                tmp_path / "private-effect-plan.json"
+            ).read_bytes() == original_bytes
         assert gmail.calls == 1
         assert all(
             (config / name).read_bytes() == payload

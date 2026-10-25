@@ -10,19 +10,25 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import os
 import time
+import uuid
 from collections.abc import Callable
 from pathlib import Path
 from datetime import datetime, timezone
-from typing import Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from pydantic import BaseModel, Field, model_validator
 
 from adminme.cos_response_assurance import AUDIT_TYPES, cos_provider_effect_counts
 from adminme.events.log import EventLog
-from bootstrap.contracts import DeploymentPaths
+from bootstrap.contracts import DeploymentPaths, atomic_write
 from bootstrap.deployment_budget import deployment_clock
 from bootstrap.secrets import secret_store
+
+
+if TYPE_CHECKING:
+    from bootstrap.cos_channel_activation import MaintenanceRestorationPlan
 
 
 class EffectContextRepairError(ValueError):
@@ -274,10 +280,13 @@ def validate_diagnostics(
     if doctor is not None:
         rows = doctor.get("checks")
         if (
-            doctor.get("status") != "degraded"
+            doctor.get("status") != "failed"
             or not isinstance(rows, list)
             or any(
-                not isinstance(r, dict) or type(r.get("ok")) is not bool for r in rows
+                not isinstance(r, dict)
+                or not isinstance(r.get("name"), str)
+                or type(r.get("ok")) is not bool
+                for r in rows
             )
             or len({r.get("name") for r in rows}) != len(rows)
             or not REPAIR_DOCTOR_CHECKS <= {r.get("name") for r in rows}
@@ -637,6 +646,124 @@ def verify_proof(
     }
 
 
+def contained_plan_history(
+    paths: DeploymentPaths,
+    repository: Path,
+    plan: MaintenanceRestorationPlan,
+    *,
+    test_mode: bool,
+) -> dict[str, Any]:
+    """Bind the original containment, or its explicit two-field successor plan."""
+    from bootstrap.source_identity import load_git_tree, reviewed_candidate_commit
+
+    history = json.loads(
+        _private(
+            paths.app_dir / "cos-channel-operation" / "history" / f"{plan.plan_id}.json"
+        )
+    )
+    original = plan
+    if history.get("maintenance_plan_sha256") != plan.digest():
+        proof = plan.effect_context_proof
+        if proof is None:
+            raise EffectContextRepairError(
+                "ordinary maintenance cannot continue an effect repair"
+            )
+        receipt = json.loads(
+            _private(
+                paths.app_dir
+                / "cos-channel-operation"
+                / "plan-continuations"
+                / f"{plan.digest()}.json"
+            )
+        )
+        original_target = history.get("controller_commit")
+        if not isinstance(original_target, str):
+            raise EffectContextRepairError("original containment controller is invalid")
+        original = plan.model_copy(
+            update={
+                "target_commit": original_target,
+                "effect_context_proof": proof.model_copy(
+                    update={"candidate_commit": original_target}
+                ),
+            }
+        )
+        expected = {
+            "contract": "effect-context-successor-plan-v1",
+            "original_target_commit": original_target,
+            "original_plan_sha256": original.digest(),
+            "successor_target_commit": plan.target_commit,
+            "successor_plan_sha256": plan.digest(),
+        }
+        if (
+            receipt != expected
+            or original.digest() != history.get("maintenance_plan_sha256")
+            or plan.target_commit == original_target
+        ):
+            raise EffectContextRepairError(
+                "successor plan does not retain exact original authority"
+            )
+        if (
+            not test_mode
+            and reviewed_candidate_commit(repository) != plan.target_commit
+        ):
+            raise EffectContextRepairError(
+                "successor plan requires its exact protected source"
+            )
+        load_git_tree(
+            repository, original_target, retained_by_commit=plan.target_commit
+        )
+    proof = original.effect_context_proof
+    if (
+        history.get("phase") != "committed"
+        or history.get("operation") != "enter_observation"
+        or history.get("activation_id") != original.plan_id
+        or history.get("maintenance_plan_sha256") != original.digest()
+        or history.get("effect_context_proof")
+        != (proof.model_dump(mode="json") if proof is not None else None)
+        or history.get("release_commit") != original.predecessor_commit
+        or history.get("controller_commit") != original.target_commit
+        or history.get("prior_activation_id") != original.prior_activation_id
+        or history.get("initial_snapshot") != original.deployment_snapshot
+        or history.get("request")
+        != original.observation_request().model_dump(mode="json")
+    ):
+        raise EffectContextRepairError("repair plan has no exact committed containment")
+    return history
+
+
+def retain_successor_plan(
+    paths: DeploymentPaths,
+    original: MaintenanceRestorationPlan,
+    successor: MaintenanceRestorationPlan,
+) -> None:
+    """Append an immutable target binding; never rewrite the original plan/history."""
+    receipt = {
+        "contract": "effect-context-successor-plan-v1",
+        "original_target_commit": original.target_commit,
+        "original_plan_sha256": original.digest(),
+        "successor_target_commit": successor.target_commit,
+        "successor_plan_sha256": successor.digest(),
+    }
+    path = (
+        paths.app_dir
+        / "cos-channel-operation"
+        / "plan-continuations"
+        / f"{successor.digest()}.json"
+    )
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if path.exists():
+        if json.loads(_private(path)) != receipt:
+            raise EffectContextRepairError("successor plan receipt already differs")
+        return
+    descriptor = os.open(
+        path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600
+    )
+    with os.fdopen(descriptor, "w") as stream:
+        json.dump(receipt, stream, sort_keys=True)
+        stream.flush()
+        os.fsync(stream.fileno())
+
+
 def load_plan(
     path: Path,
     paths: DeploymentPaths,
@@ -671,26 +798,42 @@ def load_plan(
         raise EffectContextRepairError("repair maintenance plan is expired or invalid")
     if not test_mode and reviewed_candidate_commit(repository) != candidate:
         raise EffectContextRepairError("repair requires the exact reviewed candidate")
-    history = json.loads(
-        _private(
-            paths.app_dir / "cos-channel-operation" / "history" / f"{plan.plan_id}.json"
-        )
-    )
-    if (
-        history.get("phase") != "committed"
-        or history.get("operation") != "enter_observation"
-        or history.get("maintenance_plan_sha256") != plan.digest()
-        or history.get("effect_context_proof") != proof.model_dump(mode="json")
-        or history.get("release_commit") != predecessor
-        or history.get("controller_commit") != candidate
-    ):
-        raise EffectContextRepairError("repair plan has no exact committed containment")
+    history = contained_plan_history(paths, repository, plan, test_mode=test_mode)
     from bootstrap.candidate_readiness import capture_deployment_snapshot
 
     if history.get("initial_snapshot") != capture_deployment_snapshot(paths).public():
         raise EffectContextRepairError("contained repair configuration changed")
     require_disabled(paths, proof.request_actions_sha256)
     return plan
+
+
+def retain_doctor_receipt(paths: DeploymentPaths, report: dict[str, Any]) -> Path:
+    """Retain only closed diagnostic metadata, including on validation failure."""
+    from bootstrap.submission_repair import REPAIR_DOCTOR_CHECKS
+
+    names = REPAIR_DOCTOR_CHECKS | {"canonical_synthetic_round_trip"}
+    rows = report.get("checks")
+    checks = (
+        [
+            {"name": row["name"], "ok": row["ok"]}
+            for row in rows
+            if isinstance(row, dict)
+            and isinstance(row.get("name"), str)
+            and row.get("name") in names
+            and type(row.get("ok")) is bool
+        ]
+        if isinstance(rows, list)
+        else []
+    )
+    receipt = {
+        "status": report.get("status")
+        if report.get("status") in ("healthy", "failed")
+        else "invalid",
+        "checks": checks,
+    }
+    path = paths.app_dir / "effect-context-repair" / f"doctor-{uuid.uuid4().hex}.json"
+    atomic_write(path, json.dumps(receipt, sort_keys=True).encode())
+    return path
 
 
 def wait_contained(
@@ -716,6 +859,7 @@ def wait_contained(
             continue
         verify_proof(paths, repository, proof, diagnostics=before, test_mode=test_mode)
         report = doctor()
+        retain_doctor_receipt(paths, report)
         verify_proof(
             paths,
             repository,

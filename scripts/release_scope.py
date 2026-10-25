@@ -334,6 +334,7 @@ COS_REMINDER_REQUIRED_PATHS = frozenset(
     }
 )
 UPDATER_SOURCE_ASSURANCE = "adminme/source_assurance.py"
+UPDATER_EMAIL_ATTRIBUTION = "adminme/historical_attribution.py"
 UPDATER_EFFECT_CONTEXT_COMPONENT_PATHS = frozenset(
     {"bootstrap/effect_context_repair.py"}
 )
@@ -344,6 +345,7 @@ UPDATER_EFFECT_CONTEXT_TEST_PATHS = frozenset(
         "tests/acceptance/test_cos_email_audit_context.py",
         "tests/unit/test_source_assurance.py",
         "tests/unit/test_observation_readiness_window.py",
+        "tests/unit/test_historical_attribution.py",
     }
 )
 UPDATER_EFFECT_CONTEXT_SHARED_REPLACEMENTS: dict[str, tuple[tuple[str, str], ...]] = {
@@ -932,6 +934,7 @@ def choose_scope(
                 in UPDATER_COMPONENT_PATHS
                 | UPDATER_TEST_PATHS
                 | UPDATER_EFFECT_CONTEXT_SHARED_PATHS
+                | {UPDATER_EMAIL_ATTRIBUTION}
                 | POLICY_PATHS
                 or path == UPDATER_CHECK_SCRIPT
                 or _prose(path)
@@ -1292,8 +1295,21 @@ def _updater_dependency_fingerprint(
             wired_paths.add(path)
             repair_active = True
         shared_identities.append((path, _updater_mode(path), normalized[0]))
+    historical = next(
+        (entry for entry in entries if entry.path == UPDATER_EMAIL_ATTRIBUTION), None
+    )
+    if historical is not None:
+        if historical.mode != "100644":
+            return None
+        normalized_history = _updater_email_attribution(
+            _git(repository, "show", f"{revision}:{historical.path}")
+        )
+        if normalized_history is None:
+            return None
+        shared_identities.append((historical.path, historical.mode, normalized_history))
     allowed = (
-        UPDATER_COMPONENT_PATHS
+        {UPDATER_EMAIL_ATTRIBUTION}
+        | UPDATER_COMPONENT_PATHS
         | UPDATER_TEST_PATHS
         | UPDATER_EFFECT_CONTEXT_SHARED_PATHS
         | POLICY_PATHS
@@ -1316,6 +1332,36 @@ def _updater_dependency_fingerprint(
         repair_active,
         wired_paths == UPDATER_EFFECT_CONTEXT_SHARED_PATHS,
     )
+
+
+def _updater_email_attribution(source: str) -> str | None:
+    # Exactly the legacy and repaired internal email owner predicates are allowed.
+    # Every neighboring historical binding/classification remains fingerprinted.
+    try:
+        module = ast.parse(source)
+    except SyntaxError:
+        return None
+    owners = [
+        node
+        for node in module.body
+        if isinstance(node, ast.AsyncFunctionDef)
+        and node.name == "_cos_response_owner_matches"
+    ]
+    if len(owners) != 1:
+        return None
+    owner = owners[0]
+    digest = hashlib.sha256(
+        ast.dump(owner, include_attributes=False).encode()
+    ).hexdigest()
+    if digest not in {
+        "f116840576742c6de9afb7625e83ef5355dae0574ba6f55932a8e614cc913646",
+        "a63da9c7e1e8aee7673508f993e499b08efa0910bf2e7588c41befd86a20f3c5",
+    }:
+        return None
+    module.body[module.body.index(owner)] = ast.Pass()
+    return hashlib.sha256(
+        ast.dump(module, include_attributes=False).encode()
+    ).hexdigest()
 
 
 def _updater_source_assurance(source: str) -> str | None:
