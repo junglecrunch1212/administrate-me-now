@@ -348,9 +348,14 @@ def _audit_windows(
         ):
             raise EffectContextRepairError("attested observation bounds are invalid")
 
-        def inside(event: dict[str, Any]) -> bool:
-            return _event_at_or_after(event, start) and (
-                end is None or not _event_at_or_after(event, end)
+        def inside(
+            event: dict[str, Any],
+            *,
+            window_start: datetime = start,
+            window_end: datetime | None = end,
+        ) -> bool:
+            return _event_at_or_after(event, window_start) and (
+                window_end is None or not _event_at_or_after(event, window_end)
             )
 
         result = {
