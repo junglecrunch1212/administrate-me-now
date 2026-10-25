@@ -1,4 +1,4 @@
-name: Focused Finance import correction
+name: Exact combined Finance and source-cache correctness
 on:
   push:
     branches: ['codex/finance-correction-a52b371e']
@@ -10,7 +10,7 @@ concurrency:
 jobs:
   focused-correction:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 18
     env:
       ADMINME_TEST_MODE: '1'
       PYTHONDONTWRITEBYTECODE: '1'
@@ -28,7 +28,9 @@ jobs:
       - run: poetry sync --with dev --no-interaction
       - name: Exact source and held interface checks
         run: |
-          git rev-parse HEAD HEAD:adminme HEAD:poetry.lock
+          mkdir -p "$RUNNER_TEMP/finance-correction"
+          git rev-parse HEAD HEAD:adminme HEAD:poetry.lock > "$RUNNER_TEMP/finance-correction/source-pins.txt"
+          git diff --exit-code a143849749efb46daa61bf943fd670250b1789e2 HEAD -- adminme tests pyproject.toml poetry.lock
           git diff --exit-code 427990f578b62d183dae47d5c3992f21adbd543e HEAD -- scripts/release_scope.py tests/unit/test_ci_release_gates.py bootstrap pyproject.toml poetry.lock
           git diff --name-only 427990f578b62d183dae47d5c3992f21adbd543e HEAD -- adminme
           .venv/bin/ruff check adminme/finance/dated_projection.py adminme/finance/closed_import.py tests/fixtures/finance_import_diagnostics.py tests/acceptance/test_finance_import_correction.py tests/unit/test_finance_projection_ownership.py
@@ -38,15 +40,24 @@ jobs:
           FINANCE_FOCUSED_OUTPUT: ${{ runner.temp }}/finance-correction
         run: |
           mkdir -p "$FINANCE_FOCUSED_OUTPUT"
-          .venv/bin/python -m pytest -q --runxfail --junitxml="$FINANCE_FOCUSED_OUTPUT/validation.xml" tests/unit/test_finance_projection_ownership.py tests/unit/test_finance_provenance.py tests/acceptance/test_finance_planning.py tests/acceptance/test_finance_activation.py -k 'ownership or exact_projection_validation or dated_snapshot or semantic_conflations or closed_decoder or closed_upload_rejection or independently or proof_receipt or closed_bytes'
-      - name: Focused atomicity and revocation dependencies
+          .venv/bin/python -m pytest -q --runxfail --junitxml="$FINANCE_FOCUSED_OUTPUT/validation.xml" tests/unit/test_finance_projection_ownership.py tests/unit/test_finance_provenance.py tests/acceptance/test_finance_planning.py -k 'ownership or exact_projection_validation or dated_snapshot or semantic_conflations or closed_decoder or closed_upload_rejection or independently or proof_receipt or closed_bytes'
+      - name: Current import, worker, owner and disclosure authority
+        timeout-minutes: 5
+        run: |
+          .venv/bin/python -m pytest -q --runxfail --junitxml="$RUNNER_TEMP/finance-correction/authority.xml" tests/unit/test_finance_worker.py tests/acceptance/test_finance_activation.py tests/acceptance/test_finance_disclosure.py tests/acceptance/test_finance_planning.py::test_planning_retrieval_rechecks_revoked_actor_and_human_identity tests/acceptance/test_finance_planning.py::test_member_identity_removed_after_planning_read_cannot_receive_card
+      - name: Current contract cache and audit freshness
+        timeout-minutes: 3
+        run: |
+          .venv/bin/python -m pytest -q --runxfail --junitxml="$RUNNER_TEMP/finance-correction/cache.xml" tests/unit/test_source_obligation_cache.py tests/unit/test_source_assurance.py
+          .venv/bin/python -m pytest -q --runxfail --junitxml="$RUNNER_TEMP/finance-correction/freshness.xml" tests/integration/test_runtime_application.py -k source_assurance
+      - name: Focused atomicity, isolation and revocation dependencies
         timeout-minutes: 4
         env:
           ADMINME_SYNTHETIC_STORAGE_EVALUATION: '1'
           FINANCE_STORAGE_ARTIFACT_DIR: ${{ runner.temp }}/finance-correction/atomic
         run: |
           mkdir -p "$FINANCE_STORAGE_ARTIFACT_DIR"
-          .venv/bin/python -m pytest -q --runxfail --junitxml="$FINANCE_STORAGE_ARTIFACT_DIR/results.xml" tests/acceptance/test_finance_storage_isolation.py -k 'synthetic_storage_contracts and (atomic_proof or revoke_prepared or role_before_commit or cancel_commit)'
+          .venv/bin/python -m pytest -q --runxfail --junitxml="$FINANCE_STORAGE_ARTIFACT_DIR/results.xml" tests/acceptance/test_finance_storage_isolation.py -k synthetic_storage_contracts
       - name: Bounded import cancellation replay and late shutdown receipts
         timeout-minutes: 4
         env:
@@ -54,6 +65,18 @@ jobs:
         run: |
           mkdir -p "$FINANCE_STORAGE_ARTIFACT_DIR"
           exec .venv/bin/python -I -B tests/fixtures/finance_watchdog.py focused-import "$FINANCE_STORAGE_ARTIFACT_DIR"
+      - name: Require every selected verdict
+        run: |
+          .venv/bin/python - <<'PY_CHECK'
+          import os, pathlib, xml.etree.ElementTree as ET
+          root=pathlib.Path(os.environ['RUNNER_TEMP'])/'finance-correction'
+          files=list(root.rglob('*.xml'))
+          assert len(files)==6, files
+          for file in files:
+              suites=list(ET.parse(file).getroot().iter('testsuite'))
+              assert suites and sum(int(s.attrib['tests']) for s in suites)>0
+              assert all(int(s.attrib.get(k,0))==0 for s in suites for k in ('failures','errors','skipped'))
+          PY_CHECK
       - name: Preserve focused evidence including failures
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
