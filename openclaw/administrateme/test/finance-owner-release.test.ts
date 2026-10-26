@@ -1,6 +1,10 @@
-/** Shipping owner release: never mock or override finance-release. */
+/** Explicit unavailable-capability fixture; not shipping advisor evidence. */
 import { createHmac } from "node:crypto";
 import { afterEach, expect, it, vi } from "vitest";
+vi.mock("../src/finance-release.js", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../src/finance-release.js")>(),
+  FINANCE_ADVISOR_AVAILABLE: false,
+}));
 import { fakeApi } from "./fixtures/plugin-api.js";
 import { FINANCE_ADVISOR_AVAILABLE, FINANCE_ADVISOR_TOOL_NAMES } from "../src/finance-release.js";
 
@@ -20,7 +24,7 @@ it("omits all five Finance tools and refuses stale calls without tainting ordina
   }
   const ordinary = {message:{role:"assistant",content:[{type:"text",text:"An ordinary private answer"}]}};
   for (const h of api.hooks.get("before_message_write")!) expect(h.handler(ordinary,context)).toBeUndefined();
-  // Synchronous redaction of retained Finance messages remains installed.
-  const redacted = api.hooks.get("tool_result_persist")![0]!.handler({toolName:"administrateme_finance_query",message:{role:"toolResult",content:[{type:"text",text:'{"value_minor":765432}'}]}},context);
-  expect(JSON.stringify(redacted)).not.toContain("765432");
+  // Disabling new access preserves previously delivered authorized discussion.
+  const retained = api.hooks.get("tool_result_persist")![0]!.handler({toolName:"administrateme_finance_query",message:{role:"toolResult",content:[{type:"text",text:'{"value_minor":765432}'}]}},context);
+  expect(JSON.stringify(retained)).toContain("765432");
 });

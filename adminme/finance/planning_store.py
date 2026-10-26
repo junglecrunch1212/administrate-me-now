@@ -19,9 +19,14 @@ from adminme.finance.importer import _settled
 from adminme.finance.publication import PublicationError, canonical_bytes
 from adminme.finance.queries import _owner
 from adminme.lib.session import Session
+from adminme.finance.access_control import FinanceReadScope
 
 
-def _coordinates(session: Session, book_id: str) -> tuple[str, str, str]:
+def _coordinates(
+    session: Session | FinanceReadScope, book_id: str
+) -> tuple[str, str, str]:
+    if isinstance(session, FinanceReadScope):
+        session.require_book(book_id)
     return session.tenant_id, _owner(session), book_id
 
 
@@ -355,7 +360,9 @@ async def import_projection(
         }
 
 
-def projection_head(conn: Any, session: Session, book_id: str) -> str | None:
+def projection_head(
+    conn: Any, session: Session | FinanceReadScope, book_id: str
+) -> str | None:
     row = conn.execute(
         "SELECT projection_id FROM finance_dated_projection_heads WHERE tenant_id=? AND owner_id=? AND book_id=?",
         _coordinates(session, book_id),
@@ -424,7 +431,7 @@ def _summary(context: dict[str, Any], horizon: dict[str, Any]) -> dict[str, Any]
 
 def query_projection(
     conn: Any,
-    session: Session,
+    session: Session | FinanceReadScope,
     *,
     book_id: str,
     projection_id: str | None = None,

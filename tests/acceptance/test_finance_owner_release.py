@@ -1,8 +1,8 @@
-"""Owner Books release with the REAL advisor ceiling; no release override.
+"""Explicit unavailable-capability regression, retained from the owner-only release.
 
-Saved consent is seeded as historical encrypted state, not enabled by a test
-switch. All subsequent endpoint, context, import and replay calls use shipping
-production behavior. This is distinct from the held advisor contract suites.
+This module forces only the release ceiling off. Shared-advisor acceptance and
+resource drivers exercise shipping availability; this is kill-switch evidence,
+not proof that the shipping advisor is disabled.
 """
 
 import json
@@ -37,6 +37,11 @@ from tests.acceptance.test_openclaw_native_seam import (
     OPENCLAW_HEADERS,
     _grant_cos,
 )
+
+
+@pytest.fixture(autouse=True)
+def unavailable_capability(monkeypatch):
+    monkeypatch.setattr(release, "ADVISOR_AVAILABLE", False)
 
 
 def owner_import(client, headers=DEMO_HEADERS, owner=PRINCIPAL):
@@ -627,7 +632,7 @@ def test_owner_import_preserves_native_reply_and_prepared_reminder(
         )
 
 
-def test_existing_finance_marker_remains_strict_after_owner_import(tmp_path):
+def test_kill_switch_preserves_existing_discussion_but_denies_new_reference(tmp_path):
     from adminme.finance.disclosure import (
         _append,
         _marker_key,
@@ -669,12 +674,22 @@ def test_existing_finance_marker_remains_strict_after_owner_import(tmp_path):
         owner_import(client)
         assert client.portal.call(session_has_finance, runtime, session, key)
         runtime._finance_disclosure_sessions.clear()
+        assert client.portal.call(check_disclosure, runtime, session, key) is None
+
+        async def new_reference():
+            return await check_disclosure(
+                runtime,
+                session,
+                key,
+                answer_text=json.dumps({"finance_answer": {"result_refs": ["a" * 64]}}),
+            )
+
         with pytest.raises(
             FinanceDisclosureError, match="finance_disclosure_authority_changed"
         ):
-            client.portal.call(check_disclosure, runtime, session, key)
+            client.portal.call(new_reference)
         history = client.get("/api/member/v1/chat/history", headers=DEMO_HEADERS)
-        assert history.status_code == 403
+        assert history.status_code == 200
         assert (
             len(client.portal.call(events, runtime, ["finance.disclosure_recorded"]))
             == 1
@@ -687,13 +702,23 @@ def test_existing_finance_marker_remains_strict_after_owner_import(tmp_path):
         )
         _, key = runtime.member_chat_binding(PRINCIPAL)
         assert client.portal.call(session_has_finance, runtime, session, key)
+        assert client.portal.call(check_disclosure, runtime, session, key) is None
+
+        async def new_reference():
+            return await check_disclosure(
+                runtime,
+                session,
+                key,
+                answer_text=json.dumps({"finance_answer": {"result_refs": ["a" * 64]}}),
+            )
+
         with pytest.raises(
             FinanceDisclosureError, match="finance_disclosure_authority_changed"
         ):
-            client.portal.call(check_disclosure, runtime, session, key)
+            client.portal.call(new_reference)
         assert (
             client.get("/api/member/v1/chat/history", headers=DEMO_HEADERS).status_code
-            == 403
+            == 200
         )
         assert (
             len(client.portal.call(events, runtime, ["finance.disclosure_recorded"]))

@@ -17,46 +17,14 @@ const runs = new WeakMap<PluginRuntime, Map<string, Binding>>();
 const calls = new WeakMap<PluginRuntime, Map<string, Binding>>();
 const activeFinance = new WeakMap<PluginRuntime, Map<string, string>>();
 
-function retainedReference(text: unknown): string | undefined {
-  if (typeof text !== "string" || text.length > 6000) return;
-  try {
-    const value = JSON.parse(text);
-    const ref = value.answer_ref;
-    if (typeof ref === "string" && /^[0-9a-f]{64}$/.test(ref)) return ref;
-  } catch { /* Malformed results retain no financial content. */ }
-  return;
+/** Authorized household discussion stays in OpenClaw's existing transcript.
+ * Turning off new book analysis does not erase content already delivered to
+ * that member. New domain retrieval/reference delivery rechecks the book grant.
+ * This does not grant another agent, audience or outbound tool any authority.
+ */
+export function privateFinanceTranscript(message: Record<string, unknown>, _toolResult: boolean): Record<string, unknown> {
+  return message;
 }
-
-export function privateFinanceTranscript(message: Record<string, unknown>, toolResult: boolean): Record<string, unknown> {
-  const content = Array.isArray(message.content) ? message.content : [];
-  if (toolResult) {
-    const refs = content.map((item: any) => retainedReference(item?.text)).filter((ref): ref is string => ref !== undefined);
-    return { role: "toolResult", toolCallId: message.toolCallId, toolName: message.toolName,
-      timestamp: message.timestamp, isError: message.isError,
-      content: [{ type: "text", text: JSON.stringify({ finance_result_refs: [...new Set(refs)],
-        boundary: "Private values are held in the authorized finance service. Re-read current evidence before another answer." }) }] };
-  }
-  const safeContent = content.map((item: any) => {
-    if (item?.type === "toolCall") {
-      return { type: "toolCall", id: item.id, name: item.name, arguments: {} };
-    }
-    if (item?.type === "text") {
-      try {
-        const value = JSON.parse(item.text);
-        const refs = value.finance_answer?.result_refs;
-        if (Object.keys(value).length === 1 && Object.keys(value.finance_answer).length === 1 &&
-            Array.isArray(refs) && refs.length > 0 && refs.length <= 3 && refs.every((ref: unknown) => typeof ref === "string" && /^[0-9a-f]{64}$/.test(ref))) {
-          return { type: "text", text: JSON.stringify({ finance_answer: { result_refs: refs } }) };
-        }
-      } catch { /* Narrative finance output is unverified and is not retained. */ }
-    }
-    return { type: "text", text: "[Private finance content omitted; retrieve current authorized evidence.]" };
-  });
-  return { role: "assistant", api: message.api, provider: message.provider, model: message.model,
-    usage: message.usage, stopReason: message.stopReason, timestamp: message.timestamp,
-    content: safeContent };
-}
-
 
 function privateAudience(runtime: PluginRuntime, context: HostContext): Audience | undefined {
   const sessionKey = context.sessionKey;

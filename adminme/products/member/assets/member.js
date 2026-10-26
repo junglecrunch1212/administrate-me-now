@@ -5558,12 +5558,15 @@ function financeAccessSettingsCard(data) {
     const input = document.createElement("input"); input.type = "text"; input.name = name; input.maxLength = 96; input.required = true; bindings[name] = input; bindingReview.append(field(label, input));
   }
   form.append(bindingReview);
+  const audience = document.createElement("fieldset"); audience.append(text("legend", "People who can read this book"));
+  const audienceChoices = new Map();
+  form.append(audience);
   const books = document.createElement("input"); books.type = "checkbox"; books.name = "books_enabled";
   const cos = document.createElement("input"); cos.type = "checkbox"; cos.name = "cos_analysis_enabled";
-  for (const [input, label] of [[books, "Use this book for my Finance dashboard"], [cos, "Allow CoS to analyze my accepted data from this book"]]) {
+  for (const [input, label] of [[books, "Use this book for the selected readers’ Finance dashboards"], [cos, "Allow CoS to analyze this book with the selected readers"]]) {
     const wrap = document.createElement("label"); wrap.className = "bridge-capability-choice"; wrap.append(input, text("span", label)); form.append(wrap);
   }
-  form.append(text("p", "CoS Finance analysis is unavailable in this release. Any saved consent is retained. Books access and imports work independently; disabling access preserves accepted history and your selected baseline.", "state-note"));
+  form.append(text("p", "Select yourself and at most one other principal. This shares only the selected book. Turning analysis off stops new Finance tool access and retained-result retrieval; it preserves accepted history and conversations already delivered. CoS may still reason from or retrieve that earlier discussion.", "state-note"));
   const save = text("button", "Save Books access", "button button-primary"); save.type = "submit";
   const refresh = text("button", "Check Books access", "button button-secondary"); refresh.type = "button"; form.append(save, refresh);
   const transfer = document.createElement("details"); transfer.append(text("summary", "Import a reviewed Books snapshot"));
@@ -5577,21 +5580,30 @@ function financeAccessSettingsCard(data) {
   transfer.append(field("Reviewed manifest", manifestFile), preview, reviewLabel, approve, field("Closed Books package", packetFile), upload);
   const receipt = text("pre", ""); receipt.style.whiteSpace = "pre-wrap"; receipt.style.overflowWrap = "anywhere"; transfer.append(receipt);
   function controls() {
-    for (const el of [books, cos, save, ...Object.values(bindings)]) el.disabled = busy || !policy;
+    for (const el of [books, cos, save, ...Object.values(bindings), ...audienceChoices.values()]) el.disabled = busy || !policy;
     for (const el of Object.values(bindings)) el.readOnly = Boolean(policy?.revision);
+    const own = audienceChoices.get(identity.authenticated_member_id); if (own) { own.disabled = true; own.checked = true; }
     refresh.disabled = busy; cos.disabled = busy || !policy || !books.checked || !policy.advisor_available;
     for (const el of [manifestFile, packetFile, reviewed]) el.disabled = busy || !policy?.books_enabled;
     approve.disabled = busy || !policy?.books_enabled || !manifest || !reviewed.checked || Boolean(approval);
     upload.disabled = busy || !approval || !packetFile.files.length;
   }
   function apply(value) {
+    if (value.eligible_readers) {
+      audience.replaceChildren(text("legend", "People who can read this book")); audienceChoices.clear();
+      for (const reader of value.eligible_readers) {
+        const input = document.createElement("input"); input.type = "checkbox"; input.value = reader.member_id;
+        const label = document.createElement("label"); label.className = "bridge-capability-choice"; label.append(input, text("span", reader.label)); audience.append(label); audienceChoices.set(reader.member_id, input);
+      }
+    }
+    for (const [member, input] of audienceChoices) input.checked = (value.reader_member_ids || [identity.authenticated_member_id]).includes(member);
     policy = value; books.checked = value.books_enabled; cos.checked = value.cos_analysis_enabled;
     for (const [key, input] of Object.entries(bindings)) input.value = value.binding?.[key] || "";
     bindingReview.open = !value.binding;
   }
   async function reload() {
     busy = true; approval = null; controls();
-    try { apply(await api("/api/member/v1/settings/finance")); status.textContent = policy.books_enabled ? "Books dashboard enabled. CoS Finance analysis is unavailable in this release." : "Books dashboard disabled. CoS Finance analysis is unavailable in this release."; }
+    try { apply(await api("/api/member/v1/settings/finance")); status.textContent = `Books dashboard ${policy.books_enabled ? "enabled" : "disabled"}. CoS Finance ${!policy.advisor_available ? "is unavailable in this release" : policy.cos_analysis_enabled ? "analysis enabled" : "analysis disabled"}.`; }
     catch (error) { policy = null; status.textContent = `Books access could not be verified. ${error.message}`; }
     finally { busy = false; controls(); }
   }
@@ -5599,7 +5611,8 @@ function financeAccessSettingsCard(data) {
   refresh.addEventListener("click", () => { void reload(); });
   form.addEventListener("submit", async (event) => {
     event.preventDefault(); if (busy || !policy) return;
-    const body = { request_id: crypto.randomUUID(), expected_revision: policy.revision, binding: Object.fromEntries(Object.entries(bindings).map(([key, input]) => [key, input.value.trim()])), books_enabled: books.checked, cos_analysis_enabled: cos.checked };
+    const body = { request_id: crypto.randomUUID(), expected_revision: policy.revision, binding: Object.fromEntries(Object.entries(bindings).map(([key, input]) => [key, input.value.trim()])), books_enabled: books.checked, cos_analysis_enabled: cos.checked, reader_member_ids: [...audienceChoices].filter(([, input]) => input.checked).map(([member]) => member) };
+    if (body.reader_member_ids.length > 2) { status.textContent = "Select at most two readers, including yourself."; return; }
     busy = true; approval = null; controls();
     try { apply(await api("/api/member/v1/settings/finance", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })); status.textContent = "Books access saved. Accepted history and existing CoS grants are preserved."; }
     catch (error) { policy = null; status.textContent = `Save could not be verified. Check Books access before another change. ${error.message}`; }

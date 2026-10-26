@@ -2,7 +2,11 @@
 
 Semantic classification: **MODERNIZE** the bounded domain interface under
 ADR-0001; **PRESERVE** OpenClaw scheduling/orchestration and privileged scope.
-The accepted-publication finance contract is disabled pending activation.
+The source capability is available behind explicit book/reader controls. Live
+Finance activation and private import remain pending; availability is not a grant.
+The owner production resource fixture exercises shipping availability with
+CoS analysis off. Shared-reader, advisor and retention behavior have separate
+focused acceptance coverage; an owner-only resource run does not prove them.
 
 
 ## Prospective performance policy — v3, 2026-10-26

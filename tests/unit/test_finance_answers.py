@@ -72,3 +72,39 @@ def test_no_prose_extra_claims_duplicate_keys_or_stale_reference():
             verify_answer(text, [proof])
     with pytest.raises(FinanceAnswerError, match="current_result"):
         verify_answer(selected("b" * 64), [proof])
+
+
+def test_interpretation_is_bounded_cited_and_separate_from_numeric_cards():
+    result, proof = receipt()
+    ref = result["answer_ref"]
+    body = {
+        "finance_answer": {
+            "result_refs": [ref],
+            "interpretation": [
+                {
+                    "text": "The reserve comparison is conditional on the supplied spending basis.",
+                    "result_refs": [ref],
+                }
+            ],
+            "next_steps": [
+                {
+                    "text": "Confirm which obligations the spending basis covers.",
+                    "result_refs": [ref],
+                }
+            ],
+        }
+    }
+    text = verify_answer(json.dumps(body), [proof])
+    assert "CoS interpretation; not an accounting result" in text
+    assert "Suggested next steps; no action performed" in text
+    for change in ("unknown_ref", "invented_number", "oversized"):
+        bad = deepcopy(body)
+        item = bad["finance_answer"]["interpretation"][0]
+        if change == "unknown_ref":
+            item["result_refs"] = ["0" * 64]
+        elif change == "invented_number":
+            item["text"] = "The reserve is 999999."
+        else:
+            item["text"] = "x" * 601
+        with pytest.raises(FinanceAnswerError):
+            verify_answer(json.dumps(bad), [proof])

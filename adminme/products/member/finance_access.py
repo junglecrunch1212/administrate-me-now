@@ -36,6 +36,9 @@ class AccessRequest(BaseModel):
     binding: FinanceBookBinding
     books_enabled: StrictBool
     cos_analysis_enabled: StrictBool
+    reader_member_ids: list[str] | None = Field(
+        default=None, min_length=1, max_length=2
+    )
 
 
 def require_owner(request: Request, session: Session) -> None:
@@ -62,8 +65,18 @@ async def get_finance_access(request: Request, session: SessionDep) -> dict[str,
     require_owner(request, session)
     state = await current_control(request.app.state.runtime, session)
     require_owner(request, session)
+    from adminme.settings_control import member_label
+
     return {
         **state.authority_coordinates(),
+        "eligible_readers": [
+            {
+                "member_id": member,
+                "label": member_label(request.app.state.runtime, member),
+            }
+            for member, role in request.app.state.runtime.settings.member_roles.items()
+            if role == "principal"
+        ],
         "advisor_available": release.ADVISOR_AVAILABLE,
         "provider_effect_count": 0,
     }
@@ -77,6 +90,16 @@ async def set_finance_access(
     if body.cos_analysis_enabled and not body.books_enabled:
         raise HTTPException(422, "finance_analysis_requires_books")
     runtime = request.app.state.runtime
+    readers = body.reader_member_ids
+    if readers is not None and (
+        session.auth_member_id not in readers
+        or len(set(readers)) != len(readers)
+        or any(
+            runtime.settings.member_roles.get(member) != "principal"
+            for member in readers
+        )
+    ):
+        raise HTTPException(422, "finance_audience_requires_principals_and_owner")
     fingerprint = _settings_request_fingerprint(
         CONTROL_EVENT, body.model_dump(exclude={"request_id"})
     )
@@ -89,6 +112,8 @@ async def set_finance_access(
             request_fingerprint=fingerprint,
         )
         current = await current_control(runtime, session)
+        if readers is None:
+            readers = list(current.reader_member_ids)
         if (
             body.cos_analysis_enabled
             and not current.cos_analysis_enabled
@@ -108,6 +133,7 @@ async def set_finance_access(
         if current.binding is not None and current.binding != body.binding:
             raise HTTPException(409, "finance_existing_book_binding_required")
         payload = {
+            "reader_member_ids": readers,
             "owner_id": session.auth_member_id,
             "changed_by_member_id": session.auth_member_id,
             "revision": current.revision + 1,
@@ -127,6 +153,7 @@ async def set_finance_access(
                 runtime,
                 session,
                 event_type=CONTROL_EVENT,
+                schema_version=2,
                 payload=payload,
                 request_id=body.request_id,
                 request_fingerprint=fingerprint,

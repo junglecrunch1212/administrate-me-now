@@ -20,12 +20,10 @@ from adminme.lib.session import Session
 from adminme.finance.access_control import (
     FinanceAccessError,
     analysis_enabled,
-    policy_for_session,
-    refresh_control,
+    read_scope,
+    refresh_read_scope,
 )
-from adminme.projections.parties.queries import resolve_service_delegation
 from adminme.service_identities import (
-    COS_AUTOMATION_OPERATOR_ID,
     COS_SERVICE_PRINCIPAL_ID,
 )
 
@@ -63,30 +61,9 @@ def _check_current_owner(runtime: Any, session: Session) -> None:
 
 def _disclosure_access(runtime: Any, session: Session):
     try:
-        return policy_for_session(runtime, session)
+        return read_scope(runtime, session, advisor=True).policy
     except FinanceAccessError:
         raise FinanceDisclosureError("finance_disclosure_authority_changed") from None
-
-
-def _authority_digest(runtime: Any, session: Session, context: Any) -> str:
-    if (
-        "read_context" not in context.permissions
-        or f"private:{session.auth_member_id}" not in context.allowed_scopes
-        or (session.service_context is not None and session.service_context != context)
-    ):
-        raise FinanceDisclosureError("finance_disclosure_authority_changed")
-    return _digest(
-        {
-            "tenant_id": session.tenant_id,
-            "member_id": session.auth_member_id,
-            "audience": f"private:{session.auth_member_id}",
-            "grant": context.audit_payload(),
-            "permissions": sorted(context.permissions),
-            "finance_access": _disclosure_access(
-                runtime, session
-            ).authority_coordinates(),
-        }
-    )
 
 
 def validate_current_authority(
@@ -94,20 +71,19 @@ def validate_current_authority(
     session: Session,
     expected_digest: str | None = None,
 ) -> str:
-    """Synchronous final check: do not await between this check and disclosure."""
+    """The book grant is separate from unrelated general CoS delegation."""
     _check_current_owner(runtime, session)
     try:
-        context = resolve_service_delegation(
-            runtime.projections.connection("parties"),
-            tenant_id=session.tenant_id,
-            service_principal_id=COS_SERVICE_PRINCIPAL_ID,
-            operator_principal_id=COS_AUTOMATION_OPERATOR_ID,
-            context_scope="member_private",
-            context_member_id=session.auth_member_id,
-        )
-    except Exception:
+        scope = read_scope(runtime, session, advisor=True)
+    except FinanceAccessError:
         raise FinanceDisclosureError("finance_disclosure_authority_changed") from None
-    digest = _authority_digest(runtime, session, context)
+    digest = _digest(
+        {
+            "tenant_id": session.tenant_id,
+            "service_principal_id": COS_SERVICE_PRINCIPAL_ID,
+            **scope.authority_coordinates(),
+        }
+    )
     if expected_digest is not None and digest != expected_digest:
         raise FinanceDisclosureError("finance_disclosure_authority_changed")
     return digest
@@ -169,7 +145,7 @@ async def _append(
             owner_scope=f"private:{session.auth_member_id}",
             visibility_scope=f"private:{session.auth_member_id}",
             sensitivity="privileged",
-            actor_identity=session.event_actor_identity,
+            actor_identity=COS_SERVICE_PRINCIPAL_ID,
             idempotency_key=key,
             payload=payload,
         )
@@ -194,16 +170,7 @@ async def record_disclosure(
         raise FinanceDisclosureError("finance_disclosure_run_required")
     run_hash = _digest(run_id)
     _check_current_owner(runtime, session)
-    if session.service_context is not None:
-        # The HTTP caller has just resolved this exact immutable Session after
-        # its audit append. Bind that authority to the receipt; the synchronous
-        # check after persistence still queries the current grant before release.
-        # A direct human/internal caller without that context resolves it here.
-        authority_hash = _authority_digest(runtime, session, session.service_context)
-    else:
-        authority_hash = await runtime.projections.read(
-            "parties", lambda _conn: validate_current_authority(runtime, session)
-        )
+    authority_hash = validate_current_authority(runtime, session)
     async with runtime.settings_command_locks.setdefault(
         f"finance-disclosure:{session_hash}", asyncio.Lock()
     ):
@@ -243,34 +210,35 @@ async def record_disclosure(
                 raise FinanceDisclosureError("finance_disclosure_result_conflict")
         else:
             publication = result.get("publication") or result
-            await _append(
-                runtime,
-                session,
-                key,
-                {
-                    "kind": "run",
-                    **common,
-                    "run_sha256": run_hash,
-                    "slot": slot,
-                    "result_sha256": result_hash,
-                    "result_json": json.dumps(
-                        result,
-                        sort_keys=True,
-                        separators=(",", ":"),
-                        ensure_ascii=False,
-                    ),
-                    "book_id": publication.get("book_id"),
-                    "publication_id": publication.get("publication_id"),
-                    "head_publication_id": publication.get(
-                        "current_head_publication_id"
-                    ),
-                    "calculator_id": result.get("calculator_id"),
-                    "model_version": result.get("model_version"),
-                    "expires_at": (
-                        now + timedelta(seconds=DISCLOSURE_TTL_SECONDS)
-                    ).isoformat(),
-                },
-            )
+            retained = {
+                "kind": "run",
+                **common,
+                "run_sha256": run_hash,
+                "slot": slot,
+                "result_sha256": result_hash,
+                "result_json": json.dumps(
+                    result,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    ensure_ascii=False,
+                ),
+                "book_id": publication.get("book_id"),
+                "publication_id": publication.get("publication_id"),
+                "head_publication_id": publication.get("current_head_publication_id"),
+                "calculator_id": result.get("calculator_id"),
+                "model_version": result.get("model_version"),
+                "expires_at": (
+                    now + timedelta(seconds=DISCLOSURE_TTL_SECONDS)
+                ).isoformat(),
+            }
+            await _append(runtime, session, key, retained)
+        if prior is not None:
+            retained = prior
+        retained_key = (
+            f"finance-disclosure-result:{session_hash}:{authority_hash}:{result_hash}"
+        )
+        if await _read(runtime, session, retained_key) is None:
+            await _append(runtime, session, retained_key, retained)
         # Persistence yields to the event loop. Finish any ordinary request
         # before the final synchronous authorization query; nothing awaits
         # between that query and the caller's final transport/privacy checks.
@@ -279,7 +247,9 @@ async def record_disclosure(
 
             raise FinanceBudgetError("finance_core_capacity_busy")
         try:
-            await refresh_control(runtime, session.auth_member_id)
+            await refresh_read_scope(
+                runtime, read_scope(runtime, session, advisor=True), advisor=True
+            )
         except FinanceAccessError:
             raise FinanceDisclosureError(
                 "finance_disclosure_authority_changed"
@@ -308,48 +278,64 @@ async def check_disclosure(
 
     The durable marker identifies a finance-bearing conversation. Current
     authority gates access; each run receipt independently binds its exact grant.
-    A new grant can retrieve fresh results but cannot validate old receipts.
-    Transcript hooks retain only opaque references, not reusable finance facts.
+    A new book-control revision can retrieve fresh results but cannot validate
+    old receipts. The analysis switch does not erase prior conversations.
+    Already delivered conversation is retained; this checks new domain retrieval
+    and referenced delivery, not universal erasure of past discussion.
     """
     session_hash = _session_digest(session, session_key)
-    marker = await _read(runtime, session, _marker_key(session_hash))
-    if marker is None:
-        return answer_text
+    from adminme.finance.answers import FinanceAnswerError, selected_references
+
+    try:
+        refs = selected_references(answer_text) if answer_text is not None else []
+    except FinanceAnswerError as exc:
+        raise FinanceDisclosureError(str(exc)) from None
     receipts: list[dict[str, Any]] = []
-    if require_run and run_id is None:
-        raise FinanceDisclosureError("finance_disclosure_run_required")
-    expected = validate_current_authority(runtime, session)
     if run_id is not None:
         if not run_id or len(run_id) > 200:
             raise FinanceDisclosureError("finance_disclosure_run_required")
         run_hash = _digest(run_id)
-        found = False
-        for slot in range(1, 7):
-            receipt = await _read(
-                runtime, session, _run_key(session_hash, run_hash, slot)
+        keys = [_run_key(session_hash, run_hash, slot) for slot in range(1, 7)]
+        rows = await runtime.event_log.get_by_idempotency_keys(session.tenant_id, keys)
+        receipts = [_checked_payload(row, session) for row in rows]
+    # An earlier Finance question is not a permanent ordinary-conversation gate.
+    # Already delivered conversation remains in OpenClaw. Reference reuse requires the
+    # current exact book/audience grant, but never another source acquisition.
+    if not receipts and not refs:
+        return answer_text
+    expected = validate_current_authority(runtime, session)
+    now = datetime.now(timezone.utc)
+    for receipt in receipts:
+        if (
+            receipt["authority_sha256"] != expected
+            or datetime.fromisoformat(receipt["expires_at"]) <= now
+        ):
+            raise FinanceDisclosureError("finance_disclosure_receipt_expired")
+    known = {receipt["result_sha256"] for receipt in receipts}
+    for ref in refs:
+        if ref in known:
+            continue
+        retained_receipt = await _read(
+            runtime,
+            session,
+            f"finance-disclosure-result:{session_hash}:{expected}:{ref}",
+        )
+        if retained_receipt is None or retained_receipt["authority_sha256"] != expected:
+            raise FinanceDisclosureError(
+                "finance_disclosure_retained_result_unavailable"
             )
-            if receipt is None:
-                continue
-            found = True
-            receipts.append(receipt)
-            if receipt["authority_sha256"] != expected or datetime.fromisoformat(
-                receipt["expires_at"]
-            ) <= datetime.now(timezone.utc):
-                raise FinanceDisclosureError("finance_disclosure_receipt_expired")
-        if require_run and not found:
-            raise FinanceDisclosureError("finance_disclosure_receipt_required")
-    if any(
-        datetime.fromisoformat(item["expires_at"]) <= datetime.now(timezone.utc)
-        for item in receipts
-    ):
-        raise FinanceDisclosureError("finance_disclosure_receipt_expired")
+        receipts.append(retained_receipt)
     try:
-        await refresh_control(runtime, session.auth_member_id)
-        access = _disclosure_access(runtime, session)
+        scope = read_scope(runtime, session, advisor=True)
+        await refresh_read_scope(runtime, scope, advisor=True)
+        access = scope.policy
     except FinanceAccessError:
         raise FinanceDisclosureError("finance_disclosure_authority_changed") from None
+    marker = await _read(runtime, session, _marker_key(session_hash))
+    if marker is None:
+        raise FinanceDisclosureError("finance_disclosure_provenance_invalid")
     binding_hash = _digest(access.binding.model_dump()) if access.binding else None
-    if marker.get("book_binding_sha256") != binding_hash:
+    if any(receipt.get("book_binding_sha256") != binding_hash for receipt in receipts):
         raise FinanceDisclosureError("finance_disclosure_book_changed")
     # No awaited work may follow dependency checks before final authorization.
     for receipt in receipts:
@@ -358,7 +344,7 @@ async def check_disclosure(
                 runtime.projections.connection("money")
                 .execute(
                     "SELECT publication_id FROM finance_publication_heads WHERE tenant_id=? AND owner_id=? AND book_id=?",
-                    (session.tenant_id, session.auth_member_id, receipt["book_id"]),
+                    (session.tenant_id, scope.data_owner_id, receipt["book_id"]),
                 )
                 .fetchone()
             )
@@ -371,7 +357,7 @@ async def check_disclosure(
             if (
                 projection_head(
                     runtime.projections.connection("money"),
-                    session,
+                    scope,
                     result["publication"]["book_id"],
                 )
                 != result["projection"]["head_id"]

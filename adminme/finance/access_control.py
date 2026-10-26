@@ -6,7 +6,8 @@ The owner command holds its existing per-owner lock, blocks disclosure before
 its first persistence await, then restores from the durable read-back. An
 ambiguous write/read-back keeps that owner blocked until reconciliation. Readers
 must fetch the current snapshot at final delivery, never retain one across I/O.
-Existing private CoS delegation and transport/audience checks remain required.
+Finance-only CoS authority comes from this book control. Other service grants
+and transport/audience checks remain independent.
 """
 
 from __future__ import annotations
@@ -14,8 +15,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Mapping
 
+from adminme.lib.session import Session
+
 from adminme.events.schemas.finance_access import (
     FinanceAccessControlV1,
+    FinanceAccessControlV2,
     FinanceBookBinding,
 )
 
@@ -33,6 +37,8 @@ class FinanceAccessSnapshot:
     binding: FinanceBookBinding | None = None
     books_enabled: bool = False
     cos_analysis_enabled: bool = False
+    owner_id: str | None = None
+    reader_member_ids: tuple[str, ...] = ()
 
     def allows_book(self, book_id: str | None) -> bool:
         return bool(
@@ -43,6 +49,8 @@ class FinanceAccessSnapshot:
 
     def authority_coordinates(self) -> dict[str, Any]:
         return {
+            "owner_id": self.owner_id,
+            "reader_member_ids": list(self.reader_member_ids),
             "event_id": self.event_id,
             "revision": self.revision,
             "binding": self.binding.model_dump() if self.binding else None,
@@ -89,14 +97,25 @@ class FinanceAccessCache:
         if event is None:
             if previous is not None and previous.revision:
                 raise FinanceAccessError("finance_control_history_missing")
-            state = FinanceAccessSnapshot()
+            state = FinanceAccessSnapshot(
+                owner_id=owner_id, reader_member_ids=(owner_id,)
+            )
         else:
             try:
-                payload = FinanceAccessControlV1.model_validate(event["payload"])
+                version = event["schema_version"]
+                model = (
+                    FinanceAccessControlV2 if version == 2 else FinanceAccessControlV1
+                )
+                payload = model.model_validate(event["payload"])
+                readers = (
+                    tuple(payload.reader_member_ids)
+                    if isinstance(payload, FinanceAccessControlV2)
+                    else (owner_id,)
+                )
                 if (
                     event["tenant_id"] != tenant_id
                     or event["type"] != CONTROL_EVENT
-                    or event["schema_version"] != 1
+                    or version not in (1, 2)
                     or event["actor_identity"] != owner_id
                     or event["source_account_id"] != owner_id
                     or event["source_adapter"] != "member-settings-control-plane"
@@ -108,6 +127,8 @@ class FinanceAccessCache:
                 ):
                     raise ValueError("invalid authority")
                 state = FinanceAccessSnapshot(
+                    owner_id=owner_id,
+                    reader_member_ids=readers,
                     revision=payload.revision,
                     event_id=event["event_id"],
                     binding=payload.binding,
@@ -128,6 +149,15 @@ class FinanceAccessCache:
             raise FinanceAccessError("finance_control_unavailable")
         self._blocked.discard(owner_id)
         return state
+
+    def shared_for(self, tenant_id: str, actor_id: str) -> list[FinanceAccessSnapshot]:
+        self._require_owner(tenant_id, actor_id)
+        result = []
+        for owner_id, state in self._states.items():
+            if actor_id != owner_id and actor_id in state.reader_member_ids:
+                # An unsettled owner change cannot leave a cached shared grant usable.
+                result.append(self.snapshot(tenant_id, owner_id))
+        return result
 
     def _require_owner(self, tenant_id: str, owner_id: str) -> None:
         if tenant_id != self.tenant_id or owner_id not in self._principals:
@@ -170,6 +200,8 @@ def policy_for_owner(runtime: Any, owner_id: str) -> FinanceAccessSnapshot:
     # variables and a mutable runtime member allowlist never grant production access.
     if state.revision == 0 and runtime.settings._credential_free_fixture:
         return FinanceAccessSnapshot(
+            owner_id=owner_id,
+            reader_member_ids=(owner_id,),
             books_enabled=runtime.settings.finance_publications_enabled,
             cos_analysis_enabled=(
                 runtime.settings.finance_publications_enabled
@@ -192,21 +224,20 @@ def policy_for_session(runtime: Any, session: Any) -> FinanceAccessSnapshot:
 
 def books_enabled(runtime: Any, session: Any) -> bool:
     try:
-        return policy_for_session(runtime, session).books_enabled
+        return read_scope(runtime, session).policy.books_enabled
     except FinanceAccessError:
         return False
 
 
 def analysis_enabled(runtime: Any, session: Any) -> bool:
     try:
-        state = policy_for_session(runtime, session)
-        return state.books_enabled and state.cos_analysis_enabled
+        return read_scope(runtime, session, advisor=True).policy.cos_analysis_enabled
     except FinanceAccessError:
         return False
 
 
 def bound_book(runtime: Any, session: Any, requested: str | None = None) -> str | None:
-    state = policy_for_session(runtime, session)
+    state = read_scope(runtime, session, requested).policy
     if not state.books_enabled:
         raise FinanceAccessError("finance_books_disabled")
     if state.binding is None:
@@ -228,3 +259,89 @@ def require_publication_binding(
         for key, expected in state.binding.model_dump().items()
     ):
         raise FinanceAccessError("finance_publication_binding_mismatch")
+
+
+@dataclass(frozen=True)
+class FinanceReadScope:
+    """A book read grant alongside the real Session, never an owner Session.
+
+    Callers resolve it before work and compare current authority at delivery.
+    It is accepted only by Finance queries, not generic scope or write APIs.
+    """
+
+    session: Session
+    data_owner_id: str
+    policy: FinanceAccessSnapshot
+
+    @property
+    def tenant_id(self) -> str:
+        return self.session.tenant_id
+
+    @property
+    def auth_member_id(self) -> str:
+        return self.session.auth_member_id
+
+    def require_book(self, book_id: str | None) -> str | None:
+        if self.policy.binding is not None:
+            if book_id not in (None, self.policy.binding.book_id):
+                raise FinanceAccessError("finance_book_not_authorized")
+            return self.policy.binding.book_id
+        return book_id  # Explicit credential-free owner fixtures only.
+
+    def authority_coordinates(self) -> dict[str, Any]:
+        return {
+            "actor_id": self.auth_member_id,
+            "data_owner_id": self.data_owner_id,
+            **self.policy.authority_coordinates(),
+        }
+
+
+def read_scope(
+    runtime: Any, session: Any, requested: str | None = None, *, advisor: bool = False
+) -> FinanceReadScope:
+    # The current actor and data owner are checked separately. No role name or
+    # shared:household scope grants Books access (children also have that scope).
+    if (
+        session.tenant_id != runtime.settings.instance.tenant_id
+        or session.auth_role != "principal"
+        or session.is_view_as
+        or runtime.settings.member_roles.get(session.auth_member_id) != "principal"
+    ):
+        raise FinanceAccessError("finance_control_identity_invalid")
+    own = policy_for_owner(runtime, session.auth_member_id)
+    candidates = [
+        own,
+        *runtime.finance_access.shared_for(session.tenant_id, session.auth_member_id),
+    ]
+    matches = [
+        state
+        for state in candidates
+        if state.books_enabled
+        and (state.binding is None or requested in (None, state.binding.book_id))
+        and (not advisor or state.cos_analysis_enabled)
+        and runtime.settings.member_roles.get(state.owner_id) == "principal"
+    ]
+    if len(matches) != 1:
+        raise FinanceAccessError(
+            "finance_book_selection_required" if matches else "finance_books_disabled"
+        )
+    state = matches[0]
+    if state.binding is None and not runtime.settings._credential_free_fixture:
+        raise FinanceAccessError("finance_book_binding_required")
+    assert state.owner_id is not None
+    return FinanceReadScope(session, state.owner_id, state)
+
+
+async def refresh_read_scope(
+    runtime: Any, scope: FinanceReadScope, *, advisor: bool = False
+) -> FinanceReadScope:
+    await refresh_control(runtime, scope.data_owner_id)
+    latest = read_scope(
+        runtime,
+        scope.session,
+        scope.policy.binding.book_id if scope.policy.binding else None,
+        advisor=advisor,
+    )
+    if latest != scope:
+        raise FinanceAccessError("finance_authority_changed")
+    return latest

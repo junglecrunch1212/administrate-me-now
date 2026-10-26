@@ -20,7 +20,7 @@ from tests.acceptance.test_finance_native_facade import _post
 from tests.acceptance.test_openclaw_native_seam import _grant_cos, PRINCIPAL
 from tests.fixtures.finance_planning import projection
 
-# Held advisor contracts only; the owner-release suite uses the unmodified ceiling.
+# Exercises shipping availability; kill-switch tests explicitly disable it.
 pytestmark = pytest.mark.usefixtures("unreleased_finance_advisor")
 
 

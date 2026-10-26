@@ -25,7 +25,7 @@ from tests.acceptance.test_finance_mixed_load import _profile_workload
 from tests.fixtures.finance_tasks_noop import TasksNoopDiagnostic, projection_snapshot
 from tests.unit.test_event_bus import _wait_for
 
-# Held advisor contracts only; the owner-release suite uses the unmodified ceiling.
+# Exercises shipping availability; kill-switch tests explicitly disable it.
 pytestmark = [
     pytest.mark.usefixtures("unreleased_finance_advisor"),
     pytest.mark.skipif(

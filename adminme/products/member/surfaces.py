@@ -1721,12 +1721,12 @@ def build_surface(
             raise HTTPException(404, "surface not found")
         from adminme.finance.access_control import (
             FinanceAccessError,
-            bound_book,
-            policy_for_session,
+            read_scope,
         )
 
         enabled = False
         accepted_book_id = None
+        accepted_scope = None
         if (
             session.auth_role == "principal"
             and not session.is_view_as
@@ -1734,18 +1734,21 @@ def build_surface(
             and f"private:{session.auth_member_id}" in session.allowed_scopes
         ):
             try:
-                enabled = policy_for_session(runtime, session).books_enabled
-                accepted_book_id = bound_book(runtime, session) if enabled else None
-            except FinanceAccessError:
+                accepted_scope = read_scope(runtime, session)
+                enabled = True
+                accepted_book_id = accepted_scope.require_book(None)
+            except FinanceAccessError as exc:
                 # A failed control read is not consent to switch the owner's
                 # Finance source back to the unrelated legacy workbook.
-                raise HTTPException(503, "finance_control_unavailable") from None
+                if str(exc) != "finance_books_disabled":
+                    raise HTTPException(503, "finance_control_unavailable") from None
         cockpit = finance_snapshot(
             runtime.projections.connection("money"),
             session,
             as_of=now,
             accepted_books_enabled=enabled,
             accepted_book_id=accepted_book_id,
+            accepted_read_scope=accepted_scope,
         )
         base["cockpit"] = cockpit
         base["contract"] = {

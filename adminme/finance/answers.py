@@ -1,8 +1,8 @@
 """Render finance answers from current private receipts, never model arithmetic.
 
-The model selects up to three opaque result references. It cannot supply values,
-units, dates, scenarios, caveats or narrative conclusions. Those are rendered
-from the same bounded typed results that crossed the authorized tool boundary.
+The model selects bounded result references and may supply explicitly labelled
+interpretation and next steps. Numerical cards and required qualifications come
+from typed evidence; interpretation is not an accounting result or action grant.
 """
 
 from __future__ import annotations
@@ -190,7 +190,7 @@ def render_result(result: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def verify_answer(text: str, receipts: list[dict[str, Any]]) -> str:
+def _selection(text: str) -> dict[str, Any]:
     if not text or len(text.encode("utf-8")) > 6000:
         raise FinanceAnswerError("finance_answer_contract_required")
     try:
@@ -200,7 +200,11 @@ def verify_answer(text: str, receipts: list[dict[str, Any]]) -> str:
     if not isinstance(body, dict) or set(body) != {"finance_answer"}:
         raise FinanceAnswerError("finance_answer_contract_required")
     selected = body["finance_answer"]
-    if not isinstance(selected, dict) or set(selected) != {"result_refs"}:
+    if (
+        not isinstance(selected, dict)
+        or "result_refs" not in selected
+        or set(selected) - {"result_refs", "interpretation", "next_steps"}
+    ):
         raise FinanceAnswerError("finance_answer_contract_required")
     refs = selected["result_refs"]
     if (
@@ -213,6 +217,43 @@ def verify_answer(text: str, receipts: list[dict[str, Any]]) -> str:
         or len(set(refs)) != len(refs)
     ):
         raise FinanceAnswerError("finance_answer_contract_required")
+    for field in ("interpretation", "next_steps"):
+        items = selected.get(field, [])
+        if not isinstance(items, list) or len(items) > 3:
+            raise FinanceAnswerError("finance_answer_analysis_invalid")
+        for item in items:
+            if (
+                not isinstance(item, dict)
+                or set(item) != {"text", "result_refs"}
+                or not isinstance(item["text"], str)
+                or not 1 <= len(item["text"]) <= 600
+                or any(char.isnumeric() for char in item["text"])
+                or not isinstance(item["result_refs"], list)
+                or not item["result_refs"]
+                or any(ref not in refs for ref in item["result_refs"])
+            ):
+                raise FinanceAnswerError("finance_answer_analysis_invalid")
+    return selected
+
+
+def selected_references(text: str) -> list[str]:
+    """Ordinary prose is not a Finance contract or a fresh Finance-tool demand."""
+    if not text.lstrip().startswith("{"):
+        return []
+    try:
+        body = json.loads(text)
+    except (ValueError, TypeError, RecursionError):
+        if '"finance_answer"' not in text:
+            return []
+        raise FinanceAnswerError("finance_answer_contract_required") from None
+    if not isinstance(body, dict) or "finance_answer" not in body:
+        return []
+    return _selection(text)["result_refs"]
+
+
+def verify_answer(text: str, receipts: list[dict[str, Any]]) -> str:
+    selected = _selection(text)
+    refs = selected["result_refs"]
     available = {receipt["result_sha256"]: receipt for receipt in receipts}
     cards = []
     for ref in refs:
@@ -223,6 +264,18 @@ def verify_answer(text: str, receipts: list[dict[str, Any]]) -> str:
         if result.get("answer_ref") != ref or answer_reference(result) != ref:
             raise FinanceAnswerError("finance_answer_result_integrity")
         cards.append(render_result(result))
+    for field, label in (
+        ("interpretation", "CoS interpretation; not an accounting result"),
+        ("next_steps", "Suggested next steps; no action performed"),
+    ):
+        for item in selected.get(field, []):
+            cards.append(
+                label
+                + ": "
+                + item["text"]
+                + "\nEvidence: "
+                + ", ".join(item["result_refs"])
+            )
     answer = "\n\n".join(cards)
     if len(answer.encode("utf-8")) > 6000:
         raise FinanceAnswerError("finance_answer_smaller_selection_required")

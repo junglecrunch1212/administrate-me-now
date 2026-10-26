@@ -1,11 +1,7 @@
-/** Isolated unreleased-advisor contracts. NOT owner-release acceptance evidence. */
+/** Shipping advisor transport bindings; never grants live book access. */
 import { createHash, createHmac } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AnyAgentTool } from "openclaw/plugin-sdk/plugin-entry";
-vi.mock("../src/finance-release.js", async (importOriginal) => ({
-  ...await importOriginal<typeof import("../src/finance-release.js")>(),
-  FINANCE_ADVISOR_AVAILABLE: true,
-}));
 import { fakeApi } from "./fixtures/plugin-api.js";
 function jsonResponse(value: unknown): Response {
   return new Response(JSON.stringify(value), {status: 200, headers: {"Content-Type": "application/json"}});
@@ -14,7 +10,7 @@ function requestBody(fetchMock: ReturnType<typeof vi.fn>, index = 0): Record<str
   const init = fetchMock.mock.calls[index]?.[1] as RequestInit;
   return JSON.parse(String(init.body)) as Record<string, unknown>;
 }
-describe("unreleased Finance advisor binding contracts", () => {
+describe("shipping Finance advisor binding contracts", () => {
   let fetchMock: ReturnType<typeof vi.fn>;
   beforeEach(() => {
     process.env.ADMINME_OPENCLAW_SHARED_SECRET = "fixture-secret-at-least-24-characters";

@@ -22,6 +22,7 @@ from typing import Any
 import sqlcipher3
 
 from adminme.finance.publication import PublicationError
+from adminme.finance.access_control import FinanceReadScope
 from adminme.finance.queries import publication_status, query_publication
 from adminme.lib.scope import filter_one, filter_rows
 from adminme.lib.session import Session
@@ -205,6 +206,7 @@ def finance_snapshot(
     as_of: datetime,
     accepted_books_enabled: bool = False,
     accepted_book_id: str | None = None,
+    accepted_read_scope: FinanceReadScope | None = None,
 ) -> dict[str, Any]:
     """Compose the deterministic Finance projection consumed by workbook/UI.
 
@@ -230,7 +232,7 @@ def finance_snapshot(
         # workbook. Do not even query legacy/provider totals for this view.
         result = _unavailable_finance_snapshot(as_of)
         result["accepted_books"] = _accepted_books_snapshot(
-            conn, session, accepted_book_id
+            conn, accepted_read_scope or session, accepted_book_id
         )
         result["focus"] = {
             "state": "books_outputs",
@@ -642,7 +644,7 @@ def _unavailable_finance_snapshot(as_of: datetime) -> dict[str, Any]:
 
 def _accepted_books_snapshot(
     conn: sqlcipher3.Connection,
-    session: Session,
+    session: Session | FinanceReadScope,
     book_id: str | None = None,
 ) -> dict[str, Any]:
     """Bounded exact published metrics; never map arbitrary IDs onto legacy totals."""

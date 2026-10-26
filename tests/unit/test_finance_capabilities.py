@@ -15,7 +15,7 @@ from adminme.finance.capabilities import (
     skill_bundle,
 )
 
-# Isolated unreleased advisor catalog contracts; not release-gate evidence.
+# Exercises shipping availability; kill-switch tests explicitly disable it.
 pytestmark = pytest.mark.usefixtures("unreleased_finance_advisor")
 
 
@@ -28,7 +28,7 @@ def test_all_thirty_one_routes_are_explicit_and_bounded() -> None:
             row.public()["implementation_state_applies_to"] == "routing_and_preparation"
         )
         assert row.sensitivity == "privileged"
-        assert row.audience == "authorized_owner_private"
+        assert row.audience == "authorized_book_reader_private"
         enforce_context(skill_bundle(key), kind="bundle")
     assert len(json.dumps(core_pointer(enabled=True)).encode()) <= 400
 

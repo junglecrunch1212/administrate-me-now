@@ -42,7 +42,7 @@ from tests.fixtures.finance_planning import (
 )
 from tests.fixtures import finance_watchdog as watchdog
 
-# Held advisor contracts only; the owner-release suite uses the unmodified ceiling.
+# Exercises shipping availability; kill-switch tests explicitly disable it.
 pytestmark = [
     pytest.mark.usefixtures("unreleased_finance_advisor"),
     pytest.mark.skipif(

@@ -20,7 +20,7 @@ from tests.acceptance.test_openclaw_native_seam import (
     _settings as _native_settings,
 )
 
-# Held advisor contracts only; the owner-release suite uses the unmodified ceiling.
+# Exercises shipping availability; kill-switch tests explicitly disable it.
 pytestmark = pytest.mark.usefixtures("unreleased_finance_advisor")
 
 BASE = "/api/openclaw/v1/tools/finance-"
@@ -68,7 +68,7 @@ def test_capacity_busy_is_audited_before_any_finance_read(
     )
     app = create_application(settings)
     audit_operations: list[str] = []
-    original_audit = main._record_tool_call
+    original_audit = main._finance_audit
 
     async def audit(request, session, provenance, **kwargs):
         result = await original_audit(request, session, provenance, **kwargs)
@@ -80,7 +80,7 @@ def test_capacity_busy_is_audited_before_any_finance_read(
 
     with TestClient(app) as client:
         _grant_cos(client, "finance-capacity-grant")
-        monkeypatch.setattr(main, "_record_tool_call", audit)
+        monkeypatch.setattr(main, "_finance_audit", audit)
         monkeypatch.setattr(queries, "publication_status", unexpected_read)
         assert client.portal is not None
         gate = app.state.runtime.finance_admission
@@ -207,7 +207,9 @@ def test_hypothetical_math_never_becomes_accepted_truth(tmp_path: Path) -> None:
         )
 
 
-def test_revoked_grant_and_invalid_page_never_disclose(tmp_path: Path) -> None:
+def test_unrelated_private_grant_does_not_change_finance_book_authority(
+    tmp_path: Path,
+) -> None:
     settings = replace(
         _settings(tmp_path),
         finance_publications_enabled=True,
@@ -236,7 +238,8 @@ def test_revoked_grant_and_invalid_page_never_disclose(tmp_path: Path) -> None:
         )
         assert revoked.status_code == 200, revoked.text
         response = _post(client, "status", "after-revoke", capability_id="F01")
-        assert response.status_code == 403
+        assert response.status_code == 200
+        assert response.json()["readiness"] == "missing_evidence"
 
 
 def test_turn_budget_is_shared_across_facade_operations(tmp_path: Path) -> None:
@@ -270,7 +273,7 @@ def test_processing_authority_is_rechecked_after_audit_before_delivery(
         finance_model_members=frozenset({PRINCIPAL}),
     )
     app = create_application(settings)
-    original = main._record_tool_call
+    original = main._finance_audit
 
     async def revoke_after_audit(request, session, provenance, **kwargs):
         receipt = await original(request, session, provenance, **kwargs)
@@ -283,7 +286,7 @@ def test_processing_authority_is_rechecked_after_audit_before_delivery(
 
     with TestClient(app) as client:
         _grant_cos(client, "finance-delivery-grant")
-        monkeypatch.setattr(main, "_record_tool_call", revoke_after_audit)
+        monkeypatch.setattr(main, "_finance_audit", revoke_after_audit)
         response = _post(
             client,
             "query",
@@ -299,8 +302,6 @@ def test_processing_authority_is_rechecked_after_audit_before_delivery(
 def test_grant_revocation_during_answer_suppresses_delivery(
     tmp_path: Path, monkeypatch
 ) -> None:
-    from datetime import datetime, timezone
-    from adminme.events.envelope import EventEnvelope
     from adminme.products.openclaw import main as native
 
     settings = replace(
@@ -310,49 +311,19 @@ def test_grant_revocation_during_answer_suppresses_delivery(
     )
     app = create_application(settings)
     with TestClient(app) as client:
-        grant = _grant_cos(client, "finance-mid-answer-grant")
-        original = native._record_tool_call
+        _grant_cos(client, "finance-mid-answer-grant")
+        original = native._finance_audit
 
         async def revoke_after_read(request, session, provenance, **kwargs):
             await original(request, session, provenance, **kwargs)
             if kwargs.get("operation") != "finance.calculate":
                 return
             runtime = app.state.runtime
-            now = datetime.now(timezone.utc)
-            scope = f"private:{PRINCIPAL}"
-            event_id = await runtime.events.write(
-                EventEnvelope(
-                    event_at_ms=int(now.timestamp() * 1000),
-                    tenant_id=session.tenant_id,
-                    type="service.delegation.revoked",
-                    schema_version=1,
-                    occurred_at=now.isoformat(),
-                    source_adapter="synthetic_acceptance",
-                    actor_identity=PRINCIPAL,
-                    source_account_id="synthetic",
-                    owner_scope=scope,
-                    visibility_scope=scope,
-                    sensitivity="privileged",
-                    payload={
-                        "grant_id": grant,
-                        "revoked_by_member_id": PRINCIPAL,
-                        "revoked_at": now.isoformat(),
-                        "reason": "synthetic revocation",
-                    },
-                )
+            runtime.settings = replace(
+                runtime.settings, finance_model_members=frozenset()
             )
-            await runtime.wait_for_projection("parties", event_id)
-            row = (
-                runtime.projections.connection("parties")
-                .execute(
-                    "SELECT revoked_at FROM service_delegation_grants WHERE tenant_id=? AND grant_id=?",
-                    (session.tenant_id, grant),
-                )
-                .fetchone()
-            )
-            assert row is not None and row[0] is not None
 
-        monkeypatch.setattr(native, "_record_tool_call", revoke_after_read)
+        monkeypatch.setattr(native, "_finance_audit", revoke_after_read)
         response = _post(
             client,
             "calculate",
@@ -452,7 +423,7 @@ def test_changed_enabled_owner_mapping_suppresses_old_result(
         },
     )
     app = create_application(settings)
-    original = main._record_tool_call
+    original = main._finance_audit
 
     async def reassign_after_read(request, session, provenance, **kwargs):
         receipt = await original(request, session, provenance, **kwargs)
@@ -489,7 +460,7 @@ def test_changed_enabled_owner_mapping_suppresses_old_result(
             thread_id=None,
             message_id="finance-run:owner-changed",
         )
-        monkeypatch.setattr(main, "_record_tool_call", reassign_after_read)
+        monkeypatch.setattr(main, "_finance_audit", reassign_after_read)
         response = client.post(
             BASE + "calculate",
             headers=OPENCLAW_HEADERS,

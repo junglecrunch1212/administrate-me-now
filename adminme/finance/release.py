@@ -1,6 +1,6 @@
-"""Owner Books release boundary; saved consent cannot release the advisor."""
+"""Released Finance capability; each use still requires a current book grant."""
 
-ADVISOR_AVAILABLE = False
+ADVISOR_AVAILABLE = True
 
 
 def advisor_unavailable() -> dict[str, str | int]:
@@ -23,6 +23,7 @@ def owner_books_activity(event_type: str) -> bool:
         "finance.import_result",
         "finance.metadata_inspected",
         "finance.disclosure_recorded",
+        "finance.advisor_accessed",
         "finance.goal_recorded",
         "finance.preference_recorded",
         "finance.decision_proposed",

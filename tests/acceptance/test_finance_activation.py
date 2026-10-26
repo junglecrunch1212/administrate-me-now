@@ -384,7 +384,7 @@ def test_exact_binding_owner_and_independent_approval_required(tmp_path):
             == 403
         )
         control(client, manifest["binding"], cos=True)
-        # Domain consent does not create the independent private read delegation.
+        # Book consent does not create a general private-context delegation.
         assert (
             client.get("/api/member/v1/cos/delegations", headers=DEMO_HEADERS).json()[
                 "items"
@@ -392,7 +392,8 @@ def test_exact_binding_owner_and_independent_approval_required(tmp_path):
             == []
         )
         no_grant = _post(client, "status", "domain-without-grant")
-        assert no_grant.status_code == 403, no_grant.text
+        assert no_grant.status_code == 200, no_grant.text
+        assert no_grant.json()["state"] == "missing_evidence"
         approval = approve(client, manifest)
         assert upload(client, approval, packet, headers=OTHER_HEADERS).status_code in {
             403,
@@ -559,7 +560,7 @@ def test_revocation_after_retrieval_before_disclosure_blocks_result(
             return result
 
         monkeypatch.setattr(queries, "query_publication", observe_read)
-        original = main._record_tool_call
+        original = main._finance_audit
 
         async def revoke_during_audit(request, session, provenance, **kwargs):
             result = await original(request, session, provenance, **kwargs)
@@ -590,7 +591,7 @@ def test_revocation_after_retrieval_before_disclosure_blocks_result(
                 )
             return result
 
-        monkeypatch.setattr(main, "_record_tool_call", revoke_during_audit)
+        monkeypatch.setattr(main, "_finance_audit", revoke_during_audit)
         result = _post(
             client,
             "query",
@@ -657,7 +658,7 @@ def test_one_owner_control_failure_does_not_abort_runtime(
         _grant_cos(client, "activation-unavailable-control")
         cos = _post(client, "status", "activation-unavailable-status")
         assert cos.status_code == 200, cos.text
-        assert cos.json()["reason"] == "finance_advisor_not_released"
+        assert cos.json()["state"] == "permission_required"
         assert "publication" not in cos.json()
         assert (
             client.get(

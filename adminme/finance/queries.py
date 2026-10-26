@@ -6,9 +6,20 @@ from datetime import date, timedelta
 from typing import Any
 from adminme.finance.publication import PublicationError
 from adminme.lib.session import Session
+from adminme.finance.access_control import FinanceReadScope
 
 
-def _owner(session: Session) -> str:
+def _owner(session: Session | FinanceReadScope) -> str:
+    if isinstance(session, FinanceReadScope):
+        if (
+            session.session.auth_role != "principal"
+            or session.session.is_view_as
+            or not session.policy.books_enabled
+            or session.policy.owner_id != session.data_owner_id
+            or session.auth_member_id not in session.policy.reader_member_ids
+        ):
+            raise PublicationError("finance_permission_required")
+        return session.data_owner_id
     if session.auth_role != "principal" or session.is_view_as:
         raise PublicationError("finance_permission_required")
     if f"private:{session.auth_member_id}" not in session.allowed_scopes:
@@ -17,9 +28,14 @@ def _owner(session: Session) -> str:
 
 
 def _metadata(
-    conn: Any, session: Session, book_id: str | None, publication_id: str | None = None
+    conn: Any,
+    session: Session | FinanceReadScope,
+    book_id: str | None,
+    publication_id: str | None = None,
 ) -> dict[str, Any] | None:
     owner = _owner(session)
+    if isinstance(session, FinanceReadScope):
+        book_id = session.require_book(book_id)
     if publication_id is not None:
         row = conn.execute(
             "SELECT metadata_json FROM finance_publications WHERE tenant_id=? AND owner_id=? AND book_id=? AND publication_id=?",
@@ -50,7 +66,7 @@ def _metadata(
 
 
 def publication_status(
-    conn: Any, session: Session, book_id: str | None = None
+    conn: Any, session: Session | FinanceReadScope, book_id: str | None = None
 ) -> dict[str, Any]:
     p = _metadata(conn, session, book_id)
     if p is None:
@@ -81,7 +97,7 @@ def publication_status(
 
 def query_publication(
     conn: Any,
-    session: Session,
+    session: Session | FinanceReadScope,
     book_id: str,
     publication_id: str,
     report_id: str,

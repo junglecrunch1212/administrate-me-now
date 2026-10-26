@@ -154,7 +154,7 @@ async def runtime_main(root, listener_fd, control_fd, checkout):
     from tests.acceptance.test_finance_activation import configured
     import uvicorn
 
-    assert release.ADVISOR_AVAILABLE is False
+    assert release.ADVISOR_AVAILABLE is True
     parent = os.getppid()
     listener = socket.socket(fileno=listener_fd)
     control = socket.socket(fileno=control_fd)
@@ -618,7 +618,7 @@ async def controller(root):
     from tests.fixtures.finance_import_load import sized_package
     from adminme.finance import release
 
-    assert release.ADVISOR_AVAILABLE is False
+    assert release.ADVISOR_AVAILABLE is True
     run = Run(root)
     checkout = os.environ["GITHUB_SHA"]
     if len(checkout) != 40 or any(c not in "0123456789abcdef" for c in checkout):
@@ -709,7 +709,7 @@ async def controller(root):
                     birth=process_row(run.runtime.pid)["start_ticks"],
                 )
                 ready = await receive(run.control)
-                assert ready == {"ready": True, "advisor_available": False}, ready
+                assert ready == {"ready": True, "advisor_available": True}, ready
                 control = await run.request(
                     client,
                     "PUT",
@@ -723,7 +723,7 @@ async def controller(root):
                     },
                     full=True,
                 )
-                assert control["advisor_available"] is False
+                assert control["advisor_available"] is True
                 approval = await run.request(
                     client,
                     "POST",

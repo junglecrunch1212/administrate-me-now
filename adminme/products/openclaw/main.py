@@ -4304,51 +4304,94 @@ def _finance_admission_identity(
 
 
 async def _finance_session(request: Request, provenance: Provenance) -> Session:
-    """Resolve the existing exact identity contract without blocking HTTP I/O.
+    """Authenticate the real reader; only the Finance book control grants reads.
 
-    Only detached dataclass fields cross the existing authority-reader boundary.
-    This does not cache a grant; final delivery independently rechecks current scope.
+    This Session has no generic service delegation and is used only inside the
+    Finance route. Service/reader attribution is recorded separately in the
+    Finance audit, never by impersonating the canonical data owner.
     """
-    from dataclasses import fields
-    from adminme.service_identities import ServiceRequestContext
+    tenant, member = _finance_admission_identity(request, provenance)
+    runtime = _runtime(request)
+    if runtime.settings.member_roles.get(member) != "principal":
+        raise HTTPException(403, "finance_principal_required")
+    session = Session(
+        tenant_id=tenant,
+        auth_member_id=member,
+        auth_role="principal",
+        view_member_id=member,
+        view_role="principal",
+        dm_scope="per_account_channel_peer",
+        source="openclaw_plugin",
+        correlation_id=provenance.correlation_id,
+    )
+    if not _finance_private_context(runtime, session, provenance):
+        raise HTTPException(403, "finance_private_context_required")
+    from adminme.finance.access_control import FinanceAccessError, read_scope
+
+    if not hasattr(request.state, "finance_read_scope"):
+        try:
+            request.state.finance_read_scope = read_scope(
+                runtime, session, advisor=True
+            )
+        except FinanceAccessError:
+            request.state.finance_read_scope = None
+    return session
+
+
+async def _finance_audit(
+    request: Request, session: Session, provenance: Provenance, operation: str
+) -> None:
+    from adminme.events.envelope import EventEnvelope
+    from adminme.service_identities import (
+        COS_SERVICE_PRINCIPAL_ID,
+        COS_AUTOMATION_OPERATOR_ID,
+    )
 
     runtime = _runtime(request)
-    if runtime.projections is None:
-        raise HTTPException(503, "CoS delegation projection is unavailable")
-
-    def detached_session(_conn: Any) -> dict[str, Any]:
-        resolved = _session(request, provenance)
-        # Both records contain only immutable scalar/tuple/frozenset fields.
-        # Copy the field mapping, without deepcopying immutable permissions
-        # twice per finance request. The runner still validates detachment.
-        values = {
-            field.name: getattr(resolved, field.name) for field in fields(Session)
-        }
-        if resolved.service_context is not None:
-            values["service_context"] = {
-                field.name: getattr(resolved.service_context, field.name)
-                for field in fields(ServiceRequestContext)
-            }
-        return values
-
-    values = await runtime.projections.read_authority(detached_session)
-    context = values.get("service_context")
-    if context is not None:
-        values["service_context"] = ServiceRequestContext(**context)
-    session = Session(**values)
-    if not hasattr(request.state, "finance_access_at_read"):
-        from adminme.finance.access_control import (
-            FinanceAccessError,
-            policy_for_session,
+    scope = getattr(request.state, "finance_read_scope", None)
+    policy = scope.policy if scope else None
+    now = EventEnvelope.now_utc_iso()
+    await runtime.events.write(
+        EventEnvelope(
+            tenant_id=session.tenant_id,
+            event_at_ms=int(time.time() * 1000),
+            type="finance.advisor_accessed",
+            schema_version=1,
+            occurred_at=now,
+            source_adapter="finance-advisor",
+            source_account_id=COS_SERVICE_PRINCIPAL_ID,
+            owner_scope=f"private:{session.auth_member_id}",
+            visibility_scope=f"private:{session.auth_member_id}",
+            sensitivity="privileged",
+            actor_identity=COS_SERVICE_PRINCIPAL_ID,
+            idempotency_key="finance-advisor:"
+            + hashlib.sha256(
+                json.dumps(
+                    [
+                        session.tenant_id,
+                        session.auth_member_id,
+                        operation,
+                        provenance.correlation_id,
+                    ]
+                ).encode()
+            ).hexdigest(),
+            payload={
+                "member_id": session.auth_member_id,
+                "operation": operation,
+                "data_owner_id": scope.data_owner_id if scope else None,
+                "control_event_id": policy.event_id if policy else None,
+                "control_revision": policy.revision if policy else 0,
+                "book_id": policy.binding.book_id
+                if policy and policy.binding
+                else None,
+                "authority_available": scope is not None,
+                "service_principal_id": COS_SERVICE_PRINCIPAL_ID,
+                "operator_principal_id": COS_AUTOMATION_OPERATOR_ID,
+                "channel_id": provenance.channel_id,
+                "provider_effect_count": 0,
+            },
         )
-
-        try:
-            request.state.finance_access_at_read = policy_for_session(
-                runtime, session
-            ).authority_coordinates()
-        except FinanceAccessError:
-            request.state.finance_access_at_read = None
-    return session
+    )
 
 
 def _private_member_tool_context(
@@ -4518,35 +4561,26 @@ async def _finance_delivery(
     from adminme.finance.disclosure import FinanceDisclosureError, record_disclosure
 
     runtime = _runtime(request)
-    await _record_tool_call(request, session, body.provenance, operation=operation)
+    await _finance_audit(request, session, body.provenance, operation=operation)
     # The audit append yields. Ordinary requests may have arrived meanwhile;
     # give them priority before resolving the current effective grant again.
     if not await runtime.finance_admission.yield_to_foreground():
         from adminme.finance.admission import admission_busy_result
 
         return admission_busy_result()
-    from adminme.finance.access_control import (
-        FinanceAccessError,
-        policy_for_session,
-        refresh_control,
-    )
+    from adminme.finance.access_control import FinanceAccessError, refresh_read_scope
 
     if private_result:
+        scope = getattr(request.state, "finance_read_scope", None)
+        if scope is None:
+            raise HTTPException(403, "finance_authority_changed")
         try:
-            await refresh_control(runtime, session.auth_member_id)
+            await refresh_read_scope(runtime, scope, advisor=True)
         except FinanceAccessError:
             raise HTTPException(403, "finance_authority_changed") from None
     latest = await _finance_session(request, body.provenance)
-    if private_result:
-        try:
-            current_access = policy_for_session(runtime, latest).authority_coordinates()
-        except FinanceAccessError:
-            raise HTTPException(403, "finance_authority_changed") from None
-        if current_access != getattr(request.state, "finance_access_at_read", None):
-            raise HTTPException(403, "finance_authority_changed")
-    # Frozen Session equality includes tenant, actor/view identity, allowed
-    # audience via the exact service grant, grant ID, permissions and quorum.
-    # A newly authorized different owner/grant cannot receive this old result.
+    # The actual transport/member identity must remain unchanged. The typed
+    # book authority was independently refreshed and compared above.
     if private_result and (
         latest != session or not _finance_permitted(runtime, latest, body.provenance)
     ):
@@ -4707,7 +4741,7 @@ async def finance_status(
                 publication = await runtime.projections.read(
                     "money",
                     lambda conn: publication_status(
-                        conn, session, book_id=body.book_id
+                        conn, request.state.finance_read_scope, book_id=body.book_id
                     ),
                 )
                 result["state"] = publication["state"]
@@ -4777,7 +4811,10 @@ async def finance_status(
                         await runtime.projections.read(
                             "money",
                             lambda conn: publication_readiness_context(
-                                conn, session, capability_id, book_id=body.book_id
+                                conn,
+                                request.state.finance_read_scope,
+                                capability_id,
+                                book_id=body.book_id,
                             ),
                         )
                         if not blocked
@@ -4921,7 +4958,7 @@ async def finance_query(body: FinanceQueryRequest, request: Request) -> dict[str
                         "money",
                         lambda conn: query_projection(
                             conn,
-                            session,
+                            request.state.finance_read_scope,
                             book_id=body.book_id,
                             projection_id=body.projection_id,
                             context_id=body.context_id,
@@ -4979,7 +5016,7 @@ async def finance_query(body: FinanceQueryRequest, request: Request) -> dict[str
                         "money",
                         lambda conn: query_publication(
                             conn,
-                            session,
+                            request.state.finance_read_scope,
                             book_id=body.book_id,
                             publication_id=body.publication_id,
                             report_id=body.report_id,

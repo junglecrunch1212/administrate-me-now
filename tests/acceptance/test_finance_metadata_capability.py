@@ -21,7 +21,7 @@ from tests.acceptance.test_openclaw_native_seam import (
     PRINCIPAL,
 )
 
-# Held advisor contracts only; the owner-release suite uses the unmodified ceiling.
+# Exercises shipping availability; kill-switch tests explicitly disable it.
 pytestmark = pytest.mark.usefixtures("unreleased_finance_advisor")
 
 

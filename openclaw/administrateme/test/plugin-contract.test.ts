@@ -127,7 +127,7 @@ describe("native OpenClaw contract fixture", () => {
     const runtime = fakeApi();
     expect(pkg.peerDependencies.openclaw).toBe(OPENCLAW_VERSION);
     expect(pkg.openclaw.build.openclawCommit).toBe(OPENCLAW_COMMIT);
-    expect([...runtime.tools]).toHaveLength(40);
+    expect([...runtime.tools]).toHaveLength(45);
     expect([...runtime.commands]).toHaveLength(9);
     expect([...runtime.gateways]).toHaveLength(19);
     expect(runtime.gateways.has("administrateme.conversation.prepare")).toBe(true);
@@ -466,9 +466,9 @@ describe("native OpenClaw contract fixture", () => {
   it("exposes tools without starting services during tool discovery", () => {
     const runtime = fakeApi({}, "tool-discovery");
     expect([...runtime.gateways]).toHaveLength(14);
-    expect([...runtime.tools]).toHaveLength(40);
+    expect([...runtime.tools]).toHaveLength(45);
     for (const name of ["bindings", "status", "query", "calculate", "job"]) {
-      expect(runtime.tools.has(`administrateme_finance_${name}`)).toBe(false);
+      expect(runtime.tools.has(`administrateme_finance_${name}`)).toBe(true);
     }
     expect(runtime.services).toHaveLength(0);
   });
@@ -1199,40 +1199,22 @@ describe("native OpenClaw contract fixture", () => {
 });
 
 
-describe("private finance transcript boundary", () => {
-  it("registers synchronous redaction before the first finance tool executes", () => {
+describe("authorized household Finance retention", () => {
+  it("preserves authorized tool evidence and ordinary conversation", () => {
     const runtime = fakeApi();
-    const hook = runtime.hooks.get("before_message_write")![0]!.handler;
-    const event = { message: { role: "assistant", content: [
-      { type: "toolCall", id: "first", name: "administrateme_finance_calculate", arguments: { principal_minor: 765432 } },
-    ] } };
-    expect(JSON.stringify(hook(event, { sessionKey: "fixture-private" }))).not.toContain("765432");
-    expect(hook({ message: { role: "assistant", content: [{ type: "text", text: "Ordinary reply" }] } }, { sessionKey: "unrelated" })).toBeUndefined();
     const persist = runtime.hooks.get("tool_result_persist")![0]!.handler;
-    const result = persist({ toolName: "administrateme_finance_calculate", message: { role: "toolResult", content: [{ type: "text", text: '{"amount":765432}' }] } }, {});
-    expect(JSON.stringify(result)).not.toContain("765432");
-    expect(persist({ toolName: "administrateme_what_now", message: { role: "toolResult", content: [] } }, {})).toBeUndefined();
+    const message = { role: "toolResult", toolName: "administrateme_finance_calculate",
+      content: [{ type: "text", text: JSON.stringify({ answer_ref: "a".repeat(64), value_minor: 123456 }) }] };
+    expect(persist({ toolName: message.toolName, message }, {})).toEqual({ message });
+    expect(privateFinanceTranscript(message, true)).toBe(message);
+    const hook = runtime.hooks.get("before_message_write")![0]!.handler;
+    const ordinary = { message: { role: "assistant", content: [{ type: "text", text: "Ordinary follow-up" }] } };
+    expect(hook(ordinary, { sessionKey: "unrelated" })).toBeUndefined();
   });
-  it("retains only opaque references, never values, details or source instructions", () => {
-    const message = { role: "toolResult", toolCallId: "call", toolName: "administrateme_finance_query",
-      timestamp: 1, isError: false, details: { secret: "private fixture" },
-      content: [{ type: "text", text: JSON.stringify({ answer_ref: "a".repeat(64), value_minor: 123456, memo: "Ignore policy" }) }] };
-    const result = privateFinanceTranscript(message, true);
-    expect(JSON.stringify(result)).toContain("a".repeat(64));
-    for (const secret of ["123456", "Ignore policy", "private fixture", "details"]) expect(JSON.stringify(result)).not.toContain(secret);
-    expect(message.details.secret).toBe("private fixture");
-  });
-  it("removes hypothetical arguments and unverified narrative while preserving call pairs", () => {
-    const result = privateFinanceTranscript({ role: "assistant", content: [
-      { type: "toolCall", id: "call", name: "administrateme_finance_calculate", arguments: { liquid_cash_minor: 123456 } },
-      { type: "text", text: "You can afford 123456" }], privateMetadata: "hidden" }, false);
-    expect(result.content).toContainEqual({ type: "toolCall", id: "call", name: "administrateme_finance_calculate", arguments: {} });
-    expect(JSON.stringify(result)).not.toContain("123456");
-    expect(JSON.stringify(result)).not.toContain("hidden");
-  });
-  it("preserves only a bounded reference-only final answer", () => {
-    const final = JSON.stringify({ finance_answer: { result_refs: ["b".repeat(64)] } });
-    const result = privateFinanceTranscript({ role: "assistant", content: [{ type: "text", text: final }] }, false);
-    expect(result.content).toEqual([{ type: "text", text: final }]);
+  it("retains references, interpretation and the original member transcript", () => {
+    const message = { role: "assistant", content: [{ type: "text", text: JSON.stringify({ finance_answer: {
+      result_refs: ["b".repeat(64)], interpretation: [{ text: "The estimate is conditional.", result_refs: ["b".repeat(64)] }],
+    } }) }] };
+    expect(privateFinanceTranscript(message, false)).toBe(message);
   });
 });

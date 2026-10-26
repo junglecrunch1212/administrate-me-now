@@ -106,20 +106,62 @@ a coordinating review gate, independent from this producer-neutral reader.
 
 ## Owner activation and approved package import
 
-**MODERNIZE** activation: the authenticated principal saves a fixed existing
+**MODERNIZE** activation: the authenticated data owner saves a fixed existing
 book binding and separate Books-dashboard / CoS-analysis permissions at
-`/api/member/v1/settings/finance`. Both default off. CoS additionally requires
-the existing private-context read grant; the Finance control never creates or
-widens generic delegations. Current owner/book authority is re-read after tool
-retrieval and audit, before disclosure. A pending owner-control change waits only for an already-admitted atomic
-append. Upload and validation do not hold the owner lock; fresh approval, role,
-control and head checks precede the commit. Once revocation is committed,
-subsequent disclosure is denied. An unavailable or malformed owner
-control makes that owner's Finance dashboard
-explicitly unavailable rather than substituting legacy totals, without preventing
-other owners' Finance or unrelated household services from starting. A verified
-empty or intentionally disabled control preserves the existing legacy view.
-Durable controls survive restart. Source identity creation and provider enrollment are outside this seam.
+`/api/member/v1/settings/finance`. Both default off. The shipping capability
+switch makes the advisor available but grants no access. Version 2 of
+`settings.finance_access_changed` adds `reader_member_ids`: the owner and at most
+one other current principal. Version 1 history remains owner-only; no historical
+event or source ownership is rewritten. The owner's real Session still governs
+imports, choices and settings. A typed Finance read scope carries the real reader
+beside the canonical data owner for dashboard, planning and CoS queries. It is
+never accepted as general private-data authority or an impersonated owner Session.
+
+CoS financial tools require this exact book control, current principal membership,
+and authenticated private conversation binding. An unrelated `read_context` grant
+is neither required nor created. Operational binding metadata keeps its separate
+metadata control and generic delegation boundary. Every Finance tool records the
+CoS service identity, actual member, canonical owner and control revision in
+`finance.advisor_accessed`; provider effects remain zero. Current book/reader
+permissions are rechecked after retrieval and audit before delivery, including
+in-flight revocation and role changes. A pending owner-control change waits only
+for an already-admitted atomic append. Upload and validation do not hold the
+owner lock; fresh approval, role, control and head checks precede the commit.
+An unavailable or malformed control fails closed without preventing unrelated
+household services from starting. A verified empty or intentionally disabled
+control preserves the existing legacy view. Controls survive restart. Source
+identity creation and provider enrollment are outside this seam.
+
+**SUPERSEDE** permanent conversation blocking and transcript redaction. Authorized
+results and discussion remain in the member's OpenClaw history. A later structured
+answer can reuse an encrypted retained result reference without another Finance
+call, while its exact control revision, member, book, publication/projection head
+and model dependencies remain valid. New run receipts still have a five-minute
+expiry. Reused references are current domain reads and are denied after analysis
+is disabled or a reader is removed. Deterministic result cards carry the figures;
+bounded, cited CoS interpretation and suggested next steps are labelled separately
+and authorize no financial action. Ordinary replies and historical conversation
+access do not require a fresh Finance receipt.
+
+Turning analysis off stops new Finance tools, calculations and retained-reference
+retrieval; removing a reader stops future Books/dashboard/planning reads. Neither
+control deletes or hides past authorized discussion. Generic OpenClaw history or
+memory can still reproduce or reason from facts delivered earlier. This is no
+universal erasure or generic-retrieval cutoff. Historical copies retain their
+member/client provenance and source restrictions, and establish neither newly
+verified/current evidence nor fresh source-access authority. Existing independent
+external sending approvals are preserved.
+
+For feature recovery on the schema-aware runtime, the authenticated owner first
+GETs `/api/member/v1/settings/finance`, then PUTs to that same endpoint with a new
+`request_id`, its exact `expected_revision`, unchanged `binding` and
+`reader_member_ids`, and both `books_enabled:false` and
+`cos_analysis_enabled:false`. Verify denial of new Finance tools/references and
+Books reads, continued ordinary chat/history, and preservation of accepted events.
+Do not roll back to a binary that cannot read version 2 controls or the new audit
+schema. A later re-enable requires a fresh explicit control revision; old references
+cannot acquire the new revision's authority. Import and source-history recovery
+remain governed by the closed-import contract below.
 
 The owner separately approves a `household-books.closed-import.v1` manifest with
 exact component hashes, byte limits, source snapshot and independently reviewed

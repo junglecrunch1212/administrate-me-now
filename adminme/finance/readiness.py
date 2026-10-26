@@ -16,6 +16,8 @@ from adminme.finance.capabilities import capability
 from adminme.finance.publication import PublicationError
 from adminme.finance.queries import _metadata
 from adminme.lib.session import Session
+from adminme.finance.access_control import FinanceReadScope
+from adminme.finance.queries import _owner
 
 _DIMENSIONS = (
     "coverage",
@@ -125,7 +127,7 @@ def _report_availability(
 
 def publication_readiness_context(
     conn: Any,
-    session: Session,
+    session: Session | FinanceReadScope,
     capability_id: str,
     *,
     book_id: str | None = None,
@@ -149,7 +151,7 @@ def publication_readiness_context(
     # Projection insertion already checks these coordinates. Fail closed if
     # stored metadata is inconsistent rather than exposing a corrupt row.
     if (
-        metadata.get("owner_id") != session.auth_member_id
+        metadata.get("owner_id") != _owner(session)
         or metadata.get("tenant_id") != session.tenant_id
     ):
         raise PublicationError("finance_permission_required")
@@ -192,7 +194,7 @@ def publication_readiness_context(
 
 def publication_dependencies(
     conn: Any,
-    session: Session,
+    session: Session | FinanceReadScope,
     capability_id: str,
     *,
     book_id: str | None = None,

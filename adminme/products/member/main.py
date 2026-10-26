@@ -8735,14 +8735,18 @@ class FinancePreferenceChoiceRequest(FinanceChoiceRequest):
 
 
 def _finance_choice_owner(runtime: Any, session: Session) -> None:
-    from adminme.finance.access_control import books_enabled
+    from adminme.finance.access_control import policy_for_session, FinanceAccessError
 
     require_principal(session)
+    try:
+        enabled = policy_for_session(runtime, session).books_enabled
+    except FinanceAccessError:
+        enabled = False
     if (
         session.is_view_as
         or session.service_context is not None
         or runtime.settings.member_roles.get(session.auth_member_id) != "principal"
-        or not books_enabled(runtime, session)
+        or not enabled
     ):
         raise HTTPException(403, "finance_explicit_owner_choice_required")
 
@@ -9753,13 +9757,22 @@ async def finance_planning(
     from adminme.finance.planning_store import query_projection
 
     runtime = _runtime(request)
-    _finance_choice_owner(runtime, session)
-    from adminme.finance.access_control import bound_book
+    from adminme.finance.access_control import read_scope, FinanceAccessError
+
+    def authorized_scope():
+        if session.service_context is not None:
+            raise HTTPException(403, "finance_member_reader_required")
+        try:
+            return read_scope(runtime, session, book_id)
+        except FinanceAccessError:
+            raise HTTPException(403, "finance_book_not_authorized") from None
+
+    scope = authorized_scope()
 
     def query_encoded(conn: Any) -> bytes:
         value = query_projection(
             conn,
-            session,
+            scope,
             book_id=book_id,
             projection_id=projection_id,
             context_id=context_id,
@@ -9778,11 +9791,11 @@ async def finance_planning(
             raise RuntimeError("finance_planning_response_encoding_failed") from exc
 
     try:
-        bound_book(runtime, session, book_id)
         result = await runtime.projections.read("money", query_encoded)
     except ValueError:
         raise HTTPException(422, "finance_planning_selection_invalid") from None
     if session_from_request(request) != session:
         raise HTTPException(403, "finance_planning_identity_changed")
-    _finance_choice_owner(runtime, session)
+    if authorized_scope() != scope:
+        raise HTTPException(403, "finance_authority_changed")
     return Response(result, media_type="application/json")

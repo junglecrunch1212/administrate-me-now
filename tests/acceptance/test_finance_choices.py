@@ -12,7 +12,7 @@ from adminme.runtime.application import create_application
 from tests.acceptance.test_finance_disclosure import enabled_settings, import_fixture
 from tests.acceptance.test_openclaw_native_seam import DEMO_HEADERS, OTHER
 
-# Held advisor contracts only; the owner-release suite uses the unmodified ceiling.
+# Exercises shipping availability; kill-switch tests explicitly disable it.
 pytestmark = pytest.mark.usefixtures("unreleased_finance_advisor")
 
 BASE = "/api/member/v1/finance/choices"
