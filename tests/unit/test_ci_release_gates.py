@@ -4067,14 +4067,55 @@ def test_historical_repair_and_successor_stay_in_closed_updater_lane(
     )
 
 
+_FINANCE_METADATA_REVIEWED = "4fb9988f02aa500ed848ca295f8b579fc47daee7"
+
+
+def _finance_metadata_reviewed_source(name: str) -> str:
+    # Exact historical bytes, including final newline; never ambient ROOT bytes.
+    return subprocess.run(
+        [
+            "git",
+            "--no-replace-objects",
+            "-C",
+            str(ROOT),
+            "show",
+            f"{_FINANCE_METADATA_REVIEWED}:{name}",
+        ],
+        env={k: v for k, v in os.environ.items() if not k.startswith("GIT_")},
+        capture_output=True,
+        check=True,
+        text=True,
+    ).stdout
+
+
 def _finance_metadata_candidate(path: Path) -> tuple[str, str]:
-    # Use the actual reviewed shared files; all surrounding bytes are pinned.
-    for name in FINANCE_METADATA_SHARED:
-        _commit(path, name, (ROOT / name).read_text())
+    for name in sorted(FINANCE_METADATA_SHARED):
+        _commit(path, name, _finance_metadata_reviewed_source(name))
     base = _git(path, "rev-parse", "HEAD")
     for name in sorted(FINANCE_METADATA_REQUIRED_PATHS - set(FINANCE_METADATA_SHARED)):
-        head = _commit(path, name, (ROOT / name).read_text())
+        head = _commit(path, name, _finance_metadata_reviewed_source(name))
     return base, head
+
+
+def test_finance_metadata_historical_fixture_matches_reviewed_wiring():
+    import hashlib
+
+    for name, approved in FINANCE_METADATA_SHARED.items():
+        source = _finance_metadata_reviewed_source(name)
+        assert hashlib.sha256(source.encode()).hexdigest() == approved[1]
+
+
+def test_finance_metadata_rejects_repaired_event_log_from_historical_lane(repository):
+    path, _ = repository
+    base, _ = _finance_metadata_candidate(path)
+    name = "adminme/events/log.py"
+    current = (ROOT / name).read_text()
+    assert current != _finance_metadata_reviewed_source(name)
+    head = _commit(path, name, current)
+    assert (
+        select_scope(path, _event(base, head), checkout_sha=head)["scope"]
+        == "system-wide"
+    )
 
 
 def test_finance_metadata_selects_only_complete_immutable_scope(repository):
