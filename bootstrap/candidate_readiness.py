@@ -322,6 +322,7 @@ def capture_deployment_snapshot(
     adapters_payload_override: bytes | None = None,
     bridge_payload_override: bytes | None = None,
     bridge_index_absent: bool = False,
+    gateway_payload_override: bytes | None = None,
 ) -> DeploymentSnapshot:
     """Capture content-free binding material for rehearsal and pending evidence."""
 
@@ -337,6 +338,12 @@ def capture_deployment_snapshot(
         paths.app_dir / "member-google-readiness-transition.json"
     ):
         raise CandidateReadinessError("Google readiness transition recovery is pending")
+    if gateway_payload_override is None and os.path.lexists(
+        paths.app_dir / "browser-readiness-transition.json"
+    ):
+        raise CandidateReadinessError(
+            "browser readiness transition recovery is pending"
+        )
     predecessor, pointer_sha256, pointer_chain_sha256 = _pointer_snapshot(paths)
     config_rows = []
     for relative, required in _CONFIG_COORDINATES:
@@ -365,6 +372,21 @@ def capture_deployment_snapshot(
                     "present": True,
                     "sha256": hashlib.sha256(adapters_payload_override).hexdigest(),
                     "size": len(adapters_payload_override),
+                    "mode": 0o600,
+                }
+            )
+        elif (
+            relative == "state/openclaw/runtime/openclaw.json"
+            and gateway_payload_override is not None
+        ):
+            # Reconstruct only the gateway coordinate for the bounded browser
+            # transition; optional dataset/CoS coordinates remain on the same path.
+            config_rows.append(
+                {
+                    "path": relative,
+                    "present": True,
+                    "sha256": hashlib.sha256(gateway_payload_override).hexdigest(),
+                    "size": len(gateway_payload_override),
                     "mode": 0o600,
                 }
             )

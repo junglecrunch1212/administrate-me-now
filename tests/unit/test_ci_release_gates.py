@@ -2622,15 +2622,24 @@ def test_cos_google_workspace_fingerprint_binds_every_other_byte_and_mode() -> N
 
 
 def _member_google_settings_candidate(repository: Path) -> tuple[str, str]:
+    contract = json.loads((ROOT / MEMBER_GOOGLE_SETTINGS_WIRING).read_text())
     sources = {}
     for relative in MEMBER_GOOGLE_SETTINGS_SHARED_PATHS:
-        source = (ROOT / relative).read_text()
-        normalized = _member_google_settings_shared_source(relative, source)
-        assert normalized is not None and normalized[1]
-        sources[relative] = source
+        # These are immutable scope fixtures, not the current runtime. A later
+        # shared-source edit may correctly fall outside this historical boundary.
+        pairs = contract["paths"][relative]
+        separator = "\n# Unrelated retained behavior\n"
+        before = separator.join(pair["before"] for pair in pairs)
+        after = separator.join(pair["after"] for pair in pairs)
+        assert _member_google_settings_shared_source(relative, before) == (
+            before,
+            False,
+        )
+        assert _member_google_settings_shared_source(relative, after) == (before, True)
+        sources[relative] = after
         target = repository / relative
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(normalized[0])
+        target.write_text(before)
     _git(repository, "add", "-A")
     _git(repository, "commit", "-m", "Frozen shared Google Settings dependencies")
     base = _git(repository, "rev-parse", "HEAD")
@@ -2644,6 +2653,22 @@ def _member_google_settings_candidate(repository: Path) -> tuple[str, str]:
     _git(repository, "add", "-A")
     _git(repository, "commit", "-m", "Self-service Google Settings fixture")
     return base, _git(repository, "rev-parse", "HEAD")
+
+
+def test_member_google_settings_fixture_is_independent_of_current_shared_sources(
+    repository: tuple[Path, str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fixture_root = tmp_path / "contract-only-source"
+    wiring = fixture_root / MEMBER_GOOGLE_SETTINGS_WIRING
+    wiring.parent.mkdir(parents=True)
+    wiring.write_bytes((ROOT / MEMBER_GOOGLE_SETTINGS_WIRING).read_bytes())
+    monkeypatch.setattr(sys.modules[__name__], "ROOT", fixture_root)
+    path, _ = repository
+    base, head = _member_google_settings_candidate(path)
+    assert (
+        select_scope(path, _event(base, head), checkout_sha=head)["scope"]
+        == "member-google-settings"
+    )
 
 
 def test_member_google_settings_scope_uses_exact_sources_and_existing_protected_workers(
@@ -4042,14 +4067,55 @@ def test_historical_repair_and_successor_stay_in_closed_updater_lane(
     )
 
 
+_FINANCE_METADATA_REVIEWED = "4fb9988f02aa500ed848ca295f8b579fc47daee7"
+
+
+def _finance_metadata_reviewed_source(name: str) -> str:
+    # Exact historical bytes, including final newline; never ambient ROOT bytes.
+    return subprocess.run(
+        [
+            "git",
+            "--no-replace-objects",
+            "-C",
+            str(ROOT),
+            "show",
+            f"{_FINANCE_METADATA_REVIEWED}:{name}",
+        ],
+        env={k: v for k, v in os.environ.items() if not k.startswith("GIT_")},
+        capture_output=True,
+        check=True,
+        text=True,
+    ).stdout
+
+
 def _finance_metadata_candidate(path: Path) -> tuple[str, str]:
-    # Use the actual reviewed shared files; all surrounding bytes are pinned.
-    for name in FINANCE_METADATA_SHARED:
-        _commit(path, name, (ROOT / name).read_text())
+    for name in sorted(FINANCE_METADATA_SHARED):
+        _commit(path, name, _finance_metadata_reviewed_source(name))
     base = _git(path, "rev-parse", "HEAD")
     for name in sorted(FINANCE_METADATA_REQUIRED_PATHS - set(FINANCE_METADATA_SHARED)):
-        head = _commit(path, name, (ROOT / name).read_text())
+        head = _commit(path, name, _finance_metadata_reviewed_source(name))
     return base, head
+
+
+def test_finance_metadata_historical_fixture_matches_reviewed_wiring():
+    import hashlib
+
+    for name, approved in FINANCE_METADATA_SHARED.items():
+        source = _finance_metadata_reviewed_source(name)
+        assert hashlib.sha256(source.encode()).hexdigest() == approved[1]
+
+
+def test_finance_metadata_rejects_repaired_event_log_from_historical_lane(repository):
+    path, _ = repository
+    base, _ = _finance_metadata_candidate(path)
+    name = "adminme/events/log.py"
+    current = (ROOT / name).read_text()
+    assert current != _finance_metadata_reviewed_source(name)
+    head = _commit(path, name, current)
+    assert (
+        select_scope(path, _event(base, head), checkout_sha=head)["scope"]
+        == "system-wide"
+    )
 
 
 def test_finance_metadata_selects_only_complete_immutable_scope(repository):

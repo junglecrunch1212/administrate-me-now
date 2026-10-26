@@ -899,6 +899,9 @@ jobs:
           python -m pip install "poetry==2.4.1"
           poetry sync --with dev --no-interaction
 
+      - name: Validate pinned preparation tool behavior
+        run: poetry run pytest -p no:cacheprovider -q tests/unit/bootstrap/test_prepared_runtime.py
+
       # Prove the new channel boundary before the longer recovery rehearsals.
       - name: Validate active CoS maintenance and observation windows
         run: >-
