@@ -1,9 +1,11 @@
-"""Explicitly admitted Linux owner-release experiment; never collected by pytest.
+"""Isolated NON-QUALIFYING mixed-load diagnostic; never collected by pytest.
 
 The external controller drives shipping HTTP owner control/approval/import and a
 single ordinary Money rebuild. Runtime lifecycle, importer, EventLog, subscribers,
 and projections are not replaced. No advisor override, model or provider runs.
 The existing watchdog owns process/resource/deadline enforcement and cleanup.
+Original workload, verdict and limits are preserved. Four allocator observations
+run outside timed load windows within the existing phase deadlines.
 """
 
 from __future__ import annotations
@@ -152,6 +154,8 @@ async def runtime_main(root, listener_fd, control_fd, checkout):
     from adminme.finance import release
     from adminme.runtime.application import create_application
     from tests.acceptance.test_finance_activation import configured
+    from tests.fixtures.finance_owner_native_memory import BOUNDARIES, Observations
+    from adminme.finance.worker import worker_usage
     import uvicorn
 
     assert release.ADVISOR_AVAILABLE is False
@@ -162,6 +166,7 @@ async def runtime_main(root, listener_fd, control_fd, checkout):
     faults = []
     guard = FixtureGuard(root, listener.getsockname()[1], faults, finance_workers=True)
     sys.addaudithook(guard)
+    observations = Observations()
     app = create_application(configured(root / "instance"))
     server = uvicorn.Server(
         uvicorn.Config(app, log_level="warning", lifespan="off", access_log=False)
@@ -195,6 +200,28 @@ async def runtime_main(root, listener_fd, control_fd, checkout):
                     replayed = True
                     await app.state.runtime.projections.rebuild("money")
                     await send(control, {"rebuilt": "money"})
+                elif command.get("operation") in {
+                    "observe_" + boundary for boundary in BOUNDARIES
+                } and set(command) == {"operation"}:
+                    async with asyncio.timeout(5):
+                        while True:
+                            state = await app.state.runtime.bus.subscriber_status(
+                                "projection:money"
+                            )
+                            assert not state.get("degraded"), "money_degraded"
+                            if (
+                                state["lag_count"] == 0
+                                and not state.get("draining", False)
+                                and worker_usage()["active"] is None
+                            ):
+                                break
+                            await asyncio.sleep(0.02)
+                    await send(
+                        control,
+                        observations.capture(
+                            command["operation"].removeprefix("observe_")
+                        ),
+                    )
                 elif command == {"operation": "shutdown"}:
                     break
                 else:
@@ -415,6 +442,31 @@ class Run:
     async def command(self, operation):
         await send(self.control, {"operation": operation})
         return await receive(self.control)
+
+    async def observe(self, boundary):
+        from tests.fixtures.finance_watchdog import process_row, tree_rows
+
+        before_at = time.monotonic()
+        before = process_row(self.runtime.pid)
+        assert [row["pid"] for row in tree_rows(self.runtime.pid)] == [self.runtime.pid]
+        result = await self.command("observe_" + boundary)
+        after = process_row(self.runtime.pid)
+        assert before["start_ticks"] == after["start_ticks"]
+        assert result["pid"] == self.runtime.pid and result["boundary"] == boundary
+        assert result["qualification"] is False and result["reset_counters"] is False
+        assert [row["pid"] for row in tree_rows(self.runtime.pid)] == [self.runtime.pid]
+        append(
+            self.root,
+            "native-memory-observations.jsonl",
+            {
+                **result,
+                "phase": self.phase_name,
+                "external_before_at": before_at,
+                "external_before": before,
+                "external_after_at": time.monotonic(),
+                "external_after": after,
+            },
+        )
 
     async def readback(self, client):
         value = await self.request(client, "GET", SURFACE, full=True)
@@ -649,6 +701,9 @@ async def controller(root):
                 "fixture.jsonl",
                 {
                     "candidate": checkout,
+                    "shipping_source": "71972213dd828b4a11f9be76d52647cd89028049",
+                    "qualification": False,
+                    "diagnostic": "original_mixed_load_sqlcipher_and_glibc_aggregates",
                     "units": 8022,
                     "blobs": len(package.blobs),
                     "provenance_bytes": len(package.index)
@@ -734,6 +789,7 @@ async def controller(root):
                     full=True,
                 )
                 await run.load(client, seconds=5)
+                await run.observe("preimport")
             async with run.phase("preimport_core_baseline"):
                 await run.load(client)
             async with run.phase("single_initial_import"):
@@ -759,11 +815,13 @@ async def controller(root):
                 del body
             async with run.phase("settle_and_owner_readback"):
                 run.after_import = await run.readback(client)
+                await run.observe("postimport")
             async with run.phase("single_full_money_replay"):
                 assert await run.alongside(
                     client, run.command("rebuild_money"), seconds=58
                 ) == {"rebuilt": "money"}
                 run.after_replay = await run.readback(client)
+                await run.observe("postreplay")
             async with run.phase("loaded_core_baseline_before"):
                 await run.load(client)
             async with run.phase("loaded_planning_probe"):
@@ -771,6 +829,7 @@ async def controller(root):
             async with run.phase("loaded_core_baseline_after"):
                 await run.load(client)
             async with run.phase("shutdown_receipt"):
+                await run.observe("postload")
                 run.final_readback = await run.readback(client)
                 shutdown = await run.command("shutdown")
                 assert (
