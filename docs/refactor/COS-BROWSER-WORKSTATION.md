@@ -26,13 +26,18 @@ sole live operator; candidate tests use disposable hosted state.
 
 1. Obtain a fresh native `config.get` snapshot into a private file. Run the deployed
    `python -m bootstrap.workstation_browser prepare-native-patch --instance-root
-   <root> --snapshot <private-snapshot> --output <private-patch>`. Apply the produced
+   <root> --snapshot <private-snapshot> --output <private-patch>
+   --previous-config-output <private-prior-raw>`. Preparation requires current
+   bound readiness and retains the authentic raw configuration privately for the
+   reconciliation below. Apply the produced
    `baseHash`/`raw` parameters through native `config.patch`, which checks the hash
    and performs its supported restart. Do not edit active configuration. Preparation
    enables the bundled browser plugin and exactly one explicit extension profile,
    named `chrome`, with `allowSystemProfileImport: false`. A second extension
    profile or another driver under `chrome` is rejected. Existing credentials,
-   member tools and other gateway policy are preserved.
+   member tools and other gateway policy are preserved. Obtain a fresh native
+   `config.get` after the supported restart and reconcile this exact approved
+   patch before further deployment operations.
 2. In the verified intended CoS Chrome profile, use `openclaw browser extension path`
    to locate the pinned extension, enable Developer mode in `chrome://extensions`,
    and load that directory. Use `openclaw browser extension pair --json` and transfer
@@ -60,13 +65,71 @@ sole live operator; candidate tests use disposable hosted state.
    `content_on_explicit_authorized_demand`, preserves other policy dimensions and
    cannot override explicit none/metadata/paused restrictions. The source policy
    itself never admits a read without a current authenticated instruction.
-6. Prepare/apply a fresh native patch after provisioning. This adds `browser` only
+6. Prepare/apply/reconcile a fresh native patch after provisioning. This adds `browser` only
    to the existing CoS worker when the reviewed guard, canonical identities and
    complete private policy are available. Supported activation/reconciliation
    carries that setting and the current workstation instructions forward.
    Native patch preparation accepts either legacy `agents.list` or current keyed
    `agents.entries`, rejects an ambiguous mixture, and adds only `browser` to the
    existing CoS worker's explicit allowlist. Other agent settings are preserved.
+
+### Browser-only readiness reconciliation
+
+A supported native patch can change the gateway coordinate in deployment
+readiness without changing the installed runtime or its acceptance evidence.
+Use `reconcile-readiness` only for an exact owner-approved patch produced by
+`prepare-native-patch`, including its optional additive CoS browser admission or
+explicit browser disablement. This command changes only the configuration
+fingerprint in the existing readiness document. It never writes native config,
+refreshes acceptance timestamps, changes provider receipts or adds authority.
+
+The sole operator runs the clean protected-main controller with the installed
+release's Python, from the protected checkout (`PYTHONPATH=.:bridge`). Preserve
+the prior raw config, approved patch and fresh native `config.get` as owner-only
+files in an owner-only directory. A historical `config.get` snapshot's exact
+`raw` string may be extracted to a separate private file without changing the
+original snapshot. Do not reconstruct raw bytes from its parsed `config` object.
+
+```text
+<installed-python> -m bootstrap.workstation_browser reconcile-readiness
+  --instance-root <root>
+  --previous-native-config <private-prior-raw>
+  --approved-patch <private-approved-patch>
+  --approved-patch-sha256 <exact-approved-artifact-sha256>
+  --authorization-reference <existing-owner-approval-reference>
+  --current-snapshot <fresh-private-native-config-get>
+```
+
+The authorization reference attributes the existing approval; arbitrary text is
+not authentication or new consent. Preflight returns a content-free plan digest.
+Review the exact installed/controller identities, old/new native hashes and
+approved artifact hash, then repeat those arguments with
+`--plan-sha256 <preflight-digest> --apply`. Root retains the concrete approval and
+private inputs in the existing task. Native credential bytes are not printed or
+copied into the journal. The journal preserves the original full readiness bytes,
+complete old/new snapshots and exact source/approval references.
+
+The prior raw hash must match the prepared patch's base hash and reproduce the
+complete saved readiness fingerprint with only the gateway coordinate replaced.
+Optional dataset, CoS operation and guard coordinates stay in that calculation.
+Current raw bytes must match fresh native evidence, and the parsed delta must be
+exactly the existing browser preparation, preserving every other native field.
+Routing, credentials, member grants, hooks, history/cutoff or other coordinate
+drift rejects. The shared deployment lock and pending activation, CoS, reset,
+bridge and Google journals prevent overlapping transactions.
+
+After apply, confirm a bounded readiness read and the formerly blocked supported
+maintenance preflight. The installed runtime and approved browser settings must
+remain unchanged. A refusal before apply changes no readiness. An interruption
+retains `app/browser-readiness-transition.json`, blocking ordinary deployment
+capture; repeat the same exact apply command to finish. Completion writes the
+immutable `app/browser-readiness-<plan-sha256>.json` receipt. A repeated completed
+command verifies evidence without rewriting readiness; changed source, authority,
+config or evidence refuses. Do not delete a pending journal or reapply a completed
+receipt over an older readiness document. If independent drift prevents exact
+completion, retain the healthy running runtime and escalate the concrete mismatch.
+Restoring stale readiness is not a healthy rollback. Browser feature revocation
+and subsequent runtime delivery keep their existing supported recovery paths.
 
 ### Gmail self-mailbox identity
 
