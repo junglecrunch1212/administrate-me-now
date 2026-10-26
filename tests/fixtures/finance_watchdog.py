@@ -339,7 +339,11 @@ def main(mode, directory):
     phase_active = None
     phase_started = None
     if mode == "owner-production":
-        from tests.fixtures.finance_owner_production import PHASES
+        from tests.fixtures.finance_owner_production import (
+            PHASES,
+            EVIDENCE_FILE_COUNT,
+            FINAL_EVIDENCE_FILES,
+        )
 
         owner_phases = PHASES
         report.update(
@@ -349,7 +353,30 @@ def main(mode, directory):
             evidence_limit_bytes=32 * MIB,
             inherited_file_limit_bytes=128 * MIB,
             evidence_max_bytes=0,
+            evidence_file_count_limit=EVIDENCE_FILE_COUNT,
+            reserved_final_evidence_files=sorted(FINAL_EVIDENCE_FILES),
+            role_cpu_seconds={
+                "controller": 180,
+                "runtime": 180,
+                "worker_child": 60,
+                "runtime_executor_aggregate": 180,
+                "whole_tree": 240,
+            },
         )
+
+    def write_owner_final(name, value):
+        """Count/size final outputs before writing; never discard raw failures."""
+        assert mode == "owner-production" and name in FINAL_EVIDENCE_FILES
+        raw = (json.dumps(value, indent=2) + "\n").encode()
+        files = {p.name: p.stat().st_size for p in root.iterdir() if p.is_file()}
+        if len(set(files) | FINAL_EVIDENCE_FILES) > EVIDENCE_FILE_COUNT:
+            raise ValueError("evidence_file_count_cap")
+        if (
+            len(raw) > 16 * MIB
+            or sum(files.values()) - files.get(name, 0) + len(raw) > 32 * MIB
+        ):
+            raise ValueError("evidence_final_size_cap")
+        (root / name).write_bytes(raw)
 
     def event(kind, **fields):
         report["events"].append({"at": time.monotonic(), "kind": kind, **fields})
@@ -410,6 +437,7 @@ def main(mode, directory):
     finish_at = None
     stop_at = None
     summary_window = None
+    owner_cleanup_origin = owner_cleanup_end = None
     term_sent = kill_sent = False
     selector = selectors.DefaultSelector()
     selector.register(read_fd, selectors.EVENT_READ)
@@ -435,6 +463,27 @@ def main(mode, directory):
                 max(0.001, summary_window["reserve"] - time.monotonic()),
             )
 
+    def bind_owner_cleanup(*, arm=True):
+        nonlocal owner_cleanup_origin, owner_cleanup_end
+        if mode != "owner-production":
+            return
+        origins = [
+            v for v in (owner_cleanup_origin, finish_at, stop_at) if v is not None
+        ]
+        owner_cleanup_origin = (
+            min(origins) if origins else min(time.monotonic(), STARTED + work)
+        )
+        owner_cleanup_end = min(absolute, owner_cleanup_origin + cleanup)
+        report["cleanup_schedule"] = {
+            "origin": owner_cleanup_origin,
+            "reserve": owner_cleanup_end - 5,
+            "end": owner_cleanup_end,
+        }
+        if arm:
+            signal.setitimer(
+                signal.ITIMER_REAL, max(0.001, owner_cleanup_end - 5 - time.monotonic())
+            )
+
     def stop(reason, now):
         nonlocal stop_at, finish_at
         if stop_at is None:
@@ -446,6 +495,7 @@ def main(mode, directory):
             if row and row["start_ticks"] == known.get(controller.pid):
                 os.kill(controller.pid, signal.SIGUSR1)
             bind_summary_cleanup()
+            bind_owner_cleanup()
 
     def signal_owned(sig):
         report["forced"] = True
@@ -465,7 +515,13 @@ def main(mode, directory):
         # kernel timer terminates this supervisor if finalization itself stalls.
         signal_owned(signal.SIGKILL)
         signal.signal(signal.SIGALRM, signal.SIG_DFL)
-        end = summary_window["end"] if summary_window is not None else absolute
+        end = (
+            summary_window["end"]
+            if summary_window is not None
+            else owner_cleanup_end
+            if owner_cleanup_end is not None
+            else absolute
+        )
         signal.setitimer(signal.ITIMER_REAL, max(0.001, end - time.monotonic()))
         raise TimeoutError("absolute_watchdog_alarm")
 
@@ -515,7 +571,15 @@ def main(mode, directory):
                 if evidence_bytes > 16 * MIB - 65536:
                     exceeded.append("evidence_bytes")
             if mode == "owner-production":
-                sizes = [p.stat().st_size for p in root.iterdir() if p.is_file()]
+                evidence_files = {
+                    p.name: p.stat().st_size for p in root.iterdir() if p.is_file()
+                }
+                sizes = list(evidence_files.values())
+                if (
+                    len(set(evidence_files) | FINAL_EVIDENCE_FILES)
+                    > EVIDENCE_FILE_COUNT
+                ):
+                    exceeded.append("evidence_file_count")
                 evidence_bytes = sum(sizes)
                 report["evidence_max_bytes"] = max(
                     report["evidence_max_bytes"], evidence_bytes
@@ -628,6 +692,7 @@ def main(mode, directory):
                                 raise ValueError("work_clock")
                             finish_at = msg["at"]
                             bind_summary_cleanup()
+                            bind_owner_cleanup()
                             if finish_at > STARTED + work:
                                 stop("work_deadline", now)
                         else:
@@ -708,6 +773,14 @@ def main(mode, directory):
             signal.setitimer(
                 signal.ITIMER_REAL, max(0.001, summary_window["end"] - time.monotonic())
             )
+        if mode == "owner-production":
+            bind_owner_cleanup(arm=False)
+            # Hard termination covers stuck scratch removal, hashing or export,
+            # using the earliest observed terminal origin, never a fresh 30s.
+            signal.signal(signal.SIGALRM, signal.SIG_DFL)
+            signal.setitimer(
+                signal.ITIMER_REAL, max(0.001, owner_cleanup_end - time.monotonic())
+            )
         # Final reserve: bounded nonblocking reap, then retained receipts/scratch removal.
         cleanup_maxima = {key: 0 for key in limits}
 
@@ -731,9 +804,12 @@ def main(mode, directory):
         end = (
             summary_window["end"]
             if summary_window is not None
+            else owner_cleanup_end
+            if owner_cleanup_end is not None
             else min(absolute, (finish_at or time.monotonic()) + cleanup)
         )
-        while time.monotonic() < end - 0.5:
+        reap_reserve = 5.0 if mode == "owner-production" else 0.5
+        while time.monotonic() < end - reap_reserve:
             try:
                 pid, status, usage = os.wait4(-1, os.WNOHANG)
             except ChildProcessError:
@@ -836,10 +912,18 @@ def main(mode, directory):
                     report["faults"].append("final_containment:" + key)
             if not report["phases_complete"] or not runtime_final_received:
                 report["faults"].append("incomplete_phase_or_runtime_receipt")
-            sizes = [p.stat().st_size for p in root.iterdir() if p.is_file()]
+            final_files = {
+                p.name: p.stat().st_size for p in root.iterdir() if p.is_file()
+            }
+            sizes = list(final_files.values())
+            if len(set(final_files) | FINAL_EVIDENCE_FILES) > EVIDENCE_FILE_COUNT:
+                report["faults"].append("final_containment:evidence_file_count")
             if sum(sizes) > 32 * MIB - 65536 or any(n > 16 * MIB for n in sizes):
                 report["faults"].append("final_containment:evidence_bytes")
-        (root / "watchdog.json").write_text(json.dumps(report, indent=2) + "\n")
+        if mode == "owner-production":
+            write_owner_final("watchdog.json", report)
+        else:
+            (root / "watchdog.json").write_text(json.dumps(report, indent=2) + "\n")
         if mode == "owner-production":
             # All raw files already live outside scratch. Export every file,
             # including failures, after cleanup; hash in chunks, without copying
@@ -857,16 +941,15 @@ def main(mode, directory):
                         "sha256": digest.hexdigest(),
                     }
                 )
-            (root / "evidence-manifest.json").write_text(
-                json.dumps(
-                    {
-                        "candidate": report["candidate"],
-                        "files": files,
-                        "scratch_removed": report["scratch_removed"],
-                    },
-                    indent=2,
-                )
-                + "\n"
+            write_owner_final(
+                "evidence-manifest.json",
+                {
+                    "candidate": report["candidate"],
+                    "files": files,
+                    "scratch_removed": report["scratch_removed"],
+                    "final_file_count": len(files) + 2,
+                    "file_count_limit": EVIDENCE_FILE_COUNT,
+                },
             )
             # A separate final receipt binds the manifest and accounts for
             # export itself. It is deliberately outside its own hash manifest.
@@ -877,32 +960,33 @@ def main(mode, directory):
             export_faults = [
                 key for key, bound in limits.items() if export_sample[key] > bound
             ]
-            evidence_sizes = [p.stat().st_size for p in root.iterdir() if p.is_file()]
+            evidence_files = {
+                p.name: p.stat().st_size for p in root.iterdir() if p.is_file()
+            }
+            evidence_sizes = list(evidence_files.values())
+            if len(set(evidence_files) | FINAL_EVIDENCE_FILES) > EVIDENCE_FILE_COUNT:
+                export_faults.append("evidence_file_count")
             if sum(evidence_sizes) > 32 * MIB - 16384 or any(
                 n > 16 * MIB for n in evidence_sizes
             ):
                 export_faults.append("evidence_bytes")
-            owner_export_complete = not export_faults and export_at <= min(
-                absolute, (finish_at or export_at) + cleanup
-            )
-            (root / "export-receipt.json").write_text(
-                json.dumps(
-                    {
-                        "manifest_sha256": hashlib.sha256(
-                            (root / "evidence-manifest.json").read_bytes()
-                        ).hexdigest(),
-                        "export_sample": export_sample,
-                        "export_finished_at": export_at,
-                        "cleanup_seconds_including_export": export_at - finish_at
-                        if finish_at
-                        else None,
-                        "complete": owner_export_complete,
-                        "faults": export_faults,
-                        "qualification": False,
-                    },
-                    indent=2,
-                )
-                + "\n"
+            owner_export_complete = not export_faults and export_at <= owner_cleanup_end
+            write_owner_final(
+                "export-receipt.json",
+                {
+                    "manifest_sha256": hashlib.sha256(
+                        (root / "evidence-manifest.json").read_bytes()
+                    ).hexdigest(),
+                    "export_sample": export_sample,
+                    "export_finished_at": export_at,
+                    "cleanup_seconds_including_export": export_at
+                    - owner_cleanup_origin,
+                    "cleanup_deadline": owner_cleanup_end,
+                    "final_file_count": len(set(evidence_files) | FINAL_EVIDENCE_FILES),
+                    "complete": owner_export_complete,
+                    "faults": export_faults,
+                    "qualification": False,
+                },
             )
     summary_complete = (
         summary_cleanup_complete(report, time.monotonic())
@@ -918,7 +1002,7 @@ def main(mode, directory):
         and report["absolute_bound_met"]
         and (
             mode != "owner-production"
-            or (owner_export_complete is True and time.monotonic() <= absolute)
+            or (owner_export_complete is True and time.monotonic() <= owner_cleanup_end)
         )
     )
     if contract:

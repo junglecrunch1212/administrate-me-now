@@ -11,6 +11,14 @@ on:
       - '.github/workflows/finance-development.yml'
   workflow_dispatch:
     inputs:
+      owner_production:
+        description: 'One separately admitted owner-only import/replay driver; excludes all other jobs'
+        type: boolean
+        default: false
+      owner_candidate_sha:
+        description: 'Exact reviewed 40-character commit required for owner_production'
+        type: string
+        default: ''
       import_allocations:
         description: 'Separate bounded allocation diagnostic; excludes normal resource/latency qualification'
         type: boolean
@@ -30,11 +38,11 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: finance-development-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+  group: ${{ inputs.owner_production && 'finance-owner-production' || format('finance-development-{0}', github.event.pull_request.number) }}
+  cancel-in-progress: ${{ !inputs.owner_production }}
 jobs:
   synthetic-finance:
-    if: ${{ !inputs.import_allocations }}
+    if: ${{ !inputs.import_allocations && !inputs.owner_production }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -270,7 +278,7 @@ jobs:
           retention-days: 7
 
   resource-diagnostic:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.sustained_resources }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.sustained_resources && !inputs.owner_production }}
     name: Diagnostic resource envelope (${{ matrix.workload }})
     runs-on: ubuntu-latest
     timeout-minutes: 35
@@ -317,7 +325,7 @@ jobs:
           retention-days: 7
 
   native-resource-smoke:
-    if: ${{ !inputs.import_allocations }}
+    if: ${{ !inputs.import_allocations && !inputs.owner_production }}
     name: Native macOS self-report correctness
     runs-on: macos-15
     timeout-minutes: 20
@@ -394,7 +402,7 @@ jobs:
           retention-days: 7
 
   import-allocation-diagnostic:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.import_allocations }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.import_allocations && !inputs.owner_production }}
     runs-on: ubuntu-latest
     timeout-minutes: 8
     env:
@@ -425,5 +433,58 @@ jobs:
         with:
           name: finance-import-allocations-synthetic
           path: ${{ runner.temp }}/finance-import-allocations
+          if-no-files-found: error
+          retention-days: 7
+
+
+  owner-production:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.owner_production }}
+    name: Admitted owner import and Money replay
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      ADMINME_TEST_MODE: '1'
+      PYTHONPATH: bridge
+      PYTHONDONTWRITEBYTECODE: '1'
+      FINANCE_OWNER_CANDIDATE_SHA: ${{ inputs.owner_candidate_sha }}
+      FINANCE_OWNER_OTHER_MODES: ${{ inputs.import_allocations || inputs.legacy_relative_gates || inputs.sustained_resources || inputs.exploratory_profiles }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.14.7'
+      - name: Require the exact reviewed candidate and exclusive mode
+        run: |
+          python - <<'PY_CHECK'
+          import os, re, subprocess
+          expected = os.environ["FINANCE_OWNER_CANDIDATE_SHA"]
+          assert re.fullmatch(r"[0-9a-f]{40}", expected), "exact reviewed commit required"
+          assert os.environ["FINANCE_OWNER_OTHER_MODES"] == "false", "owner mode must be exclusive"
+          head = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+          assert head == expected == os.environ["GITHUB_SHA"], "candidate mismatch"
+          assert not subprocess.check_output(["git", "status", "--porcelain"], text=True).strip(), "dirty checkout"
+          print("Verified clean candidate", head)
+          PY_CHECK
+      - name: Install locked synthetic environment
+        run: |
+          python -m pip install poetry==2.4.1
+          poetry sync --with dev --no-interaction
+      - name: Run one bounded owner-production invocation without retries
+        timeout-minutes: 7
+        env:
+          FINANCE_OWNER_ARTIFACT_DIR: ${{ runner.temp }}/finance-owner-production
+        run: |
+          mkdir -m 700 "$FINANCE_OWNER_ARTIFACT_DIR"
+          poetry run python -m tests.fixtures.finance_watchdog owner-production "$FINANCE_OWNER_ARTIFACT_DIR"
+      - name: Retain all raw evidence including failure and cleanup
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: finance-owner-production-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/finance-owner-production
+          include-hidden-files: true
           if-no-files-found: error
           retention-days: 7

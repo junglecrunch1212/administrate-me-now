@@ -449,12 +449,14 @@ def test_existing_finance_marker_remains_strict_after_owner_import(tmp_path):
         _marker_key,
         _session_digest,
         check_disclosure,
+        session_has_finance,
         FinanceDisclosureError,
     )
     from adminme.lib.session import build_internal_session
 
     assert release.ADVISOR_AVAILABLE is False
-    with TestClient(create_application(configured(tmp_path))) as client:
+    settings = configured(tmp_path)
+    with TestClient(create_application(settings)) as client:
         _grant_cos(client, "owner-release-marked-history")
         runtime = client.app.state.runtime
         session = build_internal_session(
@@ -477,6 +479,7 @@ def test_existing_finance_marker_remains_strict_after_owner_import(tmp_path):
             },
         )
         owner_import(client)
+        assert client.portal.call(session_has_finance, runtime, session, key)
         runtime._finance_disclosure_sessions.clear()
         with pytest.raises(
             FinanceDisclosureError, match="finance_disclosure_authority_changed"
@@ -484,6 +487,26 @@ def test_existing_finance_marker_remains_strict_after_owner_import(tmp_path):
             client.portal.call(check_disclosure, runtime, session, key)
         history = client.get("/api/member/v1/chat/history", headers=DEMO_HEADERS)
         assert history.status_code == 403
+        assert (
+            len(client.portal.call(events, runtime, ["finance.disclosure_recorded"]))
+            == 1
+        )
+
+    with TestClient(create_application(settings)) as client:
+        runtime = client.app.state.runtime
+        session = build_internal_session(
+            PRINCIPAL, "principal", runtime.settings.instance.tenant_id
+        )
+        _, key = runtime.member_chat_binding(PRINCIPAL)
+        assert client.portal.call(session_has_finance, runtime, session, key)
+        with pytest.raises(
+            FinanceDisclosureError, match="finance_disclosure_authority_changed"
+        ):
+            client.portal.call(check_disclosure, runtime, session, key)
+        assert (
+            client.get("/api/member/v1/chat/history", headers=DEMO_HEADERS).status_code
+            == 403
+        )
         assert (
             len(client.portal.call(events, runtime, ["finance.disclosure_recorded"]))
             == 1

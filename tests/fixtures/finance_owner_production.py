@@ -41,6 +41,10 @@ PHASES = {
 MIB = 1024**2
 EVIDENCE_FILE_CAP = 16 * MIB
 EVIDENCE_TOTAL_CAP = 32 * MIB
+EVIDENCE_FILE_COUNT = 64
+FINAL_EVIDENCE_FILES = frozenset(
+    {"watchdog.json", "evidence-manifest.json", "export-receipt.json"}
+)
 CONTROL = "/api/member/v1/settings/finance"
 APPROVALS = "/api/member/v1/finance/import-approvals"
 SURFACE = "/api/member/v1/surfaces/finance"
@@ -99,6 +103,10 @@ def core_response_fingerprint(body):
 
 def append(root, name, row):
     raw = (json.dumps(row, separators=(",", ":"), allow_nan=False) + "\n").encode()
+    # Raw evidence is at the artifact root; scratch is separately bounded.
+    names = {p.name for p in root.iterdir() if p.is_file()}
+    if len(names | FINAL_EVIDENCE_FILES | {name}) > EVIDENCE_FILE_COUNT:
+        raise ValueError("evidence_file_count_cap")
     path = root / name
     size = path.stat().st_size if path.exists() else 0
     if len(raw) > 65536 or size + len(raw) > EVIDENCE_FILE_CAP:
