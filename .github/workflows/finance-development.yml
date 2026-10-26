@@ -164,6 +164,8 @@ jobs:
           tests/acceptance/test_bounded_member_readiness.py
           tests/acceptance/test_finance_publications.py
           tests/acceptance/test_finance_metadata.py
+          tests/acceptance/test_finance_metadata_owner.py
+          tests/acceptance/test_finance_metadata_history.py
           tests/acceptance/test_finance_metadata_capability.py
           tests/acceptance/test_finance_provenance.py
           tests/acceptance/test_finance_planning.py
