@@ -9,6 +9,7 @@ on:
       - 'tests/**/test_finance*'
       - 'tests/fixtures/finance*'
       - 'scripts/finance_resource_acceptance.py'
+      - 'scripts/finance_performance_policy.py'
       - '.github/workflows/finance-development.yml'
   # Manual dispatch becomes available once this workflow is on the default branch.
   workflow_dispatch:
@@ -136,6 +137,7 @@ jobs:
           tests/unit/test_finance_resource_diagnostic.py
           tests/unit/test_finance_native_resources.py
           tests/unit/test_finance_resource_acceptance.py
+          tests/unit/test_finance_performance_policy.py
           tests/unit/test_finance_readiness.py
           tests/unit/test_finance_delegation_snapshot.py
           tests/unit/test_finance_admission.py
@@ -382,6 +384,7 @@ jobs:
         timeout-minutes: 5
         env:
           ADMINME_FINANCE_NATIVE_SMOKE: '1'
+          FINANCE_PERFORMANCE_POLICY: finance-resource-v3.2026-10-26
           FINANCE_NATIVE_ARTIFACT_DIR: ${{ runner.temp }}/native-finance
         run: >-
           poetry run pytest -q -s
@@ -389,6 +392,7 @@ jobs:
           --junitxml="${{ runner.temp }}/native-finance/results.xml"
           tests/unit/test_finance_native_resources.py
           tests/unit/test_finance_resource_acceptance.py
+          tests/unit/test_finance_performance_policy.py
           tests/acceptance/test_finance_native_resources.py
       - name: Retain raw synthetic evidence including failure and cleanup
         if: always()
@@ -478,7 +482,7 @@ jobs:
         run: |
           python -m pip install poetry==2.4.1
           poetry sync --with dev --no-interaction
-      - name: Run one bounded owner-production invocation without retries
+      - name: Run owner-production once under recorded v3 budgets; retain v2 verdict
         timeout-minutes: 7
         env:
           FINANCE_OWNER_ARTIFACT_DIR: ${{ runner.temp }}/finance-owner-production

@@ -9,8 +9,29 @@ from typing import Any
 import pytest
 
 from scripts import finance_resource_acceptance as policy
+from scripts.finance_performance_policy import POLICY as V3_POLICY
 
 IDENTITY = {"candidate": "a" * 40, "checkout": "b" * 40}
+
+
+def test_v3_requires_prospective_capture_and_retains_native_evidence_gates():
+    summary, raw = evidence(
+        workload="planning", latency=11, growth=26 * policy.MIB, peak=141 * policy.MIB
+    )
+    # This is generated policy test data, never a relabelled historical artifact.
+    old = policy.evaluate(
+        summary, raw, **IDENTITY, environment="synthetic-native-lab", policy=V3_POLICY
+    )
+    assert not old["accepted"] and "stale policy" in old["errors"][0]
+    summary["policy"] = V3_POLICY
+    result = policy.evaluate(
+        summary, raw, **IDENTITY, environment="synthetic-native-lab", policy=V3_POLICY
+    )
+    assert result["accepted"] and not result["authorizes_activation"]
+    summary["platform"] = "Linux"
+    assert not policy.evaluate(
+        summary, raw, **IDENTITY, environment="synthetic-native-lab", policy=V3_POLICY
+    )["accepted"]
 
 
 def evidence(*, workload="light", latency=6, outlier=None, cpu=0.2, growth=0, peak=0):

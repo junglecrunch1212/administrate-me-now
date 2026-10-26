@@ -25,6 +25,7 @@ from scripts.finance_resource_acceptance import (
     evaluate,
     load_evidence,
 )
+from scripts.finance_performance_policy import POLICY as V3_POLICY
 from tests.fixtures.finance_resource_diagnostic import (
     SMOKE_PHASES,
     append_record,
@@ -51,6 +52,10 @@ async def receive(member, timeout=30):
 
 
 async def native_run(tmp_path, workload="light", *, qualification=False):
+    selected_policy = os.environ.get("FINANCE_PERFORMANCE_POLICY", POLICY)
+    assert selected_policy in {POLICY, V3_POLICY}, (
+        "explicit known performance policy required"
+    )
     phases = QUALIFICATION_PHASES if qualification else SMOKE_PHASES
     prepare_synthetic_mime_database()
     # The entire fixture instance and telemetry are fresh; only selected evidence
@@ -71,7 +76,7 @@ async def native_run(tmp_path, workload="light", *, qualification=False):
     )
     report: dict[str, Any] = {
         "contract": "native-finance-self-report-v1",
-        "policy": POLICY,
+        "policy": selected_policy,
         "mode": "qualification" if qualification else "correctness_smoke",
         "workload": workload,
         "environment": os.environ.get(
@@ -234,7 +239,11 @@ async def test_native_production_composition_resource_smoke(tmp_path, workload):
     output = await native_run(tmp_path, workload)
     summary, raw = load_evidence(output)
     verdict = evaluate(
-        summary, raw, **identity(), environment="hosted-correctness-only"
+        summary,
+        raw,
+        **identity(),
+        environment="hosted-correctness-only",
+        policy=os.environ.get("FINANCE_PERFORMANCE_POLICY", POLICY),
     )
     assert verdict["state"] == "incomplete" and not verdict["accepted"]
 
@@ -255,7 +264,11 @@ async def test_native_resource_qualification(tmp_path, workload):
     )
     summary, raw = load_evidence(output)
     verdict = evaluate(
-        summary, raw, **identity(), environment=os.environ["FINANCE_NATIVE_ENVIRONMENT"]
+        summary,
+        raw,
+        **identity(),
+        environment=os.environ["FINANCE_NATIVE_ENVIRONMENT"],
+        policy=os.environ.get("FINANCE_PERFORMANCE_POLICY", POLICY),
     )
     (output / "policy-verdict.json").write_text(json.dumps(verdict, indent=2))
     assert verdict["accepted"], verdict

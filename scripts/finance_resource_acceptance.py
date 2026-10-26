@@ -15,6 +15,7 @@ from typing import Any, cast
 
 from tests.fixtures.finance_native_resources import EvidenceError, Member
 from tests.fixtures.finance_resource_diagnostic import quantiles
+from scripts.finance_performance_policy import POLICY as V3_POLICY, LIMITS as V3_LIMITS
 
 POLICY = "finance-resource-v2.2026-10-24"
 MIB = 1024 * 1024
@@ -120,19 +121,20 @@ def lifecycle(summary, rows, expected):
     return next(m for m in members.values() if m.target == "runtime")
 
 
-def evaluate(summary, raw, *, candidate, checkout, environment):
+def evaluate(summary, raw, *, candidate, checkout, environment, policy=POLICY):
     result = {
-        "policy": POLICY,
+        "policy": policy,
         "identity": {"candidate": candidate, "checkout": checkout},
         "environment": environment,
         "state": "incomplete",
         "accepted": False,
-        "limits": LIMITS,
+        "limits": dict(V3_LIMITS if policy == V3_POLICY else LIMITS),
         "errors": [],
         "measurements": {},
         "authorizes_activation": False,
     }
     try:
+        require(policy in {POLICY, V3_POLICY}, "unknown performance policy")
         _evaluate(summary, raw, result)
     except (EvidenceError, KeyError, TypeError, ValueError, IndexError) as exc:
         result["errors"].append(str(exc)[:200])
@@ -141,6 +143,7 @@ def evaluate(summary, raw, *, candidate, checkout, environment):
 
 def _evaluate(summary, raw, result):
     expected = result["identity"]
+    limits = result["limits"]
     require(
         all(
             isinstance(v, str)
@@ -155,7 +158,7 @@ def _evaluate(summary, raw, result):
         "native environment binding mismatch",
     )
     require(
-        summary["policy"] == POLICY and summary["identity"] == expected,
+        summary["policy"] == result["policy"] and summary["identity"] == expected,
         "stale policy/candidate/checkout",
     )
     require(
@@ -334,13 +337,13 @@ def _evaluate(summary, raw, result):
             "core_p99_ms",
             "added_core_p99_ms",
         ):
-            if measured[key] > LIMITS[key]:
+            if measured[key] > limits[key]:
                 failures.append(name + ": " + key)
-        if measured["added_cpu_cores"] - LIMITS[name + "_added_cpu_cores"] > 1e-9:
+        if measured["added_cpu_cores"] - limits[name + "_added_cpu_cores"] > 1e-9:
             failures.append(name + ": added CPU")
         if (
             measured["added_rss_bytes"]
-            > LIMITS[summary["workload"] + "_added_rss_bytes"]
+            > limits[summary["workload"] + "_added_rss_bytes"]
         ):
             failures.append(name + ": added RSS")
         for operation in {r["operation"] for r in grouped[name]["finance_rows"]}:
@@ -377,7 +380,7 @@ def _evaluate(summary, raw, result):
         name: {kind: grouped[name][kind]["count"] for kind in ("core", "finance")}
         for name in allowed_phases
     }
-    if retained > LIMITS["retained_growth_bytes"]:
+    if retained > limits["retained_growth_bytes"]:
         failures.append("retained RSS growth")
     result.update(
         state="failed" if failures else "passed", accepted=not failures, errors=failures
@@ -402,6 +405,7 @@ def load_evidence(directory):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("directory", type=Path)
+    parser.add_argument("--policy", choices=(POLICY, V3_POLICY), default=POLICY)
     for name in ("candidate", "checkout", "environment"):
         parser.add_argument("--" + name, required=True)
     args = parser.parse_args()
@@ -413,10 +417,11 @@ def main():
             candidate=args.candidate,
             checkout=args.checkout,
             environment=args.environment,
+            policy=args.policy,
         )
     except (OSError, ValueError) as exc:
         result = {
-            "policy": POLICY,
+            "policy": args.policy,
             "accepted": False,
             "state": "incomplete",
             "errors": [str(exc)],

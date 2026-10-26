@@ -610,6 +610,7 @@ def verdict(run):
 
 
 async def controller(root):
+    from scripts.finance_performance_policy import POLICY, owner_verdict
     import httpx
     from tests.fixtures.finance_watchdog import process_row
     from tests.acceptance.test_finance_activation import configured, packet_for
@@ -649,6 +650,7 @@ async def controller(root):
                 "fixture.jsonl",
                 {
                     "candidate": checkout,
+                    "performance_policy": POLICY,
                     "units": 8022,
                     "blobs": len(package.blobs),
                     "provenance_bytes": len(package.index)
@@ -790,7 +792,18 @@ async def controller(root):
                     pid=run.runtime.pid,
                     cpu_seconds=usage.ru_utime + usage.ru_stime,
                 )
-        result = verdict(run)
+        legacy = verdict(run)
+        append(
+            root,
+            "verdict-v2.jsonl",
+            {"policy": "finance-resource-v2.2026-10-24", **legacy},
+        )
+        schedule = [
+            json.loads(line)
+            for line in (root / "schedule.jsonl").read_text().splitlines()
+            if line
+        ]
+        result = owner_verdict(legacy, run.rows, schedule, captured_policy=POLICY)
         append(root, "verdict.jsonl", result)
         failed = not result["passed"]
     except BaseException as exc:

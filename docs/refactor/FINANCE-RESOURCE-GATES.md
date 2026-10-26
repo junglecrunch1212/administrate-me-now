@@ -5,7 +5,76 @@ ADR-0001; **PRESERVE** OpenClaw scheduling/orchestration and privileged scope.
 The accepted-publication finance contract is disabled pending activation.
 
 
-## Current acceptance policy — v2 approved 2026-10-24
+## Prospective performance policy — v3, 2026-10-26
+
+The owner decision at 11:21:46 UTC accepts the observed Finance performance
+baseline with finite headroom. `finance-resource-v3.2026-10-26` is implemented
+in `scripts/finance_performance_policy.py`; its numeric limits and integration
+require normal source review and prospective candidate validation. This changes
+performance budgets only. Correctness, credentials/history custody, authenticated
+household authorization, revocation, audit, ordinary CoS continuity, recovery and
+external-send consent are unchanged. Daily production Sheets refresh stays OFF.
+The clarified product goal is a shared household advisor for the explicitly
+authorized authenticated principals, not owner-only staging as a final product.
+That product decision does not itself modify workbook sharing or live grants.
+
+The reference is application source `71972213dd828b4a11f9be76d52647cd89028049`,
+observed by diagnostic `82fcf9aab2fa11fcc0b5198eea15f7722df66693`, tree
+`94f6513132ef292e4151e401072493cac68ace68`, run `40292362979`, job
+`121470180704`, attempt 1. Artifact `12637160248` has SHA-256
+`eb4f252f2968cb79a47d49dad543e3abed588502b2ac67eea2afcf95000b328f`.
+It exercised the full 8,022-unit/98-blob owner approval/import, Money replay,
+readback and original 20-core/10-planning-RPS workload. Its original verdict
+**failed and remains failed**. It is a Linux instrumented observation, not native
+Mini qualification or a statistical latency guarantee.
+
+| Metric | Observed baseline | Inclusive v3 ceiling | Headroom |
+|---|---:|---:|---:|
+| Added core p95 | 8.959315 ms | 12 ms | 3.040685 ms (~34%) |
+| Added core p99 | 23.602959 ms | 30 ms | 6.397041 ms (~27%) |
+| Added runtime + owned-worker peak RSS | 147,632,128 B | 160 MiB | 20,140,032 B (~14%) |
+| Retained runtime + owned-worker RSS growth | 26,275,840 B | 32 MiB | 7,278,592 B (~28%) |
+
+These rounded ceilings provide bounded scheduling/allocator variation above one
+measured run, not an entitlement to grow further. Absolute core p95/p99 remain
+25/75 ms; normal/burst/stress added CPU remain 0.25/1/1 logical cores; light added
+RSS remains 64 MiB. Warm native status/calculation/planning targets remain below
+100/500/500 ms; the owner driver retains its inclusive 500 ms planning p95.
+
+The owner workload may record at most **one** explicit `inflight_limit` planning
+refusal among exactly 100 scheduled planning slots (at least 99 dispatched valid
+responses). There is no extra loss headroom. Every scheduled slot still needs
+exactly one terminal record, including the refusal; zero core/control errors or
+refusals and zero dispatched HTTP/data errors are allowed. Missing, duplicate,
+extra, misbound or unaccounted slots fail. The refused request is **undispatched,
+not successful**: one requested refresh has no new result under that load.
+The report retains the exact row and this consequence; it does not establish a
+production UI busy indication. Native qualification still rejects every actual
+request error/rejection; this exception is specific to the owner driver's local
+single-inflight collector refusal. No runtime queue or retry is changed.
+
+The owner driver writes policy v3 before work, retains an unchanged
+`verdict-v2.jsonl`, and emits a separate versioned decision with
+`all_requests_succeeded=false` when a refusal exists. It preserves the original
+phase/rate/slot/deadline schedule, both baseline comparisons, all raw evidence,
+and the watchdog's 4-process, 512-MiB runtime/workers, 1-GiB tree, 180/240-CPU-s,
+512-MiB scratch, 330+30-second and 64-file/16-MiB-each/32-MiB-total bounds.
+All startup, worker, IPC, staging and observer costs remain counted; no prewarm,
+inflated baseline, shifted window, hidden pool or omitted process is allowed.
+Cleanup/export and correctness remain independent mandatory checks. A successful
+owner component result is not native qualification or release authority.
+
+The existing native evaluator defaults to preserved v2. Explicit
+`--policy finance-resource-v3.2026-10-26` requires a newly captured v3 summary;
+the native collector selects it only with `FINANCE_PERFORMANCE_POLICY` set to
+that exact identifier. The complete light/planning native phase plan, identity,
+environment, lifecycle and error checks remain unchanged. Hosted native smoke
+remains incomplete for qualification. Fresh exact-candidate native Mini evidence
+and applicable protected checks remain necessary; old v2 artifacts cannot be
+relabelled, and old failed verdicts are never overwritten or recalculated as
+passes. Tests using generated counter data are policy tests, not qualification.
+
+## Preserved acceptance policy — v2 approved 2026-10-24
 
 **SUPERSEDE** the relative 10% release criterion with
 `finance-resource-v2.2026-10-24`, implemented by
