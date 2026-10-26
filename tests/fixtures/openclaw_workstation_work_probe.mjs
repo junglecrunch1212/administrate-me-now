@@ -94,7 +94,12 @@ export async function startWorkstationWorkFixtures({ secret, agent, sessions, va
             ["browser", { action: "snapshot" }],
           ];
           step = plan[outputs];
-          if (outputs > 0) assert(encoded.includes("This worker may only perform its admitted browser read."), "unrelated dynamic call was not denied");
+          if (outputs > 0) {
+            const denied = input.filter((entry) => entry.type === "function_call_output" && entry.call_id === `call_worker_${channel}_0`);
+            assert.equal(denied.length, 1, "first service-context call must have exactly one result");
+            assert.equal(typeof denied[0].output, "string");
+            assert(denied[0].output.includes("A current authenticated browser request, verified CoS tab and source policy are required."), "unrelated dynamic call did not receive the public browser denial");
+          }
           if (outputs > 1) assert(encoded.includes("Review the garage plan on Friday."), "browser model did not receive the retained native observation");
         } else if (worker) {
           const plan = [
