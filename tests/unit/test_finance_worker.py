@@ -243,7 +243,7 @@ def test_retry_callback_releases_timer_ownership_without_self_join(timer_referen
     probe.process.can_reap = False
     with pytest.raises(PublicationError, match="reap_uncertain"):
         child.close()
-    assert probe.timers[0]() is None
+    assert child.timer is None
     assert worker._admission.locked() and not child.closed
     assert worker.worker_usage()["active"]["reap_uncertain"]
     # Like Timer.run, this callable retains the worker through its own reference.
