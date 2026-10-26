@@ -152,6 +152,8 @@ async def runtime_main(root, listener_fd, control_fd, checkout):
     from adminme.finance import release
     from adminme.runtime.application import create_application
     from tests.acceptance.test_finance_activation import configured
+    from tests.fixtures.finance_owner_stage_allocations import BOUNDARIES, Observations
+    from adminme.finance.worker import worker_usage
     import uvicorn
 
     assert release.ADVISOR_AVAILABLE is True
@@ -162,7 +164,9 @@ async def runtime_main(root, listener_fd, control_fd, checkout):
     faults = []
     guard = FixtureGuard(root, listener.getsockname()[1], faults, finance_workers=True)
     sys.addaudithook(guard)
+    observations = Observations(root)
     app = create_application(configured(root / "instance"))
+    observations.install()
     server = uvicorn.Server(
         uvicorn.Config(app, log_level="warning", lifespan="off", access_log=False)
     )
@@ -195,11 +199,34 @@ async def runtime_main(root, listener_fd, control_fd, checkout):
                     replayed = True
                     await app.state.runtime.projections.rebuild("money")
                     await send(control, {"rebuilt": "money"})
+                elif command.get("operation") in {
+                    "observe_" + boundary for boundary in BOUNDARIES
+                } and set(command) == {"operation"}:
+                    async with asyncio.timeout(5):
+                        while True:
+                            state = await app.state.runtime.bus.subscriber_status(
+                                "projection:money"
+                            )
+                            assert not state.get("degraded"), "money_degraded"
+                            if (
+                                state["lag_count"] == 0
+                                and not state.get("draining", False)
+                                and worker_usage()["active"] is None
+                            ):
+                                break
+                            await asyncio.sleep(0.02)
+                    await send(
+                        control,
+                        observations.capture(
+                            command["operation"].removeprefix("observe_")
+                        ),
+                    )
                 elif command == {"operation": "shutdown"}:
                     break
                 else:
                     raise ValueError("runtime_control_operation")
         finally:
+            observations.close()
             server.should_exit = True
             watching.cancel()
             await asyncio.gather(watching, return_exceptions=True)
@@ -415,6 +442,89 @@ class Run:
     async def command(self, operation):
         await send(self.control, {"operation": operation})
         return await receive(self.control)
+
+    async def observe(self, boundary):
+        from tests.fixtures.finance_watchdog import process_row, tree_rows
+        from tests.fixtures.finance_owner_stage_allocations import BOUNDARIES
+
+        assert boundary in BOUNDARIES
+        before_at = time.monotonic()
+        before = process_row(self.runtime.pid)
+        assert [row["pid"] for row in tree_rows(self.runtime.pid)] == [self.runtime.pid]
+        result = await self.command("observe_" + boundary)
+        after_at = time.monotonic()
+        after = process_row(self.runtime.pid)
+        assert before["start_ticks"] == after["start_ticks"]
+        assert result["pid"] == self.runtime.pid and result["boundary"] == boundary
+        assert result["acceptance_eligible"] is result["qualification"] is False
+        assert [row["pid"] for row in tree_rows(self.runtime.pid)] == [self.runtime.pid]
+        append(
+            self.root,
+            "allocation-observations.jsonl",
+            {
+                **result,
+                "phase": self.phase_name,
+                "external_before_at": before_at,
+                "external_before": before,
+                "external_after_at": after_at,
+                "external_after": after,
+            },
+        )
+        assert result["complete"], "incomplete_native_observation"
+
+    def retain_observer_evidence(self):
+        from tests.fixtures.finance_owner_stage_allocations import (
+            evidence_names,
+            READ_FILE_LIMIT,
+            STAGE_FILE_LIMIT,
+        )
+
+        files = []
+        for name in evidence_names():
+            source = self.root / "scratch/runtime" / name
+            if not source.exists():
+                continue
+            assert source.is_file() and not source.is_symlink()
+            cap = (
+                READ_FILE_LIMIT
+                if name == "frame-reads.jsonl"
+                else (
+                    STAGE_FILE_LIMIT
+                    if name == "allocation-stages.jsonl"
+                    else 1024 * 1024
+                )
+            )
+            assert source.stat().st_size <= cap
+            with source.open("rb") as stream:
+                raw = stream.read(cap + 1)
+            assert len(raw) <= cap
+            names = {p.name for p in self.root.iterdir() if p.is_file()}
+            assert len(names | FINAL_EVIDENCE_FILES | {name}) <= EVIDENCE_FILE_COUNT
+            assert (
+                sum(p.stat().st_size for p in self.root.iterdir() if p.is_file())
+                + len(raw)
+                <= EVIDENCE_TOTAL_CAP - 65536
+            )
+            with (self.root / name).open("xb") as stream:
+                stream.write(raw)
+            files.append(
+                {
+                    "name": name,
+                    "bytes": len(raw),
+                    "sha256": hashlib.sha256(raw).hexdigest(),
+                }
+            )
+        append(
+            self.root,
+            "observer-export.jsonl",
+            {
+                "files": files,
+                "complete_runtime_exit": self.runtime is not None
+                and self.runtime.poll() == 0,
+                "partial_tail_possible_on_failure": True,
+                "acceptance_eligible": False,
+            },
+        )
 
     async def readback(self, client):
         value = await self.request(client, "GET", SURFACE, full=True)
@@ -649,6 +759,8 @@ async def controller(root):
                 root,
                 "fixture.jsonl",
                 {
+                    "diagnostic": "allocation-boundary-observation",
+                    "acceptance_eligible": False,
                     "candidate": checkout,
                     "performance_policy": POLICY,
                     "units": 8022,
@@ -739,6 +851,7 @@ async def controller(root):
             async with run.phase("preimport_core_baseline"):
                 await run.load(client)
             async with run.phase("single_initial_import"):
+                await run.observe("preimport")
                 # One production request, no retry. Large JSON encode/decode is
                 # included in phase, CPU/RSS and scratch accounting.
                 body = json.loads(packet_path.read_text())
@@ -761,11 +874,13 @@ async def controller(root):
                 del body
             async with run.phase("settle_and_owner_readback"):
                 run.after_import = await run.readback(client)
+                await run.observe("postimport")
             async with run.phase("single_full_money_replay"):
                 assert await run.alongside(
                     client, run.command("rebuild_money"), seconds=58
                 ) == {"rebuilt": "money"}
                 run.after_replay = await run.readback(client)
+                await run.observe("postreplay")
             async with run.phase("loaded_core_baseline_before"):
                 await run.load(client)
             async with run.phase("loaded_planning_probe"):
@@ -773,6 +888,8 @@ async def controller(root):
             async with run.phase("loaded_core_baseline_after"):
                 await run.load(client)
             async with run.phase("shutdown_receipt"):
+                # Only after the original timing and retained-RSS windows.
+                await run.observe("postload")
                 run.final_readback = await run.readback(client)
                 shutdown = await run.command("shutdown")
                 assert (
@@ -804,7 +921,17 @@ async def controller(root):
             if line
         ]
         result = owner_verdict(legacy, run.rows, schedule, captured_policy=POLICY)
-        append(root, "verdict.jsonl", result)
+        append(
+            root,
+            "verdict.jsonl",
+            {
+                **result,
+                "acceptance_eligible": False,
+                "diagnostic": "allocation-boundary-observation",
+            },
+        )
+        # Preserve the original verdict and exit, including resource failures.
+        # Diagnostic completion can never turn a failed release check green.
         failed = not result["passed"]
     except BaseException as exc:
         append(
@@ -821,6 +948,18 @@ async def controller(root):
             },
         )
     finally:
+        try:
+            run.retain_observer_evidence()
+        except Exception as exc:
+            failed = True
+            append(
+                root,
+                "observer-export-failure.jsonl",
+                {
+                    "error_type": type(exc).__name__,
+                    "acceptance_eligible": False,
+                },
+            )
         if run.control:
             run.control.close()
         if run.listener:
