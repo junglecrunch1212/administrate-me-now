@@ -9784,7 +9784,7 @@ async def finance_planning(
             gap_group_id=gap_group_id,
         )
         try:
-            return JSONResponse(jsonable_encoder(value)).body
+            return bytes(JSONResponse(jsonable_encoder(value)).body)
         except ValueError as exc:
             # Rendering failures remain server errors; only selection failures
             # use the existing 422 below. Encoding stays on the Money worker.

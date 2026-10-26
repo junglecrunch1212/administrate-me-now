@@ -208,6 +208,7 @@ async def record_disclosure(
         if prior is not None:
             if prior["result_sha256"] != result_hash:
                 raise FinanceDisclosureError("finance_disclosure_result_conflict")
+            retained = prior
         else:
             publication = result.get("publication") or result
             retained = {
@@ -232,8 +233,6 @@ async def record_disclosure(
                 ).isoformat(),
             }
             await _append(runtime, session, key, retained)
-        if prior is not None:
-            retained = prior
         retained_key = (
             f"finance-disclosure-result:{session_hash}:{authority_hash}:{result_hash}"
         )
