@@ -104,21 +104,24 @@ def main():
         str(REPO / selection),
     ]
     if mode == "summary-metadata":
-        # Focused deadline/state checks and the existing eleven application
-        # cases share this single owned workload budget and interpreter exit.
-        args.insert(-1, str(REPO / "tests/unit/test_finance_watchdog_cleanup.py"))
+        # Timer ownership/recovery checks and the six affected application cases
+        # share this single owned workload budget and interpreter exit.
+        args.insert(-1, str(REPO / "tests/unit/test_finance_worker.py"))
         args += [
             "--maxfail=1",
             "-p",
             "no:cacheprovider",
             "-k",
-            "test_summary_cleanup or "
+            "test_closed_worker_releases_cancelled_timer_without_gc or "
+            "test_timer_start_failure_preserves_error_and_reaps_child or "
+            "test_retry_callback_releases_timer_ownership_without_self_join or "
+            "test_timeout_abort_overlaps_close_reference_release or "
+            "test_owned_child_failure_closes_process_and_releases_admission or "
+            "test_uncertain_reap_keeps_admission_quarantined_until_confirmed or "
             "test_summary_replay_and_idempotent_import or "
             "test_summary_ingestion_keeps_revision_membership or "
             "test_summary_authority_revoked_after_read or "
-            "test_summary_native_member_delivery_contract or "
-            "test_summary_import_boundary or "
-            "test_summary_runtime_bounds_and_native_versions",
+            "test_summary_native_member_delivery_contract",
         ]
     if mode == "contracts":
         args += ["-k", "not phased_setup"]

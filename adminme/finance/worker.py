@@ -278,10 +278,14 @@ class FinanceWorker:
         with self._close_lock:
             if self.closed:
                 return
+            # Timer callbacks retain this worker; release our side of the cycle.
+            # An already-running callback keeps its own references until return.
             if self.timer is not None:
-                self.timer.cancel()
+                timer, self.timer = self.timer, None
+                timer.cancel()
             if self._retry_timer is not None:
-                self._retry_timer.cancel()
+                timer, self._retry_timer = self._retry_timer, None
+                timer.cancel()
             self._reap_attempts += 1
             process = self.process
             failure = None

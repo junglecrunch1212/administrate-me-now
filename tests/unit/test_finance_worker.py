@@ -131,6 +131,209 @@ def test_parent_rpc_bounds_rows_and_output_bytes_before_json_encoding():
         )
 
 
+@pytest.fixture
+def timer_references(monkeypatch):
+    """Finished Timer double retains its callback, as threading.Timer does."""
+    import subprocess
+    import weakref
+
+    timers, owners, cancellations = [], [], []
+    state = SimpleNamespace(start_failure=None)
+
+    class Timer:
+        def __init__(self, delay, callback):
+            self.function = callback
+            timers.append(weakref.ref(self))
+            owners.append(weakref.ref(callback.__self__))
+
+        def start(self):
+            if state.start_failure is not None:
+                raise state.start_failure
+
+        def cancel(self):
+            cancellations.append(True)
+
+    class Process:
+        pid = 123
+        returncode = None
+        can_reap = True
+        terminated = False
+
+        def __init__(self):
+            self.stdin, self.stdout, self.stderr = (
+                io.BytesIO(),
+                io.BytesIO(),
+                io.BytesIO(),
+            )
+
+        def poll(self):
+            return self.returncode
+
+        def terminate(self):
+            self.terminated = True
+
+        def kill(self):
+            self.terminated = True
+
+        def wait(self, timeout):
+            if not self.can_reap:
+                raise subprocess.TimeoutExpired("synthetic-owned-child", timeout)
+            self.returncode = -15 if self.terminated else 0
+            return self.returncode
+
+    process = Process()
+    monkeypatch.setattr(worker.subprocess, "Popen", lambda *a, **k: process)
+    monkeypatch.setattr(worker.threading, "Timer", Timer)
+    yield SimpleNamespace(
+        process=process,
+        timers=timers,
+        owners=owners,
+        cancellations=cancellations,
+        state=state,
+    )
+    # On an assertion failure, still release synthetic admission without hiding it.
+    process.can_reap = True
+    state.start_failure = None
+    for ref in owners:
+        if (child := ref()) is not None and not child.closed:
+            child.close()
+
+
+def test_closed_worker_releases_cancelled_timer_without_gc(timer_references):
+    probe = timer_references
+    child = worker.FinanceWorker("reference-normal", timeout=10)
+    assert probe.timers[0]() is not None
+    child.done = True
+    child.close()
+    # Keep the worker alive: GC cannot collect a timer still owned by it.
+    assert probe.owners[0]() is child and child.closed
+    assert probe.timers[0]() is None
+    assert len(probe.cancellations) == 1 and probe.process.returncode == 0
+    assert all(
+        p.closed
+        for p in (probe.process.stdin, probe.process.stdout, probe.process.stderr)
+    )
+    assert worker.worker_usage()["active"] is None and not worker._admission.locked()
+    child.close()
+    assert len(probe.cancellations) == 1
+
+
+def test_timer_start_failure_preserves_error_and_reaps_child(timer_references):
+    probe = timer_references
+    original = RuntimeError("synthetic timer start failure")
+    probe.state.start_failure = original
+    with pytest.raises(RuntimeError) as caught:
+        worker.FinanceWorker("reference-start-failure", timeout=10)
+    assert caught.value is original
+    # The retained exception intentionally owns its traceback; test owner release,
+    # not disappearance of objects still legitimately referenced by that traceback.
+    child = probe.owners[0]()
+    assert child.closed and child.timer is None and child._retry_timer is None
+    assert probe.process.returncode == -15 and len(probe.cancellations) == 1
+    assert all(
+        p.closed
+        for p in (probe.process.stdin, probe.process.stdout, probe.process.stderr)
+    )
+    assert worker.worker_usage()["active"] is None and not worker._admission.locked()
+
+
+def test_retry_callback_releases_timer_ownership_without_self_join(timer_references):
+    probe = timer_references
+    child = worker.FinanceWorker("reference-retry", timeout=10)
+    probe.process.can_reap = False
+    with pytest.raises(PublicationError, match="reap_uncertain"):
+        child.close()
+    assert probe.timers[0]() is None
+    assert worker._admission.locked() and not child.closed
+    assert worker.worker_usage()["active"]["reap_uncertain"]
+    # Like Timer.run, this callable retains the worker through its own reference.
+    callback = probe.timers[1]().function
+    probe.process.can_reap = True
+    callback()
+    assert child.closed and probe.timers[1]() is None
+    assert callback.__self__ is child and len(probe.cancellations) == 2
+    assert not worker._admission.locked() and worker.worker_usage()["active"] is None
+    assert not worker.worker_usage()["lifetimes"][-1]["complete"]
+
+
+def test_timeout_abort_overlaps_close_reference_release(timer_references, monkeypatch):
+    import threading
+
+    probe = timer_references
+    before = worker.worker_usage()
+    child = worker.FinanceWorker("reference-overlap", timeout=10)
+    entered, release, cancelled = (threading.Event() for _ in range(3))
+    errors = []
+    original_wait = probe.process.wait
+
+    def blocked_wait(timeout):
+        # abort owns the process lock before entering this synthetic child wait.
+        entered.set()
+        assert release.wait(5), "test did not release the timeout callback"
+        return original_wait(timeout)
+
+    def cancel(timer):
+        assert child.timer is None
+        probe.cancellations.append(True)
+        cancelled.set()
+
+    def invoke(function):
+        try:
+            function()
+        except BaseException as exc:
+            errors.append(exc)
+
+    monkeypatch.setattr(probe.process, "wait", blocked_wait)
+    monkeypatch.setattr(type(probe.timers[0]()), "cancel", cancel)
+    # Like an entered Timer.run, the thread keeps its callback alive independently
+    # of the worker's timer field. Only the test threads use bounded joins.
+    timeout_thread = threading.Thread(
+        target=invoke, args=(probe.timers[0]().function,), daemon=True
+    )
+    close_thread = threading.Thread(target=invoke, args=(child.close,), daemon=True)
+    started = []
+    try:
+        timeout_thread.start()
+        started.append(timeout_thread)
+        assert entered.wait(2), "timeout callback did not enter abort"
+        assert child.timed_out and child._process_lock.locked()
+        close_thread.start()
+        started.append(close_thread)
+        assert cancelled.wait(2), "close did not clear and cancel the timer"
+        assert child.timer is None and child._retry_timer is None
+        assert child._close_lock.locked() and close_thread.is_alive()
+        assert timeout_thread.is_alive() and not child.closed
+        assert worker._admission.locked() and probe.process.returncode is None
+        assert worker.worker_usage()["active"]["operation"] == "reference-overlap"
+        assert not child._quarantined
+    finally:
+        # Release and join even when an ordering assertion fails; the fixture then
+        # closes any unfinished synthetic child without hiding the original error.
+        release.set()
+        for thread in started:
+            thread.join(2)
+        assert all(not thread.is_alive() for thread in started)
+    assert not errors, errors
+    assert child.closed and child._reap_attempts == 1 and not child._quarantined
+    assert probe.timers[0]() is None and len(probe.cancellations) == 1
+    assert child.timer is None and child._retry_timer is None
+    assert probe.process.returncode == -15
+    assert all(
+        p.closed
+        for p in (probe.process.stdin, probe.process.stdout, probe.process.stderr)
+    )
+    assert not worker._admission.locked()
+    after = worker.worker_usage()
+    assert after["active"] is None
+    assert after["completed_count"] == before["completed_count"] + 1
+    assert after["failed_count"] == before["failed_count"] + 1
+    assert after["completed_cpu_seconds"] == before["completed_cpu_seconds"]
+    assert after["lifetimes"][-1]["timed_out"]
+    assert not after["lifetimes"][-1]["complete"]
+    child.close()
+    assert worker.worker_usage() == after and len(probe.cancellations) == 1
+
+
 @pytest.mark.parametrize("failure", ["unknown_operation", "oversize", "timeout"])
 def test_owned_child_failure_closes_process_and_releases_admission(failure):
     child = worker.FinanceWorker("test", timeout=0.05 if failure == "timeout" else 10)
