@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import concurrent.futures.thread
 from dataclasses import replace
 import hashlib
 import json
@@ -10,6 +11,8 @@ import os
 from pathlib import Path
 import resource
 import sys
+import threading
+import time
 
 import pytest
 import sqlcipher3
@@ -20,6 +23,7 @@ from adminme.finance.dated_projection import validate_projection
 from adminme.finance.publication import PublicationError, canonical_bytes
 from adminme.lib.session import build_internal_session
 from adminme.runtime.application import create_application
+from adminme.projections.runner import ProjectionRunner
 from tests.acceptance.test_finance_disclosure import (
     enabled_settings,
     import_fixture,
@@ -85,6 +89,119 @@ def record(name, **fields):
     assert (path.stat().st_size if path.exists() else 0) + len(raw) <= 8 * 1024 * 1024
     with path.open("ab") as stream:
         stream.write(raw)
+
+
+def callback_resources():
+    """Numeric fixture facts only; RSS cannot stand in for address-space use."""
+    values = {
+        "address_space_limit": list(resource.getrlimit(resource.RLIMIT_AS)),
+        "stack_limit": list(resource.getrlimit(resource.RLIMIT_STACK)),
+    }
+    try:
+        for line in Path("/proc/self/status").read_text().splitlines():
+            name, _, value = line.partition(":")
+            if name in {"VmPeak", "VmSize", "VmRSS", "VmHWM", "Threads"}:
+                values[name] = int(value.split()[0]) * (
+                    1 if name == "Threads" else 1024
+                )
+    except (OSError, ValueError, MemoryError):
+        values["snapshot_incomplete"] = True
+    return values
+
+
+@pytest.fixture(autouse=True)
+def callback_failure_receipt(monkeypatch):
+    """Keep the first synthetic Money failure before the bus redacts its cause."""
+    repo = Path(__file__).resolve().parents[2]
+    locations = {
+        str(repo / name): name
+        for name in (
+            "tests/acceptance/test_finance_summary_metadata.py",
+            "adminme/projections/runner.py",
+            "adminme/projections/money/__init__.py",
+            "adminme/finance/import_work.py",
+            "adminme/finance/worker.py",
+            "adminme/finance/worker_protocol.py",
+        )
+    }
+    locations[str(Path(threading.__file__).resolve())] = "stdlib/threading.py"
+    locations[str(Path(concurrent.futures.thread.__file__).resolve())] = (
+        "stdlib/concurrent/futures/thread.py"
+    )
+    codes = {
+        "can't start new thread": "thread_start_failed",
+        "threads can only be started once": "thread_already_started",
+        "projection runner is closing": "runner_closing",
+        "authority callback cannot submit projection work": "authority_submission_denied",
+        "Money callback cannot submit another projection": "money_cross_projection_denied",
+        "cannot schedule new futures after shutdown": "executor_shutdown",
+        "cannot schedule new futures after interpreter shutdown": "executor_shutdown",
+        "projection 'money' connection unavailable": "money_connection_unavailable",
+    }
+    original = ProjectionRunner._make_callback
+    reported = False
+
+    def make_callback(runner, name, projection):
+        callback = original(runner, name, projection)
+        if name != "money":
+            return callback
+
+        async def observed(envelope):
+            nonlocal reported
+            before = callback_resources()
+            try:
+                return await callback(envelope)
+            except Exception as exc:
+                if not reported:
+                    reported = True
+                    try:
+                        chain = []
+                        current = exc
+                        for _ in range(4):
+                            if current is None:
+                                break
+                            frames = []
+                            tb = current.__traceback__
+                            for _ in range(64):
+                                if tb is None:
+                                    break
+                                location = locations.get(tb.tb_frame.f_code.co_filename)
+                                if location is not None:
+                                    frames.append([location, tb.tb_lineno])
+                                tb = tb.tb_next
+                            message = (
+                                current.args[0]
+                                if type(current) is RuntimeError
+                                and len(current.args) == 1
+                                and type(current.args[0]) is str
+                                else None
+                            )
+                            chain.append(
+                                {
+                                    "code": codes.get(message, "unclassified"),
+                                    "runtime_error": type(current) is RuntimeError,
+                                    "locations": frames[-12:],
+                                    "trace_truncated": tb is not None
+                                    or len(frames) > 12,
+                                }
+                            )
+                            current = current.__cause__ or current.__context__
+                        record(
+                            "money-callback-first-failure",
+                            at=time.monotonic(),
+                            stage="money_bus_callback",
+                            exception_chain=chain,
+                            chain_truncated=current is not None,
+                            before=before,
+                            after=callback_resources(),
+                        )
+                    except Exception:
+                        print("synthetic_callback_receipt_unavailable", file=sys.stderr)
+                raise
+
+        return observed
+
+    monkeypatch.setattr(ProjectionRunner, "_make_callback", make_callback)
 
 
 class ReadConnection:
