@@ -69,6 +69,7 @@ class DiagnosticTrace(Trace):
         self.cost_lock = threading.Lock()
         self.costs = {}
         self.executors = []
+        self.callback_diagnostics = None
         self.probe = {
             "created_at": time.monotonic(),
             "started_at": None,
@@ -125,42 +126,66 @@ class DiagnosticTrace(Trace):
         self.mark(kind, **fields, **values)
 
     def close(self):
+        callback_receipt = (
+            self.callback_diagnostics.close()
+            if self.callback_diagnostics is not None
+            else None
+        )
         started, cpu = time.monotonic(), time.thread_time()
         try:
             super().close()
         finally:
             self.account("trace_close", started, cpu)
-        (self.root / "diagnostic-observer.json").write_text(
-            json.dumps(
-                {
-                    "diagnostic_complete": self.probe["complete"]
-                    and self.executors
-                    == [
-                        "event_log",
-                        "event_metadata",
-                        "projection",
-                        "money_read",
-                        "authority",
-                    ],
-                    "loop_probe": self.probe,
-                    "executors_instrumented": self.executors,
-                    "costs": self.costs,
-                    "trace_rows": self.sequence,
-                    "trace_encoded_bytes": self.bytes,
-                    "trace_buffer_bytes": 65536,
-                    "trace_limit_bytes": 16 * 1024 * 1024,
-                    "limitations": [
-                        "Diagnostic only: no cost subtraction or acceptance/resource qualification.",
-                        "Counters measure trace calls, flush/close and resource samples; accounting itself, wrappers, context lookup, scheduling and this receipt write remain unmeasured.",
-                        "Wall costs can overlap across threads; do not sum them as process elapsed time.",
-                        "RSS includes observers; endpoints identify temporal association, not allocating stacks or causality.",
-                        "Loop probes every 50ms are additional observers, not requests; request cadence and all workload limits remain unchanged.",
-                    ],
-                },
-                indent=2,
+        receipt = {
+            "diagnostic_complete": self.probe["complete"]
+            and self.executors
+            == [
+                "event_log",
+                "event_metadata",
+                "projection",
+                "money_read",
+                "authority",
+            ],
+            "loop_probe": self.probe,
+            "executors_instrumented": self.executors,
+            "costs": self.costs,
+            "trace_rows": self.sequence,
+            "trace_encoded_bytes": self.bytes,
+            "trace_buffer_bytes": 65536,
+            "trace_limit_bytes": 16 * 1024 * 1024,
+            "limitations": [
+                "Diagnostic only: no cost subtraction or acceptance/resource qualification.",
+                "Counters measure trace calls, flush/close and resource samples; accounting itself, wrappers, context lookup, scheduling and this receipt write remain unmeasured.",
+                "Wall costs can overlap across threads; do not sum them as process elapsed time.",
+                "RSS includes observers; endpoints identify temporal association, not allocating stacks or causality.",
+                "Loop probes every 50ms are additional observers, not requests; request cadence and all workload limits remain unchanged.",
+            ],
+        }
+        if self.callback_diagnostics is not None:
+            receipt["callback_diagnostics"] = callback_receipt
+            receipt["diagnostic_complete"] = bool(
+                receipt["diagnostic_complete"]
+                and receipt["callback_diagnostics"]["complete"]
             )
-            + "\n"
-        )
+        encoded = (
+            json.dumps(receipt, separators=(",", ":"))
+            if self.callback_diagnostics is not None
+            else json.dumps(receipt, indent=2)
+        ) + "\n"
+        if self.callback_diagnostics is not None and len(encoded.encode()) > 65536:
+            encoded = (
+                json.dumps(
+                    {
+                        "diagnostic_complete": False,
+                        "callback_diagnostics": {
+                            "complete": False,
+                            "faults": ["receipt_bytes"],
+                        },
+                    }
+                )
+                + "\n"
+            )
+        (self.root / "diagnostic-observer.json").write_text(encoded)
 
 
 class DiagnosticHandler:
@@ -224,6 +249,9 @@ class TimedASGI:
         if not re.fullmatch(r"[a-z0-9_:]{0,100}", request_id):
             raise ValueError("synthetic_measurement_id")
         token = REQUEST.set(request_id or None)
+        callback_diagnostics = self.trace.callback_diagnostics
+        if callback_diagnostics is not None:
+            callback_diagnostics.begin_request(request_id)
         path = scope["path"]
         route = (
             "import"
@@ -246,6 +274,8 @@ class TimedASGI:
         try:
             return await self.app(scope, receive, sent)
         finally:
+            if callback_diagnostics is not None:
+                callback_diagnostics.end_request(request_id)
             self.trace.mark("http.finished", route=route)
             REQUEST.reset(token)
 
@@ -410,6 +440,14 @@ async def serve(root, nonce, tenant):
                 raise RuntimeError("synthetic_diagnostic_executor_unavailable:" + name)
             instrument_executor(executor, name, patches, trace)
             trace.executors.append(name)
+        if os.environ.get("ADMINME_SYNTHETIC_CALLBACK_DIAGNOSTICS") == "1":
+            from adminme.finance import planning_store
+            from tests.fixtures.finance_callback_diagnostics import CallbackDiagnostics
+
+            trace.callback_diagnostics = CallbackDiagnostics()
+            trace.callback_diagnostics.install(
+                runtime.projections, planning_store, patches, REQUEST
+            )
         trace.probe["runtime_ready_at"] = time.monotonic()
         trace.mark("runtime.ready")
         write_json(

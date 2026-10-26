@@ -27,7 +27,7 @@ def exact_reviewed_v2_sources():
     for module, expected in (
         (
             diagnostic,
-            "042c942aafe0b7506d0d625ecfb9bc6609300c202da9f88fc4fd0bd511d6d909",
+            "da1e3e0c1b2d1d25e35f0295e45252a173e3efcefb054aaf657c796e21ba78ee",
         ),
         (ownership, "a718903f2ab940d4ffff84b3398804470f096f39ee4d8467f4b18211aefda7c9"),
     ):
