@@ -107,6 +107,14 @@ class OwnedRun:
         self.error_file = (self.output / (name + ".stderr.txt")).open("wb")
         before = process_row(os.getpid())
         self.cpu_before = before["cpu_seconds"] + before["reaped_cpu_seconds"]
+        runtime_env = {"LANG": "C.UTF-8", "LC_ALL": "C.UTF-8", "ADMINME_TEST_MODE": "1"}
+        if (
+            self.runtime_script == "finance_staging_measurement.py"
+            and self.runtime_case == "staged_lifetime"
+            and os.environ.get("FINANCE_WATCHDOG_MODE") == "staged-bounded"
+            and os.environ.get("ADMINME_SYNTHETIC_CALLBACK_DIAGNOSTICS") == "1"
+        ):
+            runtime_env["ADMINME_SYNTHETIC_CALLBACK_DIAGNOSTICS"] = "1"
         self.process = subprocess.Popen(
             [
                 sys.executable,
@@ -123,7 +131,7 @@ class OwnedRun:
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=self.error_file,
-            env={"LANG": "C.UTF-8", "LC_ALL": "C.UTF-8", "ADMINME_TEST_MODE": "1"},
+            env=runtime_env,
             cwd="/",
             close_fds=True,
             start_new_session=True,

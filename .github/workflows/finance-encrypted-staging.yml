@@ -1,4 +1,4 @@
-name: Focused synthetic Finance callback observers
+name: Bounded representative Finance callback diagnostics
 on:
   push:
     branches: ['codex/finance-encrypted-staging']
@@ -8,7 +8,7 @@ concurrency:
   group: finance-encrypted-staging-correctness
   cancel-in-progress: false
 jobs:
-  callback-observer-preflight:
+  callback-representative:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
@@ -19,8 +19,8 @@ jobs:
     steps:
       - name: Bind isolated evidence directories
         run: |
-          printf 'FINANCE_STORAGE_ARTIFACT_DIR=%s/finance-callback-observer\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
-          printf 'FINANCE_MEASUREMENT_PINS=%s/finance-callback-observer-pins\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+          printf 'FINANCE_STORAGE_ARTIFACT_DIR=%s/finance-callback-representative\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+          printf 'FINANCE_MEASUREMENT_PINS=%s/finance-callback-representative-pins\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           persist-credentials: false
@@ -39,20 +39,11 @@ jobs:
           assert sys.version_info[:3]==(3,14,7)
           assert 'ADMINME_SYNTHETIC_CALLBACK_DIAGNOSTICS' not in os.environ
           assert subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()==os.environ['GITHUB_SHA']
-          baseline='6d3211e77fc18d15c7fc160de828360eb1f67dfe'
-          expected={
-              '.github/workflows/finance-encrypted-staging.yml',
-              'tests/fixtures/finance_callback_diagnostics.py',
-              'tests/fixtures/finance_staging_measurement.py',
-              'tests/unit/test_finance_callback_diagnostics.py',
-              'tests/unit/test_finance_diagnostic_observers.py',
-          }
+          baseline='4b9ccdf521fd8bf48d7fc0580953458e4dd38eca'
+          expected={'tests/acceptance/test_finance_storage_isolation.py', 'tests/unit/test_finance_callback_transport.py', '.github/workflows/finance-encrypted-staging.yml', 'tests/unit/test_finance_diagnostic_observers.py', 'tests/fixtures/finance_watchdog.py'}
           actual=set(subprocess.check_output(['git','diff','--name-only',baseline,'HEAD'],text=True).splitlines())
           assert actual==expected,actual
-          pins={'tests/fixtures/finance_callback_diagnostics.py': '801c623469fcd8f6a2df342cded217e61585ca59e045c8b3114845178d6685ce',
-           'tests/fixtures/finance_staging_measurement.py': 'da1e3e0c1b2d1d25e35f0295e45252a173e3efcefb054aaf657c796e21ba78ee',
-           'tests/unit/test_finance_callback_diagnostics.py': 'ff51a9efc65dd326f2c2442e5395693e4f0cbdcd523e9736af62b5ec54d65f55',
-           'tests/unit/test_finance_diagnostic_observers.py': '84c5c9db1641ac8ef22a5ea324de2aa286dfe5e42d4bae343d330fbad1027b48'}
+          pins={'tests/fixtures/finance_callback_diagnostics.py': '801c623469fcd8f6a2df342cded217e61585ca59e045c8b3114845178d6685ce', 'tests/fixtures/finance_staging_measurement.py': 'da1e3e0c1b2d1d25e35f0295e45252a173e3efcefb054aaf657c796e21ba78ee', 'tests/unit/test_finance_callback_diagnostics.py': 'ff51a9efc65dd326f2c2442e5395693e4f0cbdcd523e9736af62b5ec54d65f55', 'tests/unit/test_finance_diagnostic_observers.py': '1dfd1f22511aba019bc1183c5c0ef3b795e521ce3b0cfc3023830e55ca0df53f', 'tests/unit/test_finance_callback_transport.py': 'd05d2bcebb1d8911e23ce25b608c2a51027e09887f085419ac2a9951867e3258', 'tests/fixtures/finance_watchdog.py': '94aa41acb9e76969be76b5639e23bd80402b0298b14cbd44482e5df9712a4089', 'tests/acceptance/test_finance_storage_isolation.py': '30c1b19cba97ec0cf193d42fc95e839014e3f2c7857356c9139d2aea83a2b5b5'}
           interfaces={'adminme/finance/planning_store.py': 'e0b2ca4529414b5cddbbeed7cbcd1f5ceb90409c42087c21e2ab4aa5da622268',
            'adminme/projections/runner.py': 'ce762f5fb40eee0a6d9b1b1cd0a58a1ac1ed77d14da39a20be2437b2cbfb4fee',
            'adminme/projections/money/schema.sql': 'd90df84bb436136a598b8ae63e442bb69106e27a76dfee9e92e96f8c1b4a87f0',
@@ -60,7 +51,7 @@ jobs:
            'tests/fixtures/finance_storage_measurement.py': '6c60cac5d32bc1c7e15652bcd0b4e880450334831fdb85ef15b10428fe88e7f0',
            'tests/fixtures/finance_planning.py': 'b1c14038604d9d6a4077b45135b1ea206ad49432450655eddbbb8f015fa84ca0',
            'tests/fixtures/finance_import_load.py': '79fb003c716a5485e6f5e1cf18ae5e6b9f0aa445c6a32ec82cd7fc6fbe537a09',
-           'tests/acceptance/test_finance_storage_isolation.py': 'a718903f2ab940d4ffff84b3398804470f096f39ee4d8467f4b18211aefda7c9',
+           'tests/acceptance/test_finance_storage_isolation.py': '30c1b19cba97ec0cf193d42fc95e839014e3f2c7857356c9139d2aea83a2b5b5',
            'tests/acceptance/test_finance_staging_measurement.py': 'c363b611b7c979e3d05182c10742641d7ad75bd245f48ea07efdf71f676f6f71',
            'tests/fixtures/finance_staging_measurement_report.py': 'daf1b904c01a97aab84fa52201c721bffb1457e7f178d22d612a32185c17191f'}
           interfaces['tests/unit/test_finance_diagnostic_spans.py']='e6ab4eaee2057a07fd02537bc7125a49d9c7b79f8890b76bb48a97e07b1cc029'
@@ -68,7 +59,7 @@ jobs:
           assert subprocess.check_output(['git','rev-parse','HEAD:adminme'],text=True).strip()=='1873e65d8a36d8af74ed5608b49b62dac6934d73'
           assert subprocess.check_output(['git','rev-parse','HEAD:poetry.lock'],text=True).strip()=='cc2102f6e9dd2fd029bd636566806493c1df91dc'
           paths=subprocess.check_output(['git','diff','--name-only','35b4f0615c4ece0bc4fc0ed927b39507ea9774b2','HEAD'],text=True).splitlines()
-          assert len(paths)==27
+          assert len(paths)==28
           for p in paths:
               data=pathlib.Path(p).read_bytes()
               if p.endswith('.py'):ast.parse(data)
@@ -81,89 +72,71 @@ jobs:
               digest.update(p.encode());digest.update(pathlib.Path(p).read_bytes())
           assert digest.hexdigest()=='ce01d08e6462af13a83bb6eb3fef3977532dc0a0a652149e0f8c2593add8e750'
           out=pathlib.Path(os.environ['FINANCE_MEASUREMENT_PINS'])
-          for name,selected in [('source-sha256.json',paths),('dependency-sha256.json',files),('frozen-source-sha256.json',pins),('interface-sha256.json',interfaces)]:
+          for name,selected in [('source-sha256.json',paths),('dependency-sha256.json',files),('reviewed-source-sha256.json',pins),('interface-sha256.json',interfaces)]:
               (out/name).write_text(json.dumps({p:hashlib.sha256(pathlib.Path(p).read_bytes()).hexdigest() for p in selected},indent=2)+'\n')
-          expected_cases={'tests.unit.test_finance_callback_diagnostics': ['test_exact_five_calls_preserve_results_and_bounded_sql_json_evidence',
-                                                            'test_original_exception_identity_and_thread_scope_are_preserved[problem0]',
-                                                            'test_original_exception_identity_and_thread_scope_are_preserved[problem1]',
-                                                            'test_unselected_requests_and_operations_have_no_capture',
-                                                            'test_subspan_exceptions_preserve_identity_and_cleanup[problem0-sql]',
-                                                            'test_subspan_exceptions_preserve_identity_and_cleanup[problem0-json]',
-                                                            'test_subspan_exceptions_preserve_identity_and_cleanup[problem1-sql]',
-                                                            'test_subspan_exceptions_preserve_identity_and_cleanup[problem1-json]',
-                                                            'test_changed_selection_or_subspan_shape_cannot_claim_coverage[sql_change-sql_shape]',
-                                                            'test_changed_selection_or_subspan_shape_cannot_claim_coverage[extra_sql-sql_shape]',
-                                                            'test_changed_selection_or_subspan_shape_cannot_claim_coverage[extra_json-json_shape]',
-                                                            'test_changed_selection_or_subspan_shape_cannot_claim_coverage[metadata_change-json_shape]',
-                                                            'test_changed_selection_or_subspan_shape_cannot_claim_coverage[selection-selection]',
-                                                            'test_changed_selection_or_subspan_shape_cannot_claim_coverage[page_rows-sql_shape]',
-                                                            'test_duplicate_and_missing_callbacks_fail_without_more_records',
-                                                            'test_gc_capture_is_bounded_and_protocol_checked[paired]',
-                                                            'test_gc_capture_is_bounded_and_protocol_checked[orphan_stop]',
-                                                            'test_gc_capture_is_bounded_and_protocol_checked[unclosed]',
-                                                            'test_gc_capture_is_bounded_and_protocol_checked[mismatched]',
-                                                            'test_gc_capture_is_bounded_and_protocol_checked[overflow]',
-                                                            'test_gc_callback_returns_while_both_trace_locks_are_held',
-                                                            'test_time_and_byte_overflow_remain_incomplete[window]',
-                                                            'test_time_and_byte_overflow_remain_incomplete[callback]',
-                                                            'test_time_and_byte_overflow_remain_incomplete[section]',
-                                                            'test_terminal_receipt_requires_callback_coverage_and_is_bounded[complete]',
-                                                            'test_terminal_receipt_requires_callback_coverage_and_is_bounded[missing]',
-                                                            'test_terminal_receipt_requires_callback_coverage_and_is_bounded[oversize]',
-                                                            'test_early_close_removes_only_owned_gc_hook_before_io_failure',
-                                                            'test_installation_undo_restores_exact_module_and_executor_bindings',
-                                                            'test_observer_off_receipt_preserves_baseline_shape_and_encoding'],
-           'tests.unit.test_finance_diagnostic_observers': ['test_probe_actual_lifetime_and_receipt_completeness[healthy]',
-                                                            'test_probe_actual_lifetime_and_receipt_completeness[early_failure]',
-                                                            'test_missing_or_oversize_observer_cannot_pass_after_cleanup[missing]',
-                                                            'test_missing_or_oversize_observer_cannot_pass_after_cleanup[oversize]'],
-           'tests.unit.test_finance_diagnostic_spans': ['test_trace_streaming_buffer_does_not_retain_prior_rows',
-                                                        'test_trace_overflow_is_diagnostic_failure_before_operation_or_write',
-                                                        'test_readback_spans_preserve_digest_result_errors_and_cursor_cleanup[success]',
-                                                        'test_readback_spans_preserve_digest_result_errors_and_cursor_cleanup[error]',
-                                                        'test_readback_spans_preserve_digest_result_errors_and_cursor_cleanup[cancel]',
-                                                        'test_route_spans_preserve_request_context_results_and_errors[success]',
-                                                        'test_route_spans_preserve_request_context_results_and_errors[error]',
-                                                        'test_route_spans_preserve_request_context_results_and_errors[cancel]',
-                                                        'test_executor_spans_keep_submit_start_finish_order_and_original_outcome[success]',
-                                                        'test_executor_spans_keep_submit_start_finish_order_and_original_outcome[error]',
-                                                        'test_executor_spans_keep_submit_start_finish_order_and_original_outcome[cancel]']}
-          assert list(map(len,expected_cases.values()))==[30,4,11]
-          assert len({(module,name) for module,names in expected_cases.items() for name in names})==45
+          expected_cases={'tests.unit.test_finance_callback_transport': ['test_controller_launch_preserves_exact_allowlist[staged-on]', 'test_controller_launch_preserves_exact_allowlist[absent]', 'test_controller_launch_preserves_exact_allowlist[disabled]', 'test_controller_launch_preserves_exact_allowlist[invalid]', 'test_controller_launch_preserves_exact_allowlist[wrong-full-mode]', 'test_controller_launch_preserves_exact_allowlist[wrong-contract-mode]', 'test_runtime_launch_preserves_exact_allowlist[staged-on]', 'test_runtime_launch_preserves_exact_allowlist[absent]', 'test_runtime_launch_preserves_exact_allowlist[disabled]', 'test_runtime_launch_preserves_exact_allowlist[invalid]', 'test_runtime_launch_preserves_exact_allowlist[wrong-mode]', 'test_runtime_launch_preserves_exact_allowlist[wrong-script]', 'test_runtime_launch_preserves_exact_allowlist[wrong-case]']}
+          assert len(expected_cases['tests.unit.test_finance_callback_transport'])==13
           (out/'expected-tests.json').write_text(json.dumps(expected_cases,indent=2)+'\n')
+          reused={'head': '4b9ccdf521fd8bf48d7fc0580953458e4dd38eca', 'run': 40250697052, 'job': 121341725274, 'artifact_id': 12620114878, 'zip_sha256': 'bf8604a9abe64a09e7b9f46afa9ae0d2579f59f2be49eb2482cbf9042de396fd', 'summary_sha256': '8ad455297f227afe7c2d8b07e5cb1452b1658ec297800f47d0f48dac778f0dbf', 'passed': 45, 'repeated': 0, 'basis': 'Unchanged callback observer implementation and tested functions; only launch allowlists and OwnedRun source-pin metadata changed. New transport seams require their own13-case proof. Historical45-case evidence is not a new whole-file launch proof.'}
+          (out/'reused-observer-proof.json').write_text(json.dumps(reused,indent=2)+'\n')
           PY_CHECK
-          .venv/bin/ruff check tests/fixtures/finance_callback_diagnostics.py tests/fixtures/finance_staging_measurement.py tests/unit/test_finance_callback_diagnostics.py tests/unit/test_finance_diagnostic_observers.py tests/unit/test_finance_diagnostic_spans.py
-          .venv/bin/ruff format --check tests/fixtures/finance_callback_diagnostics.py tests/fixtures/finance_staging_measurement.py tests/unit/test_finance_callback_diagnostics.py tests/unit/test_finance_diagnostic_observers.py tests/unit/test_finance_diagnostic_spans.py
-      - name: Check exactly 30 callback and 15 affected observer cases
+          .venv/bin/ruff check tests/fixtures/finance_watchdog.py tests/acceptance/test_finance_storage_isolation.py tests/unit/test_finance_diagnostic_observers.py tests/unit/test_finance_callback_transport.py
+          .venv/bin/ruff format --check tests/fixtures/finance_watchdog.py tests/acceptance/test_finance_storage_isolation.py tests/unit/test_finance_diagnostic_observers.py tests/unit/test_finance_callback_transport.py
+      - name: Check exactly 13 synthetic launch environment cases
         id: preflight
         timeout-minutes: 2
         env:
-          ADMINME_SYNTHETIC_CALLBACK_PREFLIGHT: '1'
-          ADMINME_SYNTHETIC_DIAGNOSTIC_PREFLIGHT: '1'
+          ADMINME_SYNTHETIC_CALLBACK_TRANSPORT_PREFLIGHT: '1'
         run: |
           unset ADMINME_SYNTHETIC_CALLBACK_DIAGNOSTICS
           ulimit -t 60
           ulimit -v 1048576
           timeout --signal=TERM --kill-after=5s 60s .venv/bin/python -m pytest -p no:cacheprovider -q --runxfail --maxfail=1 \
             -o tmp_path_retention_policy=all \
-            --basetemp="$RUNNER_TEMP/finance-callback-observer-unit" \
+            --basetemp="$RUNNER_TEMP/finance-callback-transport-unit" \
             --junitxml="$FINANCE_MEASUREMENT_PINS/preflight.xml" \
-            tests/unit/test_finance_callback_diagnostics.py \
-            tests/unit/test_finance_diagnostic_observers.py \
-            tests/unit/test_finance_diagnostic_spans.py
-      - name: Retain bounded focused evidence and remove unit scratch
+            tests/unit/test_finance_callback_transport.py
+          .venv/bin/python - <<'PY_CHECK'
+          import json, os, pathlib, xml.etree.ElementTree as E
+          pins=pathlib.Path(os.environ['FINANCE_MEASUREMENT_PINS'])
+          rows=E.parse(pins/'preflight.xml').findall('.//testcase')
+          expected=json.loads((pins/'expected-tests.json').read_text())
+          expected_ids={(module,name) for module,names in expected.items() for name in names}
+          actual_ids=[(r.attrib.get('classname'),r.attrib.get('name')) for r in rows]
+          exact=len(expected_ids)==len(actual_ids)==len(set(actual_ids))==13 and set(actual_ids)==expected_ids
+          clean=all(not any(r.find(k) is not None for k in ('failure','error','skipped')) for r in rows)
+          result={'expected':13,'executed':len(rows),'exact_selection':exact,'zero_failed_error_skipped':clean,'permits_representative_step':bool(exact and clean)}
+          (pins/'preflight-result.json').write_text(json.dumps(result,indent=2)+'\n')
+          assert result['permits_representative_step'],'transport preflight failed or incomplete; representative must not start'
+          PY_CHECK
+      - name: One unchanged representative workload with callback observer
+        id: measurement
+        if: steps.preflight.outcome == 'success'
+        timeout-minutes: 7
+        env:
+          ADMINME_SYNTHETIC_CALLBACK_DIAGNOSTICS: '1'
+        run: |
+          mkdir "$FINANCE_STORAGE_ARTIFACT_DIR"
+          .venv/bin/python -I -B tests/fixtures/finance_watchdog.py staged-bounded "$FINANCE_STORAGE_ARTIFACT_DIR"
+      - name: Preserve unchanged comparisons and partial failure verdicts
+        id: report
+        if: always() && steps.measurement.outcome != 'skipped' && steps.measurement.outcome != ''
+        run: .venv/bin/python -I -B tests/fixtures/finance_staging_measurement_report.py "$FINANCE_STORAGE_ARTIFACT_DIR"
+      - name: Retain bounded source outcome and cleanup evidence
         if: always()
         env:
           PREFLIGHT_OUTCOME: ${{ steps.preflight.outcome }}
+          MEASUREMENT_OUTCOME: ${{ steps.measurement.outcome }}
+          REPORT_OUTCOME: ${{ steps.report.outcome }}
         run: |
           python - <<'PY_CHECK'
           import hashlib, json, os, pathlib, shutil, sys, xml.etree.ElementTree as E
           pins=pathlib.Path(os.environ['FINANCE_MEASUREMENT_PINS']);pins.mkdir(exist_ok=True)
           root=pathlib.Path(os.environ['FINANCE_STORAGE_ARTIFACT_DIR']);root.mkdir(exist_ok=True)
-          scratch=pathlib.Path(os.environ['RUNNER_TEMP'])/'finance-callback-observer-unit'
-          names={'measurement-trace.jsonl','diagnostic-observer.json','staged_bounded.json','staged_bounded-diagnostic-observer.json','staged_bounded-measurement-trace.jsonl'}
+          scratch=pathlib.Path(os.environ['RUNNER_TEMP'])/'finance-callback-transport-unit'
           def digest(path):
               with path.open('rb') as stream:return hashlib.file_digest(stream,'sha256').hexdigest()
+          names={'watchdog-trace.jsonl','controller-output.txt','synthetic_transport.stderr.txt'}
           existing=[p for parent in (pins,root) for p in parent.iterdir() if p.is_file() and not p.is_symlink()]
           used=sum(p.stat().st_size for p in existing);count=len(existing)
           collected=[];omitted=[]
@@ -177,28 +150,34 @@ jobs:
               target=root/name;assert not target.exists()
               shutil.copyfile(p,target);used+=size;count+=1
               collected.append({'name':name,'bytes':size,'sha256':digest(target)})
-          rows=[];parse_error=None
+          def outcome(path,expected_ids):
+              rows=[];error=None
+              try:rows=E.parse(path).findall('.//testcase')
+              except (OSError,E.ParseError) as exc:error=type(exc).__name__
+              ids=[(r.attrib.get('classname'),r.attrib.get('name')) for r in rows]
+              return {'expected':len(expected_ids),'executed':len(rows),'passed':sum(not any(r.find(k) is not None for k in ('failure','error','skipped')) for r in rows),'failed':sum(any(r.find(k) is not None for k in ('failure','error')) for r in rows),'skipped':sum(r.find('skipped') is not None for r in rows),'exact_selection':len(ids)==len(set(ids))==len(expected_ids) and set(ids)==expected_ids,'parse_error':error,'cases':ids}
+          expected=json.loads((pins/'expected-tests.json').read_text()) if (pins/'expected-tests.json').is_file() else {}
+          unit=outcome(pins/'preflight.xml',{(m,n) for m,names in expected.items() for n in names})
+          measurement=outcome(root/'results.xml',{('tests.acceptance.test_finance_staging_measurement','test_one_staged_import_replay_and_loaded_queries')})
+          observer={};observer_error=None
           try:
-              rows=E.parse(pins/'preflight.xml').findall('.//testcase')
-          except (OSError,E.ParseError) as exc:parse_error=type(exc).__name__
-          expected={}
-          if (pins/'expected-tests.json').is_file():expected=json.loads((pins/'expected-tests.json').read_text())
-          expected_ids={(module,name) for module,names in expected.items() for name in names}
-          actual_ids=[(c.attrib.get('classname'),c.attrib.get('name')) for c in rows]
-          exact=len(expected_ids)==45 and len(actual_ids)==len(set(actual_ids))==45 and set(actual_ids)==expected_ids
-          unit={'expected':45,'executed':len(rows),'passed':sum(not any(c.find(k) is not None for k in ('failure','error','skipped')) for c in rows),'failed':sum(any(c.find(k) is not None for k in ('failure','error')) for c in rows),'skipped':sum(c.find('skipped') is not None for c in rows),'exact_selection':exact,'parse_error':parse_error,'cases':[{'module':module,'name':name} for module,name in actual_ids],'missing':sorted(expected_ids-set(actual_ids)),'unexpected':sorted(set(actual_ids)-expected_ids)}
-          expected_reports={'trace-buffer','trace-overflow',*[prefix+'-'+outcome for prefix in ('readback','route','queue') for outcome in ('success','error','cancel')]}
-          reports_present=all((root/(name+'.json')).is_file() and not (root/(name+'.json')).is_symlink() for name in expected_reports)
+              path=root/'staged_bounded-diagnostic-observer.json'
+              with path.open('rb') as stream:raw=stream.read(65537)
+              if len(raw)>65536:raise ValueError('observer_size')
+              observer=json.loads(raw)
+          except (OSError,ValueError) as exc:observer_error=type(exc).__name__
+          callback=observer.get('callback_diagnostics',{})
+          callback_complete=observer.get('diagnostic_complete') is True and callback.get('complete') is True and callback.get('installed') is True and callback.get('removed') is True and len(callback.get('callbacks',[]))==5
           cleanup_error=None
           try:
               if scratch.is_symlink():scratch.unlink()
               elif scratch.exists():shutil.rmtree(scratch)
           except OSError as exc:cleanup_error=type(exc).__name__
           removed=not scratch.exists() and not scratch.is_symlink()
-          complete=os.environ['PREFLIGHT_OUTCOME']=='success' and exact and unit['passed']==45 and not unit['failed'] and not unit['skipped'] and len(collected)==41 and not omitted and reports_present and removed and cleanup_error is None
-          result={'candidate':os.environ['GITHUB_SHA'],'preflight_outcome':os.environ['PREFLIGHT_OUTCOME'],'unit':unit,'new_callback_tests':30,'repeated_observer_tests':15,'collected':collected,'omitted':omitted,'expected_collected_files':41,'expected_reports':sorted(expected_reports),'reports_present':reports_present,'unit_scratch_removed':removed,'cleanup_error':cleanup_error,'focused_evidence_complete':complete,'runtime_diagnostics_switch_unset':'ADMINME_SYNTHETIC_CALLBACK_DIAGNOSTICS' not in os.environ,'real_runtime_integration':False,'representative_executed':False,'resource_qualified':False,'production_qualified':False}
+          complete=all(os.environ[k]=='success' for k in ('PREFLIGHT_OUTCOME','MEASUREMENT_OUTCOME','REPORT_OUTCOME')) and unit['expected']==13 and unit['exact_selection'] and unit['passed']==13 and not unit['failed'] and not unit['skipped'] and measurement['exact_selection'] and measurement['passed']==1 and not measurement['failed'] and not measurement['skipped'] and callback_complete and observer_error is None and len(collected)==19 and not omitted and removed and cleanup_error is None
+          result={'candidate':os.environ['GITHUB_SHA'],'preflight_outcome':os.environ['PREFLIGHT_OUTCOME'],'measurement_outcome':os.environ['MEASUREMENT_OUTCOME'],'report_outcome':os.environ['REPORT_OUTCOME'],'unit':unit,'measurement':measurement,'reused_observer_run':40250697052,'reused_observer_tests':45,'repeated_observer_tests':0,'collected':collected,'omitted':omitted,'expected_unit_raw_files':19,'unit_scratch_removed':removed,'cleanup_error':cleanup_error,'callback_observer_present':'callback_diagnostics' in observer,'callback_observer_complete':callback_complete,'callback_observer_read_error':observer_error,'complete':complete,'resource_qualified':False,'production_qualified':False}
           (pins/'selection-result.json').write_text(json.dumps(result,indent=2)+'\n')
-          output=pathlib.Path(os.environ['RUNNER_TEMP'])/'finance-callback-observer-upload';output.mkdir()
+          output=pathlib.Path(os.environ['RUNNER_TEMP'])/'finance-callback-representative-upload';output.mkdir()
           files=sorted((p for parent in (pins,root) for p in parent.iterdir() if p.is_file() and not p.is_symlink()),key=lambda p:p.name)
           assert len({p.name for p in files})==len(files)
           records=[{'name':p.name,'bytes':p.stat().st_size,'sha256':digest(p)} for p in files]
@@ -208,15 +187,14 @@ jobs:
           (output/'artifact-manifest.json').write_text(manifest)
           if bounded:
               for p in files:shutil.copyfile(p,output/p.name)
-          if not bounded or not complete or not result['runtime_diagnostics_switch_unset']:
-              sys.exit('focused callback evidence failed or incomplete; bounded raw evidence retained, no qualification or follow-on measurement')
+          if not bounded or not complete:sys.exit('representative callback diagnostic failed or incomplete; bounded raw evidence retained, no qualification or retry')
           PY_CHECK
-      - name: Upload focused synthetic callback receipts
+      - name: Upload representative callback diagnostic receipts
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: finance-callback-observer-focused
-          path: ${{ runner.temp }}/finance-callback-observer-upload
+          name: finance-callback-representative-diagnostic
+          path: ${{ runner.temp }}/finance-callback-representative-upload
           if-no-files-found: error
           retention-days: 7
           compression-level: 9

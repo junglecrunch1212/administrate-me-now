@@ -267,6 +267,11 @@ def main(mode, directory):
         "FINANCE_WATCHDOG_ACK_FD": str(ack_read_fd),
         "FINANCE_WATCHDOG_MODE": mode,
     }
+    if (
+        mode == "staged-bounded"
+        and os.environ.get("ADMINME_SYNTHETIC_CALLBACK_DIAGNOSTICS") == "1"
+    ):
+        env["ADMINME_SYNTHETIC_CALLBACK_DIAGNOSTICS"] = "1"
     controller_script = Path(__file__).with_name("finance_watchdog_controller.py")
     output = (root / "controller-output.txt").open("wb")
     initial = sample(os.getpid(), None, None, [root])

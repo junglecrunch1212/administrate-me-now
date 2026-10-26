@@ -29,7 +29,7 @@ def exact_reviewed_v2_sources():
             diagnostic,
             "da1e3e0c1b2d1d25e35f0295e45252a173e3efcefb054aaf657c796e21ba78ee",
         ),
-        (ownership, "a718903f2ab940d4ffff84b3398804470f096f39ee4d8467f4b18211aefda7c9"),
+        (ownership, "30c1b19cba97ec0cf193d42fc95e839014e3f2c7857356c9139d2aea83a2b5b5"),
     ):
         assert (
             hashlib.sha256(Path(module.__file__).read_bytes()).hexdigest() == expected
