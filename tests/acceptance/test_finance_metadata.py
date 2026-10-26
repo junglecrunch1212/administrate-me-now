@@ -114,14 +114,15 @@ def test_disabled_is_access_unavailable_and_never_reads(
         assert response.json()["completeness"]["complete"] is False
 
 
-def test_missing_auth_or_grant_rejects(tmp_path):
+def test_missing_auth_rejects_but_finance_gate_needs_no_general_grant(tmp_path):
     with TestClient(create_application(enabled_settings(tmp_path))) as client:
         assert client.post(
             "/api/openclaw/v1/tools/finance-status", json={}
         ).status_code in {401, 422}
         response = read(client)
-        assert response.status_code == 403
-        assert "bindings" not in response.text
+        assert response.status_code == 200, response.text
+        assert response.json()["state"] == "verified_empty"
+        assert response.json()["bindings"] == []
 
 
 def test_foreign_owner_and_tenant_do_not_affect_watermark_or_empty_receipt(tmp_path):

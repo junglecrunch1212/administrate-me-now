@@ -3862,8 +3862,8 @@
     "missing_source_candidate_cells": [],
     "object_lifecycles": 28,
     "source_candidate_cells": 143,
-    "technical_event_schemas": 400,
-    "technical_event_types": 317,
+    "technical_event_schemas": 402,
+    "technical_event_types": 318,
     "uncataloged_event_types": [],
     "unproved_exact_lifecycle_transitions": [],
     "unproved_supported_source_candidate_cells": []
@@ -17196,6 +17196,107 @@
         "privacy_guard_version"
       ],
       "schema_version": 2
+    },
+    {
+      "additional_properties": false,
+      "event_type": "finance.advisor_accessed",
+      "family": "finance",
+      "properties": {
+        "authority_available": {
+          "title": "Authority Available",
+          "type": "boolean"
+        },
+        "book_id": {
+          "anyOf": [
+            {
+              "maxLength": 96,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Book Id"
+        },
+        "channel_id": {
+          "maxLength": 120,
+          "minLength": 1,
+          "title": "Channel Id",
+          "type": "string"
+        },
+        "control_event_id": {
+          "anyOf": [
+            {
+              "maxLength": 160,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Control Event Id"
+        },
+        "control_revision": {
+          "minimum": 0,
+          "title": "Control Revision",
+          "type": "integer"
+        },
+        "data_owner_id": {
+          "anyOf": [
+            {
+              "maxLength": 160,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Data Owner Id"
+        },
+        "member_id": {
+          "maxLength": 160,
+          "minLength": 1,
+          "title": "Member Id",
+          "type": "string"
+        },
+        "operation": {
+          "maxLength": 120,
+          "minLength": 1,
+          "title": "Operation",
+          "type": "string"
+        },
+        "operator_principal_id": {
+          "maxLength": 160,
+          "minLength": 1,
+          "title": "Operator Principal Id",
+          "type": "string"
+        },
+        "provider_effect_count": {
+          "const": 0,
+          "default": 0,
+          "title": "Provider Effect Count",
+          "type": "integer"
+        },
+        "service_principal_id": {
+          "maxLength": 160,
+          "minLength": 1,
+          "title": "Service Principal Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "member_id",
+        "operation",
+        "control_revision",
+        "authority_available",
+        "service_principal_id",
+        "operator_principal_id",
+        "channel_id"
+      ],
+      "schema_version": 1
     },
     {
       "additional_properties": false,
@@ -36691,6 +36792,79 @@
         "cos_analysis_enabled"
       ],
       "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "settings.finance_access_changed",
+      "family": "settings",
+      "properties": {
+        "binding": {
+          "$ref": "#/$defs/FinanceBookBinding"
+        },
+        "books_enabled": {
+          "title": "Books Enabled",
+          "type": "boolean"
+        },
+        "changed_by_member_id": {
+          "maxLength": 160,
+          "minLength": 1,
+          "title": "Changed By Member Id",
+          "type": "string"
+        },
+        "cos_analysis_enabled": {
+          "title": "Cos Analysis Enabled",
+          "type": "boolean"
+        },
+        "owner_id": {
+          "maxLength": 160,
+          "minLength": 1,
+          "title": "Owner Id",
+          "type": "string"
+        },
+        "prior_event_id": {
+          "anyOf": [
+            {
+              "maxLength": 160,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Prior Event Id"
+        },
+        "provider_effects": {
+          "const": false,
+          "default": false,
+          "title": "Provider Effects",
+          "type": "boolean"
+        },
+        "reader_member_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 2,
+          "minItems": 1,
+          "title": "Reader Member Ids",
+          "type": "array"
+        },
+        "revision": {
+          "minimum": 1,
+          "title": "Revision",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "owner_id",
+        "changed_by_member_id",
+        "revision",
+        "binding",
+        "books_enabled",
+        "cos_analysis_enabled",
+        "reader_member_ids"
+      ],
+      "schema_version": 2
     },
     {
       "additional_properties": false,
