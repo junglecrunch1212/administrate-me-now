@@ -353,7 +353,6 @@ RAW_FALLBACK = set(CORRUPTIONS) - {
     "used-negative-zero",
     "used-float-underflow",
     "used-float-overflow",
-    "utf8-literal",
     "missing-contexts",
     "wrong-contexts",
     "unselected-malformed-context",
@@ -470,26 +469,45 @@ def corrupted(raw, case):
     return canonical_bytes(metadata).decode()
 
 
-@pytest.mark.parametrize("case", list(CORRUPTIONS))
-def test_summary_corruption_and_decoder_parity(stored, case):
-    conn, _, _, raw = stored
-    assert sys.get_int_max_str_digits() == 4300  # Observe, never widen the decoder.
-    changed = corrupted(raw, case)
-    conn.execute("UPDATE finance_dated_projections SET metadata_json=?", (changed,))
-    old, new, before, after = matched(stored)
+def metadata_read(reader):
     try:
-        compact = after.metadata()
+        raw = reader.metadata()
     except Exception as exc:
+        return None, {
+            "exception": type(exc).__module__ + "." + type(exc).__qualname__,
+            "args": typed(exc.args),
+        }
+    return raw, {"returned_type": type(raw).__name__}
+
+
+def check_corrupted_input(stored, case, changed, *, as_text=False):
+    conn, _, _, _ = stored
+    sql = (
+        "UPDATE finance_dated_projections SET metadata_json=CAST(? AS TEXT)"
+        if as_text
+        else "UPDATE finance_dated_projections SET metadata_json=?"
+    )
+    conn.execute(sql, (changed,))
+    if as_text:
+        storage = conn.execute(
+            "SELECT typeof(metadata_json),CAST(metadata_json AS BLOB) FROM finance_dated_projections"
+        ).fetchone()
+        assert storage[0] == "text" and storage[1] == changed
+    old, new, before, after = matched(stored)
+    original, metadata_before = metadata_read(before)
+    compact, metadata_after = metadata_read(after)
+    if "exception" in metadata_before or "exception" in metadata_after:
         record(
             case,
             before=old,
             after=new,
-            metadata_exception=type(exc).__name__,
-            metadata_exception_args=typed(exc.args),
+            metadata_before=metadata_before,
+            metadata_after=metadata_after,
         )
-        raise AssertionError(
-            "candidate metadata read failed; exact outcomes recorded"
-        ) from exc
+        assert old == new
+        assert metadata_before == metadata_after
+        assert "exception" in old
+        return
 
     def decode(value):
         value = json.loads(value)
@@ -497,12 +515,14 @@ def test_summary_corruption_and_decoder_parity(stored, case):
             value.pop("accounting_revision_ids", None)
         return value
 
-    decoder_before = capture(lambda: decode(before.metadata()))
+    decoder_before = capture(lambda: decode(original))
     decoder_after = capture(lambda: decode(compact))
     record(
         case,
         before=old,
         after=new,
+        metadata_before=metadata_before,
+        metadata_after=metadata_after,
         decoder_before_exception=decoder_before.get("exception"),
         decoder_after_exception=decoder_after.get("exception"),
         decoder_before_args=decoder_before.get("args"),
@@ -525,6 +545,38 @@ def test_summary_corruption_and_decoder_parity(stored, case):
         assert old["exception"] == "builtins.ValueError"
     if case == "removed-deep":
         assert "exception" in old
+    if as_text:
+        raise AssertionError("invalid UTF-8 TEXT unexpectedly survived the driver read")
+
+
+@pytest.mark.parametrize("case", list(CORRUPTIONS))
+def test_summary_corruption_and_decoder_parity(stored, case):
+    _, _, _, raw = stored
+    assert sys.get_int_max_str_digits() == 4300  # Observe, never widen the decoder.
+    check_corrupted_input(stored, case, corrupted(raw, case))
+    if case == "blob-invalid-utf8":
+        # Preserve the original BLOB regression, and exercise the distinct
+        # driver boundary: bytes deliberately stored with SQLite TEXT class.
+        invalid = {
+            "invalid-leading": b"\xff",
+            "orphan-continuation": b"\x80",
+            "overlong-ascii": b"\xc0\xaf",
+            "overlong-nul": b"\xc0\x80",
+            "truncated-sequence": b"\xe2\x82",
+            "surrogate": b"\xed\xa0\x80",
+            "above-unicode": b"\xf4\x90\x80\x80",
+            "nul-before-invalid": b"\x00\xff",
+        }
+        template = field(raw, "accounting_revision_ids", '["INVALID-BYTES"]').encode()
+        for name, value in invalid.items():
+            changed = template.replace(b"INVALID-BYTES", value)
+            check_corrupted_input(stored, "text-removed-" + name, changed, as_text=True)
+        retained = raw.encode().replace(
+            b'"mandatory_flow_coverage":"INCOMPLETE"',
+            b'"mandatory_flow_coverage":"\xff"',
+            1,
+        )
+        check_corrupted_input(stored, "text-retained-invalid", retained, as_text=True)
 
 
 def test_summary_decode_allocation_and_other_reports(stored):

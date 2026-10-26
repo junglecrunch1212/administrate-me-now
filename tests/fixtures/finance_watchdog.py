@@ -144,7 +144,7 @@ def remove_scratch(scratch, *, retain_unknown, remaining_owned):
 def start_cleanup_sampler(mode, take_sample, emit, faults):
     stop = threading.Event()
     thread = None
-    if mode == "staged-bounded":
+    if mode in {"staged-bounded", "summary-metadata"}:
 
         def collect():
             try:
@@ -537,12 +537,21 @@ def main(mode, directory):
         signal_owned(signal.SIGKILL)
     finally:
         # Final reserve: bounded nonblocking reap, then retained receipts/scratch removal.
+        cleanup_maxima = {key: 0 for key in limits}
+
+        def record_cleanup_sample(row):
+            # Only this sampler writes these maxima; fold them after join so
+            # finalization cannot overwrite an intermediate cleanup peak.
+            for key in limits:
+                cleanup_maxima[key] = max(cleanup_maxima[key], row[key])
+            write_sample(row)
+
         cleanup_sampling_stop, cleanup_sampler = start_cleanup_sampler(
             mode,
             lambda: sample(
                 os.getpid(), runtime_pid, controller.pid, [root], runtime_cpu
             ),
-            write_sample,
+            record_cleanup_sample if mode == "summary-metadata" else write_sample,
             report["faults"],
         )
         end = min(absolute, (finish_at or time.monotonic()) + cleanup)
@@ -608,6 +617,12 @@ def main(mode, directory):
                 os.getpid(), runtime_pid, controller.pid, [root], runtime_cpu
             )
             write_sample(report["post_cleanup_sample"])
+            if mode == "summary-metadata":
+                report["cleanup_maxima"] = cleanup_maxima
+                report["maxima"] = {
+                    key: max(report["maxima"][key], cleanup_maxima[key])
+                    for key in limits
+                }
             report["maxima"] = {
                 k: max(report["maxima"][k], report["post_cleanup_sample"][k])
                 for k in limits

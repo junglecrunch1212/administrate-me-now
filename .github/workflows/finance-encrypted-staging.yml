@@ -42,7 +42,7 @@ jobs:
           expected=['adminme/finance/planning_store.py', 'tests/acceptance/test_finance_summary_metadata.py', 'tests/fixtures/finance_watchdog.py', 'tests/fixtures/finance_watchdog_controller.py', '.github/workflows/finance-encrypted-staging.yml']
           actual=set(subprocess.check_output(['git','diff','--name-only',baseline,'HEAD'],text=True).splitlines())
           assert actual==set(expected),actual
-          pins={'adminme/finance/planning_store.py': 'a528512a67fb7090af12062cf07fa4a6c331908bb642d3bb223ee4114eed25bc', 'tests/acceptance/test_finance_summary_metadata.py': '82c637091397ff78c1cba862d6eee82bb75d79d90237459256fc766a303344ab', 'tests/fixtures/finance_watchdog.py': 'dc177e2a4d4923191d7e84ad610a4df7d87dc7725b16e09a4f19915e55c7e060', 'tests/fixtures/finance_watchdog_controller.py': '4486d4e70e2120b11adc832d31dcf6283fa84fa857688ad7f1e7ff4d1a025fcb'}
+          pins={'adminme/finance/planning_store.py': '8cccb48ef9a74668b789b63b32233f9fd660f4ce2c960425600d6ecf8e7a0ba9', 'tests/acceptance/test_finance_summary_metadata.py': 'f32e6f09b4d2dc04dd7b7ce1f7bf0fb67c8afdc5a72d2a40712d9bd691c1289f', 'tests/fixtures/finance_watchdog.py': '3e5b52280ebfbefe90d53fa7aa7749761338dca054bf0a8e5e2b8bce7eb7ae25', 'tests/fixtures/finance_watchdog_controller.py': '4486d4e70e2120b11adc832d31dcf6283fa84fa857688ad7f1e7ff4d1a025fcb'}
           for path,digest in pins.items():
               raw=pathlib.Path(path).read_bytes()
               assert hashlib.sha256(raw).hexdigest()==digest,path
@@ -85,7 +85,7 @@ jobs:
           FOCUSED_OUTCOME: ${{ steps.focused.outcome }}
         run: |
           python - <<'PY_CHECK'
-          import hashlib,json,os,pathlib,shutil,sys,xml.etree.ElementTree as E
+          import hashlib,json,math,os,pathlib,shutil,sys,xml.etree.ElementTree as E
           root=pathlib.Path(os.environ['FINANCE_STORAGE_ARTIFACT_DIR']);root.mkdir(exist_ok=True)
           pins=pathlib.Path(os.environ['FINANCE_SUMMARY_PINS']);pins.mkdir(exist_ok=True)
           expected=[];rows=[];parse_error=None;watch={}
@@ -99,9 +99,25 @@ jobs:
           exact=len(ids)==len(set(ids))==len(required)==78 and set(ids)==required
           clean_cases=all(not any(r.find(k) is not None for k in ('failure','error','skipped')) for r in rows)
           cleaned=watch.get('scratch_removed') is True and watch.get('remaining_owned')==[] and not (root/'scratch').exists()
-          bounded=watch.get('absolute_bound_met') is True and not watch.get('faults') and not watch.get('forced') and watch.get('controller_exit')==0
+          cleanup_covered=False
+          try:
+              limits=watch['limits'];maxima=watch['maxima'];post=watch['post_cleanup_sample'];cleanup=watch['cleanup_maxima']
+              assert set(limits)==set(maxima)==set(cleanup) and len(limits)==6
+              assert watch['final_sample']['at']<=post['at']<=watch['finished']
+              observed=dict.fromkeys(limits,0);post_in_trace=False
+              trace=root/'watchdog-trace.jsonl';assert trace.stat().st_size<=8*1024*1024
+              with trace.open() as stream:
+                  for line in stream:
+                      row=json.loads(line);post_in_trace=post_in_trace or row==post
+                      for key in limits:
+                          assert type(row[key]) in (int,float) and math.isfinite(row[key])
+                          observed[key]=max(observed[key],row[key])
+              cleanup_covered=post_in_trace and all(maxima[k]>=max(observed[k],cleanup[k],post[k]) and maxima[k]<=limits[k] for k in limits)
+          except (OSError,KeyError,ValueError,AssertionError,TypeError) as exc:
+              parse_error=parse_error or 'cleanup:'+type(exc).__name__
+          bounded=watch.get('absolute_bound_met') is True and not watch.get('faults') and not watch.get('forced') and watch.get('controller_exit')==0 and cleanup_covered
           complete=os.environ['FOCUSED_OUTCOME']=='success' and exact and clean_cases and cleaned and bounded and parse_error is None
-          selection={'candidate':os.environ['GITHUB_SHA'],'expected':78,'executed':len(rows),'cases':ids,'exact_selection':exact,'clean_cases':clean_cases,'cleanup_confirmed':cleaned,'bounded':bounded,'parse_error':parse_error,'complete':complete,'resource_qualified':False,'production_qualified':False,'representative_run_started':False}
+          selection={'candidate':os.environ['GITHUB_SHA'],'expected':78,'executed':len(rows),'cases':ids,'exact_selection':exact,'clean_cases':clean_cases,'cleanup_confirmed':cleaned,'cleanup_samples_covered':cleanup_covered,'bounded':bounded,'parse_error':parse_error,'complete':complete,'resource_qualified':False,'production_qualified':False,'representative_run_started':False}
           (pins/'selection-result.json').write_text(json.dumps(selection,indent=2)+'\n')
           files=sorted([p for parent in (root,pins) for p in parent.iterdir() if p.is_file() and not p.is_symlink()],key=lambda p:p.name)
           assert len({p.name for p in files})==len(files)
