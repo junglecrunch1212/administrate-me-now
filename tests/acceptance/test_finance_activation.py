@@ -609,9 +609,10 @@ def test_revocation_after_retrieval_before_disclosure_blocks_result(
         _, session_key = runtime.member_chat_binding(PRINCIPAL)
 
         # The denied query may create an audit, but cannot mint a result receipt.
-        assert client.portal.call(
-            events, runtime, ["finance.disclosure_recorded"]
-        ) == seeded_receipts
+        assert (
+            client.portal.call(events, runtime, ["finance.disclosure_recorded"])
+            == seeded_receipts
+        )
 
         async def check(answer):
             return await check_disclosure(

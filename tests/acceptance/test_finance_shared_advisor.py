@@ -290,7 +290,9 @@ def test_retained_result_reuse_and_ordinary_reply_need_no_new_finance_call(tmp_p
             "accepted_books"
         ]
         assert disabled == {
-            "state": "disabled", "reports": [], "provider_effect_count": 0
+            "state": "disabled",
+            "reports": [],
+            "provider_effect_count": 0,
         }
         assert (
             len(client.portal.call(events, runtime, ["finance.publication_accepted"]))

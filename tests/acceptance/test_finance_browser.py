@@ -506,13 +506,14 @@ async def test_owner_saves_goal_and_preference_then_reloads(tmp_path):
             )
             await call("Page.reload")
             await wait_for(
-                "document.querySelector('.finance-access-settings')?.textContent.includes('Books dashboard disabled. CoS Finance analysis is unavailable in this release.')"
+                "document.querySelector('.finance-access-settings')?.textContent.includes('Books dashboard disabled. CoS Finance analysis disabled.')"
             )
             await evaluate("""(() => {
               const card = document.querySelector('.finance-access-settings');
               card.querySelector('[name=books_enabled]').checked = true;
               card.querySelector('[name=books_enabled]').dispatchEvent(new Event('change'));
-              if (!card.querySelector('[name=cos_analysis_enabled]').disabled) throw new Error('Advisor must remain unavailable');
+              if (card.querySelector('[name=cos_analysis_enabled]').disabled) throw new Error('Advisor control must be available');
+              if (card.querySelector('[name=cos_analysis_enabled]').checked) throw new Error('Books access must not enable analysis');
               card.querySelector('[name=cos_analysis_enabled]').checked = false;
               card.querySelector('form').requestSubmit();
             })()""")

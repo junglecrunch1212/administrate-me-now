@@ -149,10 +149,7 @@ class OwnerPhaseClock:
         return self.index == len(self.caps)
 
     def accept(self, message, now):
-        if (
-            set(message) != {"kind", "name", "edge", "at"}
-            or message["kind"] != "phase"
-        ):
+        if set(message) != {"kind", "name", "edge", "at"} or message["kind"] != "phase":
             raise ValueError("phase_fields")
         at = message["at"]
         if (
@@ -694,10 +691,7 @@ def main(mode, directory):
                             runtime_final_received = True
                             runtime_cpu = max(runtime_cpu, msg["cpu_seconds"])
                             report["runtime_final_cpu_seconds"] = msg["cpu_seconds"]
-                        elif (
-                            mode == "owner-production"
-                            and msg.get("kind") == "phase"
-                        ):
+                        elif mode == "owner-production" and msg.get("kind") == "phase":
                             assert phase_clock is not None
                             phase_clock.accept(msg, time.monotonic())
                             report["phases_complete"] = phase_clock.complete
