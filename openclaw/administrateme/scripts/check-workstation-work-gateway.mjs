@@ -1,5 +1,5 @@
 /** Real pinned Gateway: plugin RPC identity, signed service context, internal lifecycle and revocation.
- * Hosted disposable state only; synthetic loopback model/domain only, no provider credentials.
+ * Hosted disposable state only; synthetic loopback model and real encrypted error receipt, no provider credentials.
  */
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -11,7 +11,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import ts from "typescript";
 import { startBrowserTransport } from "../../../tests/fixtures/openclaw_browser_transport.mjs";
-import { startWorkstationWorkFixtures } from "../../../tests/fixtures/openclaw_workstation_work_probe.mjs";
+import { startNativeFailureBackend, startWorkstationWorkFixtures } from "../../../tests/fixtures/openclaw_workstation_work_probe.mjs";
 
 assert.equal(process.env.GITHUB_ACTIONS, "true", "Use isolated hosted CI for candidate execution");
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
@@ -43,7 +43,7 @@ const sessions = new Set();
 const conversations = new Map();
 const member = "member-conversation-fixture";
 const memberAgent = `adminme-${createHash("sha256").update(member).digest("hex").slice(0, 16)}`;
-const fixtures = await startWorkstationWorkFixtures({ secret, agent, sessions, validSession, conversations, browser });
+let failureBackend, fixtures;
 let gateway, socket, logs = "";
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 async function until(check, label, timeout = 150_000) {
@@ -106,6 +106,8 @@ async function start() {
   return request;
 }
 try {
+  failureBackend = browserProbe && !gmailSelf ? await startNativeFailureBackend({ repository, directory, secret }) : undefined;
+  fixtures = await startWorkstationWorkFixtures({ secret, agent, sessions, validSession, conversations, browser, failureBackend });
   await mkdir(state); await mkdir(path.join(plugin, "node_modules"), { recursive: true });
   const sourceDirectory = path.join(repository, "openclaw/administrateme/src");
   for (const name of (await readdir(sourceDirectory)).filter((entry) => entry.endsWith(".ts"))) {
@@ -131,6 +133,19 @@ try {
         }
       }, runtime);`);
     }
+    if (failureBackend && name === "index.ts") {
+      // This test-only hook selects a deliberately unusable synthetic model.
+      // The pinned runner must reject its context window before model/browser
+      // contact. Native subagent.run, waitForRun and failure signing stay exact.
+      const registration = "registerWorkstationWorkTool(api, runtime);";
+      assert.equal(input.split(registration).length, 2);
+      input = input.replace(registration, `${registration}
+        api.on("before_model_resolve", (event, context) => {
+          if (context.agentId === ${JSON.stringify(agent)} && event.prompt.includes("PROBE_WORKSTATION_NATIVE_FAILURE")) {
+            return { providerOverride: "fixture", modelOverride: "pre-provider-failure" };
+          }
+        });`);
+    }
     await writeFile(path.join(plugin, name.replace(/\.ts$/, ".js")), ts.transpileModule(input, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ESNext } }).outputText);
   }
   await symlink(source, path.join(plugin, "node_modules/openclaw"), "dir");
@@ -146,13 +161,16 @@ try {
   await mkdir(memberWorkspace);
   await copyFile(path.join(repository, "openclaw/administrateme/workspace/AGENTS.md"), path.join(memberWorkspace, "AGENTS.md"));
   const model = "fixture/service-work";
+  const memberAgents = [memberAgent, ...(failureBackend ? [failureBackend.member_agent_id] : [])];
+  const modelDefinition = { id: "service-work", name: "service-work", api: "openai-responses", reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 128000, maxTokens: 4096 };
+  const modelDefinitions = [modelDefinition, ...(failureBackend ? [{ ...modelDefinition, id: "pre-provider-failure", name: "pre-provider-failure", contextWindow: 1, maxTokens: 1 }] : [])];
   const tools = [...(browserProbe ? ["browser"] : []), "administrateme_service_private_work", "administrateme_service_private_work_state", "administrateme_service_private_state", "administrateme_service_context"];
   const config = {
     gateway: { mode: "local", bind: "loopback", port, auth: { mode: "token", token }, controlUi: { enabled: false }, reload: { mode: "off" } },
-    agents: { defaults: { workspace, maxConcurrent: 1, subagents: { maxConcurrent: 1 }, heartbeat: { every: "0m" }, model: { primary: model }, models: { [model]: { params: { transport: "sse", openaiWsWarmup: false } } } }, list: [{ id: agent, workspace, tools: { allow: tools } }, { id: memberAgent, workspace: memberWorkspace, tools: { allow: ["administrateme_workstation_work"] } }] },
-    models: { mode: "replace", providers: { fixture: { baseUrl: `${fixtures.baseUrl}/v1`, apiKey: "synthetic-fixture-only", api: "openai-responses", models: [{ id: "service-work", name: "service-work", api: "openai-responses", reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 128000, maxTokens: 4096 }] } } },
+    agents: { defaults: { workspace, maxConcurrent: 1, subagents: { maxConcurrent: 1 }, heartbeat: { every: "0m" }, model: { primary: model }, models: Object.fromEntries(modelDefinitions.map(({ id }) => [`fixture/${id}`, { params: { transport: "sse", openaiWsWarmup: false } }])) }, list: [{ id: agent, workspace, tools: { allow: tools } }, ...memberAgents.map((id) => ({ id, workspace: memberWorkspace, tools: { allow: ["administrateme_workstation_work"] } }))] },
+    models: { mode: "replace", providers: { fixture: { baseUrl: `${fixtures.baseUrl}/v1`, apiKey: "synthetic-fixture-only", api: "openai-responses", models: modelDefinitions } } },
     tools: { codeMode: false },
-    plugins: { allow: ["administrateme", ...(browserProbe ? ["browser"] : [])], load: { paths: [plugin] }, slots: { memory: "none" }, entries: { administrateme: { enabled: true, config: { baseUrl: fixtures.baseUrl, memberAgentIds: [memberAgent] }, hooks: { allowConversationAccess: true, allowPromptInjection: true } } } },
+    plugins: { allow: ["administrateme", ...(browserProbe ? ["browser"] : [])], load: { paths: [plugin] }, slots: { memory: "none" }, entries: { administrateme: { enabled: true, config: { baseUrl: fixtures.baseUrl, memberAgentIds: memberAgents }, hooks: { allowConversationAccess: true, allowPromptInjection: true } } } },
     channels: {}, cron: { enabled: false }, browser: browserProbe ? { enabled: true, evaluateEnabled: true, allowSystemProfileImport: false, defaultProfile: "chrome", profiles: { chrome: { driver: "extension", cdpPort: relayPort } } } : { enabled: false }, discovery: { mdns: { mode: "off" } }, update: { checkOnStart: false, auto: { enabled: false } }, logging: { file: path.join(state, "gateway.log") },
   };
   await writeFile(configPath, JSON.stringify(config), { mode: 0o600 });
@@ -196,6 +214,36 @@ try {
     await until(() => fixtures.conversationReceipts.some((row) => row.source === ticket.source_event_id), `${channel} source-bound tool receipt`);
     if (channel === "gmail") await until(() => fixtures.conversationReplies.some((row) => row.source === ticket.source_event_id), "signed native Gmail final reply");
   }
+  if (failureBackend) {
+    // Obtain the real encrypted source's short-lived signed input only after
+    // startup/positive runs. No synthetic native result or worker provenance.
+    const prepared = await failureBackend.call({ operation: "prepare" });
+    failureBackend.sourceId = prepared.source_event_id;
+    sessions.add(prepared.ticket.session_key);
+    assert.equal((await request("administrateme.conversation.prepare", prepared.ticket)).accepted, true);
+    const beforeReads = browser.bodyReads.length;
+    const admitted = await request("chat.send", { sessionKey: prepared.ticket.session_key, message: prepared.text, deliver: false, idempotencyKey: "native-worker-terminal-error" });
+    await until(async () => {
+      if (fixtures.errors.length) throw new Error(fixtures.errors.join("; "));
+      const result = await request("agent.wait", { runId: admitted.runId, timeoutMs: 1000 });
+      assert.notEqual(result.status, "error", "Parent failed instead of returning the worker error");
+      return result.status === "ok";
+    }, "authenticated parent receives actual native worker error");
+    assert.equal(fixtures.nativeFailures.length, 1);
+    const terminal = fixtures.nativeFailures[0];
+    assert.equal(terminal.status, "failed"); assert.equal(terminal.reason, "native_worker_failed");
+    const native = await request("agent.wait", { runId: terminal.native_run_id, timeoutMs: 1000 });
+    assert.equal(native.status, "error", "Retained error must identify an actual failed native run");
+    assert.match(native.error, /Model context window too small \(1 tokens;/, "Native failure must be the selected pre-provider guard");
+    const retained = await failureBackend.call({ operation: "verify" });
+    assert.equal(retained.verified, true);
+    assert.equal(retained.native_run_id, terminal.native_run_id);
+    assert.equal(retained.failure_receipt_event_id, terminal.failure_receipt_event_id);
+    assert.equal(retained.provider_effect_count, 0);
+    assert.equal(fixtures.failureModelCalls, 0);
+    assert.equal(browser.bodyReads.length, beforeReads, "Failed worker must not read a browser body");
+    console.log("Actual native pre-provider error -> production wait/sign -> encrypted failure -> same-admission replay/status: PASS");
+  }
   assert.deepEqual(fixtures.conversationReceipts.map((row) => row.channel), ["administrateme-portal", "gmail"]);
   assert.deepEqual(fixtures.conversationReplies.map((row) => row.channel), ["gmail"]);
   assert.deepEqual(fixtures.errors, []);
@@ -224,4 +272,4 @@ try {
   console.error(redacted);
   if (browser) console.error("SYNTHETIC_BROWSER_TRANSPORT", JSON.stringify({ errors: browser.errors, bodyReadCount: browser.bodyReads.length }));
   throw error;
-} finally { await stop(); await fixtures.close(); await browser?.close(); await rm(directory, { recursive: true, force: true }); }
+} finally { await stop(); await fixtures?.close(); await failureBackend?.close(); await browser?.close(); await rm(directory, { recursive: true, force: true }); }

@@ -621,3 +621,192 @@ def test_verified_browser_capture_wins_over_later_native_worker_error(
         assert completed["observation_event_id"] == captured["observation_event_id"]
         assert completed["excerpt"] == body["excerpt"]
         assert _post(client, BASE + "/result", result) == completed
+
+
+def _native_failure_gateway_backend(instance: Path) -> None:
+    """Fixed hosted fixture bridge for the existing real Gateway probe.
+
+    The native plugin supplies the failure signature; this process only routes
+    its exact HTTP body into the encrypted application and verifies persistence.
+    It never manufactures a worker result or calls a model/provider.
+    """
+    from dataclasses import replace
+    import os
+    import sys
+    import tempfile
+
+    from adminme.conversation_instructions import input_ticket
+    from adminme.openclaw_topology import member_agent_id
+    from tests.acceptance.test_authenticated_conversation_channels import (
+        provenance_for,
+    )
+    from tests.acceptance.test_cos_response_execution import HEADERS
+    from tests.acceptance.test_forwarded_channel_intake import _events
+
+    assert os.environ.get("GITHUB_ACTIONS") == "true"
+    assert os.environ.get("RUNNER_ENVIRONMENT") == "github-hosted"
+    assert instance.resolve().is_relative_to(Path(tempfile.gettempdir()).resolve())
+    assert instance.parent.name.startswith("adminme-service-gateway-")
+    os.umask(0o077)
+    initialization = json.loads(sys.stdin.readline(4096))
+    secret = initialization["secret"]
+    assert isinstance(secret, str) and len(secret) == 64
+    settings = replace(
+        _settings(instance),
+        openclaw_shared_secret=secret,
+        member_chat_enabled_members=frozenset({A}),
+        deterministic_member_chat_fixture=True,
+        openclaw_model_configured=True,
+    )
+
+    def emit(value: dict[str, Any]) -> None:
+        print("ADMINME_NATIVE_BACKEND " + json.dumps(value), flush=True)
+
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        with TestClient(create_application(settings)) as client:
+            setup_browser(client, monkeypatch)
+            runtime = client.app.state.runtime
+            auth = {"Authorization": f"Bearer {secret}"}
+            source: dict[str, Any] | None = None
+            result_body: dict[str, Any] | None = None
+            terminal: dict[str, Any] | None = None
+
+            def instruction(request_id: str, text: str) -> dict[str, Any]:
+                response = client.post(
+                    "/api/member/v1/chat/stream",
+                    headers=HEADERS,
+                    json={"request_id": request_id, "message": text},
+                )
+                assert response.status_code == 200, response.text
+                sources = client.portal.call(
+                    _events, runtime, "cos.conversation.instruction"
+                )
+                return next(
+                    row for row in sources if row["payload"]["request_id"] == request_id
+                )
+
+            emit({"ready": True, "member_agent_id": member_agent_id(A)})
+            for line in sys.stdin:
+                assert len(line) <= 1_048_576
+                command = json.loads(line)
+                operation = command["operation"]
+                if operation == "prepare":
+                    assert source is None
+                    text = "PROBE_WORKSTATION_NATIVE_FAILURE: Read the authorized CoS planning page."
+                    source = instruction("native-worker-terminal-error", text)
+                    result: dict[str, Any] = {
+                        "ticket": input_ticket(runtime, source),
+                        "text": text,
+                        "source_event_id": source["event_id"],
+                    }
+                elif operation == "request":
+                    assert source is not None
+                    route, body = command["path"], command["body"]
+                    assert route in {BASE + "/admit", BASE + "/result"}
+                    assert body["source_message_event_id"] == source["event_id"]
+                    response = client.post(route, headers=auth, json=body)
+                    result = {"status": response.status_code, "body": response.json()}
+                    assert response.status_code == 200, response.text
+                    if route.endswith("/result"):
+                        assert body["native_failure"]["status"] == "error"
+                        result_body, terminal = body, response.json()
+                        assert terminal["status"] == "failed"
+                        assert terminal["reason"] == "native_worker_failed"
+                        assert (
+                            terminal["native_run_id"]
+                            == body["native_failure"]["run_id"]
+                        )
+                        assert (
+                            "observation_event_id" not in terminal
+                            and "excerpt" not in terminal
+                        )
+                elif operation == "verify":
+                    assert (
+                        source is not None
+                        and result_body is not None
+                        and terminal is not None
+                    )
+                    # Exact native report replay cannot append a second failure.
+                    replay = client.post(
+                        BASE + "/result", headers=auth, json=result_body
+                    )
+                    assert replay.status_code == 200 and replay.json() == terminal
+                    current = instruction(
+                        "native-worker-error-status",
+                        "What happened to that browser read?",
+                    )
+                    response = client.post(
+                        BASE + "/retained",
+                        headers=auth,
+                        json={
+                            "provenance": provenance_for(current),
+                            "source_message_event_id": current["event_id"],
+                            "browser_request_event_id": terminal[
+                                "browser_request_event_id"
+                            ],
+                        },
+                    )
+                    assert response.status_code == 200 and response.json() == terminal
+                    audits = client.portal.call(
+                        _events, runtime, "openclaw.tool_call.recorded"
+                    )
+                    failures = [
+                        row
+                        for row in audits
+                        if row["payload"]["operation"]
+                        == "tools.workstation-browser.worker-failed"
+                    ]
+                    assert len(failures) == 1
+                    retained = failures[0]
+                    assert retained["event_id"] == terminal["failure_receipt_event_id"]
+                    assert (
+                        retained["owner_scope"]
+                        == retained["visibility_scope"]
+                        == f"private:{A}"
+                    )
+                    assert (
+                        retained["schema_version"] == 2
+                        and retained["sensitivity"] == "privileged"
+                    )
+                    payload = retained["payload"]
+                    assert (
+                        payload["context_scope"] == "member_private"
+                        and payload["context_member_id"] == A
+                    )
+                    assert payload["openclaw_actor_id"] == source["payload"]["actor_id"]
+                    assert (
+                        payload["request_correlation_id"] == terminal["native_run_id"]
+                    )
+                    assert payload["causation_event_ids"] == [
+                        terminal["browser_request_event_id"],
+                        source["event_id"],
+                        source["event_id"],
+                    ]
+                    assert (
+                        payload["result_event_ids"]
+                        == payload["observation_event_ids"]
+                        == []
+                    )
+                    assert (
+                        payload["session_key"] is None and payload["session_id"] is None
+                    )
+                    assert not client.portal.call(
+                        _events, runtime, "cos.workstation.source_observed"
+                    )
+                    assert runtime.fixture_adapter.delivered == []
+                    result = {
+                        "verified": True,
+                        "failure_receipt_event_id": retained["event_id"],
+                        "native_run_id": terminal["native_run_id"],
+                        "provider_effect_count": 0,
+                    }
+                else:
+                    raise AssertionError("Unexpected native failure fixture operation")
+                emit({"id": command["id"], "result": result})
+
+
+if __name__ == "__main__":
+    import sys
+
+    assert len(sys.argv) == 3 and sys.argv[1] == "--native-worker-failure"
+    _native_failure_gateway_backend(Path(sys.argv[2]))

@@ -1,11 +1,70 @@
 /** Synthetic loopback endpoints for the real pinned native handoff. Hosted only. */
 import assert from "node:assert/strict";
 import http from "node:http";
+import { spawn } from "node:child_process";
+import path from "node:path";
+import { createInterface } from "node:readline";
 import { createHash, createHmac } from "node:crypto";
 
-export async function startWorkstationWorkFixtures({ secret, agent, sessions, validSession, conversations, browser }) {
+/** The real encrypted application; only hosted synthetic member/state fixtures. */
+export async function startNativeFailureBackend({ repository, directory, secret }) {
   assert.equal(process.env.GITHUB_ACTIONS, "true");
-  const errors = [], conversationReceipts = [], conversationReplies = [], workers = new Map();
+  assert.equal(process.env.RUNNER_ENVIRONMENT, "github-hosted");
+  const env = Object.fromEntries(["PATH", "HOME", "USER", "LOGNAME", "LANG", "LC_ALL", "TMPDIR", "VIRTUAL_ENV", "POETRY_CACHE_DIR", "GITHUB_ACTIONS", "RUNNER_ENVIRONMENT"].filter((key) => process.env[key] !== undefined).map((key) => [key, process.env[key]]));
+  env.PYTHONPATH = [repository, path.join(repository, "bridge")].join(path.delimiter);
+  const child = spawn("poetry", ["run", "python", "-m", "tests.acceptance.test_cos_browser_workstation", "--native-worker-failure", path.join(directory, "failure-instance")], { cwd: repository, env, stdio: ["pipe", "pipe", "pipe"] });
+  const pending = new Map();
+  let sequence = 0, stderr = "", stopped = false;
+  child.stderr.on("data", (chunk) => { stderr = (stderr + chunk).slice(-8000); });
+  const ready = new Promise((resolve, reject) => {
+    pending.set("ready", { resolve, reject, timer: setTimeout(() => reject(new Error("Encrypted fixture startup timed out")), 60_000) });
+  });
+  const lines = createInterface({ input: child.stdout });
+  lines.on("line", (line) => {
+    if (!line.startsWith("ADMINME_NATIVE_BACKEND ")) return;
+    try {
+      const message = JSON.parse(line.slice("ADMINME_NATIVE_BACKEND ".length));
+      const item = pending.get(message.ready ? "ready" : message.id);
+      assert(item, "Unexpected encrypted fixture response");
+      pending.delete(message.ready ? "ready" : message.id); clearTimeout(item.timer);
+      item.resolve(message.ready ? message : message.result);
+    } catch (error) { for (const item of pending.values()) { clearTimeout(item.timer); item.reject(error); } pending.clear(); }
+  });
+  const failed = (error) => { for (const item of pending.values()) { clearTimeout(item.timer); item.reject(error); } pending.clear(); };
+  child.on("error", failed);
+  child.on("exit", (code, signal) => { if (!stopped) failed(new Error(`Encrypted fixture exited ${code ?? signal}: ${stderr.replaceAll(secret, "[redacted]")}`)); });
+  child.stdin.on("error", failed);
+  child.stdin.write(JSON.stringify({ secret }) + "\n");
+  const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  async function close() {
+    stopped = true;
+    if (child.pid && child.exitCode === null && child.signalCode === null) {
+      const exited = new Promise((resolve) => child.once("exit", resolve));
+      child.stdin.end(); await Promise.race([exited, pause(10_000)]);
+      if (child.exitCode === null && child.signalCode === null) { child.kill("SIGTERM"); await Promise.race([exited, pause(3000)]); }
+      if (child.exitCode === null && child.signalCode === null) { child.kill("SIGKILL"); await exited; }
+    }
+    lines.close(); failed(new Error("Encrypted fixture closed"));
+  }
+  try {
+    const identity = await ready;
+    return { ...identity, sourceId: undefined,
+      call(command) {
+        assert(child.exitCode === null && child.signalCode === null, "Encrypted fixture is not running");
+        return new Promise((resolve, reject) => {
+          const id = String(++sequence);
+          const timer = setTimeout(() => { pending.delete(id); reject(new Error(`Encrypted fixture ${command.operation} timed out`)); }, 20_000);
+          pending.set(id, { resolve, reject, timer });
+          child.stdin.write(JSON.stringify({ id, ...command }) + "\n");
+        });
+      }, close };
+  } catch (error) { await close(); throw error; }
+}
+
+export async function startWorkstationWorkFixtures({ secret, agent, sessions, validSession, conversations, browser, failureBackend }) {
+  assert.equal(process.env.GITHUB_ACTIONS, "true");
+  const errors = [], conversationReceipts = [], conversationReplies = [], nativeFailures = [], workers = new Map();
+  let failureModelCalls = 0;
   const sha = (text) => createHash("sha256").update(text).digest("hex");
   const serviceSession = (nonce) => {
     const digest = sha(nonce).slice(0, 32);
@@ -23,6 +82,8 @@ export async function startWorkstationWorkFixtures({ secret, agent, sessions, va
         const names = body.tools.map((tool) => tool.name ?? tool.function?.name);
         const worker = !names.includes("administrateme_workstation_work");
         const outputs = input.filter((entry) => entry.type === "function_call_output").length;
+        const nativeFailure = encoded.includes("PROBE_WORKSTATION_NATIVE_FAILURE");
+        if (worker && nativeFailure) { failureModelCalls++; throw new Error("Pre-provider worker failure reached the model endpoint"); }
         let step;
         if (worker) {
           assert.deepEqual([...names].sort(), [...(browser ? ["browser"] : []), "administrateme_service_private_work", "administrateme_service_private_work_state", "administrateme_service_private_state", "administrateme_service_context"].sort(), "worker retains its configured surface; per-call policy constrains execution");
@@ -44,9 +105,13 @@ export async function startWorkstationWorkFixtures({ secret, agent, sessions, va
           step = plan[outputs];
           if (outputs > 0) assert(encoded.includes("This worker run may only create and read back its exact private scratchpad."), "unrelated dynamic call was not denied");
         } else {
-          const text = channel === "gmail" ? "PROBE_WORKSTATION_GMAIL: draft a private garage plan." : "PROBE_WORKSTATION_PORTAL: draft a private garage plan.";
+          const text = nativeFailure ? "PROBE_WORKSTATION_NATIVE_FAILURE: Read the authorized CoS planning page." : channel === "gmail" ? "PROBE_WORKSTATION_GMAIL: draft a private garage plan." : "PROBE_WORKSTATION_PORTAL: draft a private garage plan.";
           step = outputs === 0 ? ["administrateme_workstation_work", { action: browser ? "browser_read" : "create", instruction: text }] : undefined;
-          if (outputs > 0) assert(encoded.includes('\\"status\\":\\"verified\\"') || encoded.includes('"status":"verified"'), "parent resumed without verified worker result");
+          if (outputs > 0) {
+            const status = nativeFailure ? "failed" : "verified";
+            assert(encoded.includes(`\\"status\\":\\"${status}\\"`) || encoded.includes(`"status":"${status}"`), "parent resumed without the actual worker terminal result");
+            if (nativeFailure) assert(encoded.includes("native_worker_failed"));
+          }
         }
         const events = [];
         if (step) {
@@ -58,8 +123,9 @@ export async function startWorkstationWorkFixtures({ secret, agent, sessions, va
         } else {
           const item = { type: "message", id: `msg_${worker ? "worker" : "member"}_${channel}`, role: "assistant", content: [], status: "in_progress" };
           events.push({ type: "response.output_item.added", item });
-          events.push({ type: "response.output_text.delta", delta: "Your private scratchpad was created and read back." });
-          events.push({ type: "response.output_item.done", item: { ...item, status: "completed", content: [{ type: "output_text", text: "Your private scratchpad was created and read back.", annotations: [] }] } });
+          const text = nativeFailure ? "The native worker failed; no browser read was completed." : "Your private scratchpad was created and read back.";
+          events.push({ type: "response.output_text.delta", delta: text });
+          events.push({ type: "response.output_item.done", item: { ...item, status: "completed", content: [{ type: "output_text", text, annotations: [] }] } });
         }
         events.push({ type: "response.completed", response: { status: "completed", usage: { input_tokens: 10, output_tokens: 10, total_tokens: 20 } } });
         res.writeHead(200, { "Content-Type": "text/event-stream" });
@@ -67,6 +133,11 @@ export async function startWorkstationWorkFixtures({ secret, agent, sessions, va
       }
       assert.equal(req.headers.authorization, `Bearer ${secret}`);
       assert.notEqual(req.url, "/api/openclaw/v1/tools/service-context", "unrelated context tool reached its backend");
+      if (failureBackend?.sourceId && body.source_message_event_id === failureBackend.sourceId) {
+        const response = await failureBackend.call({ operation: "request", path: req.url, body });
+        if (req.url.endsWith("/result")) nativeFailures.push(response.body);
+        res.writeHead(response.status, { "Content-Type": "application/json" }); res.end(JSON.stringify(response.body)); return;
+      }
       let result = { ok: true };
       const base = browser ? "/api/openclaw/v1/tools/workstation-browser" : "/api/openclaw/v1/tools/workstation-work";
       if (browser && req.url === "/api/openclaw/v1/tools/workstation-work/policy") {
@@ -122,6 +193,7 @@ export async function startWorkstationWorkFixtures({ secret, agent, sessions, va
     } catch (error) { errors.push(error.message); res.writeHead(500); res.end("Synthetic workstation assertion failed"); }
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  return { baseUrl: `http://127.0.0.1:${server.address().port}`, errors, conversationReceipts, conversationReplies,
+  return { baseUrl: `http://127.0.0.1:${server.address().port}`, errors, conversationReceipts, conversationReplies, nativeFailures,
+    get failureModelCalls() { return failureModelCalls; },
     close: () => new Promise((resolve) => server.close(resolve)) };
 }
