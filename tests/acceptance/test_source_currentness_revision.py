@@ -589,6 +589,30 @@ def test_currentness_interrupted_publication_retains_authority_and_attempts(
             {"revision": 1, "state": "active"}
         ]
     model = legacy._model(monkeypatch)
+    predecessor = None
+    if authority == "unchanged" and outcome == "revision":
+        # An actual rollback has predecessor history. Establish its fixed
+        # constitution before the successor registers its newer revision, so
+        # rollback must preserve every event rather than register a first use.
+        monkeypatch.setattr(legacy, "PREDECESSOR", PREDECESSOR)
+        predecessor = legacy._predecessor(tmp_path)
+        established = _predecessor_case(
+            tmp_path, monkeypatch, config, [], {}, predecessor=predecessor
+        )
+        assert established["model_calls"] == []
+        [constitution] = legacy._of_type(
+            established["events"], "operating_agreement.constitution_registered"
+        )
+        assert constitution["payload"]["revision"] == 1
+        [initial_floor] = [
+            row
+            for row in established["operating_agreements"]
+            if row["layer"] == "constitutional"
+        ]
+        assert (initial_floor["revision"], initial_floor["effective_state"]) == (
+            1,
+            "active",
+        )
     blocked = threading.Event()
     original = EventWriter.write
     crash = False
@@ -615,6 +639,22 @@ def test_currentness_interrupted_publication_retains_authority_and_attempts(
         before = _history(client)
         assert len(legacy._of_type(before, currentness.PLAN_TYPE)) == 1
         assert legacy._of_type(before, currentness.COMPLETION_TYPE) == []
+        if predecessor is not None:
+            agreements = client.get("/api/member/v1/cos/agreements", headers=AUTH)
+            assert agreements.status_code == 200, agreements.text
+            policy_before = agreements.json()["items"]
+            assert [
+                (row["revision"], row["effective_state"])
+                for row in policy_before
+                if row["layer"] == "constitutional"
+            ] == [(2, "active"), (1, "superseded")]
+            for event in established["events"]:
+                assert (
+                    next(
+                        item for item in before if item["event_id"] == event["event_id"]
+                    )
+                    == event
+                )
     crash, model.mode = False, "forbid"
     calls = list(model.calls)
     assert len(calls) == (4 if outcome == "fail" else 2)
@@ -628,6 +668,7 @@ def test_currentness_interrupted_publication_retains_authority_and_attempts(
             {"revision": 2, "state": "active"},
         ]
         assert _stable(rolled_back["events"]) == _stable(before)
+        assert rolled_back["operating_agreements"] == policy_before
         assert len(legacy._of_type(rolled_back["events"], currentness.PLAN_TYPE)) == 1
         assert legacy._of_type(rolled_back["events"], currentness.COMPLETION_TYPE) == []
     if authority == "selection":
@@ -651,6 +692,10 @@ def test_currentness_interrupted_publication_retains_authority_and_attempts(
         with TestClient(application.create_application(config)) as client:
             client.portal.call(settle, client.app.state.runtime)
             after = snapshot(client)["events"]
+            if predecessor is not None:
+                agreements = client.get("/api/member/v1/cos/agreements", headers=AUTH)
+                assert agreements.status_code == 200, agreements.text
+                assert agreements.json()["items"] == policy_before
             assert len(legacy._of_type(after, currentness.COMPLETION_TYPE)) == 1
             assert len(legacy._of_type(after, "triage.item.proposed")) == 1
             for event in before:

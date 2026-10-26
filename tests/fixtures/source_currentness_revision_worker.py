@@ -89,6 +89,9 @@ def main():
         ]
         captured["model_calls"] = model.calls
         captured["python_version"] = platform.python_version()
+        agreements = client.get("/api/member/v1/cos/agreements", headers=AUTH)
+        assert agreements.status_code == 200, agreements.text
+        captured["operating_agreements"] = agreements.json()["items"]
         if inputs.get("recovery_target"):
             recovery = client.post(
                 "/api/system/source-assessment-recoveries",

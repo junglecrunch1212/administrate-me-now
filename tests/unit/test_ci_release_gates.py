@@ -2712,15 +2712,24 @@ def test_cos_google_workspace_fingerprint_binds_every_other_byte_and_mode() -> N
 
 
 def _member_google_settings_candidate(repository: Path) -> tuple[str, str]:
+    contract = json.loads((ROOT / MEMBER_GOOGLE_SETTINGS_WIRING).read_text())
     sources = {}
     for relative in MEMBER_GOOGLE_SETTINGS_SHARED_PATHS:
-        source = (ROOT / relative).read_text()
-        normalized = _member_google_settings_shared_source(relative, source)
-        assert normalized is not None and normalized[1]
-        sources[relative] = source
+        # These are immutable scope fixtures, not the current runtime. A later
+        # shared-source edit may correctly fall outside this historical boundary.
+        pairs = contract["paths"][relative]
+        separator = "\n# Unrelated retained behavior\n"
+        before = separator.join(pair["before"] for pair in pairs)
+        after = separator.join(pair["after"] for pair in pairs)
+        assert _member_google_settings_shared_source(relative, before) == (
+            before,
+            False,
+        )
+        assert _member_google_settings_shared_source(relative, after) == (before, True)
+        sources[relative] = after
         target = repository / relative
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(normalized[0])
+        target.write_text(before)
     _git(repository, "add", "-A")
     _git(repository, "commit", "-m", "Frozen shared Google Settings dependencies")
     base = _git(repository, "rev-parse", "HEAD")
@@ -2734,6 +2743,22 @@ def _member_google_settings_candidate(repository: Path) -> tuple[str, str]:
     _git(repository, "add", "-A")
     _git(repository, "commit", "-m", "Self-service Google Settings fixture")
     return base, _git(repository, "rev-parse", "HEAD")
+
+
+def test_member_google_settings_fixture_is_independent_of_current_shared_sources(
+    repository: tuple[Path, str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fixture_root = tmp_path / "contract-only-source"
+    wiring = fixture_root / MEMBER_GOOGLE_SETTINGS_WIRING
+    wiring.parent.mkdir(parents=True)
+    wiring.write_bytes((ROOT / MEMBER_GOOGLE_SETTINGS_WIRING).read_bytes())
+    monkeypatch.setattr(sys.modules[__name__], "ROOT", fixture_root)
+    path, _ = repository
+    base, head = _member_google_settings_candidate(path)
+    assert (
+        select_scope(path, _event(base, head), checkout_sha=head)["scope"]
+        == "member-google-settings"
+    )
 
 
 def test_member_google_settings_scope_uses_exact_sources_and_existing_protected_workers(
