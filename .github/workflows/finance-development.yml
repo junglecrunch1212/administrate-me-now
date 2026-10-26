@@ -1,6 +1,7 @@
 name: Finance development
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - 'adminme/finance/**'
       - 'adminme/events/schemas/finance*'
@@ -9,6 +10,7 @@ on:
       - 'tests/fixtures/finance*'
       - 'scripts/finance_resource_acceptance.py'
       - '.github/workflows/finance-development.yml'
+  # Manual dispatch becomes available once this workflow is on the default branch.
   workflow_dispatch:
     inputs:
       owner_production:
@@ -438,7 +440,7 @@ jobs:
 
 
   owner-production:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.owner_production }}
+    if: ${{ (github.event_name == 'pull_request' && !github.event.pull_request.draft) || (github.event_name == 'workflow_dispatch' && inputs.owner_production) }}
     name: Admitted owner import and Money replay
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -446,27 +448,31 @@ jobs:
       ADMINME_TEST_MODE: '1'
       PYTHONPATH: bridge
       PYTHONDONTWRITEBYTECODE: '1'
-      FINANCE_OWNER_CANDIDATE_SHA: ${{ inputs.owner_candidate_sha }}
+      FINANCE_OWNER_CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || inputs.owner_candidate_sha }}
+      FINANCE_OWNER_EVENT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       FINANCE_OWNER_OTHER_MODES: ${{ inputs.import_allocations || inputs.legacy_relative_gates || inputs.sustained_resources || inputs.exploratory_profiles }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: '3.14.7'
-      - name: Require the exact reviewed candidate and exclusive mode
+      - name: Verify exact event head and clean checkout; require exclusive manual mode
         run: |
           python - <<'PY_CHECK'
-          import os, re, subprocess
+          import json, os, re, subprocess
           expected = os.environ["FINANCE_OWNER_CANDIDATE_SHA"]
+          event_head = os.environ["FINANCE_OWNER_EVENT_SHA"]
           assert re.fullmatch(r"[0-9a-f]{40}", expected), "exact reviewed commit required"
-          assert os.environ["FINANCE_OWNER_OTHER_MODES"] == "false", "owner mode must be exclusive"
+          assert re.fullmatch(r"[0-9a-f]{40}", event_head), "exact event head required"
+          if os.environ["GITHUB_EVENT_NAME"] == "workflow_dispatch":
+              assert os.environ["FINANCE_OWNER_OTHER_MODES"] == "false", "owner mode must be exclusive"
           head = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
-          assert head == expected == os.environ["GITHUB_SHA"], "candidate mismatch"
+          assert head == expected == event_head, "candidate/event head mismatch"
           assert not subprocess.check_output(["git", "status", "--porcelain"], text=True).strip(), "dirty checkout"
-          print("Verified clean candidate", head)
+          print(json.dumps({"verified_candidate_head": head, "event_head": event_head, "actions_sha": os.environ["GITHUB_SHA"], "event": os.environ["GITHUB_EVENT_NAME"], "clean": True}))
           PY_CHECK
       - name: Install locked synthetic environment
         run: |
@@ -478,12 +484,13 @@ jobs:
           FINANCE_OWNER_ARTIFACT_DIR: ${{ runner.temp }}/finance-owner-production
         run: |
           mkdir -m 700 "$FINANCE_OWNER_ARTIFACT_DIR"
-          poetry run python -m tests.fixtures.finance_watchdog owner-production "$FINANCE_OWNER_ARTIFACT_DIR"
+          # The driver records the verified checkout head, not the PR merge ref.
+          GITHUB_SHA="$FINANCE_OWNER_CANDIDATE_SHA" poetry run python -m tests.fixtures.finance_watchdog owner-production "$FINANCE_OWNER_ARTIFACT_DIR"
       - name: Retain all raw evidence including failure and cleanup
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: finance-owner-production-${{ github.sha }}-${{ github.run_attempt }}
+          name: finance-owner-production-${{ env.FINANCE_OWNER_CANDIDATE_SHA }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/finance-owner-production
           include-hidden-files: true
           if-no-files-found: error
