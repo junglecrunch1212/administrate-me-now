@@ -38,7 +38,7 @@ from adminme.workstation_inventory import (
     read_private_document,
 )
 from adminme.workstation_source_policy import BrowserSourceProvision, PROVISION_FILE
-from bootstrap.contracts import DeploymentPaths, atomic_write
+from bootstrap.contracts import DeploymentPaths, atomic_write, load_versions
 from bootstrap.activation_transaction import (
     ActivationJournalError,
     _assert_directory_coordinate,
@@ -128,7 +128,19 @@ def prepare_computer_use_patch(
         or not isinstance(snapshot.get("config"), dict)
     ):
         raise ValueError("a fresh valid native config.get snapshot is required")
-    config = _computer_use_config(snapshot["config"])
+    original = snapshot["config"]
+    meta = original.get("meta", {})
+    # The exact pin stamps these fields on every config.patch write. Refuse
+    # before generating a patch if that would also migrate unrelated metadata
+    # or the legacy model allowlist; reconciliation never blesses normalization.
+    if (
+        not isinstance(meta, dict)
+        or meta.get("lastTouchedVersion") != load_versions()["openclaw"]["version"]
+        or not isinstance(meta.get("migrations"), dict)
+        or meta["migrations"].get("modelPolicyAllowlist") is not True
+    ):
+        raise ValueError("Computer Use requires already-current native write metadata")
+    config = _computer_use_config(original)
     if disable:
         if _canonical(config.get("computerUse")) != _canonical(COMPUTER_USE_CONFIG):
             raise ValueError("disable requires the exact reviewed Computer Use object")

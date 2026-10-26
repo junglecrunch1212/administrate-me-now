@@ -1,7 +1,9 @@
 /** Exact pinned ordinary Codex thread policy; no account/model/provider calls. */
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { readFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { tmpdir } from "node:os";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -16,6 +18,121 @@ const requirePinned = createRequire(path.join(source, "package.json"));
 const { createJiti } = requirePinned("jiti");
 const jiti = createJiti(path.join(source, "package.json"), { tsconfigPaths: path.join(source, "tsconfig.json") });
 const load = (relative) => jiti.import(path.join(source, relative));
+// Real configuration I/O runs in a fresh child with only synthetic private paths.
+// No agent turn, desktop process, plugin installation or provider transport runs.
+async function computerUseConfigProof(roster) {
+  assert(["list", "entries"].includes(roster));
+  const directory = process.env.ADMINME_COMPUTER_USE_FIXTURE;
+  assert(directory && path.isAbsolute(directory));
+  assert.equal(process.env.HOME, directory);
+  assert.equal(process.env.OPENCLAW_HOME, directory);
+  assert.equal(process.env.CODEX_HOME, path.join(directory, "codex"));
+  const state = path.join(directory, "state");
+  const configPath = path.join(state, "openclaw.json");
+  assert.equal(process.env.OPENCLAW_STATE_DIR, state);
+  assert.equal(process.env.OPENCLAW_CONFIG_PATH, configPath);
+  await mkdir(state, { mode: 0o700 });
+  const agent = { workspace: path.join(directory, "workspace"), tools: { allow: ["browser"] } };
+  const original = {
+    meta: { lastTouchedVersion: versions.openclaw.version, migrations: { modelPolicyAllowlist: true } },
+    gateway: { mode: "local", bind: "loopback", auth: { mode: "token", token: "synthetic-config-proof-only" } },
+    agents: {
+      defaults: { workspace: path.join(directory, "default-workspace") },
+      [roster]: roster === "list" ? [{ id: "fixture-agent", ...agent }] : { "fixture-agent": agent },
+    },
+    plugins: { entries: { codex: { enabled: true, config: { codexPlugins: { enabled: false } } } } },
+    browser: { enabled: true, evaluateEnabled: true, defaultProfile: "chrome", allowSystemProfileImport: false, profiles: { chrome: { driver: "extension" } } },
+  };
+  await writeFile(configPath, JSON.stringify(original, null, 2) + "\n", { mode: 0o600 });
+  const { configHandlers } = await load("src/gateway/server-methods/config.ts");
+  const { readConfigFileSnapshot } = await load("src/config/io.ts");
+  const { stampConfigWriteMetadata } = await load("src/config/io.meta.ts");
+  const { VERSION } = await load("src/version.ts");
+  assert.equal(VERSION, versions.openclaw.version, "writer metadata must use the actual pinned version");
+  const client = { connId: "fixture-operator", connect: { client: { id: "fixture-control" }, scopes: ["operator.admin"] } };
+  const context = { logGateway: { info() {}, warn() {}, error() {} } };
+  const call = async (method, params) => {
+    let result;
+    await configHandlers[method]({ params, client, context, respond: (ok, payload, error) => {
+      assert.equal(result, undefined, "one native response required"); result = { ok, payload, error };
+    } });
+    assert(result, "native handler did not respond");
+    return result;
+  };
+  const python = (action, input) => JSON.parse(execFileSync(process.argv[3], ["-c", `
+import json, sys
+from bootstrap.workstation_browser import prepare_computer_use_patch, _computer_use_delta, _canonical
+value = json.load(sys.stdin)
+action = sys.argv[1]
+if action == "prepare":
+    print(json.dumps(prepare_computer_use_patch(value["snapshot"], disable=value["disable"])))
+elif action == "verify":
+    assert _canonical(_computer_use_delta(value["previous"], value["patch"])) == _canonical(value["current"])
+    print(json.dumps({"exact": True}))
+else:
+    try:
+        prepare_computer_use_patch(value, disable=False)
+    except ValueError as exc:
+        assert "already-current native write metadata" in str(exc)
+        print(json.dumps({"refused": True}))
+    else:
+        raise AssertionError("unrelated native migration was admitted")
+`, action], {
+    cwd: repository, env: { ...process.env, PYTHONPATH: `${repository}:${path.join(repository, "bridge")}` },
+    input: JSON.stringify(input), encoding: "utf8", timeout: 20_000,
+  }));
+  const hash = (raw) => createHash("sha256").update(raw).digest("hex");
+  const observed = await readConfigFileSnapshot();
+  assert.equal(observed.valid, true, "synthetic authored native configuration must validate");
+  assert(observed.config.agents.entries["fixture-agent"], "read must exercise resolved native agent representation");
+  assert.notDeepEqual(observed.config, original, "fixture must exercise authored-vs-runtime default projection");
+  assert.deepEqual(stampConfigWriteMetadata(original, "2000-01-01T00:00:00.000Z", VERSION, original), original);
+  for (const mutation of ["version", "marker"]) {
+    const unsafe = structuredClone(original);
+    if (mutation === "version") unsafe.meta.lastTouchedVersion = "2020.1.1";
+    else delete unsafe.meta.migrations;
+    assert.notDeepEqual(stampConfigWriteMetadata(unsafe, "2000-01-01T00:00:00.000Z", VERSION, unsafe), unsafe);
+    const rawBefore = await readFile(configPath, "utf8");
+    assert.deepEqual(python("refuse", { valid: true, hash: hash(rawBefore), config: unsafe }), { refused: true });
+    assert.equal(await readFile(configPath, "utf8"), rawBefore, "refusal must happen before native write");
+  }
+  for (const disable of [false, true]) {
+    const rawBefore = await readFile(configPath, "utf8");
+    const previous = JSON.parse(rawBefore);
+    const before = await call("config.get", {});
+    assert.equal(before.ok, true);
+    assert.equal(before.payload.valid, true);
+    assert.equal(before.payload.hash, hash(rawBefore));
+    const patch = python("prepare", { snapshot: { valid: before.payload.valid, hash: before.payload.hash, config: previous }, disable });
+    // Real CAS/schema refusals must leave the synthetic file byte-identical.
+    const stale = await call("config.patch", { ...patch, baseHash: "0".repeat(64) });
+    assert.equal(stale.ok, false);
+    assert.equal(await readFile(configPath, "utf8"), rawBefore);
+    const invalid = await call("config.patch", { baseHash: patch.baseHash, raw: JSON.stringify({ plugins: { entries: { codex: { config: { computerUse: { enabled: "invalid-boolean" } } } } } }) });
+    assert.equal(invalid.ok, false, "actual pinned plugin config schema must reject wrong type");
+    assert.equal(await readFile(configPath, "utf8"), rawBefore);
+    const committed = await call("config.patch", patch);
+    assert.equal(committed.ok, true, `actual native config.patch failed: ${JSON.stringify(committed.error)}`);
+    const rawAfter = await readFile(configPath, "utf8");
+    const current = JSON.parse(rawAfter);
+    const after = await call("config.get", {});
+    assert.equal(after.ok, true);
+    assert.equal(after.payload.valid, true);
+    assert.equal(committed.payload.hash, hash(rawAfter));
+    assert.equal(after.payload.hash, hash(rawAfter));
+    assert.deepEqual(python("verify", { previous, patch: JSON.parse(patch.raw), current }), { exact: true });
+    assert.deepEqual(current.agents, original.agents, "writer must retain authored roster shape and defaults");
+    assert.deepEqual(current.meta, original.meta, "no metadata refresh may enter the approved delta");
+    assert.equal(current.plugins.entries.codex.config.codexPlugins.enabled, false);
+    if (disable) assert.deepEqual(current, original, "native null inverse must restore all original parsed fields");
+    else assert.deepEqual(after.payload.config.plugins.entries.codex.config.computerUse, current.plugins.entries.codex.config.computerUse);
+  }
+  console.log(`PINNED COMPUTER USE CONFIG ${roster}: actual prepare -> config.patch -> config.get/raw readback -> null inverse; CAS/schema refusal, defaults/metadata/account policy retained: PASS`);
+}
+if (process.argv[4] === "--computer-use-config") {
+  await computerUseConfigProof(process.argv[5]);
+  process.exit(0);
+}
 const { resolveCodexPluginThreadConfigStartupPolicy, createCodexPluginThreadConfigStartupProvider } = await load("extensions/codex/src/app-server/plugin-thread-config-deadline.ts");
 const { buildCodexPluginThreadConfig, isCodexPluginThreadBindingStale } = await load("extensions/codex/src/app-server/plugin-thread-config.ts");
 const { shouldEnableCodexAppServerNativeToolSurface } = await load("extensions/codex/src/app-server/dynamic-tool-build.ts");
@@ -56,3 +173,22 @@ for (const result of [started, buildThreadResumeParams(params, { ...options, thr
   assert.equal(result.config.mcp_servers["fixture-separate-mcp"].enabled, true, "app exclusion does not claim to disable arbitrary inherited MCP servers");
 }
 console.log("PINNED CODEX ORDINARY THREAD POLICY: explicit app denial on start/resume; native code and reviewed dynamic tools retained; separate MCP scope explicit: PASS");
+
+for (const roster of ["list", "entries"]) {
+  const directory = await mkdtemp(path.join(tmpdir(), "adminme-computer-use-config-"));
+  try {
+    execFileSync(process.execPath, [fileURLToPath(import.meta.url), source, process.argv[3], "--computer-use-config", roster], {
+      cwd: repository, timeout: 120_000, stdio: "inherit",
+      env: {
+        PATH: process.env.PATH,
+        GITHUB_ACTIONS: "true",
+        HOME: directory, OPENCLAW_HOME: directory, CODEX_HOME: path.join(directory, "codex"),
+        OPENCLAW_STATE_DIR: path.join(directory, "state"), OPENCLAW_CONFIG_PATH: path.join(directory, "state/openclaw.json"),
+        ADMINME_COMPUTER_USE_FIXTURE: directory,
+        ...(process.env.TMPDIR ? { TMPDIR: process.env.TMPDIR } : {}),
+      },
+    });
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+}

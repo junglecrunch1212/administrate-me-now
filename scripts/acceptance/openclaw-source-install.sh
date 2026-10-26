@@ -79,7 +79,7 @@ if [[ "${1:-}" == --service-work ]]; then
   node "$REPOSITORY_ROOT/openclaw/administrateme/scripts/check-workstation-codex-policy.mjs" \
     "$TEST_ROOT/app/openclaw/$openclaw_commit" "$(poetry env info --executable)"
   node "$REPOSITORY_ROOT/openclaw/administrateme/scripts/check-cos-native-account-policy.mjs" \
-    "$TEST_ROOT/app/openclaw/$openclaw_commit" "$python_bin"
+    "$TEST_ROOT/app/openclaw/$openclaw_commit" "$(poetry env info --executable)"
   poetry run node "$REPOSITORY_ROOT/openclaw/administrateme/scripts/check-cos-imessage-text.mjs" \
     "$TEST_ROOT/app/openclaw/$openclaw_commit"
   node "$REPOSITORY_ROOT/openclaw/administrateme/scripts/check-service-work-gateway.mjs" \

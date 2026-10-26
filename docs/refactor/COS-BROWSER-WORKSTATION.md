@@ -239,6 +239,12 @@ and marketplace path are in `COMPUTER_USE_CONFIG`. The Codex plugin must already
 be enabled with `codexPlugins.enabled=false`. Sandbox, ambient apps, identities,
 routes, provider/reply/reminder grants and every other parsed field stay exact.
 An existing different Computer Use object is refused rather than overwritten.
+The raw config must already have the pinned `meta.lastTouchedVersion` and
+`meta.migrations.modelPolicyAllowlist=true`; otherwise preparation refuses before
+writing a patch, because the native writer would also migrate unrelated fields.
+The hosted native proof calls the actual pinned `config.patch` writer and reads
+back both legacy-list and keyed-agent fixtures through `config.get` and raw bytes,
+including the null inverse. It does not start an agent, install a plugin or use UI.
 
 After protected qualification and the actual owner approval, the sole operator:
 

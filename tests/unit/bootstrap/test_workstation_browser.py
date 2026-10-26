@@ -903,6 +903,10 @@ def _computer_use_fixture(tmp_path, monkeypatch, *, disable=False):
     """Reuse the real deployment-coordinate fixture with synthetic Codex policy."""
     fixture = _reconciliation_fixture(tmp_path, monkeypatch)
     previous = deepcopy(fixture.previous)
+    previous["meta"] = {
+        "lastTouchedVersion": browser.load_versions()["openclaw"]["version"],
+        "migrations": {"modelPolicyAllowlist": True},
+    }
     config = {
         "codexPlugins": {"enabled": False},
         "appServer": {"sandbox": "workspace-write"},
@@ -1234,3 +1238,45 @@ def test_computer_use_reconciliation_keeps_hash_evidence_and_grant_boundaries(
     with pytest.raises(ValueError):
         _reconcile(fixture)
     assert fixture.readiness_path.read_bytes() == fixture.readiness_bytes
+
+
+@pytest.mark.parametrize(
+    "mutation", ["absent", "version", "migration", "numeric-marker"]
+)
+def test_computer_use_refuses_native_metadata_migration_before_preparing_patch(
+    tmp_path, monkeypatch, mutation
+):
+    fixture = _computer_use_fixture(tmp_path, monkeypatch)
+    previous = deepcopy(fixture.previous)
+    if mutation == "absent":
+        del previous["meta"]
+    elif mutation == "version":
+        previous["meta"]["lastTouchedVersion"] = "2020.1.1"
+    elif mutation == "migration":
+        del previous["meta"]["migrations"]
+    else:
+        previous["meta"]["migrations"]["modelPolicyAllowlist"] = 1
+    prior = json.dumps(previous).encode()
+    _private_write(fixture.gateway, prior)
+    before = capture_deployment_snapshot(fixture.paths)
+    evidence = json.loads(fixture.readiness_bytes)
+    evidence["deployment_binding"] = browser._browser_binding(before)
+    private_file(fixture.readiness_path, evidence)
+    native = fixture.arguments["native_snapshot_path"]
+    private_file(native, {"valid": True, "hash": hashlib.sha256(prior).hexdigest()})
+    output, prior_output = (
+        fixture.artifacts / "refused-patch",
+        fixture.artifacts / "refused-prior",
+    )
+    with pytest.raises(ValueError, match="already-current native write metadata"):
+        browser.write_patch(
+            native,
+            fixture.paths,
+            output,
+            previous_config_output=prior_output,
+            disable=False,
+            component="computer-use",
+        )
+    assert fixture.gateway.read_bytes() == prior
+    assert json.loads(fixture.readiness_path.read_bytes()) == evidence
+    assert not output.exists() and not prior_output.exists()
