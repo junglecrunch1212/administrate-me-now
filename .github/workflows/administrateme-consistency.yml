@@ -924,16 +924,18 @@ jobs:
         # Pytest owns this one disposable tree and clears it before each run.
         # Retaining the earlier encrypted fixture trees can exhaust the next
         # suite's real Doctor disk prerequisite on the hosted Linux runner.
+        # Finish collecting failures within the existing job timeout so one repair
+        # can address the whole failing boundary instead of repeating full releases.
         run: |
           df -h "${RUNNER_TEMP}"
-          poetry run pytest -p no:cacheprovider -q -ra --maxfail=5 \
+          poetry run pytest -p no:cacheprovider -q -ra --maxfail=0 \
             --basetemp="${RUNNER_TEMP}/adminme-consistency-pytest"
           du -sh "${RUNNER_TEMP}/adminme-consistency-pytest"
 
       - name: Validate release-strict acceptance
         run: |
           df -h "${RUNNER_TEMP}"
-          poetry run pytest -p no:cacheprovider tests/acceptance --runxfail -q -ra --maxfail=5 \
+          poetry run pytest -p no:cacheprovider tests/acceptance --runxfail -q -ra --maxfail=0 \
             --basetemp="${RUNNER_TEMP}/adminme-consistency-pytest"
 
       - name: Validate bridge package
