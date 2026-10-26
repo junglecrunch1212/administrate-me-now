@@ -1240,7 +1240,14 @@ def test_member_calendar_tool_reads_current_imported_calendar_without_internal_s
         selected = client.post(
             "/api/openclaw/v1/tools/calendar",
             headers=OPENCLAW_HEADERS,
-            json={**body, "calendar_external_ids": ["absent-calendar"]},
+            json={
+                **body,
+                "calendar_external_ids": ["absent-calendar"],
+                "provenance": {
+                    **_provenance(A, "calendar-selected"),
+                    "channel_id": "imessage",
+                },
+            },
         )
         assert selected.status_code == 200, selected.text
         assert selected.json()["events"] == []
@@ -1287,7 +1294,15 @@ def test_member_calendar_tool_reads_current_imported_calendar_without_internal_s
             version=2,
         )
         deleted = client.post(
-            "/api/openclaw/v1/tools/calendar", headers=OPENCLAW_HEADERS, json=body
+            "/api/openclaw/v1/tools/calendar",
+            headers=OPENCLAW_HEADERS,
+            json={
+                **body,
+                "provenance": {
+                    **_provenance(A, "calendar-after-delete"),
+                    "channel_id": "imessage",
+                },
+            },
         )
         assert deleted.status_code == 200, deleted.text
         assert deleted.json()["events"] == []
@@ -1343,7 +1358,11 @@ def test_member_calendar_tool_bounds_results_and_does_not_claim_empty_is_free(
         empty = client.post(
             "/api/openclaw/v1/tools/calendar",
             headers=OPENCLAW_HEADERS,
-            json={**body, "anchor_date": "2026-12-01"},
+            json={
+                **body,
+                "anchor_date": "2026-12-01",
+                "provenance": _provenance(A, "calendar-empty-window"),
+            },
         )
         assert empty.status_code == 200, empty.text
         assert empty.json()["events"] == []
