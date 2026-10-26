@@ -12,6 +12,7 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
+from adminme.capability_catalog import CATALOG_VERSION
 from adminme.openclaw_approvals import sign_approval_receipt
 from adminme.openclaw_contract import OPENCLAW_COMMIT, OPENCLAW_VERSION
 from adminme.runtime.application import RuntimeSettings, create_application
@@ -569,6 +570,8 @@ def test_g08_encrypted_backup_restore_preserves_capability_requests(
             },
         )
         assert requested.status_code == 202, requested.text
+        expected_request = requested.json()["request"]
+        assert expected_request["catalog_version"] == CATALOG_VERSION
         assert client.portal.call(_provider_effect_count, client.app.state.runtime) == 0
 
     ServiceManager(paths, test_mode=True).start()
@@ -590,5 +593,5 @@ def test_g08_encrypted_backup_restore_preserves_capability_requests(
             if item["capability_id"] == "planned.apple_messages_observation"
         )
         assert saved["state"] == "requested"
-        assert saved["catalog_version"] == "1.2.0"
+        assert saved == expected_request
         assert client.portal.call(_provider_effect_count, client.app.state.runtime) == 0

@@ -24,6 +24,10 @@ from bootstrap import cos_reminders_helper_app as helper
 
 ROOT = Path(__file__).resolve().parents[3]
 
+pytestmark = pytest.mark.skipif(
+    sys.platform != "darwin", reason="native macOS packaging and embedding proof"
+)
+
 
 # No provider SDK or arbitrary callback is involved. CoreFoundation reads the
 # bundle of the already-running process after PyConfig initialized Python.
