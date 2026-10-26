@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { requestExecutionProvenance } from "./request-policy.js";
 import { Type } from "typebox";
 import type {
@@ -115,12 +116,29 @@ function makeTool(
     description: definition.description,
     parameters: definition.parameters,
     async execute(id, params) {
-      const provenance = requestExecutionProvenance(runtime, id, params as Record<string, unknown>, context) ?? provenanceFromTool(
+      let provenance = requestExecutionProvenance(runtime, id, params as Record<string, unknown>, context) ?? provenanceFromTool(
         context,
         definition.standingOrder ? "standing_order" : "tool",
         runtime.transport.config.sharedSecretEnv,
         runtime,
       );
+      if (definition.name === "administrateme_calendar") {
+        if (!id || !provenance.session_key || !provenance.agent_id) {
+          throw new Error("Calendar read requires trusted native call and session identity");
+        }
+        // Admitted Gmail/portal tools share turn provenance. Distinguish native
+        // calendar calls while preserving the identity of an intentional replay.
+        // Only host provenance and the SDK call id participate, never tool args.
+        const callIdentity = JSON.stringify([
+          "administrateme-calendar-call-v1", provenance.actor_id, provenance.channel_id,
+          provenance.account_id ?? null, provenance.agent_id, provenance.session_key,
+          provenance.session_id ?? null, provenance.message_id ?? null,
+          provenance.thread_id ?? null, id,
+        ]);
+        provenance = { ...provenance,
+          correlation_id: `calendar-call:${createHash("sha256").update(callIdentity).digest("hex")}`,
+        };
+      }
       trackSession(runtime, provenance);
       const typedParams = params as Record<string, unknown>;
       const invocationParams: Record<string, unknown> = definition.standingOrder
@@ -185,6 +203,18 @@ export function registerTools(api: OpenClawPluginApi, runtime: PluginRuntime): v
       description: "Read the authorized member's AdministrateMe state, Triage queue, and commitments.",
       parameters: Type.Object({}, { additionalProperties: false }),
       path: "/api/openclaw/v1/tools/state",
+    },
+    {
+      name: "administrateme_calendar",
+      description: "Read the current authenticated member's acquired calendar events, including authorized imported/shared calendars. Use this for calendar questions in private iMessage, Gmail or member chat; administrateme_service_context is for the internal CoS session. Supply anchor_date (YYYY-MM-DD) and view: week is Monday through Sunday, agenda is 14 days, day is one day, month is a 42-day grid. Dates use the returned household timezone. Optional calendar_external_ids filter returned calendars; preserve the accompanying provider/account identity; a person's name is not an account identity. Returns current retained revisions and their source timestamps, not a fresh provider fetch or a guarantee that all future events were acquired. Honor coverage/truncation; an empty result does not prove free time. No calendar writes or new consent.",
+      parameters: Type.Object({
+        anchor_date: Type.Optional(Type.String({ format: "date" })),
+        view: Type.Optional(Type.Union([Type.Literal("day"), Type.Literal("week"), Type.Literal("agenda"), Type.Literal("month")])),
+        context_scope: Type.Optional(ServiceContextScope),
+        calendar_external_ids: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 300 }), { maxItems: 20, uniqueItems: true })),
+        limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 200 })),
+      }, { additionalProperties: false }),
+      path: "/api/openclaw/v1/tools/calendar",
     },
     {
       name: "administrateme_what_now",

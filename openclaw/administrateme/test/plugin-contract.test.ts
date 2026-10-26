@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import { createHmac, randomUUID } from "node:crypto";
+import { createHash, createHmac, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -188,7 +188,7 @@ describe("native OpenClaw contract fixture", () => {
     const runtime = fakeApi();
     expect(pkg.peerDependencies.openclaw).toBe(OPENCLAW_VERSION);
     expect(pkg.openclaw.build.openclawCommit).toBe(OPENCLAW_COMMIT);
-    expect([...runtime.tools]).toHaveLength(40);
+    expect([...runtime.tools]).toHaveLength(41);
     expect([...runtime.commands]).toHaveLength(9);
     expect([...runtime.gateways]).toHaveLength(19);
     expect(runtime.gateways.has("administrateme.conversation.prepare")).toBe(true);
@@ -527,7 +527,7 @@ describe("native OpenClaw contract fixture", () => {
   it("exposes tools without starting services during tool discovery", () => {
     const runtime = fakeApi({}, "tool-discovery");
     expect([...runtime.gateways]).toHaveLength(14);
-    expect([...runtime.tools]).toHaveLength(40);
+    expect([...runtime.tools]).toHaveLength(41);
     expect(runtime.services).toHaveLength(0);
   });
 
@@ -690,6 +690,82 @@ describe("native OpenClaw contract fixture", () => {
     delete forgedContext.requesterSenderId;
     const forged = factory?.(forgedContext) as AnyAgentTool;
     await expect(forged.execute("forged-call", {})).rejects.toThrow("invalid");
+  });
+
+  it("routes calendar reads with current member provenance and keeps service sessions separate", async () => {
+    const runtime = fakeApi();
+    const factory = runtime.tools.get("administrateme_calendar")!;
+    const tool = factory(toolContext({ messageChannel: "imessage",
+      deliveryContext: { channel: "imessage", accountId: "account-a", threadId: "thread-a" },
+    })) as AnyAgentTool;
+    await tool.execute("calendar-read", { anchor_date: "2026-11-02", view: "week", limit: 100 });
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("http://127.0.0.1:3330/api/openclaw/v1/tools/calendar");
+    expect(requestBody(fetchMock)).toMatchObject({
+      anchor_date: "2026-11-02", view: "week", limit: 100,
+      provenance: { actor_id: "actor-a", channel_id: "imessage", account_id: "account-a", call_kind: "tool" },
+    });
+    const first = requestBody(fetchMock).provenance as Record<string, unknown>;
+    await tool.execute("calendar-read", { anchor_date: "2026-11-02", view: "week", limit: 100 });
+    expect((requestBody(fetchMock, 1).provenance as Record<string, unknown>).correlation_id).toBe(first.correlation_id);
+    const anotherSession = factory(toolContext({ messageChannel: "imessage", sessionKey: "other-native-session" })) as AnyAgentTool;
+    await anotherSession.execute("calendar-read", { anchor_date: "2026-11-02" });
+    expect((requestBody(fetchMock, 2).provenance as Record<string, unknown>).correlation_id).not.toBe(first.correlation_id);
+    await expect(tool.execute("", {})).rejects.toThrow("native call and session identity");
+    const hook = runtime.hooks.get("before_tool_call")?.[0]?.handler;
+    expect(await hook?.({ toolName: "administrateme_calendar", params: {} }, {})).toBeUndefined();
+    const service = factory(toolContext({ agentId: serviceAgentId(),
+      sessionKey: serviceSessionKey(process.env.ADMINME_OPENCLAW_SHARED_SECRET!) })) as AnyAgentTool;
+    await expect(service.execute("not-member", {})).rejects.toThrow("cannot invoke member tools");
+    const missing = toolContext();
+    delete missing.requesterSenderId;
+    await expect((factory(missing) as AnyAgentTool).execute("missing-member", {})).rejects.toThrow("requester");
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it.each(["gmail", "administrateme-portal"])("gives separate calendar calls in one admitted %s turn stable native identities", async (channel) => {
+    const agent = "adminme-0123456789abcdef";
+    const runtime = fakeApi({ memberAgentIds: [agent] });
+    const session = `agent:${agent}:administrateme-${channel === "gmail" ? "gmail-calendar-thread" : "portal-calendar-member"}`;
+    const instruction = "Read next week, then check the following week.";
+    const fields = ["source_event_id", "session_key", "agent_id", "actor_id", "channel_id", "account_id", "message_id", "thread_id", "text_sha256", "nonce"];
+    const ticket: Record<string, string | number> = {
+      source_event_id: "ev-calendar-human-input", session_key: session, agent_id: agent,
+      actor_id: `${channel}:calendar-member`, channel_id: channel,
+      account_id: channel === "gmail" ? "cos@example.invalid" : "member-portal",
+      message_id: "native-calendar-message", thread_id: channel === "gmail" ? "calendar-thread" : "",
+      text_sha256: createHash("sha256").update(instruction).digest("hex"),
+      nonce: "5".repeat(32), expires_at_ms: Date.now() + 9000,
+    };
+    const signature = createHmac("sha256", process.env.ADMINME_OPENCLAW_SHARED_SECRET!)
+      .update(["cos-conversation-input-v1", ...fields.map((key) => ticket[key]), String(ticket.expires_at_ms)].join("|"))
+      .digest("hex");
+    const respond = vi.fn();
+    await runtime.gateways.get("administrateme.conversation.prepare")!.handler({
+      params: { ...ticket, signature }, respond,
+    } as unknown as GatewayHandlerOptions);
+    expect(respond.mock.calls[0]?.[0]).toBe(true);
+    for (const hook of runtime.hooks.get("before_agent_reply") ?? []) {
+      await hook.handler({ cleanedBody: instruction }, { sessionKey: session, agentId: agent, runId: "calendar-turn" });
+    }
+    const context = { sessionKey: session, agentId: agent };
+    const factory = runtime.tools.get("administrateme_calendar")!;
+    const tool = factory(context) as AnyAgentTool;
+    await tool.execute("calendar-call-one", { anchor_date: "2026-11-02", view: "week" });
+    await tool.execute("calendar-call-two", { anchor_date: "2026-11-09", view: "week" });
+    // Recreating the tool does not change a replay's correlation.
+    await (factory(context) as AnyAgentTool).execute("calendar-call-one", { anchor_date: "2026-11-02", view: "week" });
+    const calls = [0, 1, 2].map((index) => requestBody(fetchMock, index).provenance as Record<string, unknown>);
+    for (const p of calls) expect(p).toMatchObject({
+      actor_id: ticket.actor_id, channel_id: channel, account_id: ticket.account_id,
+      agent_id: agent, session_key: session, message_id: ticket.message_id,
+    });
+    expect(calls[0]!.correlation_id).not.toBe(calls[1]!.correlation_id);
+    expect(calls[0]!.correlation_id).toBe(calls[2]!.correlation_id);
+    expect(calls[0]!.correlation_id).toMatch(/^calendar-call:[a-f0-9]{64}$/);
+    // Arguments cannot select the authenticated actor or the call identity.
+    await tool.execute("calendar-call-one", { anchor_date: "2026-11-09", actor_id: "forged", correlation_id: "forged" });
+    expect(requestBody(fetchMock, 3).provenance).toEqual(calls[0]);
+    expect(fetchMock).toHaveBeenCalledTimes(4);
   });
 
   it("adds one OpenClaw approval gate only to side-effect tools", async () => {

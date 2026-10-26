@@ -31,6 +31,7 @@ VERBS = ("read", "observe", "draft", "prepare", "hold", "execute")
 
 _TOOL_PERMISSION_OPTIONS: dict[str, frozenset[str]] = {
     "administrateme_state": frozenset({"read_context"}),
+    "administrateme_calendar": frozenset({"read_context"}),
     "administrateme_what_now": frozenset({"read_context"}),
     "administrateme_capabilities": frozenset({"read_context"}),
     "administrateme_settings_context": frozenset({"read_context"}),
@@ -142,6 +143,15 @@ _DOMAIN_DEFINITIONS: tuple[dict[str, Any], ...] = (
         "source": "product:member-surfaces",
         "verbs": {"read": "supported", "observe": "supported"},
         "openclaw_tools": ["administrateme_state"],
+    },
+    {
+        "capability_id": "domain.household_calendar",
+        "category": "planning",
+        "label": "Read authorized calendars",
+        "outcome": "Read current acquired calendar events in a bounded date window, including authorized imported calendars, with source identity and coverage limits.",
+        "source": "product:member-surfaces",
+        "verbs": {"read": "supported", "observe": "supported"},
+        "openclaw_tools": ["administrateme_calendar"],
     },
     {
         "capability_id": "domain.what_now",
@@ -1357,6 +1367,7 @@ def compose_member_catalog(
                         tool
                         not in {
                             "administrateme_state",
+                            "administrateme_calendar",
                             "administrateme_what_now",
                             "administrateme_capabilities",
                             "administrateme_settings_context",

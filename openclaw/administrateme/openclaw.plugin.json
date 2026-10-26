@@ -34,6 +34,7 @@
     "serviceWorkspaceFiles": ["AGENTS.md", "IDENTITY.md"],
     "tools": [
       "administrateme_state",
+      "administrateme_calendar",
       "administrateme_what_now",
       "administrateme_capabilities",
       "administrateme_settings_context",
@@ -76,6 +77,7 @@
     ]
   },
   "toolMetadata": {
+    "administrateme_calendar": { "optional": true },
     "administrateme_capabilities": { "optional": true },
     "administrateme_settings_context": { "optional": true },
     "administrateme_capability_request": { "optional": true },
