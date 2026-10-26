@@ -5,7 +5,7 @@ import { access, mkdir, readFile, rm } from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
 
-export async function startBrowserTransport({ directory, state, relayPort }) {
+export async function startBrowserTransport({ directory, state, relayPort, gmailSelf = false }) {
   assert.equal(process.env.GITHUB_ACTIONS, "true", "Candidate browser proof is hosted-only");
   const candidates = process.platform === "darwin"
     ? ["/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", "/Applications/Chromium.app/Contents/MacOS/Chromium"]
@@ -26,7 +26,9 @@ export async function startBrowserTransport({ directory, state, relayPort }) {
     throw new Error(`Synthetic browser timeout: ${label}`);
   }
   let socket, relay; const pending = new Map(); let nextId = 1, rootSession;
-  const errors = [], bodyReads = [], url = "https://example.com/cos-workstation-fixture";
+  const errors = [], bodyReads = [], url = gmailSelf
+    ? "https://mail.google.com/mail/u/0/#inbox" : "https://example.com/cos-workstation-fixture";
+  const requestUrl = url.split("#")[0];
   const send = (method, params = {}, sessionId) => new Promise((resolve, reject) => {
     const id = nextId++; pending.set(id, { resolve, reject }); socket.send(JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) }));
   });
@@ -39,8 +41,12 @@ export async function startBrowserTransport({ directory, state, relayPort }) {
       if (frame.id) { const row = pending.get(frame.id); if (row) { pending.delete(frame.id); frame.error ? row.reject(new Error(frame.error.message)) : row.resolve(frame.result ?? {}); } return; }
       if (frame.method === "Fetch.requestPaused" && frame.sessionId === rootSession) {
         try {
-          assert.equal(frame.params.request.url, url, "No outside browser navigation is permitted by the fixture");
-          const html = '<!doctype html><html><head><title>Synthetic CoS workspace</title><link rel="icon" href="data:,"></head><body><span id="account">cos@example.invalid</span><span id="workspace">Synthetic household</span><main>Review the garage plan on Friday.</main></body></html>';
+          assert.equal(frame.params.request.url, requestUrl, "No outside browser navigation is permitted by the fixture");
+          // Only main-document frame metadata is needed; CSP forbids outside
+          // frame loading while preserving the genuinely zero-height roster.
+          const html = gmailSelf
+            ? `<!doctype html><html><head><title>Inbox (22) - cos@example.invalid - Synthetic household Mail</title><link rel="icon" href="data:,"><meta http-equiv="Content-Security-Policy" content="frame-src 'none'"></head><body><header id="gb"><a id="account" role="button" aria-label="Google Account: Synthetic Staff (cos@example.invalid)">cos@example.invalid</a></header><div role="navigation" jscontroller="s6IIOd"><div jscontroller="m50PKc"><div jsname="hSRGPd" role="link" aria-label="Chat, 1 unread message">Chat</div></div></div><div gh="chat"><div id="talk_roster"><iframe id="gtn-roster-iframe-id" name="gtn-roster-iframe-id" title="Chat" aria-label="Chat" style="height:0;width:256px;border:0" src="https://chat.google.com/u/0/frame?origin=https%3A%2F%2Fmail.google.com"></iframe></div></div><main>Review the garage plan on Friday.</main></body></html>`
+            : '<!doctype html><html><head><title>Synthetic CoS workspace</title><link rel="icon" href="data:,"></head><body><span id="account">cos@example.invalid</span><span id="workspace">Synthetic household</span><main>Review the garage plan on Friday.</main></body></html>';
           await send("Fetch.fulfillRequest", { requestId: frame.params.requestId, responseCode: 200,
             responseHeaders: [{ name: "Content-Type", value: "text/html" }], body: Buffer.from(html).toString("base64") }, rootSession);
         } catch (error) { errors.push(error.message); await send("Fetch.failRequest", { requestId: frame.params.requestId, errorReason: "BlockedByClient" }, rootSession); }
@@ -58,8 +64,25 @@ export async function startBrowserTransport({ directory, state, relayPort }) {
     return {
       targetId, url, errors, bodyReads,
       resource: { resource_id: "fixture-browser-resource", inventory_binding_id: "fixture-browser", binding_revision: 1, policy_revision: 1, target_evidence_reference: "synthetic-native-target", native_target_id: targetId, profile: "chrome", url,
-        expected_identity: { account: "cos@example.invalid", workspace: "Synthetic household" },
-        identity_probes: { account: { selector: "#account", attribute: "textContent", extraction: "exact" }, workspace: { selector: "#workspace", attribute: "textContent", extraction: "exact" } }, route_sha256: "a".repeat(64) },
+        expected_identity: { account: "cos@example.invalid", workspace: "Synthetic household", ...(gmailSelf ? { role: "account user" } : {}) },
+        ...(gmailSelf ? { identity_verifier: "gmail_self_mailbox_v1" } : {}),
+        identity_probes: gmailSelf ? {} : { account: { selector: "#account", attribute: "textContent", extraction: "exact" }, workspace: { selector: "#workspace", attribute: "textContent", extraction: "exact" } }, route_sha256: "a".repeat(64) },
+      async armWrongAccountProof() {
+        assert(gmailSelf);
+        const result = await send("Runtime.evaluate", { expression: `(() => {
+          document.querySelector("#account").setAttribute("aria-label", "Google Account: Other Staff (other@example.invalid)");
+          globalThis.fixturePrivateBodyReads = 0;
+          Object.defineProperty(document.body, "innerText", { get() {
+            globalThis.fixturePrivateBodyReads += 1;
+            throw new Error("Wrong-account mailbox text was accessed");
+          } });
+          return true;
+        })()`, returnByValue: true }, rootSession);
+        assert.equal(result.result?.value, true);
+      },
+      async privateBodyReadCount() {
+        return (await send("Runtime.evaluate", { expression: "globalThis.fixturePrivateBodyReads", returnByValue: true }, rootSession)).result?.value;
+      },
       async connectRelay() {
         const token = await until(async () => { try { return (await readFile(path.join(state, "credentials/browser-extension-relay.secret"), "utf8")).trim(); } catch { return null; } }, "relay secret");
         assert.match(token, /^[0-9a-f]{64}$/);

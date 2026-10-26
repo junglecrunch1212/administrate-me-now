@@ -75,6 +75,7 @@ def test_browser_resource_reuses_canonical_identity_and_requires_all_site_checks
     )
     assert resolved["binding_revision"] == 1
     assert resolved["audience_member_ids"] == ["member-a", "member-b"]
+    assert "identity_verifier" not in resolved  # Preserve generic historical digests.
     del raw["resources"][0]["identity_probes"]["role"]
     with pytest.raises(ValueError, match="probe"):
         browser_resource(BrowserPolicy.model_validate(raw), inventory, "own-page")
@@ -108,3 +109,81 @@ def test_browser_source_prefix_keeps_account_origin_and_path_boundaries():
     prepared = prepare_browser_gateway({"plugins": {"allow": ["administrateme"]}})
     assert prepared["plugins"]["allow"] == ["administrateme", "browser"]
     assert prepared["plugins"]["entries"]["browser"]["enabled"] is True
+
+
+def gmail_resource():
+    return {
+        "resource_id": "own-inbox",
+        "inventory_binding_id": "cos-browser",
+        "inventory_binding_revision": 1,
+        "native_target_id": "real-native-inbox",
+        "target_evidence_reference": "operator:verified-inbox-provider-chrome",
+        "url": "https://mail.google.com/mail/u/0/#inbox",
+        "authorized_url_prefix": "https://mail.google.com/mail/u/0/",
+        "identity_verifier": "gmail_self_mailbox_v1",
+        "audience_member_ids": ["member-a"],
+    }
+
+
+def test_gmail_verifier_retains_canonical_identity_without_custom_probes():
+    from adminme.workstation_sources import identity_matches
+
+    raw = document(datetime.now(timezone.utc))
+    binding = raw["bindings"][0]
+    binding["expected_identity"]["role"] = "account user"
+    binding["observed_identity"]["role"] = "account user"
+    inventory = IdentityInventory.model_validate(raw)
+    policy = BrowserPolicy.model_validate(
+        {"revision": 1, "enabled": True, "resources": [gmail_resource()]}
+    )
+    resolved = browser_resource(policy, inventory, "own-inbox")
+    assert resolved["identity_verifier"] == "gmail_self_mailbox_v1"
+    assert resolved["identity_probes"] == {}
+    expected = binding["expected_identity"]
+    assert resolved["expected_identity"] == expected
+    assert identity_matches(
+        resolved, {**expected, "account": expected["account"].upper()}
+    )
+    for wrong in (
+        {**expected, "account": "another@fixture.invalid"},
+        {**expected, "workspace": "another tenant"},
+        {**expected, "role": "delegate"},
+        {"account": expected["account"]},
+    ):
+        assert not identity_matches(resolved, wrong)
+    for field in ("workspace", "role"):
+        incomplete = inventory.model_copy(deep=True)
+        setattr(incomplete.bindings[0].expected_identity, field, None)
+        incomplete.bindings[0].observed_identity = incomplete.bindings[
+            0
+        ].expected_identity
+        with pytest.raises(ValueError, match="account-user"):
+            browser_resource(policy, incomplete, "own-inbox")
+    wrong_role = inventory.model_copy(deep=True)
+    wrong_role.bindings[0].expected_identity.role = "administrator"
+    wrong_role.bindings[0].observed_identity = wrong_role.bindings[0].expected_identity
+    with pytest.raises(ValueError, match="account-user"):
+        browser_resource(policy, wrong_role, "own-inbox")
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"url": "https://mail.google.com/mail/u/0/#sent"},
+        {"url": "https://mail.google.com/mail/u/0/#inbox/message"},
+        {"url": "https://mail.google.com/mail/u/0/?authuser=0#inbox"},
+        {"url": "https://mail.google.com:443/mail/u/0/#inbox"},
+        {"url": "https://another.invalid/mail/u/0/#inbox"},
+        {"identity_probes": {"role": {"selector": "#fake-role"}}},
+        {"identity_verifier": "operator_attested"},
+    ],
+)
+def test_gmail_verifier_rejects_other_routes_or_unreviewed_proof(changes):
+    with pytest.raises(ValueError):
+        BrowserPolicy.model_validate(
+            {
+                "revision": 1,
+                "enabled": True,
+                "resources": [{**gmail_resource(), **changes}],
+            }
+        )

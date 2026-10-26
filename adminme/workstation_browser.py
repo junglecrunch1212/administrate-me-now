@@ -7,6 +7,7 @@ session, infer account identity from a profile label, or enable provider writes.
 from __future__ import annotations
 
 import copy
+import re
 from datetime import datetime, timezone
 from typing import Annotated, Any, Literal
 from urllib.parse import urlsplit
@@ -55,7 +56,12 @@ class BrowserResource(StrictRecord):
     # Exact URLs keep this first read slice bounded; no query/token wildcards.
     url: Annotated[str, Field(min_length=1, max_length=2000)]
     authorized_url_prefix: Annotated[str, Field(min_length=1, max_length=2000)]
-    identity_probes: dict[Literal["account", "workspace", "role"], IdentityProbe]
+    identity_verifier: Literal["dom_fields_v1", "gmail_self_mailbox_v1"] = (
+        "dom_fields_v1"
+    )
+    identity_probes: dict[Literal["account", "workspace", "role"], IdentityProbe] = (
+        Field(default_factory=dict)
+    )
     audience_member_ids: list[Text] = Field(min_length=1, max_length=20)
     restrictions: list[Text] = Field(default_factory=list, max_length=20)
     sensitivity: Literal["normal", "sensitive", "privileged"] = "sensitive"
@@ -78,7 +84,16 @@ class BrowserResource(StrictRecord):
             raise ValueError(
                 "the exact tab URL must remain in its authorized resource prefix"
             )
-        if "account" not in self.identity_probes:
+        if self.identity_verifier == "gmail_self_mailbox_v1":
+            if not re.fullmatch(
+                r"https://mail\.google\.com/mail/u/(?:0|[1-9][0-9]*)/#inbox", self.url
+            ):
+                raise ValueError(
+                    "the Gmail self-mailbox verifier requires an exact inbox URL"
+                )
+            if self.identity_probes:
+                raise ValueError("the fixed Gmail verifier cannot accept custom probes")
+        elif "account" not in self.identity_probes:
             raise ValueError("the destination account needs its own probe")
         if len(set(self.audience_member_ids)) != len(self.audience_member_ids):
             raise ValueError("browser resource audiences must be distinct")
@@ -143,7 +158,15 @@ def browser_resource(
     ):
         raise ValueError("the native target needs a current verified canonical binding")
     expected = binding.expected_identity.model_dump(exclude_none=True)
-    if set(resource.identity_probes) != set(expected):
+    if resource.identity_verifier == "gmail_self_mailbox_v1":
+        if (
+            set(expected) != {"account", "workspace", "role"}
+            or expected["role"] != "account user"
+        ):
+            raise ValueError(
+                "the Gmail self-mailbox verifier requires account, workspace and account-user role"
+            )
+    elif set(resource.identity_probes) != set(expected):
         raise ValueError(
             "each expected account, workspace and role needs a current probe"
         )
@@ -161,6 +184,13 @@ def browser_resource(
         "url": resource.url,
         "authorized_url_prefix": resource.authorized_url_prefix,
         "expected_identity": expected,
+        # Leave generic route hashes unchanged; this field records the distinct
+        # fixed provider verification method, including its derived self role.
+        **(
+            {"identity_verifier": resource.identity_verifier}
+            if resource.identity_verifier != "dom_fields_v1"
+            else {}
+        ),
         "identity_probes": {
             key: value.model_dump() for key, value in resource.identity_probes.items()
         },

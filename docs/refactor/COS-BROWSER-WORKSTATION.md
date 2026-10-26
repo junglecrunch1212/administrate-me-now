@@ -64,6 +64,63 @@ sole live operator; candidate tests use disposable hosted state.
    to the existing CoS worker when the reviewed guard, canonical identities and
    complete private policy are available. Supported activation/reconciliation
    carries that setting and the current workstation instructions forward.
+   Native patch preparation accepts either legacy `agents.list` or current keyed
+   `agents.entries`, rejects an ambiguous mixture, and adds only `browser` to the
+   existing CoS worker's explicit allowlist. Other agent settings are preserved.
+
+### Gmail self-mailbox identity
+
+The default `dom_fields_v1` verifier keeps the generic independent DOM-field
+contract. For an operator-verified Gmail inbox, `identity_verifier:
+gmail_self_mailbox_v1` uses a fixed provider verifier and an empty
+`identity_probes` object. It requires an exact
+`https://mail.google.com/mail/u/<index>/#inbox` URL and all three existing canonical
+identity fields. The URL index is a routing coordinate, never account identity.
+
+Before any mailbox text is read, the same synchronous callback checks visible
+Google account chrome under the unique `#gb` container. The account-control email
+and mailbox email in the actual title must equal the canonical account. The
+supported title shape is
+`Inbox (22) - cos@example.invalid - Synthetic household Mail` (the count is
+optional). The title's workspace label must equal the canonical workspace.
+It requires one visible, enabled Chat control in the observed Gmail app-navigation
+ancestry. Hidden, disabled, inert, ambiguous and message-content controls reject.
+Google's
+[delegation documentation](https://support.google.com/mail/answer/138350)
+states that delegated accounts cannot use Chat in Gmail; its
+[navigation documentation](https://support.google.com/mail/answer/11555490)
+identifies the main menu as the entry point. Matching mailbox labels or the
+absence of a `Delegated` label alone do not establish self access.
+
+The uniquely anchored Chat roster iframe corroborates the provider integration:
+its actual `src` must have the exact `https://chat.google.com` origin, matching
+`/u/<index>/frame` path and Gmail origin parameter, with no credentials or
+`srcdoc`. The frame can have zero height while the inbox is selected. Its presence
+and dimensions do not prove role; the visible, enabled Chat navigation does.
+No iframe content is read. The Google account-management menu lives in a separate
+cross-origin frame and is not part of this verifier.
+
+Only the positive self-only Chat feature derives canonical role `account
+user`; the role is not claimed to be literal page text. Workspace comes from the
+real title, not an email-domain inference or operator-attestation fallback. Nested
+accessible controls are accepted only when they form one containing control with
+identical labels; duplicate siblings or contradictory labels reject. Message
+content cannot supply account indicators. Missing or changed app navigation,
+untrusted frame metadata, delegated/unknown identity, different tenant and
+unsupported title formats all withhold the page body. Chat-disabled accounts
+remain unverified by this narrow mode. It does not click, fetch another identity
+page or evaluate across origins, and needs no open account menu.
+
+The verifier mode participates in existing route and source-authority hashes;
+retained observations already carry these hashes, canonical binding revision,
+actual identity tuple and native target. The fixed method distinguishes the
+title-derived workspace and Chat-feature-derived role without changing old
+event schemas or generic historical hashes. Hosted checks cover synthetic DOM,
+the existing process capture/replay boundary and a disposable native Chrome run
+(`check-workstation-work-gateway.mjs <pinned-source> --browser-gmail`). Synthetic
+markup does not prove live Gmail selectors: activation still requires the sole
+operator to verify the actual intended provider chrome and installed guard produce
+a terminal observation. Existing policy disablement remains recovery.
 
 The source coordinate is CoS ownership plus canonical binding, actual account and
 workspace, resource ID and authorized path-prefix hash. Exact URL/tab are separate

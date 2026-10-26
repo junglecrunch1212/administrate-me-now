@@ -30,13 +30,17 @@ NONCE = "7" * 32
 
 
 def setup_browser(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, *, gmail: bool = False
 ) -> tuple[dict, dict]:
     runtime = client.app.state.runtime
     directory = runtime.settings.instance.config_dir
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
     directory.chmod(0o700)
-    private_file(directory / INVENTORY_FILE, document(datetime.now(timezone.utc)))
+    inventory = document(datetime.now(timezone.utc))
+    if gmail:
+        for field in ("expected_identity", "observed_identity"):
+            inventory["bindings"][0][field]["role"] = "account user"
+    private_file(directory / INVENTORY_FILE, inventory)
     policy = {
         "revision": 1,
         "enabled": True,
@@ -59,6 +63,13 @@ def setup_browser(
             }
         ],
     }
+    if gmail:
+        policy["resources"][0].update(
+            url="https://mail.google.com/mail/u/0/#inbox",
+            authorized_url_prefix="https://mail.google.com/mail/u/0/",
+            identity_verifier="gmail_self_mailbox_v1",
+            identity_probes={},
+        )
     private_file(directory / BROWSER_POLICY_FILE, policy)
     resource = current_resource(runtime, "own-planning-page", for_read=True)
     source = coordinate(runtime, resource)
@@ -103,11 +114,12 @@ def start(client: TestClient, *, nonce: str = NONCE) -> tuple[dict, dict, dict]:
     return body, result, resource
 
 
+@pytest.mark.parametrize("gmail", [False, True])
 def test_native_observation_requires_terminal_capture_and_preserves_source_history(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, gmail: bool
 ) -> None:
     with TestClient(create_application(_settings(tmp_path / "instance"))) as client:
-        policy, source_policy = setup_browser(client, monkeypatch)
+        policy, source_policy = setup_browser(client, monkeypatch, gmail=gmail)
         body, result, resource = start(client)
         assert _post(client, BASE + "/result", result)["status"] == "pending_or_unknown"
         wrong = {

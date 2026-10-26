@@ -8,7 +8,7 @@ import { copyFile, mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } f
 import net from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import ts from "typescript";
 import { startBrowserTransport } from "../../../tests/fixtures/openclaw_browser_transport.mjs";
 import { startWorkstationWorkFixtures } from "../../../tests/fixtures/openclaw_workstation_work_probe.mjs";
@@ -35,9 +35,10 @@ function validSession(candidate) {
   const expected = createHmac("sha256", secret).update(`service-session|${principal}|${digest}`).digest("hex").slice(0, 32);
   return signature === expected;
 }
-const browserProbe = process.argv[3] === "--browser";
+const gmailSelf = process.argv[3] === "--browser-gmail";
+const browserProbe = process.argv[3] === "--browser" || gmailSelf;
 const relayPort = browserProbe ? await freePort() : undefined;
-const browser = browserProbe ? await startBrowserTransport({ directory, state, relayPort }) : undefined;
+const browser = browserProbe ? await startBrowserTransport({ directory, state, relayPort, gmailSelf }) : undefined;
 const sessions = new Set();
 const conversations = new Map();
 const member = "member-conversation-fixture";
@@ -200,6 +201,21 @@ try {
   assert.deepEqual(fixtures.errors, []);
   if (browser) {
     assert.deepEqual(browser.errors, []);
+    if (gmailSelf) {
+      const { identityBoundReadExpression, verifiedBrowserRead, prepareBrowserRead } = await import(pathToFileURL(path.join(plugin, "workstation-browser.js")).href);
+      const native = { currentConfig: () => config };
+      const prepared = prepareBrowserRead(native, browser.resource, { action: "snapshot" });
+      await browser.armWrongAccountProof();
+      const refused = await request("browser.request", { method: "POST", path: "/act", query: { profile: "chrome" },
+        body: { kind: "evaluate", targetId: browser.targetId, fn: identityBoundReadExpression(browser.resource) } });
+      assert.equal(refused.result.kind, "identity_unverified");
+      assert.equal(refused.result.reason, "wrong_account_workspace_or_role");
+      assert.equal(refused.result.text, undefined);
+      assert.equal(await browser.privateBodyReadCount(), 0, "changed-account proof must precede mailbox text access");
+      assert.throws(() => verifiedBrowserRead(native, prepared, browser.resource, { details: refused }));
+
+      console.log("Gmail wrong-account refusal before mailbox text access: PASS");
+    }
     console.log("Pinned native member -> CoS browser -> actual disposable Chrome DOM identity -> retained source -> same-origin return verified; synthetic extension/account only.");
   } else console.log("Pinned native conversation -> CoS subagent scratchpad -> actual read-back -> source-bound result verified for portal/Gmail; synthetic loopback fixtures only. No live provider effect.");
 } catch (error) {
