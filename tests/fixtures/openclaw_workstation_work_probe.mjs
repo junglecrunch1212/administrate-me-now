@@ -24,17 +24,25 @@ export async function startWorkstationWorkFixtures({ secret, agent, sessions, va
         const worker = !names.includes("administrateme_workstation_work");
         const outputs = input.filter((entry) => entry.type === "function_call_output").length;
         let step;
+        if (worker) {
+          assert.deepEqual([...names].sort(), [...(browser ? ["browser"] : []), "administrateme_service_private_work", "administrateme_service_private_work_state", "administrateme_service_private_state", "administrateme_service_context"].sort(), "worker retains its configured surface; per-call policy constrains execution");
+        }
         if (worker && browser) {
-          assert.deepEqual(names, ["browser"], "browser worker exposes only the reviewed native tool");
-          step = outputs === 0 ? ["browser", { action: "snapshot" }] : undefined;
-          if (outputs > 0) assert(encoded.includes("Review the garage plan on Friday."), "browser model did not receive the retained native observation");
-        } else if (worker) {
-          assert.deepEqual([...names].sort(), ["administrateme_service_private_state", "administrateme_service_private_work"], "worker exposes only its finite admitted tools");
           const plan = [
+            ["administrateme_service_context", {}], // Must be denied before its backend.
+            ["browser", { action: "snapshot" }],
+          ];
+          step = plan[outputs];
+          if (outputs > 0) assert(encoded.includes("This worker may only perform its admitted browser read."), "unrelated dynamic call was not denied");
+          if (outputs > 1) assert(encoded.includes("Review the garage plan on Friday."), "browser model did not receive the retained native observation");
+        } else if (worker) {
+          const plan = [
+            ["administrateme_service_context", {}], // Must be denied before its backend.
             ["administrateme_service_private_work", { request_id: `note:${source}`, title: "Private garage plan", description: "Sort, label, store.", record_kind: "scratchpad" }],
             ["administrateme_service_private_state", { task_id: `task:${source}` }],
           ];
           step = plan[outputs];
+          if (outputs > 0) assert(encoded.includes("This worker run may only create and read back its exact private scratchpad."), "unrelated dynamic call was not denied");
         } else {
           const text = channel === "gmail" ? "PROBE_WORKSTATION_GMAIL: draft a private garage plan." : "PROBE_WORKSTATION_PORTAL: draft a private garage plan.";
           step = outputs === 0 ? ["administrateme_workstation_work", { action: browser ? "browser_read" : "create", instruction: text }] : undefined;
@@ -58,6 +66,7 @@ export async function startWorkstationWorkFixtures({ secret, agent, sessions, va
         res.end(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("") + "data: [DONE]\n\n"); return;
       }
       assert.equal(req.headers.authorization, `Bearer ${secret}`);
+      assert.notEqual(req.url, "/api/openclaw/v1/tools/service-context", "unrelated context tool reached its backend");
       let result = { ok: true };
       const base = browser ? "/api/openclaw/v1/tools/workstation-browser" : "/api/openclaw/v1/tools/workstation-work";
       if (browser && req.url === "/api/openclaw/v1/tools/workstation-work/policy") {

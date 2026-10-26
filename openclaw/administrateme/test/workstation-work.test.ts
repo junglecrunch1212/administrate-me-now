@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { readPluginConfig } from "../src/config.js";
@@ -17,6 +17,7 @@ const toolName = "administrateme_workstation_work";
 const bound = { bound: true, mode: "create" as const, artifact_request_id: "artifact-request", artifact_task_id: "cos-task:artifact" };
 
 function fixture() {
+  const registrations: Array<{ name: string; options: any }> = [];
   vi.stubEnv("ADMINME_OPENCLAW_SHARED_SECRET", secret);
   const hooks = new Map<string, Array<(...args: any[]) => any>>();
   const tools = new Map<string, (context: any) => any>();
@@ -26,10 +27,10 @@ function fixture() {
     if (path.endsWith("/forward")) return { intent_event_id: "source-fixture" };
     if (path.endsWith("/admit")) return { status: "ready", mode: "create", worker_request_id: body.run_nonce,
       artifact_request_id: bound.artifact_request_id, artifact_task_id: bound.artifact_task_id,
-      follow_up_source_id: "source-fixture", instruction: text };
+      follow_up_source_id: "source-fixture", instruction: text, resource_id: "fixture-resource" };
     if (path.endsWith("/policy")) return bound;
     if (path.endsWith("/read-back")) { completed = true; return { verified: true }; }
-    if (path.endsWith("/result")) return { status: completed ? "verified" : "pending_or_unknown", provider_effect_count: 0 };
+    if (path.endsWith("/result")) return { status: completed ? "verified" : body.native_failure ? "failed" : "pending_or_unknown", provider_effect_count: 0 };
     throw new Error("unexpected fixture route");
   });
   const invoke = async (name: string, event: any, context: any) => {
@@ -42,12 +43,12 @@ function fixture() {
     expect(params.deliver).toBe(false);
     expect(params.lane).toBe("subagent");
     expect(params.sessionKey).not.toBe(member.sessionKey);
-    expect(await invoke("before_prompt_build", { prompt: params.message, messages: [] }, worker)).toEqual({ toolsAllow: ["administrateme_service_private_work", "administrateme_service_private_state"] });
+    expect(await invoke("before_prompt_build", { prompt: params.message, messages: [] }, worker)).toBeUndefined();
     await invoke("after_tool_call", { toolName: "administrateme_service_private_state", params: { task_id: note.task_id }, result: { details: { work: [note] } } }, worker);
     return { runId: "worker-run" };
   });
   const waitForRun = vi.fn(async () => ({ status: "ok" }));
-  const api = { config: {}, on: (name: string, fn: any) => hooks.set(name, [...(hooks.get(name) ?? []), fn]),
+  const api = { config: {}, on: (name: string, fn: any, options: any) => { registrations.push({ name, options }); hooks.set(name, [...(hooks.get(name) ?? []), fn]); },
     registerTool: (factory: any, options: any) => tools.set(options.name, factory),
     logger: { error: vi.fn(), info: vi.fn(), warn: vi.fn() },
     runtime: { subagent: { run, waitForRun }, channel: { outbound: { loadAdapter: vi.fn() } } } } as unknown as OpenClawPluginApi;
@@ -58,7 +59,7 @@ function fixture() {
     await invoke("before_agent_reply", { cleanedBody: text }, member);
     return invoke("before_tool_call", { toolName, toolCallId: "call-fixture", params: {} }, member);
   };
-  return { start, invoke, run, waitForRun, request, note, tool: tools.get(toolName)!(member) };
+  return { start, invoke, run, waitForRun, request, note, registrations, tool: tools.get(toolName)!(member) };
 }
 
 afterEach(() => vi.unstubAllEnvs());
@@ -84,6 +85,45 @@ describe("native private workstation handoff", () => {
     const result = await f.tool.execute("call-fixture", { action: "create", instruction: text });
     expect(result.details).toMatchObject({ status: "pending_or_unknown" });
     expect(f.request.mock.calls.some(([path]) => path.endsWith("/read-back"))).toBe(false);
+    expect(f.request.mock.calls.at(-1)![1]).not.toHaveProperty("native_failure");
+  });
+
+  it.each(["create", "browser_read"])("signs only actual native error for the exact %s parent/admission/run", async (action) => {
+    const f = fixture(); await f.start();
+    f.run.mockImplementation(async () => ({ runId: "worker-error" }));
+    f.waitForRun.mockImplementation(async () => ({ status: "error", error: "private native diagnostic must not escape" }));
+    expect((await f.tool.execute("call-fixture", { action, instruction: text })).details.status).toBe("failed");
+    const [path, body] = f.request.mock.calls.at(-1)!;
+    expect(path).toBe(`/api/openclaw/v1/tools/workstation-${action === "browser_read" ? "browser" : "work"}/result`);
+    const failure = body.native_failure, p = body.provenance;
+    expect(failure.status).toBe("error"); expect(failure.run_id).toBe("worker-error");
+    expect(p.actor_id).toBe(actor); expect(p.session_key).toBe(member.sessionKey);
+    const workerSession = f.run.mock.calls[0]![0].sessionKey;
+    expect(failure.worker_session_digest).toBe(createHash("sha256").update(workerSession).digest("hex"));
+    const material = ["administrateme-native-worker-failure-v1", action === "browser_read" ? "browser" : "scratchpad",
+      body.follow_up_source_id, body.source_message_event_id, body.run_nonce,
+      p.actor_id, p.agent_id ?? "", p.session_key ?? "", p.channel_id, p.account_id ?? "", p.message_id ?? "", p.thread_id ?? "",
+      failure.worker_session_digest, failure.run_id, failure.status];
+    expect(failure.signature).toBe(createHmac("sha256", secret).update(JSON.stringify(material)).digest("hex"));
+    expect(JSON.stringify(body)).not.toContain("private native diagnostic");
+    expect(JSON.stringify(body)).not.toContain(workerSession);
+    expect(f.registrations.some((r) => r.name === "before_prompt_build")).toBe(false);
+    expect(f.registrations.filter((r) => r.name === "before_tool_call").every((r) => r.options?.matcher === undefined)).toBe(true);
+  });
+
+  it.each(["run", "wait"])("leaves an uncertain %s transport failure unknown", async (stage) => {
+    const f = fixture(); await f.start();
+    f.run.mockImplementation(async () => { if (stage === "run") throw new Error("transport lost"); return { runId: "uncertain" }; });
+    f.waitForRun.mockRejectedValue(new Error("transport lost"));
+    expect((await f.tool.execute("call-fixture", { action: "create", instruction: text })).details.status).toBe("pending_or_unknown");
+    expect(f.request.mock.calls.at(-1)![1]).not.toHaveProperty("native_failure");
+  });
+
+  it("lets verified retained read-back win even when the worker ends with an error", async () => {
+    const f = fixture(); await f.start();
+    f.waitForRun.mockImplementation(async () => ({ status: "error" }));
+    expect((await f.tool.execute("call-fixture", { action: "create", instruction: text })).details.status).toBe("verified");
+    expect(f.request.mock.calls.at(-1)![1].native_failure.status).toBe("error");
   });
 
   it("checks durable policy for every service tool and rejects other effects or notes", async () => {

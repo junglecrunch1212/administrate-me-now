@@ -17,7 +17,7 @@ from adminme.workstation_inventory import INVENTORY_FILE
 from adminme.workstation_sources import coordinate, current_resource
 from tests.acceptance.test_cos_member_follow_up import _body, _grant, _service
 from tests.acceptance.test_cos_response_execution import A, _settings
-from tests.acceptance.test_cos_workstation_handoff import _post
+from tests.acceptance.test_cos_workstation_handoff import _native_failure, _post
 from tests.acceptance.test_native_apple_reminder import _normal_operation
 from tests.unit.bootstrap.test_workstation_browser import private_file
 from tests.unit.test_workstation_inventory import document
@@ -489,3 +489,135 @@ def test_source_policy_tools_require_exact_service_and_current_operator_request(
             )
             is None
         )
+
+
+def test_parent_native_error_is_durable_without_inventing_browser_capture(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = _settings(tmp_path / "instance")
+    with TestClient(create_application(settings)) as client:
+        setup_browser(client, monkeypatch)
+        body, result, _ = start(client)
+        runtime = client.app.state.runtime
+        state = runtime.settings_control.read()
+        signed = {**result, "native_failure": _native_failure(result, "browser")}
+        failed = _post(client, BASE + "/result", signed)
+        assert failed["status"] == "failed"
+        assert failed["reason"] == "native_worker_failed"
+        assert failed["native_run_id"] == "native-worker-error"
+        assert failed["provider_effect_count"] == 0
+        assert "observation_event_id" not in failed and "excerpt" not in failed
+        assert _post(client, BASE + "/result", signed) == failed
+        retained = client.portal.call(
+            runtime.event_log.get, failed["failure_receipt_event_id"]
+        )
+        assert (
+            retained["type"] == "openclaw.tool_call.recorded"
+            and retained["schema_version"] == 2
+        )
+        assert retained["owner_scope"] == retained["visibility_scope"] == f"private:{A}"
+        assert retained["sensitivity"] == "privileged"
+        payload = retained["payload"]
+        assert (
+            payload["context_scope"] == "member_private"
+            and payload["context_member_id"] == A
+        )
+        assert payload["openclaw_actor_id"] == result["provenance"]["actor_id"]
+        assert payload["request_correlation_id"] == "native-worker-error"
+        assert payload["result_event_ids"] == payload["observation_event_ids"] == []
+        assert payload["causation_event_ids"] == [
+            failed["browser_request_event_id"],
+            result["follow_up_source_id"],
+            result["source_message_event_id"],
+        ]
+        assert payload["session_key"] is None and payload["session_id"] is None
+        assert body["provenance"]["session_key"] not in json.dumps(retained)
+        # The worker capture endpoint cannot assert a parent wait result.
+        _post(
+            client,
+            BASE + "/capture",
+            {**body, "native_failure": signed["native_failure"]},
+            422,
+        )
+        _post(
+            client, BASE + "/result", {**signed, "provenance": body["provenance"]}, 403
+        )
+        _post(client, BASE + "/result", {**signed, "run_nonce": "a" * 32}, 403)
+        # Even another valid admission for this member/source cannot borrow the
+        # original worker's signed terminal or change its run identity.
+        _post(
+            client,
+            BASE + "/admit",
+            {
+                "provenance": result["provenance"],
+                "source_message_event_id": result["source_message_event_id"],
+                "action": "create",
+                "instruction": INSTRUCTION,
+                "run_nonce": "a" * 32,
+            },
+        )
+        _post(client, BASE + "/result", {**signed, "run_nonce": "a" * 32}, 403)
+        _post(
+            client,
+            BASE + "/result",
+            {**signed, "source_message_event_id": "missing-source"},
+            403,
+        )
+        _post(
+            client,
+            BASE + "/result",
+            {**signed, "native_failure": _native_failure(result, "scratchpad")},
+            403,
+        )
+        _post(
+            client,
+            BASE + "/result",
+            {
+                **signed,
+                "native_failure": _native_failure(result, "browser", "different-run"),
+            },
+            409,
+        )
+        forged = {
+            **signed,
+            "provenance": {**result["provenance"], "actor_id": "+15555550199"},
+        }
+        _post(client, BASE + "/result", forged, 403)
+        assert runtime.fixture_adapter.delivered == []
+    with TestClient(create_application(settings)) as client:
+        monkeypatch.setattr(
+            client.app.state.runtime.settings_control, "read", lambda: state
+        )
+        _normal_operation(client)
+        current = _body(
+            client, "native-browser-error-status", "What happened to that browser read?"
+        )
+        assert (
+            _post(
+                client,
+                BASE + "/retained",
+                {
+                    **current,
+                    "browser_request_event_id": failed["browser_request_event_id"],
+                },
+            )
+            == failed
+        )
+
+
+def test_verified_browser_capture_wins_over_later_native_worker_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with TestClient(create_application(_settings(tmp_path / "instance"))) as client:
+        setup_browser(client, monkeypatch)
+        body, result, _ = start(client)
+        captured = _post(client, BASE + "/capture", body)
+        completed = _post(
+            client,
+            BASE + "/result",
+            {**result, "native_failure": _native_failure(result, "browser")},
+        )
+        assert completed["status"] == "verified"
+        assert completed["observation_event_id"] == captured["observation_event_id"]
+        assert completed["excerpt"] == body["excerpt"]
+        assert _post(client, BASE + "/result", result) == completed

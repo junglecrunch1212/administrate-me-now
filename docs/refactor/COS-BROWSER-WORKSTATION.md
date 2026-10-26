@@ -2,7 +2,8 @@
 
 A genuine private member conversation can request an authorized CoS browser read
 through `administrateme_workstation_work(action="browser_read")`. OpenClaw runs a
-CoS worker with only its native browser tool. The installed guard binds the actual
+CoS worker whose calls are restricted to the admitted native browser read.
+Other configured tools may remain visible; the installed guard binds the actual
 shared tab, verifies the current destination account, workspace and role before
 reading visible text, then retains an encrypted `cos.workstation.source_observed`
 event. Only the originating member, with current source/audience authority, can
@@ -17,10 +18,16 @@ the browser route is a shared native tool boundary, not a separate provider SDK.
 ## Supported private preparation
 
 The protected release must contain both the native hook and result middleware.
-Supported activation enables `allowPromptInjection` only for the reviewed
-AdministrateMe plugin because this pin places finite `toolsAllow` policy inside
-`before_prompt_build`. These hooks return no prompt prose. Browser admission
-requires this setting; ordinary unbound service work keeps its existing surface.
+The worker hooks do not return `before_prompt_build.toolsAllow`: pinned Codex
+rejects that turn-scoped filtering contract. They register **unfiltered**
+`before_tool_call` guards. The reviewed ce67 Codex harness enables its native
+PreToolUse relay, and the unfiltered registration requires match-all interception,
+including native shell/file and ambient connector names. A missing/expired relay
+fails closed before execution; this is a pinned runtime guarantee, not a fabricated
+pre-admission attestation. Browser identity-before-content and result middleware
+remain mandatory. Supported activation still retains its existing plugin hook
+capability setting; this repair changes neither that setting nor account grants.
+Ordinary unbound service work keeps its existing surface.
 All account/device/tab inputs and proof remain private, outside Git. Root is the
 sole live operator; candidate tests use disposable hosted state.
 
@@ -198,9 +205,19 @@ invalidate the corresponding authority. Keep explicit client restrictions.
 
 The inventory's tool rows describe OpenClaw dynamic tools. Codex owns its base
 shell/file surface separately; agent dynamic allowlists cannot prove that surface
-absent. Finite per-run `toolsAllow`, native hooks, sandbox/root/network controls
-and actual invocation evidence govern it. Do not replace these controls with a
+absent. Unfiltered native call guards, sandbox/root/network controls and actual
+invocation evidence govern execution even while other tools remain visible. Do not replace these controls with a
 duplicate exec wrapper or use shell access to bypass source/account restrictions.
+
+A typed native `waitForRun` error is signed by the parent plugin for the exact
+member/source/admission nonce, derived worker session and native run ID. The
+result endpoint authenticates that parent and retains a member-private
+`openclaw.tool_call.recorded@2` failure receipt. No worker provenance, observation,
+page content or raw error is invented. A later same-member `browser_status` can
+report `failed/native_worker_failed`; this is not an account or browser diagnosis.
+A verified retained capture remains authoritative if the worker subsequently
+errors. Timeout, lost transport or missing terminal acknowledgement remains
+`pending_or_unknown` and must not be reported as failed or successful.
 
 Acceptance covers authenticated intake and encrypted replay/audience checks in the
 real application, plus the installed native tool path through a disposable Chrome

@@ -7,11 +7,12 @@ retain the request, origin and proof; no second queue, scheduler or transcript.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import Field
+from pydantic import BaseModel, Field
 
 from adminme.openclaw_topology import service_agent_id, service_session_key
 from adminme.products.openclaw import main as seam
@@ -32,10 +33,21 @@ class MemberWorkRequest(work.MemberFollowUpRequest):
     run_nonce: str = Field(pattern=r"^[0-9a-f]{32}$")
 
 
+class NativeWorkerFailure(BaseModel):
+    """Host-only terminal wait result; never an assistant claim or timeout."""
+
+    model_config = {"extra": "forbid"}
+    status: Literal["error"]
+    run_id: str = Field(pattern=r"^[A-Za-z0-9:_-]{1,200}$")
+    worker_session_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    signature: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
 class MemberResultRequest(work.ServiceOnlyRequest):
     source_message_event_id: str = Field(min_length=1, max_length=240)
     follow_up_source_id: str = Field(min_length=1, max_length=240)
     run_nonce: str = Field(pattern=r"^[0-9a-f]{32}$")
+    native_failure: NativeWorkerFailure | None = None
 
 
 class ReadBackRequest(work.ServiceOnlyRequest):
@@ -89,6 +101,125 @@ async def _receipt(
             f"{operation}:{work._read_session_digest(p)}",
         ),
     )
+
+
+async def native_worker_failure(
+    request: Request,
+    body: MemberResultRequest,
+    worker: seam.Provenance,
+    *,
+    kind: Literal["browser", "scratchpad"],
+    admission: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Retain/read the authenticated parent's native error, with no worker call.
+
+    The existing member-private audit schema carries the real native run ID as
+    request correlation. Its fixed per-admission key binds the worker nonce;
+    changing run IDs under that key is a conflict. No capture or source-read
+    receipt is fabricated, and no raw native error/transcript is stored.
+    """
+    runtime = seam._runtime(request)
+    member = seam._session(request, body.provenance, required_permission="read_context")
+    admission_event_id = admission["event_id"]
+    private_scope = f"private:{member.auth_member_id}"
+    operation = f"tools.workstation-{kind}.worker-failed"
+    request_id = f"{operation}:{work._read_session_digest(worker)}"
+    key = f"openclaw:{member.auth_member_id}:openclaw.tool_call.recorded:{request_id}"
+    failure = body.native_failure
+    if failure is not None:
+        p = body.provenance
+        expected_digest = hashlib.sha256(
+            (worker.session_key or "").encode()
+        ).hexdigest()
+        material = [
+            "administrateme-native-worker-failure-v1",
+            kind,
+            body.follow_up_source_id,
+            body.source_message_event_id,
+            body.run_nonce,
+            p.actor_id,
+            p.agent_id or "",
+            p.session_key or "",
+            p.channel_id,
+            p.account_id or "",
+            p.message_id or "",
+            p.thread_id or "",
+            failure.worker_session_digest,
+            failure.run_id,
+            failure.status,
+        ]
+        signature = hmac.new(
+            runtime.settings.openclaw_shared_secret.encode(),
+            json.dumps(material, ensure_ascii=False, separators=(",", ":")).encode(),
+            hashlib.sha256,
+        ).hexdigest()
+        if failure.worker_session_digest != expected_digest or not hmac.compare_digest(
+            signature, failure.signature
+        ):
+            raise HTTPException(403, "native worker terminal binding is invalid")
+        context = member.service_context
+        if context is None:
+            raise HTTPException(403, "native worker parent authority is unavailable")
+        payload = {
+            "operation": operation,
+            **context.audit_payload(),
+            "permissions": sorted(context.permissions),
+            "openclaw_actor_id": p.actor_id,
+            "agent_id": p.agent_id,
+            "session_key": None,
+            "session_id": None,
+            "channel_id": p.channel_id,
+            "account_id": p.account_id,
+            "message_id": p.message_id,
+            "thread_id": p.thread_id,
+            "request_correlation_id": failure.run_id,
+            "causation_event_ids": [
+                admission_event_id,
+                body.follow_up_source_id,
+                body.source_message_event_id,
+            ],
+            "result_event_ids": [],
+            "observation_event_ids": [],
+            "reconciliation_event_ids": [],
+            "call_kind": p.call_kind,
+            "openclaw_version": p.openclaw_version,
+            "openclaw_commit": p.openclaw_commit,
+        }
+        await seam._append(
+            runtime,
+            member,
+            event_type="openclaw.tool_call.recorded",
+            payload=payload,
+            source_account_id=p.account_id or p.channel_id,
+            owner_scope=private_scope,
+            visibility_scope=private_scope,
+            sensitivity=admission["sensitivity"],
+            request_id=request_id,
+            causation_id=admission_event_id,
+            schema_version=2,
+        )
+    retained = await runtime.event_log.get_by_idempotency(member.tenant_id, key)
+    if retained is not None and (
+        retained["owner_scope"] != private_scope
+        or retained["visibility_scope"] != private_scope
+        or retained["type"] != "openclaw.tool_call.recorded"
+        or retained["schema_version"] != 2
+        or retained["payload"]["operation"] != operation
+        or retained["payload"]["causation_event_ids"][:2]
+        != [admission_event_id, body.follow_up_source_id]
+    ):
+        raise HTTPException(403, "native worker terminal does not match its admission")
+    return retained
+
+
+def failed_worker_result(failure: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "status": "failed",
+        "reason": "native_worker_failed",
+        "native_run_id": failure["payload"]["request_correlation_id"],
+        "failure_receipt_event_id": failure["event_id"],
+        "provider_effect_count": 0,
+    }
 
 
 async def _binding(
@@ -254,10 +385,14 @@ async def result(body: MemberResultRequest, request: Request) -> dict[str, Any]:
     binding = await _binding(runtime, session, p)
     if binding is None or binding["source_id"] != body.follow_up_source_id:
         raise HTTPException(403, "worker run does not match the authenticated request")
+    failure = await native_worker_failure(
+        request, body, p, kind="scratchpad", admission=binding["anchor"]
+    )
     proof = await _receipt(runtime, session, p, READ_BACK)
     if proof is None:
         return {
             "status": "pending_or_unknown",
+            **(failed_worker_result(failure) if failure else {}),
             "follow_up_source_id": body.follow_up_source_id,
             "work_id": receipt["task_id"],
             "provider_effect_count": 0,
