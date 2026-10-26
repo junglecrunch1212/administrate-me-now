@@ -719,6 +719,9 @@ jobs:
       - name: Install locked dependencies
         run: poetry sync --with dev
 
+      - name: Validate pinned preparation tool behavior
+        run: poetry run pytest -p no:cacheprovider -q tests/unit/bootstrap/test_prepared_runtime.py
+
       - name: Render lifecycle catalog for review
         run: >-
           poetry run python scripts/generate_event_lifecycle_catalog.py
