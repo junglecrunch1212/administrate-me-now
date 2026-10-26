@@ -1,6 +1,7 @@
 """Private provisioning changes only reviewed policy and a new preparation file."""
 
 from datetime import datetime, timezone
+from copy import deepcopy
 import json
 from pathlib import Path
 
@@ -154,6 +155,51 @@ def test_native_patch_uses_hash_guard_and_only_browser_and_existing_cos_agent(tm
     assert patch["browser"]["allowSystemProfileImport"] is False
     assert patch["plugins"] == {"entries": {"browser": {"enabled": True}}}
     assert "browser" not in original
+    keyed = deepcopy(original)
+    keyed["agents"] = {
+        "defaults": {"tools": {"deny": ["arbitrary-tool"]}},
+        "entries": {
+            agent: {
+                "tools": {"allow": list(SERVICE_PRIVATE_TOOLS), "deny": ["send"]},
+                "workspace": "retained-workspace",
+            },
+            "member-agent": {
+                "tools": {"allow": ["administrateme_state"]},
+                "model": "retained-model",
+            },
+        },
+    }
+    unchanged = deepcopy(keyed)
+    keyed_params = prepare_native_patch({**snapshot, "config": keyed}, paths, release)
+    keyed_patch = json.loads(keyed_params["raw"])
+    assert keyed_patch["agents"] == {
+        "entries": {agent: {"tools": {"allow": [*SERVICE_PRIVATE_TOOLS, "browser"]}}}
+    }
+    assert {key: value for key, value in keyed_patch.items() if key != "agents"} == {
+        key: value for key, value in patch.items() if key != "agents"
+    }
+    assert keyed == unchanged
+    assert "synthetic-secret" not in json.dumps(keyed_params)
+    for invalid_agents in (
+        {"list": original["agents"]["list"], "entries": keyed["agents"]["entries"]},
+        {"entries": []},
+        {"entries": {"member-agent": {"tools": {"allow": []}}}},
+        {"entries": {agent: {"id": "another-agent", "tools": {"allow": []}}}},
+        {
+            "entries": {
+                agent: keyed["agents"]["entries"][agent],
+                "duplicate": {"id": agent},
+            }
+        },
+        {"list": [original["agents"]["list"][0], original["agents"]["list"][0]]},
+        {"entries": {agent: {"tools": {"allow": "not-a-list"}}}},
+    ):
+        with pytest.raises(ValueError):
+            prepare_native_patch(
+                {**snapshot, "config": {**original, "agents": invalid_agents}},
+                paths,
+                release,
+            )
     assert json.loads(
         prepare_native_patch(snapshot, paths, release, disable=True)["raw"]
     ) == {"browser": {"enabled": False}}

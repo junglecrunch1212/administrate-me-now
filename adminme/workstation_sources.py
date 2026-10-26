@@ -121,6 +121,8 @@ def authorized_resource(
     }
     stable["source_policy_key"] = source.key
     stable["context_mode"] = effective["context_mode"]
+    if "identity_verifier" in resource:
+        stable["identity_verifier"] = resource["identity_verifier"]
     resource["authority_sha256"] = digest(stable)
     resource["source_policy_key"] = source.key
     resource["route_sha256"] = digest(resource)
@@ -136,7 +138,12 @@ def identity_matches(resource: dict[str, Any], actual: dict[str, Any]) -> bool:
         observed = actual[field]
         if not isinstance(observed, str):
             return False
-        if resource["identity_probes"][field]["extraction"] == "email":
+        email = (
+            field == "account"
+            if resource.get("identity_verifier") == "gmail_self_mailbox_v1"
+            else resource["identity_probes"][field]["extraction"] == "email"
+        )
+        if email:
             if observed.lower() != wanted.lower():
                 return False
         elif " ".join(observed.split()) != " ".join(wanted.split()):

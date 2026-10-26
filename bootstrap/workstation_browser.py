@@ -202,31 +202,60 @@ def prepare_native_patch(
             patch["plugins"]["allow"] = prepared["plugins"]["allow"]
         tools = native_service_tools(prepared, paths, release)
         if tools:
-            agents = original.get("agents", {}).get("list", [])
-            matches = [
-                row
-                for row in agents
-                if row.get("id") == service_agent_id(COS_SERVICE_PRINCIPAL_ID)
-            ]
-            if len(matches) != 1:
+            agents = original.get("agents")
+            if not isinstance(agents, dict) or ("list" in agents) == (
+                "entries" in agents
+            ):
                 raise ValueError(
-                    "one current CoS worker must be deployed before browser admission"
+                    "one unambiguous native agent representation is required"
                 )
-            allowed = matches[0].get("tools", {}).get("allow")
+            agent_id = service_agent_id(COS_SERVICE_PRINCIPAL_ID)
+            if "entries" in agents:
+                entries = agents["entries"]
+                if not isinstance(entries, dict) or any(
+                    not isinstance(row, dict) for row in entries.values()
+                ):
+                    raise ValueError("native keyed agent entries are malformed")
+                matches = [
+                    row
+                    for key, row in entries.items()
+                    if key == agent_id or row.get("id") == agent_id
+                ]
+                if (
+                    len(matches) != 1
+                    or agent_id not in entries
+                    or entries[agent_id].get("id", agent_id) != agent_id
+                ):
+                    raise ValueError(
+                        "one current CoS worker must be deployed before browser admission"
+                    )
+            else:
+                rows = agents["list"]
+                if not isinstance(rows, list) or any(
+                    not isinstance(row, dict) for row in rows
+                ):
+                    raise ValueError("native agent list is malformed")
+                matches = [row for row in rows if row.get("id") == agent_id]
+                if len(matches) != 1:
+                    raise ValueError(
+                        "one current CoS worker must be deployed before browser admission"
+                    )
+            current_tools = matches[0].get("tools")
+            allowed = (
+                current_tools.get("allow") if isinstance(current_tools, dict) else None
+            )
             if not isinstance(allowed, list) or any(
                 not isinstance(name, str) for name in allowed
             ):
                 raise ValueError(
                     "the CoS worker needs an explicit existing tool allowlist"
                 )
-            patch["agents"] = {
-                "list": [
-                    {
-                        "id": matches[0]["id"],
-                        "tools": {"allow": list(dict.fromkeys([*allowed, *tools]))},
-                    }
-                ]
-            }
+            additive = {"tools": {"allow": list(dict.fromkeys([*allowed, *tools]))}}
+            patch["agents"] = (
+                {"entries": {agent_id: additive}}
+                if "entries" in agents
+                else {"list": [{"id": agent_id, **additive}]}
+            )
     return {
         "baseHash": snapshot["hash"],
         "raw": json.dumps(patch, separators=(",", ":")),
