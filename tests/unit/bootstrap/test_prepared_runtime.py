@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import textwrap
@@ -40,8 +41,9 @@ def test_serialized_poetry_prevents_installer_umask_race(
     assert poetry is not None, "the pinned Poetry launcher must be installed"
     shebang = Path(poetry).read_text().splitlines()[0]
     assert shebang.startswith("#!"), "Poetry must have a Python launcher"
-    poetry_python = Path(shebang[2:].strip())
-    assert poetry_python.is_absolute() and poetry_python.is_file()
+    poetry_python = shlex.split(shebang[2:].strip())
+    assert poetry_python and Path(poetry_python[0]).is_absolute()
+    assert Path(poetry_python[0]).is_file()
     # Keep this process-wide umask experiment outside pytest and its workers.
     child = textwrap.dedent(
         """
@@ -137,7 +139,7 @@ def test_serialized_poetry_prevents_installer_umask_race(
             child_environment.pop("POETRY_INSTALLER_PARALLEL")
         result = subprocess.run(
             [
-                str(poetry_python),
+                *poetry_python,
                 "-c",
                 child,
                 str(release),
