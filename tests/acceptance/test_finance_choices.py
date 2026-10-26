@@ -286,7 +286,10 @@ def test_native_choice_query_is_private_current_and_revocable(tmp_path):
             report_id="owner_choices",
             limit=1,
         )
-        assert hidden.status_code == 403
+        assert hidden.status_code == 200, hidden.text
+        assert hidden.json()["state"] == "permission_required"
+        assert hidden.json()["provider_effect_count"] == 0
+        assert "choices" not in hidden.json() and "answer_ref" not in hidden.json()
         assert (
             "123456" not in hidden.text and "Synthetic reserve goal" not in hidden.text
         )

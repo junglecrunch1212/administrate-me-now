@@ -1,6 +1,7 @@
 """Metadata-only native capability uses existing authority, never finance enablement."""
 
 from dataclasses import replace
+from datetime import datetime, timezone
 import asyncio
 
 from fastapi.testclient import TestClient
@@ -11,7 +12,6 @@ from adminme.runtime.application import create_application
 from tests.acceptance.test_finance_disclosure import (
     enabled_settings,
     import_fixture,
-    revoke,
 )
 from tests.acceptance.test_finance_native_facade import _post, _finance_provenance
 from tests.acceptance.test_openclaw_native_seam import (
@@ -70,6 +70,34 @@ def grant_read_only(client, *, metadata=True):
         response_control = control(client, cos=True)
         assert response_control.status_code == 200, response_control.text
     return response.json()["grant_id"]
+
+
+async def revoke_metadata_grant(runtime, grant):
+    """This separate metadata capability retains general private-read authority."""
+    now = datetime.now(timezone.utc)
+    scope = f"private:{PRINCIPAL}"
+    event_id = await runtime.events.write(
+        EventEnvelope(
+            event_at_ms=int(now.timestamp() * 1000),
+            tenant_id=runtime.settings.instance.tenant_id,
+            type="service.delegation.revoked",
+            schema_version=1,
+            occurred_at=now.isoformat(),
+            source_adapter="synthetic_acceptance",
+            source_account_id="synthetic",
+            actor_identity=PRINCIPAL,
+            owner_scope=scope,
+            visibility_scope=scope,
+            sensitivity="privileged",
+            payload={
+                "grant_id": grant,
+                "revoked_by_member_id": PRINCIPAL,
+                "revoked_at": now.isoformat(),
+                "reason": "fixture",
+            },
+        )
+    )
+    await runtime.wait_for_projection("parties", event_id)
 
 
 async def disable_during_audit(runtime):
@@ -231,7 +259,7 @@ def test_revocation_after_audit_prevents_disclosure(tmp_path, monkeypatch, chang
         async def revoke_after_audit(request, session, provenance, **kwargs):
             result = await original(request, session, provenance, **kwargs)
             if change == "grant":
-                await revoke(runtime, grant)
+                await revoke_metadata_grant(runtime, grant)
             elif change == "gate":
                 await disable_during_audit(runtime)
             else:

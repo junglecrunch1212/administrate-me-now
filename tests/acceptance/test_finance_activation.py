@@ -608,17 +608,32 @@ def test_revocation_after_retrieval_before_disclosure_blocks_result(
         owner = build_internal_session(PRINCIPAL, "principal", p["tenant_id"])
         _, session_key = runtime.member_chat_binding(PRINCIPAL)
 
-        async def check():
-            await check_disclosure(
+        # The denied query may create an audit, but cannot mint a result receipt.
+        assert client.portal.call(
+            events, runtime, ["finance.disclosure_recorded"]
+        ) == seeded_receipts
+
+        async def check(answer):
+            return await check_disclosure(
                 runtime,
                 owner,
                 session_key,
                 run_id="revoked-at-delivery",
                 require_run=True,
+                answer_text=answer,
             )
 
-        with pytest.raises(FinanceDisclosureError):
-            client.portal.call(check)
+        # Explicit result reuse is a new Finance disclosure, even when its
+        # reference came from an earlier authorized question in this session.
+        answer = json.dumps(
+            {"finance_answer": {"result_refs": [seeded.json()["answer_ref"]]}}
+        )
+        with pytest.raises(FinanceDisclosureError, match="authority_changed"):
+            client.portal.call(check, answer)
+        # No receipt/reference means ordinary discussion, not another Finance
+        # read. A prior authorized question never locks the whole conversation.
+        ordinary = "We can discuss tomorrow."
+        assert client.portal.call(check, ordinary) == ordinary
 
 
 @pytest.mark.parametrize("failure", ["unavailable", "malformed"])

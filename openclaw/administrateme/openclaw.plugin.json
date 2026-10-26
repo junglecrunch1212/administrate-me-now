@@ -33,6 +33,11 @@
     "nativeAccountApps": "disabled",
     "serviceWorkspaceFiles": ["AGENTS.md", "IDENTITY.md"],
     "tools": [
+      "administrateme_finance_bindings",
+      "administrateme_finance_status",
+      "administrateme_finance_query",
+      "administrateme_finance_calculate",
+      "administrateme_finance_job",
       "administrateme_state",
       "administrateme_what_now",
       "administrateme_capabilities",

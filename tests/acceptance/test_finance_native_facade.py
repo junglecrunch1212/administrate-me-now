@@ -425,6 +425,8 @@ def test_changed_enabled_owner_mapping_suppresses_old_result(
     app = create_application(settings)
     original = main._finance_audit
 
+    reassigned = []
+
     async def reassign_after_read(request, session, provenance, **kwargs):
         receipt = await original(request, session, provenance, **kwargs)
         if kwargs.get("operation") == "finance.calculate":
@@ -436,6 +438,7 @@ def test_changed_enabled_owner_mapping_suppresses_old_result(
                     coordinate: OTHER,
                 },
             )
+            reassigned.append((session.auth_member_id, OTHER))
         return receipt
 
     with TestClient(app) as client:
@@ -479,8 +482,9 @@ def test_changed_enabled_owner_mapping_suppresses_old_result(
                 },
             },
         )
+        assert reassigned == [(PRINCIPAL, OTHER)]
         assert response.status_code == 403, response.text
-        assert response.json()["detail"] == "finance_authority_changed"
+        assert response.json()["detail"] == "finance_private_context_required"
         assert "120000" not in response.text
         assert "values" not in response.text
 
