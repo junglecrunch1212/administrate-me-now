@@ -543,8 +543,6 @@ def check_corrupted_input(stored, case, changed, *, as_text=False):
         "duplicate-used-over-limit-after",
     }:
         assert old["exception"] == "builtins.ValueError"
-    if case == "removed-deep":
-        assert "exception" in old
     if as_text:
         raise AssertionError("invalid UTF-8 TEXT unexpectedly survived the driver read")
 

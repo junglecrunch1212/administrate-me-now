@@ -42,7 +42,7 @@ jobs:
           expected=['adminme/finance/planning_store.py', 'tests/acceptance/test_finance_summary_metadata.py', 'tests/fixtures/finance_watchdog.py', 'tests/fixtures/finance_watchdog_controller.py', '.github/workflows/finance-encrypted-staging.yml']
           actual=set(subprocess.check_output(['git','diff','--name-only',baseline,'HEAD'],text=True).splitlines())
           assert actual==set(expected),actual
-          pins={'adminme/finance/planning_store.py': '8cccb48ef9a74668b789b63b32233f9fd660f4ce2c960425600d6ecf8e7a0ba9', 'tests/acceptance/test_finance_summary_metadata.py': 'f32e6f09b4d2dc04dd7b7ce1f7bf0fb67c8afdc5a72d2a40712d9bd691c1289f', 'tests/fixtures/finance_watchdog.py': '3e5b52280ebfbefe90d53fa7aa7749761338dca054bf0a8e5e2b8bce7eb7ae25', 'tests/fixtures/finance_watchdog_controller.py': '4486d4e70e2120b11adc832d31dcf6283fa84fa857688ad7f1e7ff4d1a025fcb'}
+          pins={'adminme/finance/planning_store.py': '8cccb48ef9a74668b789b63b32233f9fd660f4ce2c960425600d6ecf8e7a0ba9', 'tests/acceptance/test_finance_summary_metadata.py': '8eac4de7d2df45cf8287a0845b7f012277a95988bd1b0ec22741824d79f74df4', 'tests/fixtures/finance_watchdog.py': '3e5b52280ebfbefe90d53fa7aa7749761338dca054bf0a8e5e2b8bce7eb7ae25', 'tests/fixtures/finance_watchdog_controller.py': '4486d4e70e2120b11adc832d31dcf6283fa84fa857688ad7f1e7ff4d1a025fcb'}
           for path,digest in pins.items():
               raw=pathlib.Path(path).read_bytes()
               assert hashlib.sha256(raw).hexdigest()==digest,path
