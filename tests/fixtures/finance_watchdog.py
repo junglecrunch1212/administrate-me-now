@@ -135,6 +135,52 @@ def mode_budget(mode):
     }
 
 
+class OwnerPhaseClock:
+    """Validate owned same-host phase clocks independently of IPC polling delay."""
+
+    def __init__(self, caps, origin):
+        self.caps = caps
+        self.index = 0
+        self.active = self.started = None
+        self.last_at = origin
+
+    @property
+    def complete(self):
+        return self.index == len(self.caps)
+
+    def accept(self, message, now):
+        if (
+            set(message) != {"kind", "name", "edge", "at"}
+            or message["kind"] != "phase"
+        ):
+            raise ValueError("phase_fields")
+        at = message["at"]
+        if (
+            type(at) not in (int, float)
+            or not math.isfinite(at)
+            or not self.last_at <= at <= now
+        ):
+            raise ValueError("phase_clock")
+        names = list(self.caps)
+        if self.complete or message["name"] != names[self.index]:
+            raise ValueError("phase_order")
+        if message["edge"] == "start" and self.active is None:
+            self.active, self.started = message["name"], at
+        elif message["edge"] == "end" and self.active == message["name"]:
+            if at - self.started > self.caps[self.active]:
+                raise TimeoutError("phase_deadline:" + self.active)
+            self.index += 1
+            self.active = self.started = None
+        else:
+            raise ValueError("phase_edge")
+        self.last_at = at
+
+    def overdue(self, now):
+        if self.active is not None and now - self.started > self.caps[self.active]:
+            return self.active
+        return None
+
+
 def summary_cleanup_deadlines(absolute, finish_at, stop_at=None):
     """One earliest origin; faults can shorten escalation, never borrow reserves."""
     origin = min(finish_at, stop_at) if stop_at is not None else finish_at
@@ -335,9 +381,7 @@ def main(mode, directory):
         report["evidence_max_bytes"] = 0
 
     owner_phases = {}
-    phase_index = 0
-    phase_active = None
-    phase_started = None
+    phase_clock = None
     if mode == "owner-production":
         from tests.fixtures.finance_owner_production import (
             PHASES,
@@ -346,6 +390,7 @@ def main(mode, directory):
         )
 
         owner_phases = PHASES
+        phase_clock = OwnerPhaseClock(owner_phases, STARTED)
         report.update(
             phase_caps=owner_phases,
             phases_complete=False,
@@ -588,11 +633,6 @@ def main(mode, directory):
                     n > 16 * MIB for n in sizes
                 ):
                     exceeded.append("evidence_bytes")
-                if (
-                    phase_active is not None
-                    and now - phase_started > owner_phases[phase_active]
-                ):
-                    exceeded.append("phase_deadline:" + phase_active)
             if exceeded:
                 stop("containment:" + ",".join(exceeded), now)
             for _, _ in selector.select(timeout=0):
@@ -657,28 +697,10 @@ def main(mode, directory):
                         elif (
                             mode == "owner-production"
                             and msg.get("kind") == "phase"
-                            and set(msg) == {"kind", "name", "edge"}
                         ):
-                            phase_now = time.monotonic()
-                            names = list(owner_phases)
-                            if (
-                                phase_index >= len(names)
-                                or msg["name"] != names[phase_index]
-                            ):
-                                raise ValueError("phase_order")
-                            if msg["edge"] == "start" and phase_active is None:
-                                phase_active, phase_started = msg["name"], phase_now
-                            elif msg["edge"] == "end" and phase_active == msg["name"]:
-                                if (
-                                    phase_now - phase_started
-                                    > owner_phases[phase_active]
-                                ):
-                                    stop("phase_deadline:" + phase_active, phase_now)
-                                phase_index += 1
-                                phase_active = phase_started = None
-                                report["phases_complete"] = phase_index == len(names)
-                            else:
-                                raise ValueError("phase_edge")
+                            assert phase_clock is not None
+                            phase_clock.accept(msg, time.monotonic())
+                            report["phases_complete"] = phase_clock.complete
                         elif msg.get("kind") == "work_finished" and set(msg) == {
                             "kind",
                             "at",
@@ -702,8 +724,18 @@ def main(mode, directory):
                             control_kind=msg["kind"],
                             fields={k: v for k, v in msg.items() if k != "kind"},
                         )
+                    except TimeoutError as exc:
+                        stop(str(exc), time.monotonic())
                     except (ValueError, TypeError, KeyError) as exc:
                         stop("invalid_control:" + str(exc)[:100], now)
+            # An on-time completion may already be queued when the supervisor
+            # wakes after the deadline. Apply ordered source-clock transitions
+            # before testing the still-active phase; no deadline gains IPC slack.
+            if phase_clock is not None:
+                phase_now = time.monotonic()
+                overdue = phase_clock.overdue(phase_now)
+                if overdue is not None:
+                    stop("containment:phase_deadline:" + overdue, phase_now)
             while True:
                 try:
                     pid, status, usage = os.wait4(-1, os.WNOHANG)

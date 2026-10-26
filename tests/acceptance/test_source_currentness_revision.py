@@ -581,24 +581,12 @@ def test_currentness_interrupted_publication_retains_authority_and_attempts(
                 approve_runtime_migration=True,
                 allow_openclaw_rollback=True,
             )
-        baseline = _predecessor_case(
-            tmp_path, monkeypatch, config, [], {}, predecessor=predecessor
-        )
-        assert baseline["model_calls"] == []
-        assert baseline["constitutional_agreements"] == [
-            {"revision": 1, "state": "active"}
-        ]
-    model = legacy._model(monkeypatch)
-    predecessor = None
-    if authority == "unchanged" and outcome == "revision":
-        # An actual rollback has predecessor history. Establish its fixed
-        # constitution before the successor registers its newer revision, so
-        # rollback must preserve every event rather than register a first use.
-        monkeypatch.setattr(legacy, "PREDECESSOR", PREDECESSOR)
-        predecessor = legacy._predecessor(tmp_path)
         established = _predecessor_case(
             tmp_path, monkeypatch, config, [], {}, predecessor=predecessor
         )
+        assert established["constitutional_agreements"] == [
+            {"revision": 1, "state": "active"}
+        ]
         assert established["model_calls"] == []
         [constitution] = legacy._of_type(
             established["events"], "operating_agreement.constitution_registered"
@@ -613,6 +601,7 @@ def test_currentness_interrupted_publication_retains_authority_and_attempts(
             1,
             "active",
         )
+    model = legacy._model(monkeypatch)
     blocked = threading.Event()
     original = EventWriter.write
     crash = False

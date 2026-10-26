@@ -238,7 +238,7 @@ class Run:
         self.phase_name = name
         row = {"phase": name, "started": time.monotonic(), "cap_seconds": PHASES[name]}
         self.deadline = row["started"] + PHASES[name]
-        self.notify("phase", name=name, edge="start")
+        self.notify("phase", name=name, edge="start", at=row["started"])
         append(self.root, "phases.jsonl", {**row, "edge": "start"})
         try:
             async with asyncio.timeout_at(self.deadline):
@@ -252,7 +252,7 @@ class Run:
         finally:
             row["finished"] = time.monotonic()
             append(self.root, "phases.jsonl", {**row, "edge": "end"})
-            self.notify("phase", name=name, edge="end")
+            self.notify("phase", name=name, edge="end", at=row["finished"])
             self.phases.append(row)
 
     async def request(
