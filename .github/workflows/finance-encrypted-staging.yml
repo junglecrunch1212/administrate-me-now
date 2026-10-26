@@ -1,4 +1,4 @@
-name: Focused Finance timer ownership and delivery regression
+name: Focused Finance fixture isolation comparison
 on:
   push:
     branches: ['codex/finance-encrypted-staging']
@@ -42,7 +42,7 @@ jobs:
           expected=['adminme/finance/planning_store.py', 'adminme/finance/worker.py', 'tests/acceptance/test_finance_summary_metadata.py', 'tests/fixtures/finance_watchdog.py', 'tests/fixtures/finance_watchdog_controller.py', 'tests/unit/test_finance_watchdog_cleanup.py', 'tests/unit/test_finance_worker.py', '.github/workflows/finance-encrypted-staging.yml']
           actual=set(subprocess.check_output(['git','diff','--name-only',baseline,'HEAD'],text=True).splitlines())
           assert actual==set(expected),actual
-          pins={'adminme/finance/planning_store.py': '8cccb48ef9a74668b789b63b32233f9fd660f4ce2c960425600d6ecf8e7a0ba9', 'adminme/finance/worker.py': '16ee37151c62dce4a9368e7629b712f620fbe23b317b31815b276edd7ed26970', 'tests/acceptance/test_finance_summary_metadata.py': '5ba5038720faadc0edaa9f826c3be0b07723455f4631eda269eeab2353c19421', 'tests/fixtures/finance_watchdog.py': '94deabf3f093f0d22aff8a4077af97c24130eaa56dd733bd904916e270bd27ba', 'tests/fixtures/finance_watchdog_controller.py': '078476949b9864db77a63e5ead8061e610ea42cb2d712c68a84e517a069a81fb', 'tests/unit/test_finance_watchdog_cleanup.py': '28655ba3231ec32912782816bd7cbba41dfd2ce2e9e525d25a593ad9608049e1', 'tests/unit/test_finance_worker.py': '8619afbd5a65632cda2ec12dd58f7ff0a5c304b6c351e9293ce7abcb2f41029c'}
+          pins={'adminme/finance/planning_store.py': '8cccb48ef9a74668b789b63b32233f9fd660f4ce2c960425600d6ecf8e7a0ba9', 'adminme/finance/worker.py': '16ee37151c62dce4a9368e7629b712f620fbe23b317b31815b276edd7ed26970', 'tests/acceptance/test_finance_summary_metadata.py': '5ba5038720faadc0edaa9f826c3be0b07723455f4631eda269eeab2353c19421', 'tests/fixtures/finance_watchdog.py': '94deabf3f093f0d22aff8a4077af97c24130eaa56dd733bd904916e270bd27ba', 'tests/fixtures/finance_watchdog_controller.py': 'e3531aa6e5777537abb604a711bc0469685550a47ec7c9ecaa432f8804cc8418', 'tests/unit/test_finance_watchdog_cleanup.py': '28655ba3231ec32912782816bd7cbba41dfd2ce2e9e525d25a593ad9608049e1', 'tests/unit/test_finance_worker.py': '8619afbd5a65632cda2ec12dd58f7ff0a5c304b6c351e9293ce7abcb2f41029c'}
           for path,digest in pins.items():
               raw=pathlib.Path(path).read_bytes()
               assert hashlib.sha256(raw).hexdigest()==digest,path
@@ -62,18 +62,18 @@ jobs:
               if isinstance(node,ast.Call) and isinstance(node.func,ast.Attribute) and node.func.attr=='execute' and node.args and isinstance(node.args[0],ast.Name) and node.args[0].id=='metadata_sql':
                   node.args[0]=ast.Constant(legacy);replacements+=1
           assert replacements==1 and ast.dump(old,include_attributes=False)==ast.dump(new,include_attributes=False)
-          expected_cases=[('tests.unit.test_finance_worker', 'test_closed_worker_releases_cancelled_timer_without_gc'), ('tests.unit.test_finance_worker', 'test_timer_start_failure_preserves_error_and_reaps_child'), ('tests.unit.test_finance_worker', 'test_retry_callback_releases_timer_ownership_without_self_join'), ('tests.unit.test_finance_worker', 'test_timeout_abort_overlaps_close_reference_release'), ('tests.unit.test_finance_worker', 'test_owned_child_failure_closes_process_and_releases_admission[unknown_operation]'), ('tests.unit.test_finance_worker', 'test_owned_child_failure_closes_process_and_releases_admission[oversize]'), ('tests.unit.test_finance_worker', 'test_owned_child_failure_closes_process_and_releases_admission[timeout]'), ('tests.unit.test_finance_worker', 'test_uncertain_reap_keeps_admission_quarantined_until_confirmed[False-terminate]'), ('tests.unit.test_finance_worker', 'test_uncertain_reap_keeps_admission_quarantined_until_confirmed[False-kill]'), ('tests.unit.test_finance_worker', 'test_uncertain_reap_keeps_admission_quarantined_until_confirmed[False-wait]'), ('tests.unit.test_finance_worker', 'test_uncertain_reap_keeps_admission_quarantined_until_confirmed[True-terminate]'), ('tests.unit.test_finance_worker', 'test_uncertain_reap_keeps_admission_quarantined_until_confirmed[True-kill]'), ('tests.unit.test_finance_worker', 'test_uncertain_reap_keeps_admission_quarantined_until_confirmed[True-wait]'), ('tests.acceptance.test_finance_summary_metadata', 'test_summary_replay_and_idempotent_import'), ('tests.acceptance.test_finance_summary_metadata', 'test_summary_ingestion_keeps_revision_membership[first]'), ('tests.acceptance.test_finance_summary_metadata', 'test_summary_ingestion_keeps_revision_membership[last]'), ('tests.acceptance.test_finance_summary_metadata', 'test_summary_authority_revoked_after_read[native]'), ('tests.acceptance.test_finance_summary_metadata', 'test_summary_authority_revoked_after_read[member]'), ('tests.acceptance.test_finance_summary_metadata', 'test_summary_native_member_delivery_contract')]
-          assert len(expected_cases)==len(set(expected_cases))==19
+          expected_cases=[('fresh', 'tests.acceptance.test_finance_summary_metadata', 'test_summary_native_member_delivery_contract'), ('sequence', 'tests.unit.test_finance_worker', 'test_closed_worker_releases_cancelled_timer_without_gc'), ('sequence', 'tests.unit.test_finance_worker', 'test_timer_start_failure_preserves_error_and_reaps_child'), ('sequence', 'tests.unit.test_finance_worker', 'test_retry_callback_releases_timer_ownership_without_self_join'), ('sequence', 'tests.unit.test_finance_worker', 'test_timeout_abort_overlaps_close_reference_release'), ('sequence', 'tests.unit.test_finance_worker', 'test_owned_child_failure_closes_process_and_releases_admission[unknown_operation]'), ('sequence', 'tests.unit.test_finance_worker', 'test_owned_child_failure_closes_process_and_releases_admission[oversize]'), ('sequence', 'tests.unit.test_finance_worker', 'test_owned_child_failure_closes_process_and_releases_admission[timeout]'), ('sequence', 'tests.unit.test_finance_worker', 'test_uncertain_reap_keeps_admission_quarantined_until_confirmed[False-terminate]'), ('sequence', 'tests.unit.test_finance_worker', 'test_uncertain_reap_keeps_admission_quarantined_until_confirmed[False-kill]'), ('sequence', 'tests.unit.test_finance_worker', 'test_uncertain_reap_keeps_admission_quarantined_until_confirmed[False-wait]'), ('sequence', 'tests.unit.test_finance_worker', 'test_uncertain_reap_keeps_admission_quarantined_until_confirmed[True-terminate]'), ('sequence', 'tests.unit.test_finance_worker', 'test_uncertain_reap_keeps_admission_quarantined_until_confirmed[True-kill]'), ('sequence', 'tests.unit.test_finance_worker', 'test_uncertain_reap_keeps_admission_quarantined_until_confirmed[True-wait]'), ('sequence', 'tests.acceptance.test_finance_summary_metadata', 'test_summary_replay_and_idempotent_import'), ('sequence', 'tests.acceptance.test_finance_summary_metadata', 'test_summary_ingestion_keeps_revision_membership[first]'), ('sequence', 'tests.acceptance.test_finance_summary_metadata', 'test_summary_ingestion_keeps_revision_membership[last]'), ('sequence', 'tests.acceptance.test_finance_summary_metadata', 'test_summary_authority_revoked_after_read[native]'), ('sequence', 'tests.acceptance.test_finance_summary_metadata', 'test_summary_authority_revoked_after_read[member]'), ('sequence', 'tests.acceptance.test_finance_summary_metadata', 'test_summary_native_member_delivery_contract')]
+          assert len(expected_cases)==len(set(expected_cases))==20
           out=pathlib.Path(os.environ['FINANCE_SUMMARY_PINS'])
           (out/'expected-tests.json').write_text(json.dumps(expected_cases,indent=2)+'\n')
           tracked=subprocess.check_output(['git','ls-files','adminme','tests/fixtures','tests/acceptance/test_finance_planning.py','tests/acceptance/test_finance_summary_metadata.py','tests/unit/test_finance_watchdog_cleanup.py','tests/unit/test_finance_worker.py','pyproject.toml','poetry.lock'],text=True).splitlines()
           source={p:hashlib.sha256(pathlib.Path(p).read_bytes()).hexdigest() for p in tracked if pathlib.Path(p).is_file()}
           (out/'source-pins.json').write_text(json.dumps({'candidate':os.environ['GITHUB_SHA'],'baseline':baseline,'changed':expected,'pins':pins,'source':source},indent=2)+'\n')
-          (out/'prior-evidence.json').write_text(json.dumps({'failed_representative': 40252645394, 'zip_sha256': '3ad9e51bea70055999bc488d7c96853fe2bbf43319a393ad5fa97a32c1ac928f', 'previous_observer45_run': 40250697052, 'previous_launch13_run': 40252645394, 'repeated_launch_or_observer_tests': 0, 'previous_proofs_do_not_prove_this_read_path': True, 'failed_summary_run': 40259507076, 'failed_summary_zip_sha256': '50580474bb5493364033eee8c85cd975ad87942225697a756e0e708cc5e8d2cc', 'failed_summary_passed': 72, 'failed_summary_failed': 1, 'failed_summary_unexecuted': 5, 'failed_summary_forced': True, 'prior_30c_run': 40261417864, 'prior_30c_zip_sha256': '47b15cdfb1895c1ba07b53151099f6ccb93cd543efe20dbff86b8166415442a1', 'prior_30c_passed': 11, 'prior_30c_forced': True, 'reused_prior_passed_nodes': 67, 'resource_qualified': False, 'production_qualified': False, 'prior_5001_run': 40265603172, 'prior_5001_zip_sha256': 'ddbf544208d2a89975934f9cdf0d73955fbecd8c5dfc1512689aa8050b3399bf', 'prior_5001_passed': 16, 'prior_5001_failed': 1, 'prior_5001_unexecuted': 5, 'prior_5001_forced': False, 'prior_5001_controller_exit': 1, 'application_case_scope': 6, 'new_worker_cases': 4, 'existing_worker_cases': 9, 'repeated_behavior_cases': 15, 'reused_clock_boundary_cases': 11, 'harness_budget_changed': False, 'production_change': 'Release cancelled primary/retry Timer references; preserve timeout, reap, admission and quarantine policies.', 'cause_claim': 'Confirmed reference cycle correction; not proof of the 5001 OS cause or the 53ee inner cause.'},indent=2)+'\n')
+          (out/'prior-evidence.json').write_text(json.dumps({'failed_representative': 40252645394, 'zip_sha256': '3ad9e51bea70055999bc488d7c96853fe2bbf43319a393ad5fa97a32c1ac928f', 'previous_observer45_run': 40250697052, 'previous_launch13_run': 40252645394, 'repeated_launch_or_observer_tests': 0, 'previous_proofs_do_not_prove_this_read_path': True, 'failed_summary_run': 40259507076, 'failed_summary_zip_sha256': '50580474bb5493364033eee8c85cd975ad87942225697a756e0e708cc5e8d2cc', 'failed_summary_passed': 72, 'failed_summary_failed': 1, 'failed_summary_unexecuted': 5, 'failed_summary_forced': True, 'prior_30c_run': 40261417864, 'prior_30c_zip_sha256': '47b15cdfb1895c1ba07b53151099f6ccb93cd543efe20dbff86b8166415442a1', 'prior_30c_passed': 11, 'prior_30c_forced': True, 'reused_prior_passed_nodes': 67, 'resource_qualified': False, 'production_qualified': False, 'prior_5001_run': 40265603172, 'prior_5001_zip_sha256': 'ddbf544208d2a89975934f9cdf0d73955fbecd8c5dfc1512689aa8050b3399bf', 'prior_5001_passed': 16, 'prior_5001_failed': 1, 'prior_5001_unexecuted': 5, 'prior_5001_forced': False, 'prior_5001_controller_exit': 1, 'reused_clock_boundary_cases': 11, 'harness_budget_changed': False, 'prior_02aa_run': 40268233509, 'prior_02aa_zip_sha256': '7a851ff9b49b6b4d7e44411c8631ec43a3052d2bc54c4751c939167f04874b01', 'prior_02aa_passed': 18, 'prior_02aa_failed': 1, 'prior_02aa_forced': False, 'prior_02aa_controller_exit': 1, 'comparison_arms': 2, 'diagnostic_test_executions': 20, 'sequence_setup_predecessors': 18, 'production_change': False, 'allocator_stack_gc_changed': False, 'cause_claim': 'Fresh-process fixture-isolation comparison only; not OS-cause or production qualification.'},indent=2)+'\n')
           PY_CHECK
           .venv/bin/ruff check adminme/finance/planning_store.py tests/acceptance/test_finance_summary_metadata.py tests/fixtures/finance_watchdog.py tests/fixtures/finance_watchdog_controller.py tests/unit/test_finance_watchdog_cleanup.py adminme/finance/worker.py tests/unit/test_finance_worker.py
           .venv/bin/ruff format --check adminme/finance/planning_store.py tests/acceptance/test_finance_summary_metadata.py tests/fixtures/finance_watchdog.py tests/fixtures/finance_watchdog_controller.py tests/unit/test_finance_watchdog_cleanup.py adminme/finance/worker.py tests/unit/test_finance_worker.py
-      - name: One bounded worker-and-six-application-case regression
+      - name: One bounded sequential fresh-versus-predecessor comparison
         id: focused
         timeout-minutes: 3
         run: |
@@ -88,15 +88,36 @@ jobs:
           import hashlib,json,math,os,pathlib,shutil,sys,xml.etree.ElementTree as E
           root=pathlib.Path(os.environ['FINANCE_STORAGE_ARTIFACT_DIR']);root.mkdir(exist_ok=True)
           pins=pathlib.Path(os.environ['FINANCE_SUMMARY_PINS']);pins.mkdir(exist_ok=True)
-          expected=[];rows=[];parse_error=None;watch={}
+          expected=[];rows=[];labels=[];arms=[];parse_error=None;watch={};arm_evidence=False
           try:
               expected=json.loads((pins/'expected-tests.json').read_text())
-              rows=E.parse(root/'results.xml').findall('.//testcase')
               watch=json.loads((root/'watchdog.json').read_text())
+              arms=json.loads((root/'comparison-results.json').read_text())
+              for arm in ('fresh','sequence'):
+                  arm_rows=E.parse(root/f'results-{arm}.xml').findall('.//testcase')
+                  rows.extend(arm_rows);labels.extend([arm]*len(arm_rows))
           except (OSError,ValueError,E.ParseError) as exc:parse_error=type(exc).__name__
-          ids=[(r.attrib.get('classname'),r.attrib.get('name')) for r in rows]
+          ids=[(arm,r.attrib.get('classname'),r.attrib.get('name')) for arm,r in zip(labels,rows,strict=True)]
           required={tuple(row) for row in expected}
-          exact=len(ids)==len(set(ids))==len(required)==19 and set(ids)==required
+          exact=len(ids)==len(set(ids))==len(required)==20 and set(ids)==required
+          try:
+              assert [a['arm'] for a in arms]==['fresh','sequence']
+              assert all(a['evidence_complete'] is True and a['exit_code'] in (0,1) and a['remaining_owned']==[] and a['started']<=a['reaped_at'] for a in arms)
+              assert arms[0]['reaped_at']<=arms[1]['started']
+              snapshots=[json.loads((root/f"arm-facts-{a['arm']}.json").read_text()) for a in arms]
+              for arm,facts in zip(arms,snapshots,strict=True):
+                  assert set(facts)=={'before','after'}
+                  for value in facts.values():
+                      assert value['pid']==arm['pid'] and arm['started']<=value['at']<=arm['reaped_at']
+                      assert value['address_space_limit']==[1024**3,1024**3] and value['cpu_limit']==[60,60]
+                      assert value['allocator_env']==dict.fromkeys(('MALLOC_ARENA_MAX','GLIBC_TUNABLES','PYTHONMALLOC','LD_PRELOAD'))
+                      assert type(value['glibc_version']) is str and value['glibc_version'].startswith('glibc ')
+                      assert value['python_stack_size_setting']==0 and value['mapping_complete'] is True
+                      assert 0<value['mapping_rows']<=4096 and value['VmSize']<=1024**3 and value['Threads']>0
+                      assert all(type(n) is int and n>=0 for n in value['mapping_categories_bytes'].values())
+                      assert value['stack_limit']==snapshots[0]['before']['stack_limit'] and value['glibc_version']==snapshots[0]['before']['glibc_version']
+              arm_evidence=True
+          except (OSError,KeyError,ValueError,TypeError,AssertionError) as exc:parse_error=parse_error or 'arm_evidence:'+type(exc).__name__
           clean_cases=all(not any(r.find(k) is not None for k in ('failure','error','skipped')) for r in rows)
           cleaned=watch.get('scratch_removed') is True and watch.get('remaining_owned')==[] and not (root/'scratch').exists()
           cleanup_covered=False
@@ -115,17 +136,20 @@ jobs:
               cleanup_covered=post_in_trace and all(maxima[k]>=max(observed[k],cleanup[k],post[k]) and maxima[k]<=limits[k] for k in limits)
           except (OSError,KeyError,ValueError,AssertionError,TypeError) as exc:
               parse_error=parse_error or 'cleanup:'+type(exc).__name__
-          cleanup_timing=False
+          cleanup_timing=False;diagnostic_timing=False
           try:
               first=watch['work_finished_at'];start=watch['started'];finished=watch['finished'];end=watch['cleanup_schedule']['end']
               assert all(type(v) in (int,float) and math.isfinite(v) for v in (first,start,finished,end))
               assert watch['normal_exit_grace_seconds']==2 and watch['cancel_grace_seconds']==0.5
               natural_reap=any(e['kind']=='controller.reaped' and e['exit_code']==0 and first<=e['at']<=watch['cleanup_schedule']['term']==end-3 for e in watch['events'])
-              cleanup_timing=start<=first<=start+120 and first<=finished<=end==min(start+125,first+5) and watch['cleanup_seconds']==finished-first<=5 and watch['elapsed_seconds']==finished-start<=125 and natural_reap
+              timing=start<=first<=start+120 and first<=finished<=end==min(start+125,first+5) and watch['cleanup_seconds']==finished-first<=5 and watch['elapsed_seconds']==finished-start<=125
+              cleanup_timing=timing and natural_reap
+              diagnostic_timing=timing and any(e['kind']=='controller.reaped' and e['exit_code'] in (0,1) and first<=e['at']<=watch['cleanup_schedule']['term'] for e in watch['events'])
           except (KeyError,ValueError,TypeError,AssertionError):parse_error=parse_error or 'cleanup_timing'
           bounded=watch.get('absolute_bound_met') is True and watch.get('faults')==[] and watch.get('forced') is False and type(watch.get('controller_exit')) is int and watch['controller_exit']==0 and cleanup_covered and cleanup_timing
-          complete=os.environ['FOCUSED_OUTCOME']=='success' and exact and clean_cases and cleaned and bounded and parse_error is None
-          selection={'candidate':os.environ['GITHUB_SHA'],'expected':19,'focused_worker_expected':13,'new_worker_expected':4,'existing_worker_expected':9,'application_expected':6,'executed':len(rows),'cases':ids,'exact_selection':exact,'clean_cases':clean_cases,'cleanup_confirmed':cleaned,'cleanup_samples_covered':cleanup_covered,'cleanup_timing_verified':cleanup_timing,'bounded':bounded,'parse_error':parse_error,'complete':complete,'resource_qualified':False,'production_qualified':False,'representative_run_started':False,'original_78_cohort_complete':False,'original_failure_explained':False,'reused_prior_passed_nodes':67,'repeated_behavior_cases':15,'reused_clock_boundary_cases':11,'prior_30c_still_failed':True,'prior_5001_still_failed':True,'harness_budget_changed':False}
+          diagnostic_complete=exact and arm_evidence and cleaned and cleanup_covered and diagnostic_timing and watch.get('absolute_bound_met') is True and watch.get('faults')==[] and watch.get('forced') is False and watch.get('controller_exit') in (0,1) and parse_error is None
+          complete=os.environ['FOCUSED_OUTCOME']=='success' and diagnostic_complete and clean_cases and bounded
+          selection={'candidate':os.environ['GITHUB_SHA'],'expected':20,'fresh_expected':1,'sequence_expected':19,'setup_predecessors':18,'executed':len(rows),'cases':ids,'arms':arms,'exact_selection':exact,'clean_cases':clean_cases,'arm_evidence':arm_evidence,'cleanup_confirmed':cleaned,'cleanup_samples_covered':cleanup_covered,'cleanup_timing_verified':cleanup_timing,'diagnostic_timing_verified':diagnostic_timing,'bounded':bounded,'parse_error':parse_error,'diagnostic_complete':diagnostic_complete,'complete':complete,'resource_qualified':False,'production_qualified':False,'representative_run_started':False,'original_failure_explained':False,'reused_prior_passed_nodes':67,'reused_clock_boundary_cases':11,'retained_02aa_passes':18,'repeated_predecessors_are_setup':True,'historical_failures_preserved':True,'harness_budget_changed':False}
           (pins/'selection-result.json').write_text(json.dumps(selection,indent=2)+'\n')
           files=sorted([p for parent in (root,pins) for p in parent.iterdir() if p.is_file() and not p.is_symlink()],key=lambda p:p.name)
           assert len({p.name for p in files})==len(files)
