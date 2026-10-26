@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
+import shutil
 import subprocess
-import sys
 import textwrap
 from pathlib import Path
 
@@ -33,8 +34,17 @@ def test_preparation_environment_always_serializes_poetry(
 def test_serialized_poetry_prevents_installer_umask_race(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Hosted CI installs the pinned Poetry into the base interpreter. Keep this
-    # process-wide umask experiment entirely outside pytest and its workers.
+    # Linux uses pipx while macOS installs Poetry into the base interpreter.
+    # Keep the launcher's interpreter path intact: resolving its venv symlink
+    # would discard pipx's installed dependencies. The child verifies the pin.
+    poetry = shutil.which("poetry")
+    assert poetry is not None, "the pinned Poetry launcher must be installed"
+    shebang = Path(poetry).read_text().splitlines()[0]
+    assert shebang.startswith("#!"), "Poetry must have a Python launcher"
+    poetry_python = shlex.split(shebang[2:].strip())
+    assert poetry_python and Path(poetry_python[0]).is_absolute()
+    assert Path(poetry_python[0]).is_file()
+    # Keep this process-wide umask experiment outside pytest and its workers.
     child = textwrap.dedent(
         """
         import json
@@ -129,7 +139,7 @@ def test_serialized_poetry_prevents_installer_umask_race(
             child_environment.pop("POETRY_INSTALLER_PARALLEL")
         result = subprocess.run(
             [
-                sys._base_executable,
+                *poetry_python,
                 "-c",
                 child,
                 str(release),
