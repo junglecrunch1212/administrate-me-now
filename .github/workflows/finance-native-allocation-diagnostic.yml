@@ -1,0 +1,74 @@
+name: Non-qualifying Finance native allocator observation
+on:
+  push:
+    branches: [codex/finance-native-allocation-737]
+permissions:
+  contents: read
+concurrency:
+  group: finance-native-allocation-737
+  cancel-in-progress: false
+jobs:
+  observe:
+    name: Five allocator boundaries on exact 737 application
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      ADMINME_TEST_MODE: '1'
+      PYTHONPATH: bridge
+      PYTHONDONTWRITEBYTECODE: '1'
+      FINANCE_DIAGNOSTIC_EVENT_HEAD: ${{ github.event.after }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 2
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.14.7'
+      - name: Verify isolated source, unchanged application and watchdog
+        run: |
+          python - <<'PY_CHECK'
+          import json, os, subprocess
+          base = "737e95dd12b74477c0405e6eb5b028a56169c9fd"
+          allowed = {
+              ".github/workflows/finance-native-allocation-diagnostic.yml",
+              "tests/fixtures/finance_owner_native_allocations.py",
+              "tests/fixtures/finance_owner_production.py",
+          }
+          def git(*args):
+              return subprocess.check_output(["git", *args], text=True).strip()
+          head = git("rev-parse", "HEAD")
+          assert os.environ["GITHUB_EVENT_NAME"] == "push"
+          assert os.environ["GITHUB_REF"] == "refs/heads/codex/finance-native-allocation-737"
+          assert os.environ["GITHUB_RUN_ATTEMPT"] == "1", "no rerun admission"
+          assert head == os.environ["GITHUB_SHA"] == os.environ["FINANCE_DIAGNOSTIC_EVENT_HEAD"]
+          assert git("show", "-s", "--format=%P", "HEAD") == base, "exact reviewed parent required"
+          assert not git("status", "--porcelain"), "clean checkout required"
+          changed = set(git("diff", "--name-only", base, head).splitlines())
+          assert changed == allowed, changed
+          assert git("rev-parse", base + "^{tree}") == "fbf4c56a379145c6d6f2570f72ec0da362b5f720"
+          print(json.dumps({"diagnostic_head": head, "shipping_source": base,
+              "tree": git("rev-parse", "HEAD^{tree}"), "changed": sorted(changed),
+              "application_and_watchdog_unchanged": True, "qualification": False}))
+          PY_CHECK
+      - name: Install exact locked synthetic environment
+        run: |
+          python -m pip install poetry==2.4.1
+          poetry sync --with dev --no-interaction
+      - name: Observe one import and replay; preserve verdict; trim only after measured windows
+        timeout-minutes: 7
+        env:
+          FINANCE_DIAGNOSTIC_ARTIFACT_DIR: ${{ runner.temp }}/finance-native-allocation-diagnostic
+        run: |
+          mkdir -m 700 "$FINANCE_DIAGNOSTIC_ARTIFACT_DIR"
+          poetry run python -m tests.fixtures.finance_watchdog owner-production "$FINANCE_DIAGNOSTIC_ARTIFACT_DIR"
+      - name: Retain all raw observations, failures and cleanup proof
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: finance-native-allocation-diagnostic-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/finance-native-allocation-diagnostic
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
