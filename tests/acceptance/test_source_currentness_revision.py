@@ -22,7 +22,7 @@ from fastapi.testclient import TestClient
 
 import adminme.runtime.application as application
 from bootstrap.contracts import DeploymentPaths, load_versions
-from bootstrap.upgrade import UpgradeError, UpgradeManager
+from bootstrap.upgrade import UpgradeError, UpgradeManager, validate_candidate
 from adminme.events.log import EventLog
 from adminme.events.writer import EventWriter
 from adminme.source_assessment_revision import RevisionRefused
@@ -565,6 +565,29 @@ def test_currentness_interrupted_publication_retains_authority_and_attempts(
 ):
     instance = tmp_path / "instance"
     config = settings(instance, ROOT, selected=["message-0"])
+    predecessor = None
+    if authority == "unchanged" and outcome == "revision":
+        # Roll back to the runtime that actually preceded this upgrade. A fresh
+        # v2-only instance has no retained v1 baseline and is a different case.
+        monkeypatch.setattr(legacy, "PREDECESSOR", PREDECESSOR)
+        predecessor = legacy._predecessor(tmp_path)
+        # This immutable historical binary cannot acquire the new startup guard.
+        # The real updater refuses it for the current production policy epoch;
+        # only this explicitly pre-cutover legacy fixture starts it directly.
+        with pytest.raises(UpgradeError, match="policy-aware rollback baseline"):
+            validate_candidate(
+                predecessor,
+                active_root=ROOT,
+                approve_runtime_migration=True,
+                allow_openclaw_rollback=True,
+            )
+        baseline = _predecessor_case(
+            tmp_path, monkeypatch, config, [], {}, predecessor=predecessor
+        )
+        assert baseline["model_calls"] == []
+        assert baseline["constitutional_agreements"] == [
+            {"revision": 1, "state": "active"}
+        ]
     model = legacy._model(monkeypatch)
     blocked = threading.Event()
     original = EventWriter.write
@@ -596,8 +619,14 @@ def test_currentness_interrupted_publication_retains_authority_and_attempts(
     calls = list(model.calls)
     assert len(calls) == (4 if outcome == "fail" else 2)
     if authority == "unchanged" and outcome == "revision":
-        rolled_back = _predecessor_case(tmp_path, monkeypatch, config, [], {})
+        rolled_back = _predecessor_case(
+            tmp_path, monkeypatch, config, [], {}, predecessor=predecessor
+        )
         assert rolled_back["model_calls"] == []
+        assert rolled_back["constitutional_agreements"] == [
+            {"revision": 1, "state": "superseded"},
+            {"revision": 2, "state": "active"},
+        ]
         assert _stable(rolled_back["events"]) == _stable(before)
         assert len(legacy._of_type(rolled_back["events"], currentness.PLAN_TYPE)) == 1
         assert legacy._of_type(rolled_back["events"], currentness.COMPLETION_TYPE) == []

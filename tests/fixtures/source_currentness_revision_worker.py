@@ -76,6 +76,17 @@ def main():
             )
             client.portal.call(settle, runtime)
         captured = snapshot(client)
+        captured["constitutional_agreements"] = [
+            dict(row)
+            for row in runtime.projections.connection("parties")
+            .execute(
+                "SELECT revision, state FROM operating_agreements "
+                "WHERE tenant_id=? AND agreement_id=? AND layer='constitutional' "
+                "ORDER BY revision",
+                (config.instance.tenant_id, "constitutional:household-cos-safety"),
+            )
+            .fetchall()
+        ]
         captured["model_calls"] = model.calls
         captured["python_version"] = platform.python_version()
         if inputs.get("recovery_target"):

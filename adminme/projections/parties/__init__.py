@@ -15,7 +15,8 @@ from adminme.projections.parties import handlers
 
 class PartiesProjection(Projection):
     name = "parties"
-    version = 4
+    version = 5
+    replay_retained_events_on_version_change = True
     subscribes_to = [
         "party.created",
         "party.updated",

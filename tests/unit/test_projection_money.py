@@ -10,6 +10,8 @@ explicit keyword.
 from __future__ import annotations
 
 import time
+import json
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -606,6 +608,24 @@ async def test_finance_cockpit_projects_provider_and_workbook_facts(
     log = rig["log"]
     bus = rig["bus"]
     runner = rig["runner"]
+    for assumption_id, value, unit in (
+        ("opening_cash", "1000", "USD"),
+        ("base_monthly_expenses", "2500", "USD/month"),
+        ("minimum_cash_floor", "500", "USD"),
+    ):
+        await log.append(
+            _envelope(
+                "finance.assumption_set",
+                {
+                    "assumption_id": assumption_id,
+                    "category": "cash_flow",
+                    "label": assumption_id,
+                    "value_decimal": value,
+                    "unit": unit,
+                    "as_of": "2026-08-01",
+                },
+            )
+        )
     await log.append(
         _envelope(
             "financial.account_observed",
@@ -701,8 +721,263 @@ async def test_finance_cockpit_projects_provider_and_workbook_facts(
     assert snapshot["summary"]["mtd_expenses_minor"] == 10_000
     assert snapshot["summary"]["base_monthly_income_minor"] == 500_000
     assert snapshot["scenarios"][0]["opening_cash_minor"] == 105_000
+    assert snapshot["scenarios"][0]["readiness"] == "qualified"
+    assert snapshot["summary"]["net_worth_minor"] is None
+    assert snapshot["summary"]["observed_listed_net_minor"] == 100_000
     assert snapshot["budgets"][0]["state"] == "watch"
     assert snapshot["focus"]["state"] == "budget_watch"
+
+
+async def test_unconfigured_finance_is_unknown_not_zero(rig: dict[str, Any]) -> None:
+    snapshot = finance_snapshot(
+        rig["runner"].connection("money"),
+        _S("tenant-a"),
+        as_of=datetime(2026, 8, 15, 12, tzinfo=timezone.utc),
+    )
+    assert all(value is None for value in snapshot["summary"].values())
+    assert snapshot["scenarios"] == []
+    assert snapshot["data_health"]["latest_source_at"] is None
+    assert snapshot["data_health"]["state"] == "not_configured"
+    assert snapshot["reports"]["liquid_cash"]["state"] == "missing_evidence"
+
+
+async def test_workbook_receipts_preserve_event_scope_across_replay(
+    rig: dict[str, Any],
+) -> None:
+    shared_payload = {
+        "workbook_name": "shared-fixture.xlsx",
+        "workbook_sha256": "a" * 64,
+        "workbook_schema_version": 2,
+        "published_at": "2026-08-01T12:00:00Z",
+        "published_by_party_id": "xlsx_reverse",
+        "validation_state": "valid",
+        "validation_failures": [],
+    }
+    await rig["log"].append(
+        _envelope(
+            "finance.workbook_published",
+            shared_payload,
+            sensitivity="sensitive",
+        )
+    )
+    private_payload = {
+        **shared_payload,
+        "workbook_name": "private-fixture.xlsx",
+        "published_at": "2026-08-02T12:00:00Z",
+        # Attribution alone must not make a private envelope readable.
+        "published_by_party_id": "test_actor",
+        "validation_state": "rejected",
+        "validation_failures": ["Private synthetic validation detail"],
+    }
+    last = await rig["log"].append(
+        _envelope(
+            "finance.workbook_published",
+            private_payload,
+            owner_scope="private:other-member",
+            sensitivity="privileged",
+        )
+    )
+    await rig["bus"].notify(last)
+    await _wait_for_checkpoint(rig["bus"], "projection:money", last)
+    for replay in (False, True):
+        if replay:
+            await rig["runner"].rebuild("money")
+        conn = rig["runner"].connection("money")
+        visible = finance_snapshot(
+            conn, _S(), as_of=datetime(2026, 8, 15, tzinfo=timezone.utc)
+        )
+        assert visible["workbook"]["workbook_name"] == "shared-fixture.xlsx"
+        assert visible["workbook"]["validation_state"] == "valid"
+        assert "Private synthetic" not in json.dumps(visible)
+        owner = build_internal_session("other-member", "principal", "tenant-a")
+        private = finance_snapshot(
+            conn, owner, as_of=datetime(2026, 8, 15, tzinfo=timezone.utc)
+        )
+        assert private["workbook"]["workbook_name"] == "private-fixture.xlsx"
+        assert private["workbook"]["validation_state"] == "rejected"
+
+
+async def test_historical_workbook_receipt_without_scope_is_denied(
+    rig: dict[str, Any],
+) -> None:
+    conn = rig["runner"].connection("money")
+    # Use the isolated compatibility-fixture write seam. Runtime readers remain
+    # query-only; migration defaults deliberately carry no authority until replay.
+    fixture_conn = rig["runner"]._unsafe_maintenance_connection("money")
+    fixture_conn.execute(
+        "INSERT INTO finance_workbook_state (tenant_id,workbook_name,workbook_sha256,"
+        "workbook_schema_version,published_at,published_by_party_id,validation_state,"
+        "validation_failures_json,last_event_id) VALUES (?,?,?,?,?,?,?,?,?)",
+        (
+            "tenant-a",
+            "legacy-fixture.xlsx",
+            "a" * 64,
+            2,
+            "2026-08-01T12:00:00Z",
+            "test_actor",
+            "valid",
+            "[]",
+            "legacy-receipt",
+        ),
+    )
+    snapshot = finance_snapshot(
+        conn, _S(), as_of=datetime(2026, 8, 15, tzinfo=timezone.utc)
+    )
+    assert snapshot["workbook"] is None
+
+
+async def test_accepted_books_display_limits_preserve_required_qualifications(
+    rig: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from adminme.projections.money import queries as money_queries
+
+    status = {
+        "state": "qualified",
+        "book_id": "synthetic-book",
+        "publication_id": "publication-bounded",
+        "content_hash": "a" * 64,
+        "reports": [
+            {
+                "report_id": report,
+                "release_state": "qualified",
+                "required_evidence": ["complete_coverage", "current_source_freshness"],
+            }
+            for report in ("actuals", "budget", "scenarios")
+        ],
+    }
+    monkeypatch.setattr(money_queries, "publication_status", lambda *args: status)
+
+    def page(conn, session, book_id, publication_id, report_id, offset=0, limit=50):
+        assert limit <= 10
+        assert offset == 0
+        return {
+            "metrics": [
+                {
+                    "metric_id": f"{report_id}-{index}",
+                    "value_minor": index,
+                    "currency": "USD",
+                    "evidence_ids": ["e" * 96] * 20,
+                }
+                for index in range(limit)
+            ],
+            "next_offset": limit,
+        }
+
+    monkeypatch.setattr(money_queries, "query_publication", page)
+    books = finance_snapshot(
+        rig["runner"].connection("money"),
+        _S("tenant-a"),
+        as_of=datetime(2026, 8, 15, 12, tzinfo=timezone.utc),
+        accepted_books_enabled=True,
+    )["accepted_books"]
+    assert len(json.dumps(books).encode()) <= 32768
+    assert sum(len(report["metrics"]) for report in books["reports"]) <= 20
+    assert all(len(report["metrics"]) <= 10 for report in books["reports"])
+    assert any(report["more_metrics"] for report in books["reports"])
+    assert books["limitations"]
+    assert all(
+        report["required_evidence"] == ["complete_coverage", "current_source_freshness"]
+        for report in books["reports"]
+    )
+
+
+@pytest.mark.parametrize(
+    "role", ["coach_session", "device", "child", "ambient", "view_as"]
+)
+async def test_finance_nonprivate_sessions_do_not_learn_source_existence(
+    rig: dict[str, Any],
+    role: str,
+) -> None:
+    last = await rig["log"].append(
+        _envelope(
+            "money_flow.recorded",
+            _recorded_payload(),
+            owner_scope="private:test_actor",
+            sensitivity="privileged",
+        )
+    )
+    await rig["bus"].notify(last)
+    await _wait_for_checkpoint(rig["bus"], "projection:money", last)
+    if role == "view_as":
+        session = replace(_S(), view_member_id="other-member")
+    elif role == "ambient":
+        # Ambient cannot act internally. Construct its read-session shape
+        # directly to exercise defense in depth at the projection boundary.
+        session = replace(_S(), auth_role="ambient", view_role="ambient")
+    else:
+        session = build_internal_session("test_actor", role, "tenant-a")
+    snapshot = finance_snapshot(
+        rig["runner"].connection("money"),
+        session,
+        as_of=datetime(2026, 8, 15, 12, tzinfo=timezone.utc),
+    )
+    assert snapshot["data_health"]["state"] == "permission_required"
+    assert snapshot["data_health"]["transaction_count"] == 0
+    assert snapshot["recent_flows"] == []
+    assert snapshot["workbook"] is None
+    assert all(value is None for value in snapshot["summary"].values())
+
+
+async def test_unknown_balance_and_missing_plan_do_not_produce_runway(
+    rig: dict[str, Any],
+) -> None:
+    last = await rig["log"].append(
+        _envelope(
+            "financial.account_observed",
+            {
+                "member_id": "member-a",
+                "plaid_item_id": "item-incomplete",
+                "account_id": "account-incomplete",
+                "institution_id": "fixture-bank",
+                "institution_name": "Fixture institution",
+                "display_name": "Checking",
+                "account_type": "depository",
+                "current_balance_minor": None,
+                "currency": "USD",
+                "as_of": "2026-08-15T12:00:00Z",
+                "link_healthy": True,
+            },
+        )
+    )
+    await rig["bus"].notify(last)
+    await _wait_for_checkpoint(rig["bus"], "projection:money", last)
+    snapshot = finance_snapshot(
+        rig["runner"].connection("money"),
+        _S("tenant-a"),
+        as_of=datetime(2026, 8, 15, 12, tzinfo=timezone.utc),
+    )
+    assert snapshot["summary"]["cash_minor"] is None
+    assert snapshot["summary"]["observed_listed_net_minor"] is None
+    assert snapshot["summary"]["mtd_expenses_minor"] is None
+    assert snapshot["scenarios"] == []
+    assert snapshot["focus"]["state"] == "missing_evidence"
+
+
+async def test_expected_reimbursement_is_not_received_or_spent_cash(
+    rig: dict[str, Any],
+) -> None:
+    last = await rig["log"].append(
+        _envelope(
+            "money_flow.recorded",
+            _recorded_payload(
+                kind="reimbursable",
+                amount_minor=1500,
+                occurred_at="2026-08-01T12:00:00Z",
+            ),
+        )
+    )
+    await rig["bus"].notify(last)
+    await _wait_for_checkpoint(rig["bus"], "projection:money", last)
+    snapshot = finance_snapshot(
+        rig["runner"].connection("money"),
+        _S("tenant-a"),
+        as_of=datetime(2026, 8, 15, 12, tzinfo=timezone.utc),
+    )
+    assert snapshot["summary"]["mtd_income_minor"] == 0
+    assert snapshot["summary"]["mtd_expenses_minor"] == 0
+    assert snapshot["summary"]["cash_minor"] is None
+    assert snapshot["reports"]["observed_activity"]["state"] == "qualified"
 
 
 async def test_finance_prior_period_never_spills_into_current_month(

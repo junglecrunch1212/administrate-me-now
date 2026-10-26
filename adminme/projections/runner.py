@@ -3,8 +3,12 @@ ProjectionRunner — discovers, dispatches, rebuilds projections.
 
 Per SYSTEM_INVARIANTS.md §2 and ADMINISTRATEME_BUILD.md §L3.
 
-The runner owns one SQLCipher connection per registered projection, one
-serialized native owner worker for every persistent projection handle, and one
+The runner owns one SQLCipher writer per registered projection and one bounded
+query-only Parties handle for current authority reads. One serialized native
+worker owns ordinary writers and a separate serialized worker owns Money.
+A dedicated serialized reader worker prevents fresh
+Parties authority reads from queuing behind unrelated projection writes. Each
+native handle keeps one owner thread throughout its lifecycle, with one
 bus subscription per projection (``subscriber_id = f"projection:{name}"``).
 On each delivered event, the bound callback opens a transaction on the
 projection's DB, calls ``projection.apply(envelope, conn)``, commits, and
@@ -36,6 +40,7 @@ import tempfile
 import threading
 import uuid
 from collections.abc import Callable, Iterable, Sequence
+from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, TypeVar, cast
@@ -340,6 +345,7 @@ class ProjectionRunner:
         self._key_pragma = _format_key(encryption_key)
         self._projections: dict[str, Projection] = {}
         self._conns: dict[str, sqlcipher3.Connection] = {}
+        self._parties_read_conn: sqlcipher3.Connection | None = None
         self._staged_conns: dict[str, sqlcipher3.Connection] = {}
         self._staged_paths: dict[str, Path] = {}
         self._facades: dict[str, _ProjectionConnectionFacade] = {}
@@ -348,12 +354,26 @@ class ProjectionRunner:
         self._lifecycle_lock = asyncio.Lock()
         self._submission_lock = threading.Lock()
         self._worker_thread_id: int | None = None
+        self._money_thread_id: int | None = None
+        self._parties_reader_thread_id: int | None = None
+        self._parties_submission_lock = threading.Lock()
+        self._parties_pending_mutations = 0
         self._closing = False
         self._closed = False
         self._executor = concurrent.futures.ThreadPoolExecutor(
             max_workers=1,
             thread_name_prefix="adminme-projections",
             initializer=self._capture_worker_thread,
+        )
+        self._money_executor = concurrent.futures.ThreadPoolExecutor(
+            max_workers=1,
+            thread_name_prefix="adminme-money",
+            initializer=self._capture_money_thread,
+        )
+        self._parties_executor = concurrent.futures.ThreadPoolExecutor(
+            max_workers=1,
+            thread_name_prefix="adminme-authority-reader",
+            initializer=self._capture_parties_reader_thread,
         )
         self._started = False
         self._config.projections_dir.mkdir(parents=True, exist_ok=True)
@@ -412,6 +432,40 @@ class ProjectionRunner:
         self._require_detached_result(result)
         return cast(_T, result)
 
+    async def read_authority(
+        self,
+        query: Callable[[sqlcipher3.Connection], _T],
+    ) -> _T:
+        """Run a Parties-only read on its existing query-only owner worker.
+
+        This avoids occupying the general projection worker while it waits for
+        the authority reader. Already-submitted Parties mutations still precede
+        this callback; publication/close retain the same admission boundary.
+        """
+        if "parties" not in self._projections:
+            raise KeyError("parties")
+        call = self._submit_authority(self._call_query, "parties", query)
+        pending = asyncio.wrap_future(call)
+        try:
+            result = await asyncio.shield(pending)
+        except asyncio.CancelledError:
+            # An accepted callback must settle before its caller relinquishes
+            # ownership, including during rebuild/close. Do not cancel SQL.
+            while not pending.done():
+                try:
+                    await asyncio.shield(pending)
+                except asyncio.CancelledError:
+                    continue
+                except Exception:
+                    break
+            try:
+                pending.result()
+            except Exception:
+                _log.exception("authority query failed after cancellation")
+            raise
+        self._require_detached_result(result)
+        return cast(_T, result)
+
     async def read_many(
         self,
         names: Iterable[str],
@@ -423,7 +477,12 @@ class ProjectionRunner:
         unknown = sorted(set(selected) - set(self._projections))
         if unknown:
             raise KeyError(", ".join(unknown))
-        result = await self._run_on_worker(self._call_many_query, selected, query)
+        # A Money write has a different native owner. Keep the original
+        # cross-projection read fence while its callback consumes facades.
+        async with AsyncExitStack() as stack:
+            for name in sorted(selected):
+                await stack.enter_async_context(self._write_locks[name])
+            result = await self._run_on_worker(self._call_many_query, selected, query)
         self._require_detached_result(result)
         return cast(_T, result)
 
@@ -479,11 +538,14 @@ class ProjectionRunner:
                     raise RuntimeError(
                         "projection runner is not available for snapshot"
                     )
-                await self._run_on_worker(
-                    self._copy_projection_snapshots,
-                    selected,
-                    snapshot_root,
-                )
+                async with AsyncExitStack() as stack:
+                    for name in sorted(selected):
+                        await stack.enter_async_context(self._write_locks[name])
+                    await self._run_on_worker(
+                        self._copy_projection_snapshots,
+                        selected,
+                        snapshot_root,
+                    )
             call = executor.submit(
                 self._call_snapshot_query,
                 selected,
@@ -491,7 +553,9 @@ class ProjectionRunner:
                 query,
             )
             try:
-                result = await asyncio.shield(asyncio.wrap_future(call))
+                from adminme.finance.import_work import await_settled
+
+                result = await await_settled(asyncio.wrap_future(call))
             except asyncio.CancelledError:
                 try:
                     call.result()
@@ -606,6 +670,9 @@ class ProjectionRunner:
                         subscriber_id,
                         types,
                         self._make_callback(name, projection),
+                        raw_payload_types=self._raw_payload_types(name),
+                        metadata_only_types=self._metadata_only_types(name),
+                        on_drain_end=self._delivery_settler(name, projection),
                     )
                     if replay_version_change:
                         replay_required.append(name)
@@ -674,11 +741,15 @@ class ProjectionRunner:
                     self._closing = True
                     close_call = self._executor.submit(self._close_all_connections)
                 try:
-                    await asyncio.shield(asyncio.wrap_future(close_call))
+                    from adminme.finance.import_work import await_settled
+
+                    await await_settled(asyncio.wrap_future(close_call))
                 except asyncio.CancelledError as exc:
                     cancellation = cancellation or exc
                 finally:
                     self._executor.shutdown(wait=True, cancel_futures=False)
+                    self._money_executor.shutdown(wait=True, cancel_futures=False)
+                    self._parties_executor.shutdown(wait=True, cancel_futures=False)
                     if close_call is not None:
                         try:
                             close_call.result()
@@ -814,9 +885,11 @@ class ProjectionRunner:
                     through=through,
                     types=types_filter,
                     limit=500,
+                    raw_payload_types=self._raw_payload_types(name),
+                    metadata_only_types=self._metadata_only_types(name),
                 ):
                     batch.append(envelope)
-                    if len(batch) >= 500:
+                    if len(batch) >= (1 if name == "money" else 500):
                         await self._run_on_worker(
                             self._apply_replay_batch,
                             name,
@@ -835,6 +908,7 @@ class ProjectionRunner:
                 )
             succeeded = True
         finally:
+            await self._run_on_worker(self._finish_delivery, name, projection)
             if not (staged and succeeded):
                 await self._run_on_worker(
                     self._after_replay,
@@ -853,9 +927,20 @@ class ProjectionRunner:
         """Per-projection dict: name, version, row_counts, checkpoint,
         lag_count, last_event_applied. Omit uncollected row counts when requested."""
         out: dict[str, dict[str, Any]] = {}
+        statuses = (
+            await self._bus.subscriber_statuses(
+                [f"projection:{name}" for name in self._projections]
+            )
+            if not include_row_counts
+            else None
+        )
         for name, projection in self._projections.items():
             subscriber_id = f"projection:{name}"
-            bus_status = await self._bus.subscriber_status(subscriber_id)
+            bus_status = (
+                statuses[subscriber_id]
+                if statuses is not None
+                else await self._bus.subscriber_status(subscriber_id)
+            )
             out[name] = {
                 "name": name,
                 "version": projection.version,
@@ -879,6 +964,46 @@ class ProjectionRunner:
     # ------------------------------------------------------------------
     # internals
     # ------------------------------------------------------------------
+    @staticmethod
+    def _raw_payload_types(name):
+        return (
+            frozenset(
+                {
+                    "finance.provenance_archived",
+                    "finance.publication_accepted",
+                    "finance.projection_verified",
+                }
+            )
+            if name == "money"
+            else frozenset()
+        )
+
+    @staticmethod
+    def _metadata_only_types(name):
+        # Context Fabric's complete Finance graph depends only on envelope
+        # coordinates and lineage. Do not retrieve unused bodies from SQL.
+        return (
+            ProjectionRunner._raw_payload_types("money")
+            if name == "context_fabric"
+            else frozenset()
+        )
+
+    def _delivery_settler(self, name, projection):
+        finish = getattr(projection, "finish_delivery", None)
+        if finish is None:
+            return None
+
+        async def settle():
+            async with self._write_locks[name]:
+                await self._run_on_worker(self._finish_delivery, name, projection)
+
+        return settle
+
+    def _finish_delivery(self, name, projection):
+        finish = getattr(projection, "finish_delivery", None)
+        if finish is not None:
+            finish()
+
     def _make_callback(self, name: str, projection: Projection):
         write_locks = self._write_locks
 
@@ -1025,31 +1150,68 @@ class ProjectionRunner:
     # ------------------------------------------------------------------
     # native worker ownership
     # ------------------------------------------------------------------
+    def _capture_money_thread(self) -> None:
+        self._money_thread_id = threading.get_ident()
+
+    def _on_owner_thread(self, name: str | None) -> bool:
+        expected = self._money_thread_id if name == "money" else self._worker_thread_id
+        return expected is not None and threading.get_ident() == expected
+
     def _capture_worker_thread(self) -> None:
         self._worker_thread_id = threading.get_ident()
+
+    def _capture_parties_reader_thread(self) -> None:
+        self._parties_reader_thread_id = threading.get_ident()
 
     def _submit(
         self, func: Callable[..., _T], *args: Any
     ) -> concurrent.futures.Future[_T]:
+        if threading.get_ident() == self._parties_reader_thread_id:
+            # An authority callback must not wait on the writer: publication or
+            # shutdown may be waiting for this reader to finish. Its only DB
+            # surface is the permanent query-only Parties handle.
+            raise RuntimeError("authority callback cannot submit projection work")
         with self._submission_lock:
             if self._closing or self._closed:
                 raise RuntimeError("projection runner is closing")
-            return self._executor.submit(func, *args)
+            if args and args[0] == "money":
+                return self._money_executor.submit(func, *args)
+            if threading.get_ident() == self._money_thread_id:
+                # Cross-projection queries run on the general worker with
+                # facades. A Money callback cannot invert that wait order.
+                raise RuntimeError("Money callback cannot submit another projection")
+            # Preserve the writer FIFO for already-enqueued authority changes.
+            # Only a known query callback may bypass this mutation fence.
+            parties_mutation = bool(
+                args and args[0] == "parties" and func != self._call_query
+            )
+            if not parties_mutation:
+                return self._executor.submit(func, *args)
+            self._parties_pending_mutations += 1
+            try:
+                return self._executor.submit(self._run_parties_mutation, func, args)
+            except BaseException:
+                self._parties_pending_mutations -= 1
+                raise
+
+    def _run_parties_mutation(
+        self, func: Callable[..., _T], args: tuple[Any, ...]
+    ) -> _T:
+        try:
+            return func(*args)
+        finally:
+            with self._submission_lock:
+                self._parties_pending_mutations -= 1
 
     async def _run_on_worker(self, func: Callable[..., _T], *args: Any) -> _T:
-        if threading.get_ident() == self._worker_thread_id:
+        name = args[0] if args and isinstance(args[0], str) else None
+        if self._on_owner_thread(name):
             return func(*args)
-        call = self._submit(func, *args)
-        try:
-            return await asyncio.shield(asyncio.wrap_future(call))
-        except asyncio.CancelledError:
-            # The native call may already be running. Settle and retrieve it
-            # before allowing lifecycle locks or staging ownership to escape.
-            try:
-                call.result()
-            except Exception:
-                _log.exception("projection worker call failed after cancellation")
-            raise
+        # Keep lifecycle/transaction ownership through repeated cancellation,
+        # but never synchronously wait on a native callback on the HTTP loop.
+        from adminme.finance.import_work import await_settled
+
+        return await await_settled(asyncio.wrap_future(self._submit(func, *args)))
 
     def _execute_sync(
         self,
@@ -1060,7 +1222,13 @@ class ProjectionRunner:
         many: bool = False,
         read_only: bool = True,
     ) -> _DetachedCursor:
-        if threading.get_ident() == self._worker_thread_id:
+        if read_only and name == "parties":
+            if threading.get_ident() == self._parties_reader_thread_id:
+                return self._execute_statement(name, sql, parameters, many, read_only)
+            return self._submit_authority(
+                self._execute_statement, name, sql, parameters, many, read_only
+            ).result()
+        if self._on_owner_thread(name):
             return self._execute_statement(name, sql, parameters, many, read_only)
         return self._submit(
             self._execute_statement,
@@ -1071,6 +1239,33 @@ class ProjectionRunner:
             read_only,
         ).result()
 
+    def _submit_authority(
+        self, func: Callable[..., _T], *args: Any
+    ) -> concurrent.futures.Future[_T]:
+        if threading.get_ident() == self._money_thread_id:
+            raise RuntimeError("Money callback cannot submit another projection")
+        if threading.get_ident() == self._parties_reader_thread_id:
+            raise RuntimeError("authority callback cannot submit nested work")
+        # Serialize admission with publication. Reads either finish on the old
+        # inode before its close or open the replacement after publication.
+        with self._submission_lock:
+            on_writer = threading.get_ident() == self._worker_thread_id
+            if self._closed or (self._closing and not on_writer):
+                raise RuntimeError("projection runner is closing")
+            if self._parties_pending_mutations and not on_writer:
+                # Preserve the original writer FIFO for accepted revocations,
+                # role changes and publication; bypass only unrelated work.
+                return self._executor.submit(
+                    self._run_authority_after_mutations, func, args
+                )
+            with self._parties_submission_lock:
+                return self._parties_executor.submit(func, *args)
+
+    def _run_authority_after_mutations(
+        self, func: Callable[..., _T], args: tuple[Any, ...]
+    ) -> _T:
+        return self._submit_authority(func, *args).result()
+
     def _execute_statement(
         self,
         name: str,
@@ -1079,9 +1274,15 @@ class ProjectionRunner:
         many: bool,
         read_only: bool,
     ) -> _DetachedCursor:
-        conn = self._require_connection(name)
-        if read_only:
+        stable_authorizer = read_only and name == "parties"
+        conn = (
+            self._parties_reader()
+            if stable_authorizer
+            else self._require_connection(name)
+        )
+        if read_only and not stable_authorizer:
             conn.set_authorizer(self._query_only_authorizer)
+        cursor = None
         try:
             cursor = (
                 conn.executemany(sql, parameters)
@@ -1102,8 +1303,51 @@ class ProjectionRunner:
                 description=description,
             )
         finally:
-            if read_only:
+            if cursor is not None:
+                cursor.close()
+            if read_only and not stable_authorizer:
                 conn.set_authorizer(None)
+
+    def _parties_reader(self) -> sqlcipher3.Connection:
+        """One worker-owned current reader with a fixed SQL policy, not a cache.
+
+        Resetting sqlite3_set_authorizer invalidates compiled statements. This
+        separate handle keeps its read-only policy for its entire lifetime;
+        every execute still reads the current committed WAL state. Its statement
+        cache can never contain a statement prepared with writer permissions.
+        """
+        self._require_connection("parties")
+        if self._parties_read_conn is not None:
+            return self._parties_read_conn
+        path = self._config.projection_db_path("parties")
+        conn = sqlcipher3.connect(
+            path.resolve().as_uri() + "?mode=ro",
+            uri=True,
+            isolation_level=None,
+            cached_statements=64,
+        )
+        try:
+            conn.row_factory = sqlcipher3.Row
+            conn.execute(f'PRAGMA key = "{self._key_pragma}"')
+            conn.execute("PRAGMA query_only=ON")
+            conn.execute("PRAGMA cache_size=-256")
+            conn.execute("SELECT count(*) FROM sqlite_master").fetchone()
+            conn.set_authorizer(self._query_only_authorizer)
+        except BaseException:
+            conn.close()
+            raise
+        self._parties_read_conn = conn
+        return conn
+
+    def _close_parties_reader(self) -> None:
+        # Called only by writer lifecycle work, with admission excluded during
+        # publication or after the runner is marked closing during shutdown.
+        self._parties_executor.submit(self._close_parties_reader_native).result()
+
+    def _close_parties_reader_native(self) -> None:
+        conn, self._parties_read_conn = self._parties_read_conn, None
+        if conn is not None:
+            conn.close()
 
     @staticmethod
     def _query_only_authorizer(
@@ -1127,7 +1371,7 @@ class ProjectionRunner:
         name: str,
         operation: Literal["commit", "rollback"],
     ) -> None:
-        if threading.get_ident() == self._worker_thread_id:
+        if self._on_owner_thread(name):
             self._connection_control(name, operation)
             return
         self._submit(self._connection_control, name, operation).result()
@@ -1229,6 +1473,7 @@ class ProjectionRunner:
         staged: bool,
     ) -> None:
         conn = self._staged_conns[name] if staged else self._require_connection(name)
+        self._finish_delivery(name, projection)
         projection.before_replay(conn)
 
     def _after_replay(
@@ -1288,11 +1533,25 @@ class ProjectionRunner:
         projection: Projection,
         stage_path: Path,
     ) -> None:
+        if name == "parties":
+            with self._parties_submission_lock:
+                self._publish_staged_projection_locked(name, projection, stage_path)
+        else:
+            self._publish_staged_projection_locked(name, projection, stage_path)
+
+    def _publish_staged_projection_locked(
+        self,
+        name: str,
+        projection: Projection,
+        stage_path: Path,
+    ) -> None:
         stage = self._staged_conns.pop(name)
         self._staged_paths.pop(name, None)
         target = self._config.projection_db_path(name)
         backup = Path(f"{target}.pre-rebuild-{uuid.uuid4().hex}")
         old = self._require_connection(name)
+        if name == "parties":
+            self._close_parties_reader()
         stage.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         stage.close()
         old.execute("PRAGMA wal_checkpoint(TRUNCATE)")
@@ -1330,7 +1589,41 @@ class ProjectionRunner:
             conn.close()
         self._remove_if_exists(tracked)
 
+    def _close_money_connections(self) -> None:
+        first_failure = None
+        projection = self._projections.get("money")
+        if projection is not None:
+            try:
+                self._finish_delivery("money", projection)
+            except Exception as exc:
+                first_failure = exc
+        for connections in (self._staged_conns, self._conns):
+            conn = connections.pop("money", None)
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception as exc:
+                    first_failure = first_failure or exc
+        path = self._staged_paths.pop("money", None)
+        if path is not None:
+            try:
+                self._remove_if_exists(path)
+            except Exception as exc:
+                first_failure = first_failure or exc
+        if first_failure is not None:
+            raise first_failure
+
     def _close_all_connections(self) -> None:
+        # Admission is closed; settle and close Money on its lifetime owner.
+        money_failure = None
+        try:
+            self._money_executor.submit(self._close_money_connections).result()
+        except Exception as exc:
+            money_failure = exc
+        try:
+            self._close_parties_reader()
+        except Exception:
+            _log.exception("error closing Parties query-only connection")
         for name, conn in list(self._staged_conns.items()):
             try:
                 conn.close()
@@ -1349,6 +1642,8 @@ class ProjectionRunner:
             except Exception:
                 _log.exception("error closing projection %s", name)
         self._conns.clear()
+        if money_failure is not None:
+            raise money_failure
 
     def _copy_projection_snapshots(
         self,
@@ -1356,6 +1651,11 @@ class ProjectionRunner:
         destination: Path,
     ) -> None:
         for name in names:
+            if name == "money" and not self._on_owner_thread(name):
+                self._money_executor.submit(
+                    self._copy_projection_snapshots, (name,), destination
+                ).result()
+                continue
             conn = self._require_connection(name)
             checkpoint = conn.execute("PRAGMA wal_checkpoint(FULL)").fetchone()
             if checkpoint is None or int(checkpoint[0]) != 0:
@@ -1430,6 +1730,8 @@ class ProjectionRunner:
             close_call.result()
         finally:
             self._executor.shutdown(wait=True, cancel_futures=False)
+            self._money_executor.shutdown(wait=True, cancel_futures=False)
+            self._parties_executor.shutdown(wait=True, cancel_futures=False)
             self._closed = True
             self._closing = False
 

@@ -3862,8 +3862,8 @@
     "missing_source_candidate_cells": [],
     "object_lifecycles": 28,
     "source_candidate_cells": 143,
-    "technical_event_schemas": 389,
-    "technical_event_types": 306,
+    "technical_event_schemas": 400,
+    "technical_event_types": 317,
     "uncataloged_event_types": [],
     "unproved_exact_lifecycle_transitions": [],
     "unproved_supported_source_candidate_cells": []
@@ -17327,6 +17327,468 @@
     },
     {
       "additional_properties": false,
+      "event_type": "finance.decision_approved",
+      "family": "finance",
+      "properties": {
+        "approval_receipt_id": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$",
+          "title": "Approval Receipt Id",
+          "type": "string"
+        },
+        "approved_at": {
+          "format": "date-time",
+          "title": "Approved At",
+          "type": "string"
+        },
+        "approved_by_member_id": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$",
+          "title": "Approved By Member Id",
+          "type": "string"
+        },
+        "chosen_alternative_id": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$",
+          "title": "Chosen Alternative Id",
+          "type": "string"
+        },
+        "decision_id": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$",
+          "title": "Decision Id",
+          "type": "string"
+        },
+        "expires_at": {
+          "format": "date-time",
+          "title": "Expires At",
+          "type": "string"
+        },
+        "external_action_authorized": {
+          "const": false,
+          "default": false,
+          "title": "External Action Authorized",
+          "type": "boolean"
+        },
+        "policy_revision": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$",
+          "title": "Policy Revision",
+          "type": "string"
+        },
+        "proposal_event_id": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$",
+          "title": "Proposal Event Id",
+          "type": "string"
+        },
+        "proposal_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Proposal Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "decision_id",
+        "proposal_event_id",
+        "proposal_sha256",
+        "chosen_alternative_id",
+        "approved_by_member_id",
+        "policy_revision",
+        "approval_receipt_id",
+        "approved_at",
+        "expires_at"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "finance.decision_outcome_recorded",
+      "family": "finance",
+      "properties": {
+        "attribution": {
+          "enum": [
+            "unresolved",
+            "association_only",
+            "reviewed_decomposition"
+          ],
+          "title": "Attribution",
+          "type": "string"
+        },
+        "baseline": {
+          "$ref": "#/$defs/MetricReference"
+        },
+        "causal_savings_claim": {
+          "const": false,
+          "default": false,
+          "title": "Causal Savings Claim",
+          "type": "boolean"
+        },
+        "decision_approval_event_ids": {
+          "items": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$",
+            "type": "string"
+          },
+          "maxItems": 2,
+          "minItems": 1,
+          "title": "Decision Approval Event Ids",
+          "type": "array"
+        },
+        "decision_id": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$",
+          "title": "Decision Id",
+          "type": "string"
+        },
+        "decomposition_evidence_refs": {
+          "items": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$",
+            "type": "string"
+          },
+          "maxItems": 12,
+          "title": "Decomposition Evidence Refs",
+          "type": "array"
+        },
+        "implementation": {
+          "enum": [
+            "not_started",
+            "partial",
+            "completed",
+            "reversed",
+            "unknown"
+          ],
+          "title": "Implementation",
+          "type": "string"
+        },
+        "observed": {
+          "$ref": "#/$defs/MetricReference"
+        },
+        "observed_at": {
+          "format": "date-time",
+          "title": "Observed At",
+          "type": "string"
+        },
+        "outcome_id": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$",
+          "title": "Outcome Id",
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/RecordScope"
+        }
+      },
+      "required": [
+        "outcome_id",
+        "decision_id",
+        "decision_approval_event_ids",
+        "scope",
+        "implementation",
+        "baseline",
+        "observed",
+        "attribution",
+        "observed_at"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "finance.decision_proposed",
+      "family": "finance",
+      "properties": {
+        "alternatives": {
+          "items": {
+            "$ref": "#/$defs/DecisionAlternative"
+          },
+          "maxItems": 5,
+          "minItems": 1,
+          "title": "Alternatives",
+          "type": "array"
+        },
+        "capability_ids": {
+          "items": {
+            "pattern": "^F(?:0[1-9]|[12][0-9]|3[01])$",
+            "type": "string"
+          },
+          "maxItems": 8,
+          "minItems": 1,
+          "title": "Capability Ids",
+          "type": "array"
+        },
+        "decision_id": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$",
+          "title": "Decision Id",
+          "type": "string"
+        },
+        "external_action_authorized": {
+          "const": false,
+          "default": false,
+          "title": "External Action Authorized",
+          "type": "boolean"
+        },
+        "proposed_alternative_id": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Proposed Alternative Id"
+        },
+        "proposed_at": {
+          "format": "date-time",
+          "title": "Proposed At",
+          "type": "string"
+        },
+        "proposer_member_id": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$",
+          "title": "Proposer Member Id",
+          "type": "string"
+        },
+        "rationale_codes": {
+          "items": {
+            "enum": [
+              "cash_timing",
+              "reserve",
+              "cost",
+              "time",
+              "risk",
+              "coverage",
+              "preference"
+            ],
+            "type": "string"
+          },
+          "maxItems": 7,
+          "minItems": 1,
+          "title": "Rationale Codes",
+          "type": "array"
+        },
+        "review_at": {
+          "format": "date-time",
+          "title": "Review At",
+          "type": "string"
+        },
+        "revision": {
+          "minimum": 1,
+          "title": "Revision",
+          "type": "integer"
+        },
+        "scope": {
+          "$ref": "#/$defs/RecordScope"
+        },
+        "supersedes_event_id": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Supersedes Event Id"
+        }
+      },
+      "required": [
+        "decision_id",
+        "revision",
+        "scope",
+        "proposer_member_id",
+        "capability_ids",
+        "alternatives",
+        "rationale_codes",
+        "proposed_at",
+        "review_at"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "finance.disclosure_recorded",
+      "family": "finance",
+      "properties": {
+        "authority_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Authority Sha256",
+          "type": "string"
+        },
+        "book_binding_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Book Binding Sha256"
+        },
+        "book_id": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Book Id"
+        },
+        "calculator_id": {
+          "anyOf": [
+            {
+              "maxLength": 100,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Calculator Id"
+        },
+        "expires_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expires At"
+        },
+        "head_publication_id": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Head Publication Id"
+        },
+        "issued_at": {
+          "format": "date-time",
+          "title": "Issued At",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "session",
+            "run"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "member_id": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Member Id",
+          "type": "string"
+        },
+        "model_version": {
+          "anyOf": [
+            {
+              "maxLength": 100,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Model Version"
+        },
+        "publication_id": {
+          "anyOf": [
+            {
+              "maxLength": 240,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Publication Id"
+        },
+        "result_json": {
+          "anyOf": [
+            {
+              "maxLength": 2000,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Result Json"
+        },
+        "result_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Result Sha256"
+        },
+        "run_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Run Sha256"
+        },
+        "session_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Session Sha256",
+          "type": "string"
+        },
+        "slot": {
+          "anyOf": [
+            {
+              "maximum": 6,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Slot"
+        }
+      },
+      "required": [
+        "kind",
+        "member_id",
+        "session_sha256",
+        "authority_sha256",
+        "issued_at"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
       "event_type": "finance.goal_completed",
       "family": "finance",
       "properties": {
@@ -17404,6 +17866,154 @@
         "goal_id",
         "paused_at",
         "paused_by_member_id"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "finance.goal_recorded",
+      "family": "finance",
+      "properties": {
+        "currency": {
+          "pattern": "^[A-Z]{3}$",
+          "title": "Currency",
+          "type": "string"
+        },
+        "evidence_refs": {
+          "items": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$",
+            "type": "string"
+          },
+          "maxItems": 12,
+          "title": "Evidence Refs",
+          "type": "array"
+        },
+        "external_action_authorized": {
+          "const": false,
+          "default": false,
+          "title": "External Action Authorized",
+          "type": "boolean"
+        },
+        "goal_id": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$",
+          "title": "Goal Id",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "reserve",
+            "purchase",
+            "education",
+            "retirement",
+            "support",
+            "debt"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "label": {
+          "anyOf": [
+            {
+              "maxLength": 120,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Label"
+        },
+        "priority": {
+          "default": "unranked",
+          "enum": [
+            "unranked",
+            "essential",
+            "preferred",
+            "optional"
+          ],
+          "title": "Priority",
+          "type": "string"
+        },
+        "recorded_at": {
+          "format": "date-time",
+          "title": "Recorded At",
+          "type": "string"
+        },
+        "revision": {
+          "minimum": 1,
+          "title": "Revision",
+          "type": "integer"
+        },
+        "scope": {
+          "$ref": "#/$defs/RecordScope"
+        },
+        "selected_by_member_id": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$",
+          "title": "Selected By Member Id",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "proposed",
+            "selected",
+            "paused",
+            "completed"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "supersedes_event_id": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Supersedes Event Id"
+        },
+        "target_date": {
+          "anyOf": [
+            {
+              "format": "date",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target Date"
+        },
+        "target_minor": {
+          "anyOf": [
+            {
+              "maximum": 1000000000000000,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target Minor"
+        }
+      },
+      "required": [
+        "goal_id",
+        "revision",
+        "scope",
+        "selected_by_member_id",
+        "kind",
+        "status",
+        "currency",
+        "recorded_at"
       ],
       "schema_version": 1
     },
@@ -17521,6 +18131,85 @@
     },
     {
       "additional_properties": false,
+      "event_type": "finance.import_result",
+      "family": "finance",
+      "properties": {
+        "approval_event_id": {
+          "maxLength": 160,
+          "minLength": 1,
+          "title": "Approval Event Id",
+          "type": "string"
+        },
+        "outcome": {
+          "enum": [
+            "accepted",
+            "rejected",
+            "incomplete"
+          ],
+          "title": "Outcome",
+          "type": "string"
+        },
+        "owner_id": {
+          "maxLength": 160,
+          "minLength": 1,
+          "title": "Owner Id",
+          "type": "string"
+        },
+        "policy_revision": {
+          "minimum": 1,
+          "title": "Policy Revision",
+          "type": "integer"
+        },
+        "projection_event_id": {
+          "anyOf": [
+            {
+              "maxLength": 160,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Projection Event Id"
+        },
+        "provider_effects": {
+          "const": false,
+          "default": false,
+          "title": "Provider Effects",
+          "type": "boolean"
+        },
+        "publication_event_id": {
+          "anyOf": [
+            {
+              "maxLength": 160,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Publication Event Id"
+        },
+        "reason": {
+          "maxLength": 100,
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        }
+      },
+      "required": [
+        "owner_id",
+        "approval_event_id",
+        "policy_revision",
+        "outcome",
+        "reason"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
       "event_type": "finance.metadata_inspected",
       "family": "finance",
       "properties": {
@@ -17594,6 +18283,177 @@
     },
     {
       "additional_properties": false,
+      "event_type": "finance.packet_prepared",
+      "family": "finance",
+      "properties": {
+        "audience_principal_ids": {
+          "items": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$",
+            "type": "string"
+          },
+          "maxItems": 4,
+          "minItems": 1,
+          "title": "Audience Principal Ids",
+          "type": "array"
+        },
+        "content_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Content Sha256",
+          "type": "string"
+        },
+        "disclosure_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Disclosure Authorized",
+          "type": "boolean"
+        },
+        "evidence_refs": {
+          "items": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$",
+            "type": "string"
+          },
+          "maxItems": 30,
+          "title": "Evidence Refs",
+          "type": "array"
+        },
+        "expires_at": {
+          "format": "date-time",
+          "title": "Expires At",
+          "type": "string"
+        },
+        "packet_id": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$",
+          "title": "Packet Id",
+          "type": "string"
+        },
+        "prepared_at": {
+          "format": "date-time",
+          "title": "Prepared At",
+          "type": "string"
+        },
+        "prepared_by_member_id": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$",
+          "title": "Prepared By Member Id",
+          "type": "string"
+        },
+        "professional_kind": {
+          "enum": [
+            "tax",
+            "legal",
+            "investment",
+            "lending",
+            "insurance"
+          ],
+          "title": "Professional Kind",
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/RecordScope"
+        },
+        "source_sharing_authorized": {
+          "const": false,
+          "default": false,
+          "title": "Source Sharing Authorized",
+          "type": "boolean"
+        },
+        "status": {
+          "const": "prepared",
+          "default": "prepared",
+          "title": "Status",
+          "type": "string"
+        },
+        "unresolved_question_ids": {
+          "items": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$",
+            "type": "string"
+          },
+          "maxItems": 20,
+          "minItems": 1,
+          "title": "Unresolved Question Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "packet_id",
+        "scope",
+        "professional_kind",
+        "audience_principal_ids",
+        "unresolved_question_ids",
+        "content_sha256",
+        "prepared_by_member_id",
+        "prepared_at",
+        "expires_at"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "finance.preference_recorded",
+      "family": "finance",
+      "properties": {
+        "chosen_by_member_id": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$",
+          "title": "Chosen By Member Id",
+          "type": "string"
+        },
+        "dimension": {
+          "enum": [
+            "grocery_substitution",
+            "service_time_tradeoff",
+            "reserve_policy",
+            "support_intent",
+            "review_cadence",
+            "decision_priority"
+          ],
+          "title": "Dimension",
+          "type": "string"
+        },
+        "evidence_refs": {
+          "items": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$",
+            "type": "string"
+          },
+          "maxItems": 8,
+          "title": "Evidence Refs",
+          "type": "array"
+        },
+        "preference_id": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$",
+          "title": "Preference Id",
+          "type": "string"
+        },
+        "recorded_at": {
+          "format": "date-time",
+          "title": "Recorded At",
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/RecordScope"
+        },
+        "selected_option_id": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$",
+          "title": "Selected Option Id",
+          "type": "string"
+        },
+        "source": {
+          "const": "explicit_member_choice",
+          "default": "explicit_member_choice",
+          "title": "Source",
+          "type": "string"
+        }
+      },
+      "required": [
+        "preference_id",
+        "scope",
+        "chosen_by_member_id",
+        "dimension",
+        "selected_option_id",
+        "recorded_at"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
       "event_type": "finance.projection_verified",
       "family": "finance",
       "properties": {
@@ -17605,6 +18465,68 @@
       },
       "required": [
         "projection"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "finance.provenance_archived",
+      "family": "finance",
+      "properties": {
+        "approved_evidence": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 128,
+          "title": "Approved Evidence",
+          "type": "array"
+        },
+        "book_id": {
+          "maxLength": 96,
+          "minLength": 1,
+          "title": "Book Id",
+          "type": "string"
+        },
+        "canonical_json": {
+          "maxLength": 1048576,
+          "minLength": 1,
+          "title": "Canonical Json",
+          "type": "string"
+        },
+        "content_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Content Sha256",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "index",
+            "chunk",
+            "evidence"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "owner_id": {
+          "maxLength": 96,
+          "minLength": 1,
+          "title": "Owner Id",
+          "type": "string"
+        },
+        "root_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Root Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "owner_id",
+        "book_id",
+        "root_sha256",
+        "content_sha256",
+        "kind",
+        "canonical_json",
+        "approved_evidence"
       ],
       "schema_version": 1
     },
@@ -35704,6 +36626,126 @@
         "entries",
         "changed_by_member_id",
         "changed_at"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "settings.finance_access_changed",
+      "family": "settings",
+      "properties": {
+        "binding": {
+          "$ref": "#/$defs/FinanceBookBinding"
+        },
+        "books_enabled": {
+          "title": "Books Enabled",
+          "type": "boolean"
+        },
+        "changed_by_member_id": {
+          "maxLength": 160,
+          "minLength": 1,
+          "title": "Changed By Member Id",
+          "type": "string"
+        },
+        "cos_analysis_enabled": {
+          "title": "Cos Analysis Enabled",
+          "type": "boolean"
+        },
+        "owner_id": {
+          "maxLength": 160,
+          "minLength": 1,
+          "title": "Owner Id",
+          "type": "string"
+        },
+        "prior_event_id": {
+          "anyOf": [
+            {
+              "maxLength": 160,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Prior Event Id"
+        },
+        "provider_effects": {
+          "const": false,
+          "default": false,
+          "title": "Provider Effects",
+          "type": "boolean"
+        },
+        "revision": {
+          "minimum": 1,
+          "title": "Revision",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "owner_id",
+        "changed_by_member_id",
+        "revision",
+        "binding",
+        "books_enabled",
+        "cos_analysis_enabled"
+      ],
+      "schema_version": 1
+    },
+    {
+      "additional_properties": false,
+      "event_type": "settings.finance_import_approved",
+      "family": "settings",
+      "properties": {
+        "approved_at": {
+          "title": "Approved At",
+          "type": "string"
+        },
+        "changed_by_member_id": {
+          "maxLength": 160,
+          "minLength": 1,
+          "title": "Changed By Member Id",
+          "type": "string"
+        },
+        "expires_at": {
+          "title": "Expires At",
+          "type": "string"
+        },
+        "manifest": {
+          "$ref": "#/$defs/FinanceImportManifest"
+        },
+        "owner_id": {
+          "maxLength": 160,
+          "minLength": 1,
+          "title": "Owner Id",
+          "type": "string"
+        },
+        "policy_event_id": {
+          "maxLength": 160,
+          "minLength": 1,
+          "title": "Policy Event Id",
+          "type": "string"
+        },
+        "policy_revision": {
+          "minimum": 1,
+          "title": "Policy Revision",
+          "type": "integer"
+        },
+        "provider_effects": {
+          "const": false,
+          "default": false,
+          "title": "Provider Effects",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "owner_id",
+        "changed_by_member_id",
+        "policy_revision",
+        "policy_event_id",
+        "manifest",
+        "approved_at",
+        "expires_at"
       ],
       "schema_version": 1
     },

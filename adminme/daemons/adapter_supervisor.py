@@ -607,7 +607,7 @@ class AdapterSupervisor:
                     "adapter_family": adapter.family,
                     "severity": "transient",
                     "error_kind": "unknown",
-                    "error_message": f"{type(exc).__name__}: {exc}",
+                    "error_message": "Adapter failed; inspect the authorized source status.",
                     "retry_after_s": int(managed.backoff_s),
                     "occurred_at": datetime.now(timezone.utc).strftime(
                         "%Y-%m-%dT%H:%M:%SZ"

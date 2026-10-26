@@ -33,6 +33,11 @@
     "nativeAccountApps": "disabled",
     "serviceWorkspaceFiles": ["AGENTS.md", "IDENTITY.md"],
     "tools": [
+      "administrateme_finance_bindings",
+      "administrateme_finance_status",
+      "administrateme_finance_query",
+      "administrateme_finance_calculate",
+      "administrateme_finance_job",
       "administrateme_state",
       "administrateme_what_now",
       "administrateme_capabilities",
@@ -76,6 +81,11 @@
     ]
   },
   "toolMetadata": {
+    "administrateme_finance_bindings": { "optional": true },
+    "administrateme_finance_status": { "optional": true },
+    "administrateme_finance_query": { "optional": true },
+    "administrateme_finance_calculate": { "optional": true },
+    "administrateme_finance_job": { "optional": true },
     "administrateme_capabilities": { "optional": true },
     "administrateme_settings_context": { "optional": true },
     "administrateme_capability_request": { "optional": true },

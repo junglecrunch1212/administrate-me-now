@@ -102,7 +102,19 @@ def _what_now(
 
 @router.get("/v1/what-now")
 async def what_now(request: Request, session: SessionDep) -> dict[str, Any]:
-    return _what_now(request.app.state.runtime, session)
+    runtime = request.app.state.runtime
+    if runtime.projections is None:
+        raise HTTPException(503, "work projections unavailable")
+    # Keep this complete deterministic read on the existing projection worker.
+    # Per-statement synchronous dispatch blocks HTTP I/O while other projection
+    # work completes and amplifies contention from background finance audits.
+    result = await runtime.projections.read_many(
+        ("commitments", "tasks", "lists", "recurrences"),
+        lambda _connections: _what_now(runtime, session),
+    )
+    if session_from_request(request) != session:
+        raise HTTPException(403, "member_identity_changed")
+    return result
 
 
 @router.get("/v1/triage")
@@ -232,9 +244,8 @@ async def activity(
     }
 
 
-@router.get("/v1/commitments/active")
-async def active_commitments(request: Request, session: SessionDep) -> dict[str, Any]:
-    runtime = request.app.state.runtime
+def _active_commitments(runtime: Any, session: Session) -> dict[str, Any]:
+    """Domain read shared by independently authenticated HTTP/tool boundaries."""
     if runtime.projections is None:
         raise HTTPException(503, "commitments projection unavailable")
     return {
@@ -244,6 +255,19 @@ async def active_commitments(request: Request, session: SessionDep) -> dict[str,
             member_party_id=session.view_member_id,
         )
     }
+
+
+@router.get("/v1/commitments/active")
+async def active_commitments(request: Request, session: SessionDep) -> dict[str, Any]:
+    runtime = request.app.state.runtime
+    if runtime.projections is None:
+        raise HTTPException(503, "commitments projection unavailable")
+    result = await runtime.projections.read(
+        "commitments", lambda _conn: _active_commitments(runtime, session)
+    )
+    if session_from_request(request) != session:
+        raise HTTPException(403, "member_identity_changed")
+    return result
 
 
 @router.get("/v1/commitments/{commitment_id}")

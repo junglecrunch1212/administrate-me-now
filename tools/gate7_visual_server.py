@@ -1203,6 +1203,20 @@ def build_app():
         planning = [
             (
                 "finance.assumption_set",
+                "assumption-opening-cash",
+                {
+                    "assumption_id": "opening_cash",
+                    "category": "cash_flow",
+                    "label": "Chosen planning opening cash",
+                    # Deliberately differs from the observed account balance:
+                    # a scenario must use its chosen input, not a bank fallback.
+                    "value_decimal": "20000",
+                    "unit": "USD",
+                    "as_of": now.date().isoformat(),
+                },
+            ),
+            (
+                "finance.assumption_set",
                 "assumption-income",
                 {
                     "assumption_id": "base_monthly_income",

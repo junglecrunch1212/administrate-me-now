@@ -49,6 +49,11 @@ export type PluginConfig = {
 export type IntegrationState = "healthy" | "degraded" | "unavailable" | "incompatible";
 
 export const TOOL_NAMES = [
+  "administrateme_finance_bindings",
+  "administrateme_finance_status",
+  "administrateme_finance_query",
+  "administrateme_finance_calculate",
+  "administrateme_finance_job",
   "administrateme_state",
   "administrateme_what_now",
   "administrateme_capabilities",

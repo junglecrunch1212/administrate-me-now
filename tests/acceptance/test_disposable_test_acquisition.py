@@ -278,6 +278,20 @@ async def _source_decisions(runtime: Any, source_ids: set[str]) -> dict[str, set
     return result
 
 
+async def _candidate_failure_evidence(runtime):
+    return [
+        {"type": event["type"], "payload": event["payload"]}
+        async for event in runtime.event_log.read_since(
+            types=[
+                "triage.intent.features_extracted",
+                "triage.source_publication.planned",
+                "triage.source_publication.completed",
+                "skill.call.failed",
+            ]
+        )
+    ]
+
+
 def test_initial_incremental_expired_cursor_and_warm_restart_are_bounded(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -587,7 +601,9 @@ def test_empty_selection_can_admit_new_ids_without_reimporting_old_sources(
             known_decisions = client.portal.call(_source_decisions, runtime, known_ids)
             if expected_ids:
                 assert known_decisions["triage.intent.features_extracted"]
-                assert known_decisions["triage.item.proposed"]
+                assert known_decisions["triage.item.proposed"], client.portal.call(
+                    _candidate_failure_evidence, runtime
+                )
     assert set(service.get_ids) == {
         "selected-incoming",
         "selected-sent",
@@ -632,7 +648,9 @@ def test_legacy_source_aliases_preserve_classifier_and_candidate_continuity(
                 _source_decisions, runtime, original_ids
             )
             assert original_decisions["triage.intent.features_extracted"]
-            assert original_decisions["triage.item.proposed"]
+            assert original_decisions["triage.item.proposed"], client.portal.call(
+                _candidate_failure_evidence, runtime
+            )
     config[CONFIG_KEY]["message_ids"].append("selected-new")
     _rotate_transport(service, 1)
     app = create_application(_settings(tmp_path, config))

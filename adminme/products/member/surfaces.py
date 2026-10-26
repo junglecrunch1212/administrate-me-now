@@ -1719,8 +1719,33 @@ def build_surface(
     elif surface == "finance":
         if session.auth_role == "child":
             raise HTTPException(404, "surface not found")
+        from adminme.finance.access_control import (
+            FinanceAccessError,
+            bound_book,
+            policy_for_session,
+        )
+
+        enabled = False
+        accepted_book_id = None
+        if (
+            session.auth_role == "principal"
+            and not session.is_view_as
+            and session.service_context is None
+            and f"private:{session.auth_member_id}" in session.allowed_scopes
+        ):
+            try:
+                enabled = policy_for_session(runtime, session).books_enabled
+                accepted_book_id = bound_book(runtime, session) if enabled else None
+            except FinanceAccessError:
+                # A failed control read is not consent to switch the owner's
+                # Finance source back to the unrelated legacy workbook.
+                raise HTTPException(503, "finance_control_unavailable") from None
         cockpit = finance_snapshot(
-            runtime.projections.connection("money"), session, as_of=now
+            runtime.projections.connection("money"),
+            session,
+            as_of=now,
+            accepted_books_enabled=enabled,
+            accepted_book_id=accepted_book_id,
         )
         base["cockpit"] = cockpit
         base["contract"] = {
@@ -1730,13 +1755,31 @@ def build_surface(
             "model_decides_financial_action": False,
             "external_financial_writes": False,
         }
+        accepted_books = cockpit["accepted_books"]
+        has_accepted_books = bool(accepted_books.get("publication_id"))
         base["freshness"] = surface_freshness(
             generated_at=now,
-            latest_source_at=_latest_time([cockpit["data_health"]], "latest_source_at"),
+            latest_source_at=(
+                _latest_time(
+                    [accepted_books["source_clock_summary"]], "oldest_observed_at"
+                )
+                if has_accepted_books
+                else _latest_time([cockpit["data_health"]], "latest_source_at")
+            ),
             stale_after_seconds=172800,
-            row_count=cockpit["data_health"]["transaction_count"],
+            row_count=(
+                sum(len(report["metrics"]) for report in accepted_books["reports"])
+                if has_accepted_books
+                else cockpit["data_health"]["transaction_count"]
+            ),
+            degraded_reason=(
+                "Accepted historical snapshot; current source freshness is unverified."
+                if has_accepted_books
+                else None
+            ),
             configured=bool(
-                cockpit["data_health"]["transaction_count"]
+                has_accepted_books
+                or cockpit["data_health"]["transaction_count"]
                 or cockpit["data_health"]["account_count"]
                 or cockpit["workbook"]
             ),
