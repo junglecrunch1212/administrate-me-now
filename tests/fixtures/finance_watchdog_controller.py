@@ -104,13 +104,15 @@ def main():
         str(REPO / selection),
     ]
     if mode == "summary-metadata":
-        # Repeat only the five immediate runtime predecessors of the failed
-        # delivery case, then that case and the five previously unrun nodes.
+        # Focused deadline/state checks and the existing eleven application
+        # cases share this single owned workload budget and interpreter exit.
+        args.insert(-1, str(REPO / "tests/unit/test_finance_watchdog_cleanup.py"))
         args += [
             "--maxfail=1",
             "-p",
             "no:cacheprovider",
             "-k",
+            "test_summary_cleanup or "
             "test_summary_replay_and_idempotent_import or "
             "test_summary_ingestion_keeps_revision_membership or "
             "test_summary_authority_revoked_after_read or "

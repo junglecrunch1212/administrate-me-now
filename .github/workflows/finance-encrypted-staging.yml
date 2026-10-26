@@ -1,4 +1,4 @@
-name: Focused Finance remaining delivery diagnosis
+name: Focused Finance shutdown budget and delivery diagnosis
 on:
   push:
     branches: ['codex/finance-encrypted-staging']
@@ -39,10 +39,10 @@ jobs:
           assert 'ADMINME_SYNTHETIC_CALLBACK_DIAGNOSTICS' not in os.environ
           baseline='9bf5bd55292fb770e9285db0fd6dca06c5a5fa4b'
           assert subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()==os.environ['GITHUB_SHA']
-          expected=['adminme/finance/planning_store.py', 'tests/acceptance/test_finance_summary_metadata.py', 'tests/fixtures/finance_watchdog.py', 'tests/fixtures/finance_watchdog_controller.py', '.github/workflows/finance-encrypted-staging.yml']
+          expected=['adminme/finance/planning_store.py', 'tests/acceptance/test_finance_summary_metadata.py', 'tests/fixtures/finance_watchdog.py', 'tests/fixtures/finance_watchdog_controller.py', 'tests/unit/test_finance_watchdog_cleanup.py', '.github/workflows/finance-encrypted-staging.yml']
           actual=set(subprocess.check_output(['git','diff','--name-only',baseline,'HEAD'],text=True).splitlines())
           assert actual==set(expected),actual
-          pins={'adminme/finance/planning_store.py': '8cccb48ef9a74668b789b63b32233f9fd660f4ce2c960425600d6ecf8e7a0ba9', 'tests/acceptance/test_finance_summary_metadata.py': '5ba5038720faadc0edaa9f826c3be0b07723455f4631eda269eeab2353c19421', 'tests/fixtures/finance_watchdog.py': '3e5b52280ebfbefe90d53fa7aa7749761338dca054bf0a8e5e2b8bce7eb7ae25', 'tests/fixtures/finance_watchdog_controller.py': 'eb2842ea072d50ef7adbf0caf20df047a2da200062c05664b74ee758bd393c06'}
+          pins={'adminme/finance/planning_store.py': '8cccb48ef9a74668b789b63b32233f9fd660f4ce2c960425600d6ecf8e7a0ba9', 'tests/acceptance/test_finance_summary_metadata.py': '5ba5038720faadc0edaa9f826c3be0b07723455f4631eda269eeab2353c19421', 'tests/fixtures/finance_watchdog.py': '94deabf3f093f0d22aff8a4077af97c24130eaa56dd733bd904916e270bd27ba', 'tests/fixtures/finance_watchdog_controller.py': '223200ec366d34503082afe9c5d565bc74b134b25b10853b4f845d03f5470d88', 'tests/unit/test_finance_watchdog_cleanup.py': '28655ba3231ec32912782816bd7cbba41dfd2ce2e9e525d25a593ad9608049e1'}
           for path,digest in pins.items():
               raw=pathlib.Path(path).read_bytes()
               assert hashlib.sha256(raw).hexdigest()==digest,path
@@ -62,18 +62,18 @@ jobs:
               if isinstance(node,ast.Call) and isinstance(node.func,ast.Attribute) and node.func.attr=='execute' and node.args and isinstance(node.args[0],ast.Name) and node.args[0].id=='metadata_sql':
                   node.args[0]=ast.Constant(legacy);replacements+=1
           assert replacements==1 and ast.dump(old,include_attributes=False)==ast.dump(new,include_attributes=False)
-          expected_cases=['test_summary_replay_and_idempotent_import', 'test_summary_ingestion_keeps_revision_membership[first]', 'test_summary_ingestion_keeps_revision_membership[last]', 'test_summary_authority_revoked_after_read[native]', 'test_summary_authority_revoked_after_read[member]', 'test_summary_native_member_delivery_contract', 'test_summary_import_boundary[disabled]', 'test_summary_import_boundary[wrong_owner]', 'test_summary_import_boundary[wrong_hash]', 'test_summary_import_boundary[conflicting_retry]', 'test_summary_runtime_bounds_and_native_versions']
-          assert len(expected_cases)==len(set(expected_cases))==11
+          expected_cases=[('tests.unit.test_finance_watchdog_cleanup', 'test_summary_cleanup_delayed_natural_exit[past_old_grace]'), ('tests.unit.test_finance_watchdog_cleanup', 'test_summary_cleanup_delayed_natural_exit[before_normal_deadline]'), ('tests.unit.test_finance_watchdog_cleanup', 'test_summary_cleanup_stuck_exit_is_forced_failure'), ('tests.unit.test_finance_watchdog_cleanup', 'test_summary_cleanup_fault_before_finish_keeps_first_origin'), ('tests.unit.test_finance_watchdog_cleanup', 'test_summary_cleanup_late_fault_cannot_reset_window[early_fault]'), ('tests.unit.test_finance_watchdog_cleanup', 'test_summary_cleanup_late_fault_cannot_reset_window[late_fault]'), ('tests.unit.test_finance_watchdog_cleanup', 'test_summary_cleanup_late_fault_cannot_reset_window[after_term_deadline]'), ('tests.unit.test_finance_watchdog_cleanup', 'test_summary_cleanup_near_absolute_boundary[before_work]'), ('tests.unit.test_finance_watchdog_cleanup', 'test_summary_cleanup_near_absolute_boundary[at_work]'), ('tests.unit.test_finance_watchdog_cleanup', 'test_summary_cleanup_near_absolute_boundary[late_finish]'), ('tests.unit.test_finance_watchdog_cleanup', 'test_summary_cleanup_rejects_missing_late_or_unclean_receipt'), ('tests.acceptance.test_finance_summary_metadata', 'test_summary_replay_and_idempotent_import'), ('tests.acceptance.test_finance_summary_metadata', 'test_summary_ingestion_keeps_revision_membership[first]'), ('tests.acceptance.test_finance_summary_metadata', 'test_summary_ingestion_keeps_revision_membership[last]'), ('tests.acceptance.test_finance_summary_metadata', 'test_summary_authority_revoked_after_read[native]'), ('tests.acceptance.test_finance_summary_metadata', 'test_summary_authority_revoked_after_read[member]'), ('tests.acceptance.test_finance_summary_metadata', 'test_summary_native_member_delivery_contract'), ('tests.acceptance.test_finance_summary_metadata', 'test_summary_import_boundary[disabled]'), ('tests.acceptance.test_finance_summary_metadata', 'test_summary_import_boundary[wrong_owner]'), ('tests.acceptance.test_finance_summary_metadata', 'test_summary_import_boundary[wrong_hash]'), ('tests.acceptance.test_finance_summary_metadata', 'test_summary_import_boundary[conflicting_retry]'), ('tests.acceptance.test_finance_summary_metadata', 'test_summary_runtime_bounds_and_native_versions')]
+          assert len(expected_cases)==len(set(expected_cases))==22
           out=pathlib.Path(os.environ['FINANCE_SUMMARY_PINS'])
           (out/'expected-tests.json').write_text(json.dumps(expected_cases,indent=2)+'\n')
-          tracked=subprocess.check_output(['git','ls-files','adminme','tests/fixtures','tests/acceptance/test_finance_planning.py','tests/acceptance/test_finance_summary_metadata.py','pyproject.toml','poetry.lock'],text=True).splitlines()
+          tracked=subprocess.check_output(['git','ls-files','adminme','tests/fixtures','tests/acceptance/test_finance_planning.py','tests/acceptance/test_finance_summary_metadata.py','tests/unit/test_finance_watchdog_cleanup.py','pyproject.toml','poetry.lock'],text=True).splitlines()
           source={p:hashlib.sha256(pathlib.Path(p).read_bytes()).hexdigest() for p in tracked if pathlib.Path(p).is_file()}
           (out/'source-pins.json').write_text(json.dumps({'candidate':os.environ['GITHUB_SHA'],'baseline':baseline,'changed':expected,'pins':pins,'source':source},indent=2)+'\n')
-          (out/'prior-evidence.json').write_text(json.dumps({'failed_representative':40252645394,'zip_sha256':'3ad9e51bea70055999bc488d7c96853fe2bbf43319a393ad5fa97a32c1ac928f','previous_observer45_run':40250697052,'previous_launch13_run':40252645394,'repeated_previous_tests':0,'previous_proofs_do_not_prove_this_read_path':True,'failed_summary_run':40259507076,'failed_summary_zip_sha256':'50580474bb5493364033eee8c85cd975ad87942225697a756e0e708cc5e8d2cc','failed_summary_passed':72,'failed_summary_failed':1,'failed_summary_unexecuted':5,'failed_summary_forced':True,'remaining_case_scope':11,'repeated_runtime_predecessors':5,'reused_prior_passed_nodes':67,'resource_qualified':False,'production_qualified':False},indent=2)+'\n')
+          (out/'prior-evidence.json').write_text(json.dumps({'failed_representative':40252645394,'zip_sha256':'3ad9e51bea70055999bc488d7c96853fe2bbf43319a393ad5fa97a32c1ac928f','previous_observer45_run':40250697052,'previous_launch13_run':40252645394,'repeated_launch_or_observer_tests':0,'previous_proofs_do_not_prove_this_read_path':True,'failed_summary_run':40259507076,'failed_summary_zip_sha256':'50580474bb5493364033eee8c85cd975ad87942225697a756e0e708cc5e8d2cc','failed_summary_passed':72,'failed_summary_failed':1,'failed_summary_unexecuted':5,'failed_summary_forced':True,'prior_30c_run':40261417864,'prior_30c_zip_sha256':'47b15cdfb1895c1ba07b53151099f6ccb93cd543efe20dbff86b8166415442a1','prior_30c_passed':11,'prior_30c_forced':True,'application_case_scope':11,'focused_state_boundary_cases':11,'repeated_behavior_cases':11,'harness_budget_reallocation':'normal exit0.5s to2s within unchanged5s cleanup and125sabsolute;fault grace0.5s with frozen earliest deadline','reused_prior_passed_nodes':67,'resource_qualified':False,'production_qualified':False},indent=2)+'\n')
           PY_CHECK
-          .venv/bin/ruff check adminme/finance/planning_store.py tests/acceptance/test_finance_summary_metadata.py tests/fixtures/finance_watchdog.py tests/fixtures/finance_watchdog_controller.py
-          .venv/bin/ruff format --check adminme/finance/planning_store.py tests/acceptance/test_finance_summary_metadata.py tests/fixtures/finance_watchdog.py tests/fixtures/finance_watchdog_controller.py
-      - name: One bounded remaining-case diagnostic suite
+          .venv/bin/ruff check adminme/finance/planning_store.py tests/acceptance/test_finance_summary_metadata.py tests/fixtures/finance_watchdog.py tests/fixtures/finance_watchdog_controller.py tests/unit/test_finance_watchdog_cleanup.py
+          .venv/bin/ruff format --check adminme/finance/planning_store.py tests/acceptance/test_finance_summary_metadata.py tests/fixtures/finance_watchdog.py tests/fixtures/finance_watchdog_controller.py tests/unit/test_finance_watchdog_cleanup.py
+      - name: One bounded focused-tests-plus-eleven-case diagnostic
         id: focused
         timeout-minutes: 3
         run: |
@@ -95,8 +95,8 @@ jobs:
               watch=json.loads((root/'watchdog.json').read_text())
           except (OSError,ValueError,E.ParseError) as exc:parse_error=type(exc).__name__
           ids=[(r.attrib.get('classname'),r.attrib.get('name')) for r in rows]
-          required={('tests.acceptance.test_finance_summary_metadata',name) for name in expected}
-          exact=len(ids)==len(set(ids))==len(required)==11 and set(ids)==required
+          required={tuple(row) for row in expected}
+          exact=len(ids)==len(set(ids))==len(required)==22 and set(ids)==required
           clean_cases=all(not any(r.find(k) is not None for k in ('failure','error','skipped')) for r in rows)
           cleaned=watch.get('scratch_removed') is True and watch.get('remaining_owned')==[] and not (root/'scratch').exists()
           cleanup_covered=False
@@ -115,9 +115,17 @@ jobs:
               cleanup_covered=post_in_trace and all(maxima[k]>=max(observed[k],cleanup[k],post[k]) and maxima[k]<=limits[k] for k in limits)
           except (OSError,KeyError,ValueError,AssertionError,TypeError) as exc:
               parse_error=parse_error or 'cleanup:'+type(exc).__name__
-          bounded=watch.get('absolute_bound_met') is True and not watch.get('faults') and not watch.get('forced') and watch.get('controller_exit')==0 and cleanup_covered
+          cleanup_timing=False
+          try:
+              first=watch['work_finished_at'];start=watch['started'];finished=watch['finished'];end=watch['cleanup_schedule']['end']
+              assert all(type(v) in (int,float) and math.isfinite(v) for v in (first,start,finished,end))
+              assert watch['normal_exit_grace_seconds']==2 and watch['cancel_grace_seconds']==0.5
+              natural_reap=any(e['kind']=='controller.reaped' and e['exit_code']==0 and first<=e['at']<=watch['cleanup_schedule']['term']==end-3 for e in watch['events'])
+              cleanup_timing=start<=first<=start+120 and first<=finished<=end==min(start+125,first+5) and watch['cleanup_seconds']==finished-first<=5 and watch['elapsed_seconds']==finished-start<=125 and natural_reap
+          except (KeyError,ValueError,TypeError,AssertionError):parse_error=parse_error or 'cleanup_timing'
+          bounded=watch.get('absolute_bound_met') is True and watch.get('faults')==[] and watch.get('forced') is False and type(watch.get('controller_exit')) is int and watch['controller_exit']==0 and cleanup_covered and cleanup_timing
           complete=os.environ['FOCUSED_OUTCOME']=='success' and exact and clean_cases and cleaned and bounded and parse_error is None
-          selection={'candidate':os.environ['GITHUB_SHA'],'expected':11,'executed':len(rows),'cases':ids,'exact_selection':exact,'clean_cases':clean_cases,'cleanup_confirmed':cleaned,'cleanup_samples_covered':cleanup_covered,'bounded':bounded,'parse_error':parse_error,'complete':complete,'resource_qualified':False,'production_qualified':False,'representative_run_started':False,'original_78_cohort_complete':False,'original_failure_explained':False,'reused_prior_passed_nodes':67,'repeated_runtime_predecessors':5}
+          selection={'candidate':os.environ['GITHUB_SHA'],'expected':22,'focused_boundary_expected':11,'application_expected':11,'executed':len(rows),'cases':ids,'exact_selection':exact,'clean_cases':clean_cases,'cleanup_confirmed':cleaned,'cleanup_samples_covered':cleanup_covered,'cleanup_timing_verified':cleanup_timing,'bounded':bounded,'parse_error':parse_error,'complete':complete,'resource_qualified':False,'production_qualified':False,'representative_run_started':False,'original_78_cohort_complete':False,'original_failure_explained':False,'reused_prior_passed_nodes':67,'repeated_behavior_cases':11,'prior_30c_still_failed':True,'harness_budget_changed':True}
           (pins/'selection-result.json').write_text(json.dumps(selection,indent=2)+'\n')
           files=sorted([p for parent in (root,pins) for p in parent.iterdir() if p.is_file() and not p.is_symlink()],key=lambda p:p.name)
           assert len({p.name for p in files})==len(files)

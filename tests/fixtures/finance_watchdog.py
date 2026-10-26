@@ -134,6 +134,75 @@ def mode_budget(mode):
     }
 
 
+def summary_cleanup_deadlines(absolute, finish_at, stop_at=None):
+    """One earliest origin; faults can shorten escalation, never borrow reserves."""
+    origin = min(finish_at, stop_at) if stop_at is not None else finish_at
+    end = min(absolute, origin + 5.0)
+    term_at = end - 3.0  # 2s natural exit, 1s TERM, 1s KILL/reap, 1s final reserve.
+    if stop_at is not None:
+        term_at = min(term_at, stop_at + 0.5)
+    return {
+        "origin": origin,
+        "term": term_at,
+        "kill": term_at + 1.0,
+        "reserve": end - 1.0,
+        "reap": end - 0.5,
+        "end": end,
+    }
+
+
+def summary_cleanup_step(window, now, term_sent, kill_sent, signal_owned):
+    """Use absolute phase deadlines; a missed phase cannot consume the next one."""
+    if now >= window["reserve"]:
+        signal_owned(signal.SIGKILL)
+        return term_sent, True, True
+    if now >= window["kill"]:
+        if not kill_sent:
+            signal_owned(signal.SIGKILL)
+        return term_sent, True, False
+    if now >= window["term"] and not term_sent:
+        signal_owned(signal.SIGTERM)
+        term_sent = True
+    return term_sent, kill_sent, False
+
+
+def summary_cleanup_complete(report, now):
+    first = report.get("work_finished_at")
+    start, finished = report.get("started"), report.get("finished")
+    schedule = report.get("cleanup_schedule", {})
+    end, term_at = schedule.get("end"), schedule.get("term")
+    reaped = next(
+        (
+            row.get("at")
+            for row in report.get("reaped", [])
+            if row.get("pid") == report.get("controller_pid")
+        ),
+        None,
+    )
+    return (
+        all(
+            type(v) in (int, float) and math.isfinite(v)
+            for v in (first, start, finished, end, term_at, reaped, now)
+        )
+        and start <= first <= start + 120
+        and end == min(start + 125, first + 5)
+        and term_at == end - 3
+        and first <= reaped <= term_at
+        and reaped <= finished <= now <= end
+        and report.get("cleanup_seconds") == finished - first
+        and 0 <= report["cleanup_seconds"] <= 5
+        and report.get("elapsed_seconds") == finished - start
+        and report["elapsed_seconds"] <= 125
+        and report.get("absolute_bound_met") is True
+        and report.get("forced") is False
+        and report.get("faults") == []
+        and type(report.get("controller_exit")) is int
+        and report["controller_exit"] == 0
+        and report.get("remaining_owned") == []
+        and report.get("scratch_removed") is True
+    )
+
+
 def remove_scratch(scratch, *, retain_unknown, remaining_owned):
     if retain_unknown and remaining_owned:
         return False
@@ -318,9 +387,31 @@ def main(mode, directory):
     runtime_final_received = False
     finish_at = None
     stop_at = None
+    summary_window = None
     term_sent = kill_sent = False
     selector = selectors.DefaultSelector()
     selector.register(read_fd, selectors.EVENT_READ)
+
+    def bind_summary_cleanup(*, arm=True):
+        nonlocal summary_window
+        if mode != "summary-metadata":
+            return
+        first = (
+            finish_at
+            if finish_at is not None
+            else min(time.monotonic(), STARTED + work)
+        )
+        if summary_window is not None:
+            first = min(first, summary_window["origin"])
+        summary_window = summary_cleanup_deadlines(absolute, first, stop_at)
+        report["cleanup_schedule"] = summary_window
+        report["normal_exit_grace_seconds"] = 2.0
+        report["cancel_grace_seconds"] = 0.5
+        if arm:
+            signal.setitimer(
+                signal.ITIMER_REAL,
+                max(0.001, summary_window["reserve"] - time.monotonic()),
+            )
 
     def stop(reason, now):
         nonlocal stop_at, finish_at
@@ -332,6 +423,7 @@ def main(mode, directory):
             row = process_row(controller.pid)
             if row and row["start_ticks"] == known.get(controller.pid):
                 os.kill(controller.pid, signal.SIGUSR1)
+            bind_summary_cleanup()
 
     def signal_owned(sig):
         report["forced"] = True
@@ -351,7 +443,8 @@ def main(mode, directory):
         # kernel timer terminates this supervisor if finalization itself stalls.
         signal_owned(signal.SIGKILL)
         signal.signal(signal.SIGALRM, signal.SIG_DFL)
-        signal.setitimer(signal.ITIMER_REAL, max(0.001, absolute - time.monotonic()))
+        end = summary_window["end"] if summary_window is not None else absolute
+        signal.setitimer(signal.ITIMER_REAL, max(0.001, end - time.monotonic()))
         raise TimeoutError("absolute_watchdog_alarm")
 
     signal.signal(signal.SIGALRM, alarm)
@@ -471,6 +564,7 @@ def main(mode, directory):
                             ):
                                 raise ValueError("work_clock")
                             finish_at = msg["at"]
+                            bind_summary_cleanup()
                             if finish_at > STARTED + work:
                                 stop("work_deadline", now)
                         else:
@@ -515,7 +609,14 @@ def main(mode, directory):
             if finish_at is None and now >= STARTED + work:
                 stop("work_deadline", now)
             cleanup_start = stop_at if stop_at is not None else finish_at
-            if cleanup_start is not None:
+            if summary_window is not None:
+                term_sent, kill_sent, reserve = summary_cleanup_step(
+                    summary_window, time.monotonic(), term_sent, kill_sent, signal_owned
+                )
+                if reserve:
+                    report["faults"].append("cleanup_deadline")
+                    break
+            elif cleanup_start is not None:
                 if now >= cleanup_start + grace and not term_sent:
                     signal_owned(signal.SIGTERM)
                     term_sent = True
@@ -536,6 +637,14 @@ def main(mode, directory):
         finish_at = finish_at or min(time.monotonic(), STARTED + work)
         signal_owned(signal.SIGKILL)
     finally:
+        # The same deadline caps reap, sampler settlement and receipt/scratch I/O.
+        if mode == "summary-metadata":
+            if summary_window is None:
+                bind_summary_cleanup(arm=False)
+            signal.signal(signal.SIGALRM, signal.SIG_DFL)
+            signal.setitimer(
+                signal.ITIMER_REAL, max(0.001, summary_window["end"] - time.monotonic())
+            )
         # Final reserve: bounded nonblocking reap, then retained receipts/scratch removal.
         cleanup_maxima = {key: 0 for key in limits}
 
@@ -554,7 +663,11 @@ def main(mode, directory):
             record_cleanup_sample if mode == "summary-metadata" else write_sample,
             report["faults"],
         )
-        end = min(absolute, (finish_at or time.monotonic()) + cleanup)
+        end = (
+            summary_window["end"]
+            if summary_window is not None
+            else min(absolute, (finish_at or time.monotonic()) + cleanup)
+        )
         while time.monotonic() < end - 0.5:
             try:
                 pid, status, usage = os.wait4(-1, os.WNOHANG)
@@ -610,7 +723,12 @@ def main(mode, directory):
             report["faults"].append("uncertain_ownership_scratch_retained")
         if cleanup_sampler is not None:
             cleanup_sampling_stop.set()
-            cleanup_sampler.join(timeout=1)
+            join_timeout = (
+                min(1.0, max(0.0, end - time.monotonic()))
+                if summary_window is not None
+                else 1.0
+            )
+            cleanup_sampler.join(timeout=join_timeout)
             if cleanup_sampler.is_alive():
                 report["faults"].append("cleanup_sampler_unsettled")
             report["post_cleanup_sample"] = sample(
@@ -647,7 +765,14 @@ def main(mode, directory):
             if evidence_bytes > 16 * MIB - 65536:
                 report["faults"].append("final_containment:evidence_bytes")
         (root / "watchdog.json").write_text(json.dumps(report, indent=2) + "\n")
+    summary_complete = (
+        summary_cleanup_complete(report, time.monotonic())
+        if mode == "summary-metadata"
+        else None
+    )
     signal.setitimer(signal.ITIMER_REAL, 0)
+    if summary_complete is not None:
+        return 0 if summary_complete else 1
     clean = (
         not report["remaining_owned"]
         and report["scratch_removed"]
