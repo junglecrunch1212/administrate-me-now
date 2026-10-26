@@ -1,9 +1,10 @@
-"""Explicitly admitted Linux owner-release experiment; never collected by pytest.
+"""Isolated NON-QUALIFYING memory diagnostic; never collected by pytest.
 
 The external controller drives shipping HTTP owner control/approval/import and a
 single ordinary Money rebuild. Runtime lifecycle, importer, EventLog, subscribers,
 and projections are not replaced. No advisor override, model or provider runs.
-The existing watchdog owns process/resource/deadline enforcement and cleanup.
+The exact 9a application and watchdog remain unchanged. Fixture-only observation
+replaces timed load windows; no resource or latency qualification is attempted.
 """
 
 from __future__ import annotations
@@ -29,13 +30,11 @@ REPO = Path(__file__).resolve().parents[2]
 PHASES = {
     "synthetic_fixture_build": 45,
     "runtime_startup": 30,
-    "preimport_core_baseline": 10,
+    "settled_preimport_observation": 10,
     "single_initial_import": 120,
-    "settle_and_owner_readback": 15,
+    "settled_postimport_observation": 20,
     "single_full_money_replay": 60,
-    "loaded_core_baseline_before": 10,
-    "loaded_planning_probe": 10,
-    "loaded_core_baseline_after": 10,
+    "settled_postreplay_observation": 20,
     "shutdown_receipt": 15,
 }
 MIB = 1024**2
@@ -152,6 +151,8 @@ async def runtime_main(root, listener_fd, control_fd, checkout):
     from adminme.finance import release
     from adminme.runtime.application import create_application
     from tests.acceptance.test_finance_activation import configured
+    from tests.fixtures.finance_owner_allocations import BOUNDARIES, Observations
+    from adminme.finance.worker import worker_usage
     import uvicorn
 
     assert release.ADVISOR_AVAILABLE is False
@@ -162,6 +163,7 @@ async def runtime_main(root, listener_fd, control_fd, checkout):
     faults = []
     guard = FixtureGuard(root, listener.getsockname()[1], faults, finance_workers=True)
     sys.addaudithook(guard)
+    observations = Observations()
     app = create_application(configured(root / "instance"))
     server = uvicorn.Server(
         uvicorn.Config(app, log_level="warning", lifespan="off", access_log=False)
@@ -195,6 +197,28 @@ async def runtime_main(root, listener_fd, control_fd, checkout):
                     replayed = True
                     await app.state.runtime.projections.rebuild("money")
                     await send(control, {"rebuilt": "money"})
+                elif command.get("operation") in {
+                    "observe_" + boundary for boundary in BOUNDARIES
+                } and set(command) == {"operation"}:
+                    async with asyncio.timeout(5):
+                        while True:
+                            state = await app.state.runtime.bus.subscriber_status(
+                                "projection:money"
+                            )
+                            assert not state.get("degraded"), "money_degraded"
+                            if (
+                                state["lag_count"] == 0
+                                and not state.get("draining", False)
+                                and worker_usage()["active"] is None
+                            ):
+                                break
+                            await asyncio.sleep(0.02)
+                    await send(
+                        control,
+                        observations.capture(
+                            command["operation"].removeprefix("observe_")
+                        ),
+                    )
                 elif command == {"operation": "shutdown"}:
                     break
                 else:
@@ -415,6 +439,31 @@ class Run:
     async def command(self, operation):
         await send(self.control, {"operation": operation})
         return await receive(self.control)
+
+    async def observe(self, boundary):
+        from tests.fixtures.finance_watchdog import process_row, tree_rows
+
+        before_at = time.monotonic()
+        before = process_row(self.runtime.pid)
+        assert [row["pid"] for row in tree_rows(self.runtime.pid)] == [self.runtime.pid]
+        result = await self.command("observe_" + boundary)
+        after = process_row(self.runtime.pid)
+        assert before["start_ticks"] == after["start_ticks"]
+        assert result["pid"] == self.runtime.pid and result["boundary"] == boundary
+        assert result["qualification"] is False and result["trace_frames"] == 1
+        assert [row["pid"] for row in tree_rows(self.runtime.pid)] == [self.runtime.pid]
+        append(
+            self.root,
+            "allocation-observations.jsonl",
+            {
+                **result,
+                "phase": self.phase_name,
+                "external_before_at": before_at,
+                "external_before": before,
+                "external_after_at": time.monotonic(),
+                "external_after": after,
+            },
+        )
 
     async def readback(self, client):
         value = await self.request(client, "GET", SURFACE, full=True)
@@ -649,6 +698,9 @@ async def controller(root):
                 "fixture.jsonl",
                 {
                     "candidate": checkout,
+                    "shipping_source": "9a23c9372650e6502bf2f76d08f318fcca891729",
+                    "qualification": False,
+                    "diagnostic": "runtime_only_tracemalloc_depth_1",
                     "units": 8022,
                     "blobs": len(package.blobs),
                     "provenance_bytes": len(package.index)
@@ -733,43 +785,33 @@ async def controller(root):
                     },
                     full=True,
                 )
-                await run.load(client, seconds=5)
-            async with run.phase("preimport_core_baseline"):
-                await run.load(client)
+                await run.request(client, "GET", CORE)
+            async with run.phase("settled_preimport_observation"):
+                await run.observe("preimport")
             async with run.phase("single_initial_import"):
                 # One production request, no retry. Large JSON encode/decode is
                 # included in phase, CPU/RSS and scratch accounting.
                 body = json.loads(packet_path.read_text())
-                result = await run.alongside(
+                result = await run.request(
                     client,
-                    run.request(
-                        client,
-                        "POST",
-                        "/api/member/v1/finance/imports/"
-                        + approval["approval_event_id"],
-                        body=body,
-                        timeout=117,
-                        full=True,
-                    ),
-                    seconds=118,
+                    "POST",
+                    "/api/member/v1/finance/imports/" + approval["approval_event_id"],
+                    body=body,
+                    timeout=117,
+                    full=True,
                 )
                 assert result["accounting"]["publication_id"] == run.publication_id, (
                     result
                 )
                 del body
-            async with run.phase("settle_and_owner_readback"):
+            async with run.phase("settled_postimport_observation"):
                 run.after_import = await run.readback(client)
+                await run.observe("postimport")
             async with run.phase("single_full_money_replay"):
-                assert await run.alongside(
-                    client, run.command("rebuild_money"), seconds=58
-                ) == {"rebuilt": "money"}
+                assert await run.command("rebuild_money") == {"rebuilt": "money"}
+            async with run.phase("settled_postreplay_observation"):
                 run.after_replay = await run.readback(client)
-            async with run.phase("loaded_core_baseline_before"):
-                await run.load(client)
-            async with run.phase("loaded_planning_probe"):
-                await run.load(client, planning=True)
-            async with run.phase("loaded_core_baseline_after"):
-                await run.load(client)
+                await run.observe("postreplay")
             async with run.phase("shutdown_receipt"):
                 run.final_readback = await run.readback(client)
                 shutdown = await run.command("shutdown")
@@ -790,9 +832,23 @@ async def controller(root):
                     pid=run.runtime.pid,
                     cpu_seconds=usage.ru_utime + usage.ru_stime,
                 )
-        result = verdict(run)
-        append(root, "verdict.jsonl", result)
-        failed = not result["passed"]
+        assert run.after_import == run.after_replay == run.final_readback
+        assert all(row["validated"] for row in run.rows)
+        append(
+            root,
+            "diagnostic-result.jsonl",
+            {
+                "diagnostic_complete": True,
+                "qualification": False,
+                "latency_qualification": "omitted_while_tracing",
+                "resource_qualification": "not_attempted",
+                "same_readback_after_import_replay_and_final": True,
+                "observations": 3,
+                "normal_runtime_shutdown": True,
+                "external_cleanup_and_export_proof_required": True,
+            },
+        )
+        failed = False
     except BaseException as exc:
         append(
             root,
