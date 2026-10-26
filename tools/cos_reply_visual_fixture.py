@@ -87,7 +87,12 @@ class CoSReplyVisualTransport(DeterministicOpenClawChatTransport):
         self.phase = "idle"
 
     async def stream(
-        self, *, session_key: str, message: str, idempotency_key: str
+        self,
+        *,
+        session_key: str,
+        message: str,
+        idempotency_key: str,
+        instruction_ticket: dict[str, Any] | None = None,
     ) -> AsyncIterator[MemberChatChunk]:
         prefix = (
             "Please use administrateme_cos_response to request sending approval "
@@ -98,9 +103,12 @@ class CoSReplyVisualTransport(DeterministicOpenClawChatTransport):
                 session_key=session_key,
                 message=message,
                 idempotency_key=idempotency_key,
+                instruction_ticket=instruction_ticket,
             ):
                 yield chunk
             return
+        # Like the deterministic parent, this fixture does not simulate native
+        # conversation preparation. A ticket never replaces sending approval.
         approval_id = message[len(prefix) : -1]
         event = await self.runtime.event_log.get(approval_id)
         if (

@@ -6,11 +6,15 @@ production behavior. This is distinct from the held advisor contract suites.
 """
 
 import json
+import threading
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 import pytest
+import httpx
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 
 from adminme.events.envelope import EventEnvelope
@@ -70,6 +74,173 @@ def owner_import(client, headers=DEMO_HEADERS, owner=PRINCIPAL):
     )
     assert result.status_code == 200, result.text
     return p, d, manifest, packet, approval.json()["approval_event_id"]
+
+
+def test_owner_planning_encodes_complete_json_on_money_worker(tmp_path, monkeypatch):
+    from adminme.finance import planning_store
+    from adminme.products.member import main
+
+    with TestClient(create_application(configured(tmp_path))) as client:
+        p, d, *_ = owner_import(client)
+        runtime = client.app.state.runtime
+        original_query = planning_store.query_projection
+        original_read = runtime.projections.read
+        query_threads, render_threads, loop_threads, expected, detached = (
+            [],
+            [],
+            [],
+            [],
+            [],
+        )
+
+        def observed_query(*args, **kwargs):
+            query_threads.append(threading.get_ident())
+            value = original_query(*args, **kwargs)
+            value["encoding_fixture"] = {
+                "text": "Café — 東京",
+                "nullable": None,
+                "numbers": [0, -7, 9007199254740993, 1.25, -0.0],
+                "flag": False,
+            }
+            expected.append(value)
+            return value
+
+        class ObservedJSONResponse(JSONResponse):
+            def render(self, content):
+                render_threads.append(threading.get_ident())
+                return super().render(content)
+
+        async def observed_read(name, callback):
+            loop_threads.append(threading.get_ident())
+            value = await original_read(name, callback)
+            if name == "money":
+                assert type(value) is bytes
+                detached.append(value)
+            return value
+
+        monkeypatch.setattr(planning_store, "query_projection", observed_query)
+        monkeypatch.setattr(main, "JSONResponse", ObservedJSONResponse)
+        monkeypatch.setattr(runtime.projections, "read", observed_read)
+        for report, days in (
+            ("planning_contexts", 30),
+            ("planning_projection", 7),
+            ("planning_projection", 365),
+            ("planning_events", 30),
+        ):
+            response = client.get(
+                "/api/member/v1/finance/planning",
+                headers=DEMO_HEADERS,
+                params={
+                    "book_id": p["book_id"],
+                    "context_id": d["contexts"][0]["context_id"],
+                    "report_id": report,
+                    "horizon_days": days,
+                },
+            )
+            assert response.status_code == 200, response.text
+            assert response.headers["content-type"] == "application/json"
+            assert (
+                response.content
+                == detached[-1]
+                == JSONResponse(jsonable_encoder(expected[-1])).body
+            )
+            assert response.json() == expected[-1]
+        assert len(query_threads) == len(render_threads) == len(detached) == 4
+        assert query_threads == render_threads
+        assert set(query_threads).isdisjoint(loop_threads)
+
+
+@pytest.mark.parametrize("revocation", ["identity", "role", "books"])
+def test_owner_planning_rechecks_authority_after_encoding(
+    tmp_path, monkeypatch, revocation
+):
+    with TestClient(create_application(configured(tmp_path))) as client:
+        p, d, manifest, *_ = owner_import(client)
+        runtime = client.app.state.runtime
+        original_read = runtime.projections.read
+        captured = []
+
+        async def revoke_after_read(name, callback):
+            value = await original_read(name, callback)
+            if name == "money" and not captured:
+                assert type(value) is bytes and p["publication_id"].encode() in value
+                captured.append(value)
+                if revocation == "identity":
+                    runtime.settings = replace(runtime.settings, member_identities={})
+                elif revocation == "role":
+                    runtime.settings = replace(
+                        runtime.settings,
+                        member_roles={
+                            **runtime.settings.member_roles,
+                            PRINCIPAL: "child",
+                        },
+                    )
+                else:
+                    async with httpx.AsyncClient(
+                        transport=httpx.ASGITransport(app=client.app),
+                        base_url="http://fixture",
+                    ) as http:
+                        current = await http.get(CONTROL, headers=DEMO_HEADERS)
+                        revoked = await http.put(
+                            CONTROL,
+                            headers=DEMO_HEADERS,
+                            json={
+                                "request_id": str(uuid4()),
+                                "expected_revision": current.json()["revision"],
+                                "binding": manifest["binding"],
+                                "books_enabled": False,
+                                "cos_analysis_enabled": False,
+                            },
+                        )
+                    assert revoked.status_code == 200, revoked.text
+            return value
+
+        monkeypatch.setattr(runtime.projections, "read", revoke_after_read)
+        response = client.get(
+            "/api/member/v1/finance/planning",
+            headers=DEMO_HEADERS,
+            params={
+                "book_id": p["book_id"],
+                "context_id": d["contexts"][0]["context_id"],
+                "report_id": "planning_projection",
+            },
+        )
+        assert len(captured) == 1
+        assert response.status_code == (401 if revocation == "identity" else 403)
+        assert (
+            p["publication_id"] not in response.text
+            and '"summary":' not in response.text
+        )
+
+
+@pytest.mark.parametrize("failure", ["selection", "encoding"])
+def test_owner_planning_preserves_selection_and_render_errors(
+    tmp_path, monkeypatch, failure
+):
+    from adminme.finance import planning_store
+
+    with TestClient(
+        create_application(configured(tmp_path)), raise_server_exceptions=False
+    ) as client:
+        p, *_ = owner_import(client)
+
+        def invalid(*args, **kwargs):
+            if failure == "selection":
+                raise ValueError("fixture_invalid_selection")
+            return {"value": float("nan")}
+
+        monkeypatch.setattr(planning_store, "query_projection", invalid)
+        response = client.get(
+            "/api/member/v1/finance/planning",
+            headers=DEMO_HEADERS,
+            params={"book_id": p["book_id"]},
+        )
+        if failure == "selection":
+            assert response.status_code == 422
+            assert response.json() == {"detail": "finance_planning_selection_invalid"}
+        else:
+            assert response.status_code == 500
+            assert response.text == "Internal Server Error"
 
 
 async def saved_consent(runtime, binding):

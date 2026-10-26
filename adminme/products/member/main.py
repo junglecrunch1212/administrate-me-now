@@ -14,8 +14,10 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from dateutil.rrule import rrulestr
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.encoders import jsonable_encoder
 from fastapi.responses import (
     FileResponse,
+    JSONResponse,
     RedirectResponse,
     Response,
     StreamingResponse,
@@ -9726,7 +9728,7 @@ async def record_attention_feedback(
 __all__ = ["router"]
 
 
-@router.get("/api/member/v1/finance/planning")
+@router.get("/api/member/v1/finance/planning", response_model=dict[str, Any])
 async def finance_planning(
     request: Request,
     session: SessionDep,
@@ -9747,34 +9749,40 @@ async def finance_planning(
     horizon_days: int = Query(default=30, ge=7, le=365),
     gap_group_id: str | None = Query(default=None, min_length=1, max_length=80),
     offset: int = Query(default=0, ge=0, le=10000),
-) -> dict[str, Any]:
+) -> Response:
     from adminme.finance.planning_store import query_projection
 
     runtime = _runtime(request)
     _finance_choice_owner(runtime, session)
     from adminme.finance.access_control import bound_book
 
+    def query_encoded(conn: Any) -> bytes:
+        value = query_projection(
+            conn,
+            session,
+            book_id=book_id,
+            projection_id=projection_id,
+            context_id=context_id,
+            report_id=report_id,
+            horizon_days=horizon_days,
+            offset=offset,
+            limit=50,
+            reference_id=reference_id,
+            gap_group_id=gap_group_id,
+        )
+        try:
+            return JSONResponse(jsonable_encoder(value)).body
+        except ValueError as exc:
+            # Rendering failures remain server errors; only selection failures
+            # use the existing 422 below. Encoding stays on the Money worker.
+            raise RuntimeError("finance_planning_response_encoding_failed") from exc
+
     try:
         bound_book(runtime, session, book_id)
-        result = await runtime.projections.read(
-            "money",
-            lambda conn: query_projection(
-                conn,
-                session,
-                book_id=book_id,
-                projection_id=projection_id,
-                context_id=context_id,
-                report_id=report_id,
-                horizon_days=horizon_days,
-                offset=offset,
-                limit=50,
-                reference_id=reference_id,
-                gap_group_id=gap_group_id,
-            ),
-        )
+        result = await runtime.projections.read("money", query_encoded)
     except ValueError:
         raise HTTPException(422, "finance_planning_selection_invalid") from None
     if session_from_request(request) != session:
         raise HTTPException(403, "finance_planning_identity_changed")
     _finance_choice_owner(runtime, session)
-    return result
+    return Response(result, media_type="application/json")
