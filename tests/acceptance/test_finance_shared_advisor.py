@@ -129,6 +129,14 @@ def test_shared_dashboard_tools_and_replay_preserve_actual_actor_and_owner(tmp_p
             response = query(client, member, p, "shared-" + member)
             assert response.status_code == 200, response.text
             assert response.json()["metrics"][0]["value_minor"] == 12500
+        metadata = tool(
+            client, OTHER, "status", "shared-bindings", include_bindings=True
+        )
+        assert metadata.status_code == 200, metadata.text
+        assert metadata.json()["state"] == "access_unavailable"
+        assert metadata.json()["reason"] == "canonical_owner_metadata_required"
+        assert metadata.json()["completeness"]["complete"] is False
+        assert metadata.json()["bindings"] == []
         # Reading another owner's book grants neither import nor private choices.
         assert upload(client, approval, packet, headers=OTHER_HEADERS).status_code in {
             403,

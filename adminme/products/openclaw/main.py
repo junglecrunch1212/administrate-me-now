@@ -4716,6 +4716,12 @@ async def finance_status(
             if body.include_bindings:
                 from adminme.finance.metadata import binding_metadata
 
+                scope = request.state.finance_read_scope
+                if blocked is None and scope.data_owner_id != session.auth_member_id:
+                    # This legacy status option reads owner history. A shared
+                    # book grant must not report the reader's empty history as
+                    # the canonical book's state or widen metadata authority.
+                    blocked = {"state": "canonical_owner_metadata_required"}
                 result = (
                     {
                         "state": "access_unavailable",
@@ -4733,7 +4739,7 @@ async def finance_status(
                     result,
                     operation="finance.bindings",
                     receipt=receipt,
-                    private_result=permitted and enabled,
+                    private_result=blocked is None and permitted and enabled,
                 )
             if blocked:
                 result.update(blocked)

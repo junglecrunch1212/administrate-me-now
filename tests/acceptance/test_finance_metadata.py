@@ -43,7 +43,7 @@ def test_empty_is_scoped_complete_and_audited(tmp_path):
             return [
                 e
                 async for e in client.app.state.runtime.event_log.read_since(
-                    types=["openclaw.tool_call.recorded"]
+                    types=["finance.advisor_accessed"]
                 )
             ]
 
@@ -201,14 +201,14 @@ def test_revocation_during_audit_prevents_metadata_disclosure(tmp_path, monkeypa
     with TestClient(create_application(enabled_settings(tmp_path))) as client:
         grant = _grant_cos(client, "metadata-revoke")
         pub, _ = import_fixture(client)
-        original = main._record_tool_call
+        original = main._finance_audit
 
         async def revoke_after_audit(request, session, provenance, **kwargs):
             result = await original(request, session, provenance, **kwargs)
             await revoke(client.app.state.runtime, grant)
             return result
 
-        monkeypatch.setattr(main, "_record_tool_call", revoke_after_audit)
+        monkeypatch.setattr(main, "_finance_audit", revoke_after_audit)
         result = read(client)
         assert result.status_code == 403
         assert pub["book_id"] not in result.text
