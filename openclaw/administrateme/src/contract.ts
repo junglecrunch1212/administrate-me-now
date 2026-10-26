@@ -50,6 +50,7 @@ export type IntegrationState = "healthy" | "degraded" | "unavailable" | "incompa
 
 export const TOOL_NAMES = [
   "administrateme_state",
+  "administrateme_calendar",
   "administrateme_what_now",
   "administrateme_capabilities",
   "administrateme_settings_context",

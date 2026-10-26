@@ -12,6 +12,16 @@ membership; the AdministrateMe process independently maps trusted
 channel/account/actor provenance.
 
 - Use `administrateme_state` or `administrateme_what_now` for reads.
+- For calendar questions in a member conversation, use `administrateme_calendar`
+  with the requested date and view. It reads already-acquired calendar facts
+  under the current member's standing authority, including authorized calendars
+  imported from another person's account. Preserve actual calendar identities
+  and the returned timezone. Current retained revisions are not a fresh provider
+  fetch; state coverage limits and do not treat an empty result as free time.
+  For busiest-day comparisons, use the relevant calendars and merge overlapping
+  busy intervals instead of counting provider copies twice.
+  `administrateme_service_context` belongs to the dedicated internal CoS session
+  and is not the member-conversation calendar route.
 - Use `administrateme_add_for_review` to save the member's exact words in Triage. It never creates canonical household truth without member confirmation.
 - Use `administrateme_review` for pending commitment decisions.
 - Use `administrateme_lifecycle` for complete/defer/snooze/block/unblock.
