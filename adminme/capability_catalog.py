@@ -16,6 +16,7 @@ from typing import Any
 
 import yaml
 
+from adminme.finance import release as finance_release
 from adminme.openclaw_topology import member_agent_id
 from adminme.openclaw_contract import OPENCLAW_COMMIT, OPENCLAW_VERSION
 from adminme.projections.parties.queries import (
@@ -780,6 +781,17 @@ def load_catalog(repository_root: Path) -> dict[str, Any]:
         ):
             raise RuntimeError("capability ids must be stable and unique")
         ids.add(capability_id)
+        if (
+            capability_id == "domain.household_finance"
+            and not finance_release.ADVISOR_AVAILABLE
+        ):
+            definition.update(
+                verbs={},
+                implementation="planned_finance_advisor",
+                implementation_present=False,
+                openclaw_tools=[],
+                unavailable_reason="Finance advisor is unavailable in this release. Owner Books remain available in Finance.",
+            )
         definition["catalog_version"] = CATALOG_VERSION
         definition["owner_kinds"] = list(definition.get("owner_kinds") or ["member"])
         definition["verbs"] = _verb_matrix(definition.get("verbs"))
@@ -1246,7 +1258,11 @@ def compose_member_catalog(
                 and analysis_enabled(runtime, session)
             )
             setup = (
-                "explicit_activation_required" if not read_available else "configured"
+                "unavailable"
+                if not finance_release.ADVISOR_AVAILABLE
+                else "explicit_activation_required"
+                if not read_available
+                else "configured"
             )
             freshness = "unknown"  # Topic-specific evidence is checked on demand.
         required_permissions = set().union(

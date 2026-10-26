@@ -456,6 +456,96 @@ def test_selector_binds_test_merge_to_exact_base_and_head(
         select_scope(path, _event(head, base), checkout_sha=merged)
 
 
+@pytest.mark.parametrize(
+    "advanced_path, expected",
+    [(PROSE, "bridge-helper"), ("adminme/runtime.py", "system-wide")],
+)
+def test_regenerated_merge_keeps_original_base_scope_and_checkout_evidence(
+    repository, advanced_path, expected
+):
+    path, base = repository
+    advanced = _commit(path, advanced_path, "ADVANCED_MAIN = True\n")
+    head = _commit(path, HELPER, "#!/bin/bash\nexit 1\n")
+    merge = _git(
+        path,
+        "commit-tree",
+        _git(path, "rev-parse", f"{head}^{{tree}}"),
+        "-p",
+        advanced,
+        "-p",
+        head,
+        "-m",
+        "Regenerated head-equivalent merge",
+    )
+    _git(path, "checkout", "--detach", merge)
+    proof = select_scope(path, _event(base, head), checkout_sha=merge)
+    assert proof["scope"] == expected
+    assert proof["base_sha"] == base and proof["head_sha"] == head
+    assert proof["checkout_sha"] == merge
+    assert {row["path"] for row in proof["changes"]} == {advanced_path, HELPER}
+    for platform in ("linux", "macos"):
+        needs = _needs(proof, platform)
+        verify_gate(proof, needs, platform=platform)
+        for worker_name in required_workers(expected, platform):
+            stale = copy.deepcopy(needs)
+            stale[worker_name]["outputs"]["validated_sha"] = head
+            with pytest.raises(ValueError, match="stale revision"):
+                verify_gate(proof, stale, platform=platform)
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "unintegrated",
+        "merge-bytes",
+        "merge-mode",
+        "wrong-head",
+        "extra-parent",
+        "one-parent",
+        "unrelated-event-base",
+    ],
+)
+def test_regenerated_merge_rejects_unproven_relationship_or_tree(repository, fault):
+    path, base = repository
+    advanced = _commit(path, "adminme/runtime.py", "ADVANCED_MAIN = True\n")
+    if fault == "unintegrated":
+        _git(path, "checkout", "--detach", base)
+    head = _commit(path, HELPER, "#!/bin/bash\nexit 1\n")
+    parents = [advanced, head]
+    if fault == "merge-bytes":
+        (path / HELPER).write_text("#!/bin/bash\nexit 2\n")
+    elif fault == "merge-mode":
+        (path / HELPER).chmod(0o644)
+    elif fault == "wrong-head":
+        parents = [advanced, base]
+    elif fault == "extra-parent":
+        parents.append(base)
+    elif fault == "one-parent":
+        parents = [advanced]
+    event_base = base
+    if fault == "unrelated-event-base":
+        event_base = _git(
+            path,
+            "commit-tree",
+            _git(path, "rev-parse", f"{base}^{{tree}}"),
+            "-m",
+            "Unrelated root",
+        )
+    _git(path, "add", "--all")
+    parent_args = [part for parent in parents for part in ("-p", parent)]
+    merge = _git(
+        path,
+        "commit-tree",
+        _git(path, "write-tree"),
+        *parent_args,
+        "-m",
+        "Unproven regenerated merge",
+    )
+    _git(path, "checkout", "--detach", merge)
+    with pytest.raises(ValueError, match="exact event"):
+        select_scope(path, _event(event_base, head), checkout_sha=merge)
+
+
 def test_selector_uses_prose_modes_from_both_git_endpoints(
     repository: tuple[Path, str],
 ) -> None:
@@ -4042,14 +4132,55 @@ def test_historical_repair_and_successor_stay_in_closed_updater_lane(
     )
 
 
+_FINANCE_METADATA_REVIEWED = "4fb9988f02aa500ed848ca295f8b579fc47daee7"
+
+
+def _finance_metadata_reviewed_source(name: str) -> str:
+    # Exact historical bytes, including final newline; never ambient ROOT bytes.
+    return subprocess.run(
+        [
+            "git",
+            "--no-replace-objects",
+            "-C",
+            str(ROOT),
+            "show",
+            f"{_FINANCE_METADATA_REVIEWED}:{name}",
+        ],
+        env={k: v for k, v in os.environ.items() if not k.startswith("GIT_")},
+        capture_output=True,
+        check=True,
+        text=True,
+    ).stdout
+
+
 def _finance_metadata_candidate(path: Path) -> tuple[str, str]:
-    # Use the actual reviewed shared files; all surrounding bytes are pinned.
-    for name in FINANCE_METADATA_SHARED:
-        _commit(path, name, (ROOT / name).read_text())
+    for name in sorted(FINANCE_METADATA_SHARED):
+        _commit(path, name, _finance_metadata_reviewed_source(name))
     base = _git(path, "rev-parse", "HEAD")
     for name in sorted(FINANCE_METADATA_REQUIRED_PATHS - set(FINANCE_METADATA_SHARED)):
-        head = _commit(path, name, (ROOT / name).read_text())
+        head = _commit(path, name, _finance_metadata_reviewed_source(name))
     return base, head
+
+
+def test_finance_metadata_historical_fixture_matches_reviewed_wiring():
+    import hashlib
+
+    for name, approved in FINANCE_METADATA_SHARED.items():
+        source = _finance_metadata_reviewed_source(name)
+        assert hashlib.sha256(source.encode()).hexdigest() == approved[1]
+
+
+@pytest.mark.parametrize("name", sorted(FINANCE_METADATA_SHARED))
+def test_finance_metadata_rejects_broader_current_shared_source(repository, name):
+    path, _ = repository
+    base, _ = _finance_metadata_candidate(path)
+    current = (ROOT / name).read_text()
+    assert current != _finance_metadata_reviewed_source(name)
+    head = _commit(path, name, current)
+    assert (
+        select_scope(path, _event(base, head), checkout_sha=head)["scope"]
+        == "system-wide"
+    )
 
 
 def test_finance_metadata_selects_only_complete_immutable_scope(repository):

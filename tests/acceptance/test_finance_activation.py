@@ -1126,8 +1126,9 @@ def test_historical_idempotent_retry_preserves_newer_head(tmp_path):
         )
 
 
+@pytest.mark.parametrize("revocation", [None, "role", "books"])
 def test_money_delivery_reuses_one_child_and_waits_for_terminal_cleanup(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, revocation
 ):
     import threading
     from adminme.finance.worker import MoneyCalculation, worker_usage
@@ -1166,10 +1167,42 @@ def test_money_delivery_reuses_one_child_and_waits_for_terminal_cleanup(
                     assert state["lag_count"] == 0 and state["draining"]
                     await asyncio.sleep(0.05)
                     assert not importing.done()
+                    if revocation == "role":
+                        runtime.settings = replace(
+                            runtime.settings,
+                            member_roles={
+                                **runtime.settings.member_roles,
+                                PRINCIPAL: "child",
+                            },
+                        )
+                    elif revocation == "books":
+                        current = await http.get(CONTROL, headers=DEMO_HEADERS)
+                        assert current.status_code == 200, current.text
+                        revoked = await asyncio.wait_for(
+                            http.put(
+                                CONTROL,
+                                headers=DEMO_HEADERS,
+                                json={
+                                    "request_id": str(uuid4()),
+                                    "expected_revision": current.json()["revision"],
+                                    "binding": manifest["binding"],
+                                    "books_enabled": False,
+                                    "cos_analysis_enabled": False,
+                                },
+                            ),
+                            5,
+                        )
+                        assert revoked.status_code == 200, revoked.text
                 finally:
                     release.set()
                 response = await asyncio.wait_for(importing, 10)
-                assert response.status_code == 200, response.text
+                expected = {None: 200, "role": 403, "books": 409}[revocation]
+                assert response.status_code == expected, response.text
+                if revocation is not None:
+                    assert p["publication_id"] not in response.text
+                    assert d["projection_id"] not in response.text
+                accepted = await events(runtime, ["finance.publication_accepted"])
+                assert len(accepted) == 1
 
         client.portal.call(scenario)
         assert counts == [len(manifest["blobs"]) + 3]

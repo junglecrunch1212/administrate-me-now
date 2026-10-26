@@ -592,3 +592,98 @@ def test_receipt_hash_checks_changes_after_multiple_utf8_chunks():
     changed = replace(event, payload_json=payload[:-3] + 'changed"}')
     with pytest.raises(PublicationError, match="receipt_invalid"):
         changed.verify()
+
+
+@pytest.mark.asyncio
+async def test_approved_batch_settlement_requires_zero_lag_and_finished_drain():
+    import asyncio
+    from adminme.products.member.finance_import import _settled_approved_batch
+
+    states = iter(
+        [
+            {"lag_count": 1, "draining": False},
+            {"lag_count": 0, "draining": True},
+            {"lag_count": 0, "draining": False},
+        ]
+    )
+    observed = []
+
+    async def status(name):
+        assert name == "projection:money"
+        value = next(states)
+        observed.append(value)
+        return value
+
+    runtime = SimpleNamespace(bus=SimpleNamespace(subscriber_status=status))
+    await _settled_approved_batch(runtime, asyncio.get_running_loop().time() + 1)
+    assert len(observed) == 3
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stuck", ["lag", "drain", "status-read"])
+async def test_approved_batch_settlement_deadline_never_accepts_pending(stuck):
+    import asyncio
+    from adminme.products.member.finance_import import _settled_approved_batch
+
+    async def status(_name):
+        if stuck == "status-read":
+            await asyncio.Future()
+        return {"lag_count": int(stuck == "lag"), "draining": stuck == "drain"}
+
+    runtime = SimpleNamespace(bus=SimpleNamespace(subscriber_status=status))
+    with pytest.raises(PublicationError, match="publication_projection_pending"):
+        await _settled_approved_batch(runtime, asyncio.get_running_loop().time() + 0.01)
+
+
+@pytest.mark.asyncio
+async def test_approved_batch_settlement_rejects_degraded_even_with_zero_lag():
+    import asyncio
+    from adminme.products.member.finance_import import _settled_approved_batch
+
+    calls = 0
+
+    async def status(_name):
+        nonlocal calls
+        calls += 1
+        assert calls == 1
+        return {"lag_count": 0, "draining": False, "degraded": True}
+
+    runtime = SimpleNamespace(bus=SimpleNamespace(subscriber_status=status))
+    with pytest.raises(PublicationError, match="publication_projection_unavailable"):
+        await _settled_approved_batch(runtime, asyncio.get_running_loop().time() + 40)
+    assert calls == 1
+
+
+@pytest.mark.asyncio
+async def test_approved_batch_settlement_preserves_caller_cancellation():
+    import asyncio
+    from adminme.products.member.finance_import import _settled_approved_batch
+
+    entered = asyncio.Event()
+
+    async def status(_name):
+        entered.set()
+        await asyncio.Future()
+
+    runtime = SimpleNamespace(bus=SimpleNamespace(subscriber_status=status))
+    waiting = asyncio.create_task(
+        _settled_approved_batch(runtime, asyncio.get_running_loop().time() + 40)
+    )
+    await asyncio.wait_for(entered.wait(), 1)
+    waiting.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await waiting
+
+
+@pytest.mark.asyncio
+async def test_approved_batch_settlement_does_not_accept_completion_after_deadline():
+    import asyncio
+    from adminme.products.member.finance_import import _settled_approved_batch
+
+    async def status(_name):
+        # No suspension: timeout_at's scheduled callback has not fired yet.
+        return {"lag_count": 0, "draining": False}
+
+    runtime = SimpleNamespace(bus=SimpleNamespace(subscriber_status=status))
+    with pytest.raises(PublicationError, match="publication_projection_pending"):
+        await _settled_approved_batch(runtime, asyncio.get_running_loop().time() - 1)

@@ -239,6 +239,19 @@ def test_saved_true_consent_cannot_release_any_advisor_surface(tmp_path, monkeyp
     with TestClient(create_application(configured(tmp_path))) as client:
         p, d, manifest, _, _ = owner_import(client)
         runtime = client.app.state.runtime
+        from adminme.capability_catalog import load_catalog
+
+        catalog = load_catalog(runtime.settings.repository_root)
+        advisor = next(
+            row
+            for row in catalog["items"]
+            if row["capability_id"] == "domain.household_finance"
+        )
+        assert advisor["openclaw_tools"] == []
+        assert advisor["implementation_present"] is False
+        assert set(advisor["verbs"].values()) == {"unsupported"}
+        assert "unavailable" in advisor["unavailable_reason"]
+        assert len(catalog["openclaw_plugin"]["tools"]) == 40
         _grant_cos(client, "owner-release-existing-private-grant")
         client.portal.call(saved_consent, runtime, manifest["binding"])
         stored = client.get(CONTROL, headers=DEMO_HEADERS).json()
@@ -455,7 +468,11 @@ def test_existing_finance_marker_remains_strict_after_owner_import(tmp_path):
     from adminme.lib.session import build_internal_session
 
     assert release.ADVISOR_AVAILABLE is False
-    settings = configured(tmp_path)
+    settings = replace(
+        configured(tmp_path),
+        deterministic_member_chat_fixture=True,
+        openclaw_model_configured=True,
+    )
     with TestClient(create_application(settings)) as client:
         _grant_cos(client, "owner-release-marked-history")
         runtime = client.app.state.runtime

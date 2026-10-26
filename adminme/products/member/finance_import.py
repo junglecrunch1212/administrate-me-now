@@ -39,6 +39,31 @@ router = APIRouter(tags=["member-finance-import"])
 SessionDep = Annotated[Session, Depends(session_from_request)]
 APPROVAL_EVENT = "settings.finance_import_approved"
 DECODE_SECONDS = 30
+APPROVED_BATCH_SETTLE_SECONDS = 40
+
+
+async def _settled_approved_batch(runtime: Any, deadline: float) -> None:
+    """Allow the existing 30s Money worker and bounded cleanup to finish.
+
+    This single monotonic deadline applies only after the approved batch commits.
+    Pre-ingress and legacy ingress retain their existing ten-second wait.
+    """
+    timeout = asyncio.timeout_at(deadline)
+    try:
+        async with timeout:
+            while True:
+                state = await runtime.bus.subscriber_status("projection:money")
+                if state.get("degraded"):
+                    raise PublicationError("publication_projection_unavailable")
+                if asyncio.get_running_loop().time() >= deadline:
+                    raise PublicationError("publication_projection_pending")
+                if state["lag_count"] == 0 and not state.get("draining", False):
+                    return
+                await asyncio.sleep(0.02)
+    except TimeoutError:
+        if not timeout.expired():
+            raise
+        raise PublicationError("publication_projection_pending") from None
 
 
 class ImportApprovalRequest(BaseModel):
@@ -349,7 +374,10 @@ async def import_approved_package(
 
                     await await_settled(commit())
                 prepared.events.clear()
-                await _settled(runtime)
+                await _settled_approved_batch(
+                    runtime,
+                    asyncio.get_running_loop().time() + APPROVED_BATCH_SETTLE_SECONDS,
+                )
                 require_owner(request, session)
                 if prepared.metadata.get("dated_error"):
                     raise PublicationError(prepared.metadata["dated_error"])

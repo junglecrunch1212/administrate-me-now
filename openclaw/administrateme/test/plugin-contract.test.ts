@@ -467,8 +467,8 @@ describe("native OpenClaw contract fixture", () => {
     const runtime = fakeApi({}, "tool-discovery");
     expect([...runtime.gateways]).toHaveLength(14);
     expect([...runtime.tools]).toHaveLength(40);
-    for (const name of ["status", "query", "calculate", "job"]) {
-      expect(runtime.tools.has(`administrateme_finance_${name}`)).toBe(true);
+    for (const name of ["bindings", "status", "query", "calculate", "job"]) {
+      expect(runtime.tools.has(`administrateme_finance_${name}`)).toBe(false);
     }
     expect(runtime.services).toHaveLength(0);
   });
