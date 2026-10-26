@@ -149,6 +149,7 @@ jobs:
           tests/unit/test_finance_book_scope.py
           tests/unit/test_finance_binding_history.py
           tests/unit/test_finance_owner_phase_clock.py
+          tests/unit/bootstrap/test_member_bridge_component.py
           tests/unit/daemons/test_adapter_supervisor.py
           tests/unit/test_projection_money.py
           tests/unit/test_projection_parties.py
