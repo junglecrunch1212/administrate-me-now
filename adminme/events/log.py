@@ -1053,11 +1053,17 @@ class EventLog:
         }
         deadline = time.monotonic() + 0.1
         steps = 0
+        budget_interrupted = False
+        # Fence the two event types before owner filtering. Unrelated owner
+        # history must not consume this read's fixed VM/time budget. The baseline
+        # index also exists in read-only snapshots predating covering indexes.
+        type_index = self._metadata_index_hint or " INDEXED BY idx_events_type_time"
 
         def bounded() -> int:
-            nonlocal steps
+            nonlocal steps, budget_interrupted
             steps += 1000
-            return int(steps > 100_000 or time.monotonic() > deadline)
+            budget_interrupted = steps > 100_000 or time.monotonic() > deadline
+            return int(budget_interrupted)
 
         fields = (
             "tenant_id",
@@ -1078,7 +1084,7 @@ class EventLog:
         try:
             self._conn.execute("BEGIN")
             head = self._conn.execute(
-                "SELECT event_id FROM events WHERE "
+                f"SELECT event_id FROM events{type_index} WHERE "
                 + where
                 + " ORDER BY event_id DESC LIMIT 1",
                 args,
@@ -1087,7 +1093,8 @@ class EventLog:
             headers = list(
                 self._conn.execute(
                     "SELECT event_id,type,schema_version,visibility_scope,"
-                    "length(CAST(payload AS BLOB)) AS payload_bytes FROM events WHERE "
+                    "length(CAST(payload AS BLOB)) AS payload_bytes "
+                    f"FROM events{type_index} WHERE "
                     + where
                     + " ORDER BY event_id ASC LIMIT 257",
                     args,
@@ -1120,8 +1127,10 @@ class EventLog:
                         )
                     )
                 row = self._conn.execute(
-                    "SELECT " + ",".join(columns) + " FROM events WHERE event_id=? "
-                    "AND tenant_id=? AND owner_scope=?",
+                    "SELECT "
+                    + ",".join(columns)
+                    + " FROM events INDEXED BY sqlite_autoindex_events_1 "
+                    "WHERE event_id=? AND tenant_id=? AND owner_scope=?",
                     (header["event_id"], tenant_id, scope),
                 ).fetchone()
                 result["rows"].append(
@@ -1140,7 +1149,11 @@ class EventLog:
         except getattr(sqlcipher3, "DatabaseError"):
             # No database diagnostics or partially extracted coordinates escape.
             result.update(
-                state="history_incomplete", rows=[], reason="history_read_unavailable"
+                state="history_incomplete",
+                rows=[],
+                reason="history_scan_limit"
+                if budget_interrupted
+                else "history_read_unavailable",
             )
             return result
         finally:
