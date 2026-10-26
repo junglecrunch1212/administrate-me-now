@@ -525,6 +525,10 @@ def _serve(
     tasks_noop_mode: str | None = None,
     stop_event=None,
 ) -> None:
+    # Isolated held-advisor diagnostic only; never owner-release acceptance.
+    from adminme.finance import release
+
+    release.ADVISOR_AVAILABLE = True
     diagnostic = None
     diagnostic_context = None
     if tasks_noop_mode is not None:

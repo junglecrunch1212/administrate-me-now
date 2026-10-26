@@ -42,10 +42,15 @@ from tests.fixtures.finance_planning import (
 )
 from tests.fixtures import finance_watchdog as watchdog
 
-pytestmark = pytest.mark.skipif(
-    sys.platform != "linux" or os.getenv("FINANCE_WATCHDOG_MODE") != "summary-metadata",
-    reason="exact isolated summary metadata admission required",
-)
+# Held advisor contracts only; the owner-release suite uses the unmodified ceiling.
+pytestmark = [
+    pytest.mark.usefixtures("unreleased_finance_advisor"),
+    pytest.mark.skipif(
+        sys.platform != "linux"
+        or os.getenv("FINANCE_WATCHDOG_MODE") != "summary-metadata",
+        reason="exact isolated summary metadata admission required",
+    ),
+]
 LEGACY_SQL = "SELECT metadata_json FROM finance_dated_projections WHERE tenant_id=? AND owner_id=? AND book_id=? AND projection_id=?"
 VIEWS = ("all", "balances", "signals", "dates", "provenance", "clocks")
 DAYS = (7, 30, 90, 180, 365)

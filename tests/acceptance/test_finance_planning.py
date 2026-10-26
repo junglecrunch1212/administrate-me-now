@@ -34,6 +34,9 @@ from tests.acceptance.test_openclaw_native_seam import (
 )
 from tests.fixtures.finance_planning import projection, seal, bounds
 
+# Held advisor contracts only; the owner-release suite uses the unmodified ceiling.
+pytestmark = pytest.mark.usefixtures("unreleased_finance_advisor")
+
 
 def test_exact_projection_validation_receipts_are_bounded_and_reject_changed_bytes(
     tmp_path,

@@ -1,3 +1,4 @@
+import { FINANCE_ADVISOR_AVAILABLE } from "./finance-release.js";
 import { prepareRequestedApproval } from "./request-policy.js";
 import type {
   OpenClawPluginApi,
@@ -32,6 +33,7 @@ export function registerHooks(api: OpenClawPluginApi, runtime: PluginRuntime): v
     "before_tool_call",
     async (event, context) => {
       if (FINANCE_TOOLS.has(event.toolName) || METADATA_TOOLS.has(event.toolName)) {
+        if (!FINANCE_ADVISOR_AVAILABLE) return { block: true, blockReason: "Finance advisor is unavailable in this release." };
         if (!bindFinanceTurn(runtime, {
           runId: typeof context.runId === "string" ? context.runId : undefined,
           sessionKey: typeof context.sessionKey === "string" ? context.sessionKey : undefined,

@@ -25,11 +25,15 @@ from tests.acceptance.test_finance_mixed_load import _profile_workload
 from tests.fixtures.finance_tasks_noop import TasksNoopDiagnostic, projection_snapshot
 from tests.unit.test_event_bus import _wait_for
 
-pytestmark = pytest.mark.skipif(
-    os.getenv("ADMINME_FINANCE_TASKS_NOOP_DIAGNOSTIC") != "1"
-    or platform.system() != "Linux",
-    reason="One explicitly selected hosted synthetic diagnostic only",
-)
+# Held advisor contracts only; the owner-release suite uses the unmodified ceiling.
+pytestmark = [
+    pytest.mark.usefixtures("unreleased_finance_advisor"),
+    pytest.mark.skipif(
+        os.getenv("ADMINME_FINANCE_TASKS_NOOP_DIAGNOSTIC") != "1"
+        or platform.system() != "Linux",
+        reason="One explicitly selected hosted synthetic diagnostic only",
+    ),
+]
 KEY = b"n" * 32
 STAMP = "2030-01-01T00:00:00Z"
 PRINCIPAL = "service-principal:chief-of-staff"

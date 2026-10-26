@@ -1,3 +1,4 @@
+import { FINANCE_ADVISOR_AVAILABLE, FINANCE_ADVISOR_TOOL_NAMES } from "./finance-release.js";
 import { requestExecutionProvenance } from "./request-policy.js";
 import { Type } from "typebox";
 import type {
@@ -749,6 +750,7 @@ export function registerTools(api: OpenClawPluginApi, runtime: PluginRuntime): v
   ];
 
   for (const definition of definitions) {
+    if (!FINANCE_ADVISOR_AVAILABLE && FINANCE_ADVISOR_TOOL_NAMES.has(definition.name)) continue;
     api.registerTool((context) => makeTool(api, context, runtime, definition), {
       name: definition.name,
       optional: !["administrateme_state", "administrateme_what_now"].includes(definition.name),

@@ -4058,7 +4058,13 @@ async def dashboard_today(body: ContextRequest, request: Request) -> dict[str, A
     events: list[dict[str, Any]] = []
     async for event in runtime.event_log.read_since(limit=250):
         events.append(event)
-    visible = filter_rows(session, events)[-20:]
+    from adminme.finance import release
+
+    visible = [
+        event
+        for event in filter_rows(session, events)
+        if release.ADVISOR_AVAILABLE or not release.owner_books_activity(event["type"])
+    ][-20:]
     result = {
         # Preserve the pinned dashboard's established What Now key while
         # publishing the same complete deterministic Day Brief as the portal.
@@ -4399,11 +4405,29 @@ def _metadata_permitted(runtime: Any, session: Session, provenance: Provenance) 
     )
 
 
+async def _owner_finance_release_boundary(
+    request: Request, provenance: Provenance
+) -> dict[str, Any] | None:
+    from adminme.finance import release
+
+    if release.ADVISOR_AVAILABLE:
+        return None
+    session = _session(request, provenance)
+    await _record_tool_call(
+        request, session, provenance, operation="finance.advisor.unavailable"
+    )
+    _session(request, provenance)
+    return release.advisor_unavailable()
+
+
 @router.post("/tools/finance-bindings")
 async def finance_bindings(
     body: FinanceBindingsRequest, request: Request
 ) -> dict[str, Any]:
     """Independently gated operational metadata, with no financial model/ingress."""
+    unavailable = await _owner_finance_release_boundary(request, body.provenance)
+    if unavailable is not None:
+        return unavailable
     from adminme.finance.metadata import inspect_metadata
     from adminme.finance.metadata_control import control_lock, control_state
 
@@ -4601,6 +4625,9 @@ def _finance_blocked(
 async def finance_status(
     body: FinanceStatusRequest, request: Request
 ) -> dict[str, Any]:
+    unavailable = await _owner_finance_release_boundary(request, body.provenance)
+    if unavailable is not None:
+        return unavailable
     from adminme.finance.budgets import FinanceBudgetError, enforce_context
     from adminme.finance.capabilities import (
         CAPABILITIES,
@@ -4838,6 +4865,9 @@ async def finance_status(
 
 @router.post("/tools/finance-query")
 async def finance_query(body: FinanceQueryRequest, request: Request) -> dict[str, Any]:
+    unavailable = await _owner_finance_release_boundary(request, body.provenance)
+    if unavailable is not None:
+        return unavailable
     from adminme.finance.budgets import FinanceBudgetError
     from adminme.finance.queries import query_publication
 
@@ -4981,6 +5011,9 @@ async def finance_query(body: FinanceQueryRequest, request: Request) -> dict[str
 async def finance_calculate(
     body: FinanceCalculateRequest, request: Request
 ) -> dict[str, Any]:
+    unavailable = await _owner_finance_release_boundary(request, body.provenance)
+    if unavailable is not None:
+        return unavailable
     from adminme.finance.budgets import FinanceBudgetError
     from adminme.finance.calculators import (
         CalculatorError,
@@ -5056,6 +5089,9 @@ async def finance_calculate(
 
 @router.post("/tools/finance-job")
 async def finance_job(body: FinanceJobRequest, request: Request) -> dict[str, Any]:
+    unavailable = await _owner_finance_release_boundary(request, body.provenance)
+    if unavailable is not None:
+        return unavailable
     from adminme.finance.budgets import FinanceBudgetError
     from adminme.finance.jobs import finance_job_status
 

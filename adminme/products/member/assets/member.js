@@ -5563,7 +5563,7 @@ function financeAccessSettingsCard(data) {
   for (const [input, label] of [[books, "Use this book for my Finance dashboard"], [cos, "Allow CoS to analyze my accepted data from this book"]]) {
     const wrap = document.createElement("label"); wrap.className = "bridge-capability-choice"; wrap.append(input, text("span", label)); form.append(wrap);
   }
-  form.append(text("p", "CoS also needs your existing private-context read permission. This Finance consent changes no other grants. Disabling access preserves accepted history and your selected baseline.", "state-note"));
+  form.append(text("p", "CoS Finance analysis is unavailable in this release. Any saved consent is retained. Books access and imports work independently; disabling access preserves accepted history and your selected baseline.", "state-note"));
   const save = text("button", "Save Books access", "button button-primary"); save.type = "submit";
   const refresh = text("button", "Check Books access", "button button-secondary"); refresh.type = "button"; form.append(save, refresh);
   const transfer = document.createElement("details"); transfer.append(text("summary", "Import a reviewed Books snapshot"));
@@ -5579,7 +5579,7 @@ function financeAccessSettingsCard(data) {
   function controls() {
     for (const el of [books, cos, save, ...Object.values(bindings)]) el.disabled = busy || !policy;
     for (const el of Object.values(bindings)) el.readOnly = Boolean(policy?.revision);
-    refresh.disabled = busy; cos.disabled = busy || !policy || !books.checked;
+    refresh.disabled = busy; cos.disabled = busy || !policy || !books.checked || !policy.advisor_available;
     for (const el of [manifestFile, packetFile, reviewed]) el.disabled = busy || !policy?.books_enabled;
     approve.disabled = busy || !policy?.books_enabled || !manifest || !reviewed.checked || Boolean(approval);
     upload.disabled = busy || !approval || !packetFile.files.length;
@@ -5591,7 +5591,7 @@ function financeAccessSettingsCard(data) {
   }
   async function reload() {
     busy = true; approval = null; controls();
-    try { apply(await api("/api/member/v1/settings/finance")); status.textContent = policy.books_enabled ? `Books dashboard enabled. Finance analysis consent ${policy.cos_analysis_enabled ? "enabled; the existing private-context grant is also required" : "disabled"}.` : "Books dashboard and Finance analysis are disabled."; }
+    try { apply(await api("/api/member/v1/settings/finance")); status.textContent = policy.books_enabled ? "Books dashboard enabled. CoS Finance analysis is unavailable in this release." : "Books dashboard disabled. CoS Finance analysis is unavailable in this release."; }
     catch (error) { policy = null; status.textContent = `Books access could not be verified. ${error.message}`; }
     finally { busy = false; controls(); }
   }

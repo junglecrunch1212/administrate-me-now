@@ -1,3 +1,4 @@
+import { FINANCE_ADVISOR_AVAILABLE } from "./finance-release.js";
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import type { OpenClawPluginApi, OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "./runtime.js";
@@ -90,7 +91,7 @@ export function registerFinanceTurns(api: OpenClawPluginApi, runtime: PluginRunt
   // The host, not tool parameters or source content, attests an interactive
   // user trigger. Cron/heartbeat/background turns never get an admission.
   api.on("before_agent_reply", (_event, context) => {
-    if (!context.runId || context.runId.length > 200) return;
+    if (!FINANCE_ADVISOR_AVAILABLE || !context.runId || context.runId.length > 200) return;
     let admitted = runs.get(runtime);
     if (!admitted) { admitted = new Map(); runs.set(runtime, admitted); }
     prune(admitted);
@@ -124,7 +125,7 @@ export function registerFinanceTurns(api: OpenClawPluginApi, runtime: PluginRunt
 }
 
 export function bindFinanceTurn(runtime: PluginRuntime, context: HostContext, callId: string | undefined, financialContent = true): boolean {
-  if (!callId || callId.length > 300 || !context.runId) return false;
+  if (!FINANCE_ADVISOR_AVAILABLE || !callId || callId.length > 300 || !context.runId) return false;
   const admitted = runs.get(runtime)?.get(context.runId);
   const audience = privateAudience(runtime, context);
   if (!admitted || !audience || admitted.expiresAt <= Date.now() || admitted.sessionKey !== audience.sessionKey || admitted.agentId !== audience.agentId) return false;
@@ -144,6 +145,7 @@ export function bindFinanceTurn(runtime: PluginRuntime, context: HostContext, ca
 }
 
 export function takeFinanceTurn(runtime: PluginRuntime, callId: string, context: OpenClawPluginToolContext): string {
+  if (!FINANCE_ADVISOR_AVAILABLE) throw new Error("Finance advisor is unavailable in this release.");
   const binding = calls.get(runtime)?.get(callId);
   calls.get(runtime)?.delete(callId);
   const audience = privateAudience(runtime, context);

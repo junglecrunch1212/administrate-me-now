@@ -19,7 +19,9 @@ def witness_projection(value):
     return value
 
 
-async def activate(app, headers, publication, planned, package, *, import_data=True):
+async def activate(
+    app, headers, publication, planned, package, *, import_data=True, advisor=True
+):
     """No legacy static enable flags and no direct private ingress calls."""
     assert not app.state.runtime.settings.finance_publications_enabled
     assert not app.state.runtime.settings.finance_model_members
@@ -35,7 +37,7 @@ async def activate(app, headers, publication, planned, package, *, import_data=T
                 "expected_revision": 0,
                 "binding": manifest["binding"],
                 "books_enabled": True,
-                "cos_analysis_enabled": True,
+                "cos_analysis_enabled": advisor,
             },
         )
         assert control.status_code == 200, control.text

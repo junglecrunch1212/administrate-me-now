@@ -15,6 +15,9 @@ from adminme.finance.capabilities import (
     skill_bundle,
 )
 
+# Isolated unreleased advisor catalog contracts; not release-gate evidence.
+pytestmark = pytest.mark.usefixtures("unreleased_finance_advisor")
+
 
 def test_all_thirty_one_routes_are_explicit_and_bounded() -> None:
     assert set(CAPABILITIES) == {f"F{i:02}" for i in range(1, 32)}

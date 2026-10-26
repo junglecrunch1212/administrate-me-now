@@ -1,0 +1,532 @@
+"""Owner Books release with the REAL advisor ceiling; no release override.
+
+Saved consent is seeded as historical encrypted state, not enabled by a test
+switch. All subsequent endpoint, context, import and replay calls use shipping
+production behavior. This is distinct from the held advisor contract suites.
+"""
+
+import json
+from dataclasses import replace
+from datetime import datetime, timedelta, timezone
+from uuid import uuid4
+
+import pytest
+from fastapi.testclient import TestClient
+
+from adminme.events.envelope import EventEnvelope
+from adminme.finance import release
+from adminme.runtime.application import create_application
+from tests.acceptance.test_finance_activation import (
+    CONTROL,
+    SURFACE,
+    OTHER_HEADERS,
+    configured,
+    fixture,
+    packet_for,
+    upload,
+    events,
+)
+from tests.acceptance.test_finance_native_facade import _post, _finance_provenance
+from tests.acceptance.test_openclaw_native_seam import (
+    PRINCIPAL,
+    DEMO_HEADERS,
+    OPENCLAW_HEADERS,
+    _grant_cos,
+)
+
+
+def owner_import(client, headers=DEMO_HEADERS, owner=PRINCIPAL):
+    runtime = client.app.state.runtime
+    p, d, package = fixture(runtime.settings.instance.tenant_id, owner=owner)
+    manifest, packet = packet_for(p, d, package)
+    state = client.get(CONTROL, headers=headers).json()
+    response = client.put(
+        CONTROL,
+        headers=headers,
+        json={
+            "request_id": str(uuid4()),
+            "expected_revision": state["revision"],
+            "binding": manifest["binding"],
+            "books_enabled": True,
+            "cos_analysis_enabled": False,
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["advisor_available"] is False
+    approval = client.post(
+        "/api/member/v1/finance/import-approvals",
+        headers=headers,
+        json={
+            "request_id": str(uuid4()),
+            "expected_policy_revision": response.json()["revision"],
+            "manifest": manifest,
+        },
+    )
+    assert approval.status_code == 200, approval.text
+    result = client.post(
+        "/api/member/v1/finance/imports/" + approval.json()["approval_event_id"],
+        headers=headers,
+        json=packet,
+    )
+    assert result.status_code == 200, result.text
+    return p, d, manifest, packet, approval.json()["approval_event_id"]
+
+
+async def saved_consent(runtime, binding):
+    """Simulate an existing installation, without changing the release ceiling."""
+    previous = await runtime.event_log.read_finance_access_control(
+        runtime.settings.instance.tenant_id, PRINCIPAL
+    )
+    assert previous is not None
+    now = datetime.now(timezone.utc)
+    scope = f"private:{PRINCIPAL}"
+    for event_type, payload in [
+        (
+            "settings.finance_access_changed",
+            {
+                "owner_id": PRINCIPAL,
+                "changed_by_member_id": PRINCIPAL,
+                "revision": previous["payload"]["revision"] + 1,
+                "prior_event_id": previous["event_id"],
+                "binding": binding,
+                "books_enabled": True,
+                "cos_analysis_enabled": True,
+                "provider_effects": False,
+            },
+        ),
+        (
+            "settings.finance_metadata_changed",
+            {
+                "owner_id": PRINCIPAL,
+                "changed_by_member_id": PRINCIPAL,
+                "revision": 1,
+                "prior_event_id": None,
+                "owner_read_enabled": True,
+                "cos_read_enabled": True,
+                "provider_effects": False,
+            },
+        ),
+    ]:
+        await runtime.events.write(
+            EventEnvelope(
+                event_at_ms=int(now.timestamp() * 1000),
+                tenant_id=runtime.settings.instance.tenant_id,
+                type=event_type,
+                schema_version=1,
+                occurred_at=now.isoformat(),
+                source_adapter="member-settings-control-plane",
+                source_account_id=PRINCIPAL,
+                actor_identity=PRINCIPAL,
+                owner_scope=scope,
+                visibility_scope=scope,
+                sensitivity="privileged",
+                payload=payload,
+            )
+        )
+
+
+def test_owner_import_replay_restart_and_enable_refusal(tmp_path):
+    assert release.ADVISOR_AVAILABLE is False
+    settings = configured(tmp_path)
+    with TestClient(create_application(settings)) as client:
+        p, d, manifest, packet, approval_id = owner_import(client)
+        value = client.get(SURFACE, headers=DEMO_HEADERS)
+        assert value.status_code == 200
+        assert (
+            value.json()["cockpit"]["accepted_books"]["publication_id"]
+            == p["publication_id"]
+        )
+        assert (
+            client.get(SURFACE, headers=OTHER_HEADERS)
+            .json()["cockpit"]["accepted_books"]
+            .get("publication_id")
+            is None
+        )
+        query = client.get(
+            "/api/member/v1/finance/planning",
+            headers=DEMO_HEADERS,
+            params={"book_id": p["book_id"]},
+        )
+        assert query.status_code == 200, query.text
+        assert upload(client, approval_id, packet).json()["accounting"]["idempotent"]
+        assert upload(
+            client, approval_id, packet, headers=OTHER_HEADERS
+        ).status_code in {403, 404, 409}
+        client.portal.call(client.app.state.runtime.projections.rebuild, "money")
+        assert (
+            client.get(SURFACE, headers=DEMO_HEADERS).json()["cockpit"][
+                "accepted_books"
+            ]["publication_id"]
+            == p["publication_id"]
+        )
+        rejected = client.put(
+            CONTROL,
+            headers=DEMO_HEADERS,
+            json={
+                "request_id": str(uuid4()),
+                "expected_revision": 1,
+                "binding": manifest["binding"],
+                "books_enabled": True,
+                "cos_analysis_enabled": True,
+            },
+        )
+        assert (
+            rejected.status_code == 409
+            and rejected.json()["detail"] == "finance_advisor_not_released"
+        )
+        assert (
+            client.get(CONTROL, headers=DEMO_HEADERS).json()["cos_analysis_enabled"]
+            is False
+        )
+        metadata = client.put(
+            "/api/member/v1/settings/finance-metadata",
+            headers=DEMO_HEADERS,
+            json={
+                "request_id": str(uuid4()),
+                "expected_revision": 0,
+                "owner_read_enabled": True,
+                "cos_read_enabled": False,
+            },
+        )
+        assert metadata.status_code == 200
+        assert (
+            client.post(
+                "/api/member/v1/finance/bindings", headers=DEMO_HEADERS, json={}
+            ).status_code
+            == 200
+        )
+        assert (
+            client.put(
+                "/api/member/v1/settings/finance-metadata",
+                headers=DEMO_HEADERS,
+                json={
+                    "request_id": str(uuid4()),
+                    "expected_revision": 1,
+                    "owner_read_enabled": True,
+                    "cos_read_enabled": True,
+                },
+            ).status_code
+            == 409
+        )
+        assert not client.portal.call(
+            events, client.app.state.runtime, ["finance.disclosure_recorded"]
+        )
+    with TestClient(create_application(settings)) as client:
+        assert release.ADVISOR_AVAILABLE is False
+        assert (
+            client.get(CONTROL, headers=DEMO_HEADERS).json()["advisor_available"]
+            is False
+        )
+        assert (
+            client.get(SURFACE, headers=DEMO_HEADERS).json()["cockpit"][
+                "accepted_books"
+            ]["publication_id"]
+            == p["publication_id"]
+        )
+
+
+def test_saved_true_consent_cannot_release_any_advisor_surface(tmp_path, monkeypatch):
+    assert release.ADVISOR_AVAILABLE is False
+    from adminme.finance import (
+        capabilities,
+        calculators,
+        disclosure,
+        metadata,
+        queries,
+        planning_store,
+    )
+
+    with TestClient(create_application(configured(tmp_path))) as client:
+        p, d, manifest, _, _ = owner_import(client)
+        runtime = client.app.state.runtime
+        _grant_cos(client, "owner-release-existing-private-grant")
+        client.portal.call(saved_consent, runtime, manifest["binding"])
+        stored = client.get(CONTROL, headers=DEMO_HEADERS).json()
+        assert (
+            stored["cos_analysis_enabled"] is True
+            and stored["advisor_available"] is False
+        )
+        assert (
+            client.get(
+                "/api/member/v1/settings/finance-metadata", headers=DEMO_HEADERS
+            ).json()["cos_read_enabled"]
+            is True
+        )
+
+        def forbidden(*args, **kwargs):
+            raise AssertionError(
+                "Owner release entered an unreleased Finance operation"
+            )
+
+        for module, name in [
+            (metadata, "inspect_metadata"),
+            (queries, "publication_status"),
+            (queries, "query_publication"),
+            (planning_store, "query_projection"),
+            (calculators, "calculate"),
+            (capabilities, "skill_bundle"),
+            (disclosure, "record_disclosure"),
+        ]:
+            monkeypatch.setattr(module, name, forbidden)
+        cases = [
+            ("bindings", {}),
+            ("status", {}),
+            ("status", {"include_bindings": True}),
+            ("status", {"capability_id": "F07", "include_bundle": True}),
+            ("status", {"calculator_id": "reserve_coverage"}),
+            ("status", {"compound_id": "household_readiness"}),
+            (
+                "calculate",
+                {
+                    "calculator_id": "reserve_coverage",
+                    "version": "1",
+                    "hypothetical": True,
+                    "inputs": {},
+                },
+            ),
+        ]
+        for report in [
+            "actuals",
+            "planning_contexts",
+            "planning_projection",
+            "owner_choices",
+        ]:
+            cases.append(
+                (
+                    "query",
+                    {
+                        "book_id": p["book_id"],
+                        "publication_id": p["publication_id"],
+                        "report_id": report,
+                    },
+                )
+            )
+        for operation in ["submit", "status", "cancel"]:
+            cases.append(("job", {"operation": operation}))
+        for index, (route, body) in enumerate(cases):
+            result = _post(client, route, f"owner-release-{index}", **body)
+            assert result.status_code == 200, result.text
+            assert result.json() == release.advisor_unavailable()
+        assert release.ADVISOR_AVAILABLE is False
+        assert not client.portal.call(events, runtime, ["finance.disclosure_recorded"])
+        provenance = _finance_provenance(client, "generic-context")
+        for path in [
+            "/dashboard/finance",
+            "/dashboard/today",
+            "/tools/settings-context",
+            "/tools/state",
+        ]:
+            result = client.post(
+                "/api/openclaw/v1" + path,
+                headers=OPENCLAW_HEADERS,
+                json={"provenance": provenance},
+            )
+            assert result.status_code == 200, result.text
+            assert (
+                p["publication_id"] not in result.text
+                and p["book_id"] not in result.text
+            )
+            assert (
+                '"type":"finance.' not in result.text
+                and '"type":"settings.finance_' not in result.text
+            )
+            assert "administrateme_finance_status" not in result.text
+        assert (
+            client.post(
+                "/api/openclaw/v1/tools/finance-status", json={"provenance": provenance}
+            ).status_code
+            == 401
+        )
+        # Saved permissions and owner history were not rewritten by the ceiling.
+        assert (
+            client.get(CONTROL, headers=DEMO_HEADERS).json()["cos_analysis_enabled"]
+            is True
+        )
+        assert (
+            len(client.portal.call(events, runtime, ["finance.publication_accepted"]))
+            == 1
+        )
+
+
+def test_ordinary_portal_continues_after_owner_import(tmp_path):
+    assert release.ADVISOR_AVAILABLE is False
+    settings = replace(
+        configured(tmp_path),
+        deterministic_member_chat_fixture=True,
+        openclaw_model_configured=True,
+    )
+    with TestClient(create_application(settings)) as client:
+        _grant_cos(client, "owner-release-chat-grant")
+        for imported in [False, True]:
+            if imported:
+                owner_import(client)
+            result = client.post(
+                "/api/member/v1/chat/stream",
+                headers=DEMO_HEADERS,
+                json={
+                    "message": "Help plan the ordinary day.",
+                    "request_id": str(uuid4()),
+                },
+            )
+            assert result.status_code == 200, result.text
+            chunks = [
+                json.loads(line[6:])
+                for line in result.text.splitlines()
+                if line.startswith("data: ")
+            ]
+            assert not any(chunk["kind"] == "error" for chunk in chunks), result.text
+            assert any(chunk["kind"] == "final" for chunk in chunks), result.text
+        assert not client.portal.call(
+            events, client.app.state.runtime, ["finance.disclosure_recorded"]
+        )
+
+
+def test_owner_import_preserves_native_reply_and_prepared_reminder(
+    tmp_path, monkeypatch
+):
+    """Only synthetic transport claims/receipts; no provider is invoked."""
+    from tests.acceptance.test_cos_response_execution import A, HEADERS, AUTH, _settings
+    from tests.acceptance.test_cos_self_replies import (
+        _activate,
+        _inbound,
+        _send,
+        ENDPOINT,
+    )
+    from tests.acceptance.test_cos_self_reminders import (
+        enable,
+        prepare,
+        advance,
+        receipt,
+        BASE,
+    )
+
+    assert release.ADVISOR_AVAILABLE is False
+    with TestClient(create_application(_settings(tmp_path))) as client:
+        _activate(client, monkeypatch)
+        enable(client)
+        request, callback, due = prepare(client)
+        owner_import(client, HEADERS, A)
+        _send(
+            client,
+            _inbound(
+                client,
+                native_id="owner-release-reply",
+                text="Help with the ordinary day.",
+            ),
+        )
+        advance(monkeypatch, due + timedelta(seconds=1))
+        fired = client.post(BASE + "/fire", headers=AUTH, json=callback)
+        assert fired.status_code == 200, fired.text
+        dispatch = fired.json()["transport_dispatch"]
+        assert dispatch["body"] == request["body"]
+        claim = client.post(
+            ENDPOINT + "/claim",
+            headers=AUTH,
+            json={k: dispatch[k] for k in ("account_id", "recipient", "body")},
+        )
+        assert claim.status_code == 200, claim.text
+        terminal = client.post(
+            ENDPOINT + "/terminal",
+            headers=AUTH,
+            json={"claim_id": claim.json()["claim_id"], "status": "sent"},
+        )
+        assert terminal.status_code == 200, terminal.text
+        assert (
+            receipt(client, request, callback["reminder_event_id"])["status"] == "sent"
+        )
+        repeated = client.post(BASE + "/fire", headers=AUTH, json=callback)
+        assert (
+            repeated.status_code == 200 and "transport_dispatch" not in repeated.json()
+        )
+        assert not client.portal.call(
+            events, client.app.state.runtime, ["finance.disclosure_recorded"]
+        )
+
+
+def test_existing_finance_marker_remains_strict_after_owner_import(tmp_path):
+    from adminme.finance.disclosure import (
+        _append,
+        _marker_key,
+        _session_digest,
+        check_disclosure,
+        FinanceDisclosureError,
+    )
+    from adminme.lib.session import build_internal_session
+
+    assert release.ADVISOR_AVAILABLE is False
+    with TestClient(create_application(configured(tmp_path))) as client:
+        _grant_cos(client, "owner-release-marked-history")
+        runtime = client.app.state.runtime
+        session = build_internal_session(
+            PRINCIPAL, "principal", runtime.settings.instance.tenant_id
+        )
+        _, key = runtime.member_chat_binding(PRINCIPAL)
+        digest = _session_digest(session, key)
+        # Historical encrypted marker, not a release override or a fresh disclosure.
+        client.portal.call(
+            _append,
+            runtime,
+            session,
+            _marker_key(digest),
+            {
+                "kind": "session",
+                "member_id": PRINCIPAL,
+                "session_sha256": digest,
+                "authority_sha256": "a" * 64,
+                "issued_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+        owner_import(client)
+        runtime._finance_disclosure_sessions.clear()
+        with pytest.raises(
+            FinanceDisclosureError, match="finance_disclosure_authority_changed"
+        ):
+            client.portal.call(check_disclosure, runtime, session, key)
+        history = client.get("/api/member/v1/chat/history", headers=DEMO_HEADERS)
+        assert history.status_code == 403
+        assert (
+            len(client.portal.call(events, runtime, ["finance.disclosure_recorded"]))
+            == 1
+        )
+
+
+def test_service_context_rejects_exact_owner_books_event_ids(tmp_path):
+    from tests.acceptance.test_cos_identity_delegation_kernel import (
+        A,
+        A_HEADERS,
+        _settings,
+        _grant_private,
+    )
+    from tests.acceptance.test_cos_service_working_context import _context, _source
+
+    assert release.ADVISOR_AVAILABLE is False
+    with TestClient(create_application(_settings(tmp_path))) as client:
+        _grant_private(client, A, "owner-release-service-context")
+        ordinary = _source(client, A, "Ordinary operational fact")
+        owner_import(client, A_HEADERS, A)
+        runtime = client.app.state.runtime
+        books = client.portal.call(
+            events,
+            runtime,
+            [
+                "finance.publication_accepted",
+                "finance.projection_verified",
+                "settings.finance_access_changed",
+            ],
+        )
+        assert len(books) == 3
+        assert (
+            _context(
+                client, "ordinary-exact-source", source_event_ids=[ordinary]
+            ).status_code
+            == 200
+        )
+        for event in books:
+            result = _context(
+                client, "held-books-source", source_event_ids=[event["event_id"]]
+            )
+            assert result.status_code == 404, result.text
+        scan = _context(client, "ordinary-source-scan")
+        assert scan.status_code == 200
+        assert {fact["event_id"] for fact in scan.json()["facts"]} == {ordinary}
+        assert not client.portal.call(events, runtime, ["finance.disclosure_recorded"])

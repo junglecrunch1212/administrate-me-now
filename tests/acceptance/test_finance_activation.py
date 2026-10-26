@@ -248,6 +248,7 @@ def test_composed_browser_projection_imports_without_shared_evidence_lists(
         assert result.json()["dated"]["state"] == "verified"
 
 
+@pytest.mark.usefixtures("unreleased_finance_advisor")
 def test_persisted_activation_import_disclosure_restart_and_disable(tmp_path):
     settings = configured(tmp_path)
     p, d, package = fixture(settings.instance.tenant_id)
@@ -369,6 +370,7 @@ def test_persisted_activation_import_disclosure_restart_and_disable(tmp_path):
         assert runtime.xlsx_reverse._finance_reverse_enabled
 
 
+@pytest.mark.usefixtures("unreleased_finance_advisor")
 def test_exact_binding_owner_and_independent_approval_required(tmp_path):
     settings = configured(tmp_path)
     p, d, package = fixture(settings.instance.tenant_id)
@@ -512,6 +514,7 @@ def test_partial_dated_import_and_conflicting_accounting_preserve_last_good_head
         )
 
 
+@pytest.mark.usefixtures("unreleased_finance_advisor")
 def test_revocation_after_retrieval_before_disclosure_blocks_result(
     tmp_path, monkeypatch
 ):
@@ -654,7 +657,7 @@ def test_one_owner_control_failure_does_not_abort_runtime(
         _grant_cos(client, "activation-unavailable-control")
         cos = _post(client, "status", "activation-unavailable-status")
         assert cos.status_code == 200, cos.text
-        assert cos.json()["state"] == "permission_required"
+        assert cos.json()["reason"] == "finance_advisor_not_released"
         assert "publication" not in cos.json()
         assert (
             client.get(
@@ -765,6 +768,7 @@ def test_cancelled_decoder_keeps_admission_until_settled_and_never_imports(
         )
 
 
+@pytest.mark.usefixtures("unreleased_finance_advisor")
 def test_controls_preserve_chosen_baseline_and_shared_legacy_processing(tmp_path):
     from adminme.projections.xlsx_workbooks import FINANCE_WORKBOOK_NAME
     from tests.acceptance.test_finance_choices import goal

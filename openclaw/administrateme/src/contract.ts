@@ -1,3 +1,4 @@
+import { FINANCE_ADVISOR_AVAILABLE, FINANCE_ADVISOR_TOOL_NAMES } from "./finance-release.js";
 export const OPENCLAW_VERSION = "2026.7.2" as const;
 export const OPENCLAW_COMMIT = "ce67ffb70e83e5ebb56ea02e814e577153f84f61" as const;
 export const PLUGIN_ID = "administrateme" as const;
@@ -48,7 +49,7 @@ export type PluginConfig = {
 
 export type IntegrationState = "healthy" | "degraded" | "unavailable" | "incompatible";
 
-export const TOOL_NAMES = [
+const DECLARED_TOOL_NAMES = [
   "administrateme_finance_bindings",
   "administrateme_finance_status",
   "administrateme_finance_query",
@@ -93,6 +94,8 @@ export const TOOL_NAMES = [
   "administrateme_workstation_inventory",
   "administrateme_workstation_work",
 ] as const;
+
+export const TOOL_NAMES = DECLARED_TOOL_NAMES.filter((name) => FINANCE_ADVISOR_AVAILABLE || !FINANCE_ADVISOR_TOOL_NAMES.has(name));
 
 export const SIDE_EFFECT_TOOL_NAMES = new Set<string>([
   "administrateme_add_for_review",

@@ -45,6 +45,9 @@ from tests.acceptance.test_openclaw_native_seam import (
 )
 from tests.fixtures.finance_import_load import sized_package
 
+# Held advisor contracts only; the owner-release suite uses the unmodified ceiling.
+pytestmark = pytest.mark.usefixtures("unreleased_finance_advisor")
+
 
 SERVER_CPU_SECONDS = 90
 SERVER_RSS_BYTES = 512 * 1024 * 1024
@@ -166,6 +169,11 @@ def _server(root, listener, channel, telemetry, allocation_profile=False):
                     sample("end", "owner_control_critical_section")
 
     finance_import.control_lock = measured_lock
+    from adminme.finance import release
+
+    release.ADVISOR_AVAILABLE = (
+        True  # Isolated legacy advisor diagnostic, not release evidence.
+    )
     app = create_application(configured(root))
     lifespan = app.router.lifespan_context
 

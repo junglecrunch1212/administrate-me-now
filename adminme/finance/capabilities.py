@@ -453,6 +453,10 @@ def skill_bundle(capability_id: str) -> dict[str, Any]:
 
 
 def core_pointer(*, enabled: bool) -> dict[str, Any]:
+    from adminme.finance import release
+
+    if not release.ADVISOR_AVAILABLE:
+        return {"contract": REGISTRY_VERSION, "status": "disabled"}
     # Under 400 UTF-8 bytes, a conservative token ceiling. No private facts.
     from adminme.finance.budgets import enforce_context
 

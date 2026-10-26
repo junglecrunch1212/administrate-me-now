@@ -15,6 +15,7 @@ from adminme.finance.access_control import (
     refresh_control,
 )
 from adminme.finance.metadata_control import owner_allowed
+from adminme.finance import release
 from adminme.lib.session import Session
 from adminme.products.auth import session_from_request
 from adminme.products.member.main import (
@@ -61,7 +62,11 @@ async def get_finance_access(request: Request, session: SessionDep) -> dict[str,
     require_owner(request, session)
     state = await current_control(request.app.state.runtime, session)
     require_owner(request, session)
-    return {**state.authority_coordinates(), "provider_effect_count": 0}
+    return {
+        **state.authority_coordinates(),
+        "advisor_available": release.ADVISOR_AVAILABLE,
+        "provider_effect_count": 0,
+    }
 
 
 @router.put("/api/member/v1/settings/finance")
@@ -84,10 +89,17 @@ async def set_finance_access(
             request_fingerprint=fingerprint,
         )
         current = await current_control(runtime, session)
+        if (
+            body.cos_analysis_enabled
+            and not current.cos_analysis_enabled
+            and not release.ADVISOR_AVAILABLE
+        ):
+            raise HTTPException(409, "finance_advisor_not_released")
         if prior is not None:
             require_owner(request, session)
             return {
                 **current.authority_coordinates(),
+                "advisor_available": release.ADVISOR_AVAILABLE,
                 "idempotent": True,
                 "provider_effect_count": 0,
             }
@@ -128,6 +140,7 @@ async def set_finance_access(
         require_owner(request, session)
         return {
             **latest.authority_coordinates(),
+            "advisor_available": release.ADVISOR_AVAILABLE,
             "idempotent": False,
             "provider_effect_count": 0,
         }

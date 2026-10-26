@@ -20,6 +20,9 @@ from tests.acceptance.test_openclaw_native_seam import (
     _settings as _native_settings,
 )
 
+# Held advisor contracts only; the owner-release suite uses the unmodified ceiling.
+pytestmark = pytest.mark.usefixtures("unreleased_finance_advisor")
+
 BASE = "/api/openclaw/v1/tools/finance-"
 
 

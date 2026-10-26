@@ -20,6 +20,9 @@ from tests.acceptance.test_finance_native_facade import _post
 from tests.acceptance.test_openclaw_native_seam import _grant_cos, PRINCIPAL
 from tests.fixtures.finance_planning import projection
 
+# Held advisor contracts only; the owner-release suite uses the unmodified ceiling.
+pytestmark = pytest.mark.usefixtures("unreleased_finance_advisor")
+
 
 def read(client, message="bindings", **kwargs):
     return _post(client, "status", message, include_bindings=True, **kwargs)

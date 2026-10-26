@@ -9,6 +9,7 @@ import time
 STARTED = time.monotonic()
 
 import ctypes
+import hashlib
 import json
 import math
 import os
@@ -112,7 +113,7 @@ def mode_budget(mode):
     work, cleanup = (2.0, 4.0) if contract else (200.0, 30.0)
     grace, term, kill = (1.0, 1.0, 1.0) if contract else (15.0, 5.0, 5.0)
     limits = dict(LIMITS)
-    if mode == "staged-bounded":
+    if mode in {"staged-bounded", "owner-production"}:
         work = 330.0
         limits.update(runtime_executor_cpu_seconds=180, whole_tree_cpu_seconds=240)
     if mode == "summary-metadata":
@@ -213,7 +214,7 @@ def remove_scratch(scratch, *, retain_unknown, remaining_owned):
 def start_cleanup_sampler(mode, take_sample, emit, faults):
     stop = threading.Event()
     thread = None
-    if mode in {"staged-bounded", "summary-metadata"}:
+    if mode in {"staged-bounded", "summary-metadata", "owner-production"}:
 
         def collect():
             try:
@@ -264,6 +265,7 @@ def main(mode, directory):
         "focused-import",
         "allocation-profile",
         "staged-bounded",
+        "owner-production",
         "summary-metadata",
         "setup",
         "setup-stop-before",
@@ -294,6 +296,9 @@ def main(mode, directory):
     if mode == "summary-metadata":
         resource.setrlimit(resource.RLIMIT_AS, (1024 * MIB, 1024 * MIB))
         resource.setrlimit(resource.RLIMIT_FSIZE, (8 * MIB, 8 * MIB))
+    if mode == "owner-production":
+        # Packet/SQLCipher files need a distinct cap from retained evidence.
+        resource.setrlimit(resource.RLIMIT_FSIZE, (128 * MIB, 128 * MIB))
     contract = mode.startswith("contract-")
     budget = mode_budget(mode)
     work, cleanup = budget["work"], budget["cleanup"]
@@ -328,6 +333,23 @@ def main(mode, directory):
     if mode == "summary-metadata":
         report["evidence_limit_bytes"] = 16 * MIB
         report["evidence_max_bytes"] = 0
+
+    owner_phases = {}
+    phase_index = 0
+    phase_active = None
+    phase_started = None
+    if mode == "owner-production":
+        from tests.fixtures.finance_owner_production import PHASES
+
+        owner_phases = PHASES
+        report.update(
+            phase_caps=owner_phases,
+            phases_complete=False,
+            evidence_file_limit_bytes=16 * MIB,
+            evidence_limit_bytes=32 * MIB,
+            inherited_file_limit_bytes=128 * MIB,
+            evidence_max_bytes=0,
+        )
 
     def event(kind, **fields):
         report["events"].append({"at": time.monotonic(), "kind": kind, **fields})
@@ -458,6 +480,7 @@ def main(mode, directory):
         ),
     )
     alarm_test_started = False
+    owner_export_complete = None
     try:
         while True:
             now = time.monotonic()
@@ -491,6 +514,21 @@ def main(mode, directory):
                 )
                 if evidence_bytes > 16 * MIB - 65536:
                     exceeded.append("evidence_bytes")
+            if mode == "owner-production":
+                sizes = [p.stat().st_size for p in root.iterdir() if p.is_file()]
+                evidence_bytes = sum(sizes)
+                report["evidence_max_bytes"] = max(
+                    report["evidence_max_bytes"], evidence_bytes
+                )
+                if evidence_bytes > 32 * MIB - 65536 or any(
+                    n > 16 * MIB for n in sizes
+                ):
+                    exceeded.append("evidence_bytes")
+                if (
+                    phase_active is not None
+                    and now - phase_started > owner_phases[phase_active]
+                ):
+                    exceeded.append("phase_deadline:" + phase_active)
             if exceeded:
                 stop("containment:" + ",".join(exceeded), now)
             for _, _ in selector.select(timeout=0):
@@ -552,6 +590,31 @@ def main(mode, directory):
                             runtime_final_received = True
                             runtime_cpu = max(runtime_cpu, msg["cpu_seconds"])
                             report["runtime_final_cpu_seconds"] = msg["cpu_seconds"]
+                        elif (
+                            mode == "owner-production"
+                            and msg.get("kind") == "phase"
+                            and set(msg) == {"kind", "name", "edge"}
+                        ):
+                            phase_now = time.monotonic()
+                            names = list(owner_phases)
+                            if (
+                                phase_index >= len(names)
+                                or msg["name"] != names[phase_index]
+                            ):
+                                raise ValueError("phase_order")
+                            if msg["edge"] == "start" and phase_active is None:
+                                phase_active, phase_started = msg["name"], phase_now
+                            elif msg["edge"] == "end" and phase_active == msg["name"]:
+                                if (
+                                    phase_now - phase_started
+                                    > owner_phases[phase_active]
+                                ):
+                                    stop("phase_deadline:" + phase_active, phase_now)
+                                phase_index += 1
+                                phase_active = phase_started = None
+                                report["phases_complete"] = phase_index == len(names)
+                            else:
+                                raise ValueError("phase_edge")
                         elif msg.get("kind") == "work_finished" and set(msg) == {
                             "kind",
                             "at",
@@ -660,7 +723,9 @@ def main(mode, directory):
             lambda: sample(
                 os.getpid(), runtime_pid, controller.pid, [root], runtime_cpu
             ),
-            record_cleanup_sample if mode == "summary-metadata" else write_sample,
+            record_cleanup_sample
+            if mode in {"summary-metadata", "owner-production"}
+            else write_sample,
             report["faults"],
         )
         end = (
@@ -713,11 +778,12 @@ def main(mode, directory):
             shutil.copyfile(path, root / ("emergency-" + str(index) + "-" + path.name))
         report["scratch_removed"] = remove_scratch(
             scratch,
-            retain_unknown=mode in {"staged-bounded", "summary-metadata"},
+            retain_unknown=mode
+            in {"staged-bounded", "summary-metadata", "owner-production"},
             remaining_owned=report["remaining_owned"],
         )
         if (
-            mode in {"staged-bounded", "summary-metadata"}
+            mode in {"staged-bounded", "summary-metadata", "owner-production"}
             and not report["scratch_removed"]
         ):
             report["faults"].append("uncertain_ownership_scratch_retained")
@@ -735,7 +801,7 @@ def main(mode, directory):
                 os.getpid(), runtime_pid, controller.pid, [root], runtime_cpu
             )
             write_sample(report["post_cleanup_sample"])
-            if mode == "summary-metadata":
+            if mode in {"summary-metadata", "owner-production"}:
                 report["cleanup_maxima"] = cleanup_maxima
                 report["maxima"] = {
                     key: max(report["maxima"][key], cleanup_maxima[key])
@@ -764,7 +830,80 @@ def main(mode, directory):
             )
             if evidence_bytes > 16 * MIB - 65536:
                 report["faults"].append("final_containment:evidence_bytes")
+        if mode == "owner-production":
+            for key, bound in limits.items():
+                if report["maxima"][key] > bound:
+                    report["faults"].append("final_containment:" + key)
+            if not report["phases_complete"] or not runtime_final_received:
+                report["faults"].append("incomplete_phase_or_runtime_receipt")
+            sizes = [p.stat().st_size for p in root.iterdir() if p.is_file()]
+            if sum(sizes) > 32 * MIB - 65536 or any(n > 16 * MIB for n in sizes):
+                report["faults"].append("final_containment:evidence_bytes")
         (root / "watchdog.json").write_text(json.dumps(report, indent=2) + "\n")
+        if mode == "owner-production":
+            # All raw files already live outside scratch. Export every file,
+            # including failures, after cleanup; hash in chunks, without copying
+            # or truncating evidence. The manifest intentionally excludes itself.
+            files = []
+            for path in sorted(p for p in root.iterdir() if p.is_file()):
+                digest = hashlib.sha256()
+                with path.open("rb") as stream:
+                    for chunk in iter(lambda: stream.read(65536), b""):
+                        digest.update(chunk)
+                files.append(
+                    {
+                        "name": path.name,
+                        "bytes": path.stat().st_size,
+                        "sha256": digest.hexdigest(),
+                    }
+                )
+            (root / "evidence-manifest.json").write_text(
+                json.dumps(
+                    {
+                        "candidate": report["candidate"],
+                        "files": files,
+                        "scratch_removed": report["scratch_removed"],
+                    },
+                    indent=2,
+                )
+                + "\n"
+            )
+            # A separate final receipt binds the manifest and accounts for
+            # export itself. It is deliberately outside its own hash manifest.
+            export_sample = sample(
+                os.getpid(), runtime_pid, controller.pid, [root], runtime_cpu
+            )
+            export_at = time.monotonic()
+            export_faults = [
+                key for key, bound in limits.items() if export_sample[key] > bound
+            ]
+            evidence_sizes = [p.stat().st_size for p in root.iterdir() if p.is_file()]
+            if sum(evidence_sizes) > 32 * MIB - 16384 or any(
+                n > 16 * MIB for n in evidence_sizes
+            ):
+                export_faults.append("evidence_bytes")
+            owner_export_complete = not export_faults and export_at <= min(
+                absolute, (finish_at or export_at) + cleanup
+            )
+            (root / "export-receipt.json").write_text(
+                json.dumps(
+                    {
+                        "manifest_sha256": hashlib.sha256(
+                            (root / "evidence-manifest.json").read_bytes()
+                        ).hexdigest(),
+                        "export_sample": export_sample,
+                        "export_finished_at": export_at,
+                        "cleanup_seconds_including_export": export_at - finish_at
+                        if finish_at
+                        else None,
+                        "complete": owner_export_complete,
+                        "faults": export_faults,
+                        "qualification": False,
+                    },
+                    indent=2,
+                )
+                + "\n"
+            )
     summary_complete = (
         summary_cleanup_complete(report, time.monotonic())
         if mode == "summary-metadata"
@@ -777,6 +916,10 @@ def main(mode, directory):
         not report["remaining_owned"]
         and report["scratch_removed"]
         and report["absolute_bound_met"]
+        and (
+            mode != "owner-production"
+            or (owner_export_complete is True and time.monotonic() <= absolute)
+        )
     )
     if contract:
         expected_forced = mode != "contract-normal"

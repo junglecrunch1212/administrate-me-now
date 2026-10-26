@@ -260,6 +260,10 @@ def main():
             return 0
         while True:
             time.sleep(0.05)
+    if mode == "owner-production":
+        from tests.fixtures.finance_owner_production import main as owner_main
+
+        return owner_main(root)
     arm = os.environ.get("FINANCE_SUMMARY_ARM") if mode == "summary-metadata" else None
     if mode == "summary-metadata":
         if arm is None:

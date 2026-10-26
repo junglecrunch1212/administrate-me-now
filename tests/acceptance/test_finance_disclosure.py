@@ -20,6 +20,9 @@ from tests.acceptance.test_openclaw_native_seam import (
     _grant_cos,
 )
 
+# Held advisor contracts only; the owner-release suite uses the unmodified ceiling.
+pytestmark = pytest.mark.usefixtures("unreleased_finance_advisor")
+
 
 def enabled_settings(tmp_path):
     return replace(

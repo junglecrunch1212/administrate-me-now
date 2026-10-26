@@ -54,6 +54,7 @@ def _serve_choices(root, listener, ready):
                 value,
                 planned,
                 package,
+                advisor=False,
             )
             (root / "reviewed-manifest.json").write_text(json.dumps(manifest))
             (root / "closed-package.json").write_text(json.dumps(packet))
@@ -505,13 +506,14 @@ async def test_owner_saves_goal_and_preference_then_reloads(tmp_path):
             )
             await call("Page.reload")
             await wait_for(
-                "document.querySelector('.finance-access-settings')?.textContent.includes('Books dashboard and Finance analysis are disabled.')"
+                "document.querySelector('.finance-access-settings')?.textContent.includes('Books dashboard disabled. CoS Finance analysis is unavailable in this release.')"
             )
             await evaluate("""(() => {
               const card = document.querySelector('.finance-access-settings');
               card.querySelector('[name=books_enabled]').checked = true;
               card.querySelector('[name=books_enabled]').dispatchEvent(new Event('change'));
-              card.querySelector('[name=cos_analysis_enabled]').checked = true;
+              if (!card.querySelector('[name=cos_analysis_enabled]').disabled) throw new Error('Advisor must remain unavailable');
+              card.querySelector('[name=cos_analysis_enabled]').checked = false;
               card.querySelector('form').requestSubmit();
             })()""")
             await wait_for(
