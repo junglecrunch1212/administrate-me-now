@@ -747,6 +747,7 @@ def _reusable_recovery_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     _private_write(
         paths.instance_dir / "events" / "events.db", b"encrypted-event-fixture"
     )
+    monkeypatch.setenv("ADMINME_TEST_MODE", "1")
     manager = BackupManager(paths, root=candidate, test_mode=True)
     keys = {"backup": b"b" * 32, "events": b"e" * 32}
     manager.store = SimpleNamespace(get=lambda name: keys[name])
