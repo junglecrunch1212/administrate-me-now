@@ -32,12 +32,26 @@ The Python patch and exact retained-release exception are governed by
 The target release baseline is:
 
 - CPython `>=3.14,<3.15`, preferred `3.14.7`, from `python@3.14`;
-- Node `>=24.15,<25`, preferred `24.19.0`, from `node@24`;
+- Node `>=24.15,<25`, preferred `24.22.1`, from `node@24`;
 - Homebrew `>=6,<7`, Poetry `2.4.1`, and npm `>=11.6,<12`;
 - SQLCipher `>=4.12,<5` through the existing `sqlcipher3==0.6.2` boundary;
 - OpenClaw `2026.7.2` at reviewed commit
   `ce67ffb70e83e5ebb56ea02e814e577153f84f61`, unchanged after the reviewed
   same-version llm-task compatibility cutover in ADR-0001.
+
+The Node 24.22.1 maintenance minor update preserves the Node 24 major and the
+pinned OpenClaw source. It restores fresh startup with current Homebrew libraries
+without reverting newer workstation tools or accepting ambient Node 26. Only
+source-verified retained releases `471d20ec71d40d59490ff763be524d73a3c3cb7d` and
+`02c2957acc4e659a19720db5bfb296ebba710bbd` may use that exact Node pin despite
+their original 24.19.0 manifests. Candidate preparation remains exact; unlisted
+releases keep their original requirement, and Python's existing patch rules are
+unchanged. Qualified recovery uses the new protected controller to restore those
+application releases on Node 24.22.1, not the broken older Homebrew binary.
+Installing Node/libngtcp2 and restarting the runtime still require explicit
+runtime-migration authority; source preparation or a passing check is not that
+authority. Qualification must cover real fresh native startup and interrupted
+recovery before this migration is called usable.
 
 Python and Node are installed side by side. The candidate builds a new,
 release-local virtual environment and plugin dependency tree. It never edits

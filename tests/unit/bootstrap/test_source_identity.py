@@ -2363,10 +2363,12 @@ def test_operation_lock_excludes_a_separate_upgrade_process(
 
 
 @pytest.mark.parametrize("retained_patch", [False, True])
+@pytest.mark.parametrize("retained_node", [False, True])
 def test_prepared_runtime_requires_exact_python_node_and_poetry_pins(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     retained_patch: bool,
+    retained_node: bool,
 ) -> None:
     repository, _commit_value = _upgrade_repository(tmp_path)
     paths = DeploymentPaths.from_root(tmp_path / "deployment")
@@ -2396,11 +2398,11 @@ def test_prepared_runtime_requires_exact_python_node_and_poetry_pins(
     node_bin = tools / "node-bin"
     node_bin.mkdir(mode=0o700)
     node = node_bin / "node"
-    node.write_text("#!/bin/sh\nprintf 'v24.19.0\\n'\n", encoding="utf-8")
+    node.write_text("#!/bin/sh\nprintf 'v24.22.1\\n'\n", encoding="utf-8")
     node.chmod(0o700)
     versions = {
         "python": {"preferred": "3.14.6"},
-        "node": {"preferred": "24.19.0"},
+        "node": {"preferred": "24.19.0" if retained_node else "24.22.1"},
         "package_managers": {"poetry": "2.4.1"},
     }
     monkeypatch.setattr(
@@ -2416,8 +2418,12 @@ def test_prepared_runtime_requires_exact_python_node_and_poetry_pins(
     )
 
     def validate() -> None:
-        if retained_patch:
-            manager._validate_runtime(release, retained_python=expected_version)  # noqa: SLF001
+        if retained_patch or retained_node:
+            manager._validate_runtime(  # noqa: SLF001
+                release,
+                retained_python=expected_version if retained_patch else None,
+                retained_node="24.22.1" if retained_node else None,
+            )
         else:
             manager._validate_prepared_runtime(release)  # noqa: SLF001
 
@@ -2456,10 +2462,11 @@ def test_prepared_runtime_requires_exact_python_node_and_poetry_pins(
     )
     poetry.chmod(0o700)
 
-    node.write_text("#!/bin/sh\nprintf 'v24.18.0\\n'\n", encoding="utf-8")
-    node.chmod(0o700)
-    with pytest.raises(UpgradeError, match="wrong pinned Node"):
-        validate()
+    for wrong_node in ("24.19.0", "24.22.0", "26.12.1"):
+        node.write_text(f"#!/bin/sh\nprintf 'v{wrong_node}\\n'\n", encoding="utf-8")
+        node.chmod(0o700)
+        with pytest.raises(UpgradeError, match="wrong pinned Node"):
+            validate()
 
 
 def test_release_parent_swap_before_rename_cannot_touch_replacement(

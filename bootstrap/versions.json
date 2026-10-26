@@ -21,8 +21,20 @@
   },
   "node": {
     "compatible": ">=24.15,<25",
-    "preferred": "24.19.0",
-    "formula": "node@24"
+    "preferred": "24.22.1",
+    "formula": "node@24",
+    "reviewed_retained_releases": [
+      {
+        "commit": "471d20ec71d40d59490ff763be524d73a3c3cb7d",
+        "declared_preferred": "24.19.0",
+        "runtime_preferred": "24.22.1"
+      },
+      {
+        "commit": "02c2957acc4e659a19720db5bfb296ebba710bbd",
+        "declared_preferred": "24.19.0",
+        "runtime_preferred": "24.22.1"
+      }
+    ]
   },
   "bun": {
     "required": false
