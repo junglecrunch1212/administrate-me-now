@@ -1109,3 +1109,245 @@ def test_own_mail_currentness_is_exact_and_historical_note_keeps_original_source
             == 200
         )
         assert runtime.fixture_adapter.delivered == []
+
+
+def test_member_calendar_tool_reads_current_imported_calendar_without_internal_session(
+    tmp_path: Path,
+) -> None:
+    from dataclasses import replace
+
+    from tests.acceptance.test_cos_identity_delegation_kernel import (
+        A_HEADERS,
+        _provenance,
+    )
+
+    instance = tmp_path / "member-calendar"
+    instance.mkdir()
+    settings = _settings(instance)
+    settings = replace(
+        settings,
+        instance=replace(settings.instance, timezone="America/New_York"),
+        openclaw_actor_identities={"imessage|account-a|actor-a": A},
+    )
+    app = create_application(settings)
+    with TestClient(app) as client:
+        runtime = app.state.runtime
+        assert client.portal is not None
+        grant = _grant_private(client, A, "calendar-standing-read")
+        _observed_source(
+            client,
+            A,
+            "calendar.source_observed",
+            {
+                "member_id": A,
+                "provider": "google_calendar",
+                "provider_account_id": f"calendar-{A}",
+                "calendar_external_id": "fixture-calendar",
+                "calendar_name": "Partner work busy/free",
+                "access_role": "reader",
+                "read_details": True,
+                "read_free_busy": True,
+                "write_events": False,
+                "observed_at": "2026-10-22T12:00:00Z",
+            },
+        )
+        original = _observed_source(
+            client,
+            A,
+            "calendar.event_added",
+            _calendar(
+                A, calendar_name="Partner work busy/free", summary="Old revision"
+            ),
+            version=2,
+        )
+        current = _observed_source(
+            client,
+            A,
+            "calendar.event_updated",
+            _calendar(
+                A,
+                calendar_name="Partner work busy/free",
+                summary="Busy",
+                end="2026-11-02T18:00:00Z",
+            ),
+            version=2,
+        )
+        _observed_source(
+            client,
+            B,
+            "calendar.event_added",
+            _calendar(B, summary="OUTSIDE_CURRENT_SOURCE_AUTHORITY"),
+            version=2,
+        )
+        _observed_source(
+            client,
+            A,
+            "calendar.event_added",
+            _calendar(
+                A,
+                external_event_id="out-of-range",
+                start="2026-11-09T14:00:00Z",
+                end="2026-11-09T15:00:00Z",
+            ),
+            version=2,
+        )
+        provenance = {**_provenance(A, "calendar-query"), "channel_id": "imessage"}
+        body = {"provenance": provenance, "anchor_date": "2026-11-02", "view": "week"}
+        response = client.post(
+            "/api/openclaw/v1/tools/calendar", headers=OPENCLAW_HEADERS, json=body
+        )
+        assert response.status_code == 200, response.text
+        result = response.json()
+        assert result["timezone"] == "America/New_York"
+        assert result["range"] == {
+            "start_at": "2026-11-02T00:00:00-05:00",
+            "end_at": "2026-11-09T00:00:00-05:00",
+        }
+        assert result["matching_event_count"] == 1
+        assert result["events"][0]["summary"] == "Busy"
+        assert result["events"][0]["calendar_name"] == "Partner work busy/free"
+        assert result["events"][0]["source_event_id"] == current
+        assert result["events"][0]["provider_account_id"] == f"calendar-{A}"
+        retained = client.portal.call(runtime.event_log.get, current)
+        assert result["events"][0]["retained_change_at"] == retained["recorded_at"]
+        assert original not in str(result)
+        assert "OUTSIDE_CURRENT_SOURCE_AUTHORITY" not in str(result)
+        assert "PROVIDER_BODY_MUST_NOT_ENTER_CONTEXT" not in str(result)
+        assert result["coverage"]["provider_live_read"] is False
+        assert result["coverage"]["provider_last_successful_poll_at"] is None
+        assert result["coverage"]["provider_range_completeness"] == "not_verified"
+        assert result["provider_effect_count"] == 0
+        catalog = client.post(
+            "/api/openclaw/v1/tools/capabilities",
+            headers=OPENCLAW_HEADERS,
+            json={"provenance": provenance},
+        )
+        assert catalog.status_code == 200, catalog.text
+        capability = next(
+            item
+            for item in catalog.json()["items"]
+            if item["capability_id"] == "domain.household_calendar"
+        )
+        assert capability["openclaw"]["declared_tools"] == ["administrateme_calendar"]
+        assert capability["openclaw"]["approval_required_for_side_effects"] is False
+        assert result["sources"][0]["access_role"] == "reader"
+        assert result["sources"][0]["provider_account_id"] == f"calendar-{A}"
+        assert result["sources"][0]["observed_at"].startswith("2026-10-22")
+        assert (
+            result["coverage"]["source_observed_at_means"]
+            == "source_metadata_change_not_last_poll"
+        )
+        selected = client.post(
+            "/api/openclaw/v1/tools/calendar",
+            headers=OPENCLAW_HEADERS,
+            json={**body, "calendar_external_ids": ["absent-calendar"]},
+        )
+        assert selected.status_code == 200, selected.text
+        assert selected.json()["events"] == []
+        assert selected.json()["sources"] == []
+        denied = client.post(
+            "/api/openclaw/v1/tools/service-context",
+            headers=OPENCLAW_HEADERS,
+            json={"provenance": provenance, "source_kind": "calendar"},
+        )
+        assert denied.status_code == 403
+        forged = {**body, "provenance": {**provenance, "actor_id": "unknown"}}
+        assert (
+            client.post(
+                "/api/openclaw/v1/tools/calendar", headers=OPENCLAW_HEADERS, json=forged
+            ).status_code
+            == 403
+        )
+        for invalid in (
+            {"limit": 201},
+            {"view": "year"},
+            {"anchor_date": "not-a-date"},
+            {"member_id": B},
+        ):
+            assert (
+                client.post(
+                    "/api/openclaw/v1/tools/calendar",
+                    headers=OPENCLAW_HEADERS,
+                    json={**body, **invalid},
+                ).status_code
+                == 422
+            )
+        _observed_source(
+            client,
+            A,
+            "calendar.event_deleted",
+            {
+                "member_id": A,
+                "provider": "google_calendar",
+                "provider_account_id": f"calendar-{A}",
+                "calendar_external_id": "fixture-calendar",
+                "external_event_id": f"appointment-{A}",
+                "deleted_at": "2026-11-01T13:00:00Z",
+            },
+            version=2,
+        )
+        deleted = client.post(
+            "/api/openclaw/v1/tools/calendar", headers=OPENCLAW_HEADERS, json=body
+        )
+        assert deleted.status_code == 200, deleted.text
+        assert deleted.json()["events"] == []
+        revoke = client.request(
+            "DELETE",
+            f"/api/member/v1/cos/delegations/{grant}",
+            headers=A_HEADERS,
+            json={"request_id": "calendar-revoke", "reason": "fixture"},
+        )
+        assert revoke.status_code == 200, revoke.text
+        assert (
+            client.post(
+                "/api/openclaw/v1/tools/calendar", headers=OPENCLAW_HEADERS, json=body
+            ).status_code
+            == 403
+        )
+        assert runtime.fixture_adapter.delivered == []
+
+
+def test_member_calendar_tool_bounds_results_and_does_not_claim_empty_is_free(
+    tmp_path: Path,
+) -> None:
+    from tests.acceptance.test_cos_identity_delegation_kernel import _provenance
+
+    instance = tmp_path / "bounded-calendar"
+    instance.mkdir()
+    with TestClient(create_application(_settings(instance))) as client:
+        _grant_private(client, A, "bounded-calendar-standing")
+        for number in range(2):
+            _observed_source(
+                client,
+                A,
+                "calendar.event_added",
+                _calendar(A, external_event_id=f"busy-{number}", summary="x" * 600),
+                version=2,
+            )
+        body = {
+            "provenance": _provenance(A, "bounded-calendar"),
+            "anchor_date": "2026-11-02",
+            "view": "week",
+            "limit": 1,
+        }
+        response = client.post(
+            "/api/openclaw/v1/tools/calendar", headers=OPENCLAW_HEADERS, json=body
+        )
+        assert response.status_code == 200, response.text
+        result = response.json()
+        assert len(result["events"]) == 1
+        assert result["matching_event_count"] == 2
+        assert result["truncated"] is True
+        assert len(result["events"][0]["summary"]) == 500
+        assert result["events"][0]["text_truncated"] is True
+        empty = client.post(
+            "/api/openclaw/v1/tools/calendar",
+            headers=OPENCLAW_HEADERS,
+            json={**body, "anchor_date": "2026-12-01"},
+        )
+        assert empty.status_code == 200, empty.text
+        assert empty.json()["events"] == []
+        assert (
+            empty.json()["coverage"]["empty_result_means"]
+            == "no_matching_retained_events_not_proven_free_time"
+        )

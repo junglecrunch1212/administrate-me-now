@@ -187,6 +187,18 @@ export function registerTools(api: OpenClawPluginApi, runtime: PluginRuntime): v
       path: "/api/openclaw/v1/tools/state",
     },
     {
+      name: "administrateme_calendar",
+      description: "Read the current authenticated member's acquired calendar events, including authorized imported/shared calendars. Use this for calendar questions in private iMessage, Gmail or member chat; administrateme_service_context is for the internal CoS session. Supply anchor_date (YYYY-MM-DD) and view: week is Monday through Sunday, agenda is 14 days, day is one day, month is a 42-day grid. Dates use the returned household timezone. Optional calendar_external_ids filter returned calendars; preserve the accompanying provider/account identity; a person's name is not an account identity. Returns current retained revisions and their source timestamps, not a fresh provider fetch or a guarantee that all future events were acquired. Honor coverage/truncation; an empty result does not prove free time. No calendar writes or new consent.",
+      parameters: Type.Object({
+        anchor_date: Type.Optional(Type.String({ format: "date" })),
+        view: Type.Optional(Type.Union([Type.Literal("day"), Type.Literal("week"), Type.Literal("agenda"), Type.Literal("month")])),
+        context_scope: Type.Optional(ServiceContextScope),
+        calendar_external_ids: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 300 }), { maxItems: 20, uniqueItems: true })),
+        limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 200 })),
+      }, { additionalProperties: false }),
+      path: "/api/openclaw/v1/tools/calendar",
+    },
+    {
       name: "administrateme_what_now",
       description: "Read the authorized member's deterministic What Now ranking.",
       parameters: Type.Object({}, { additionalProperties: false }),

@@ -13,6 +13,7 @@ const expectedCommit = "ce67ffb70e83e5ebb56ea02e814e577153f84f61";
 const expectedNode = ">=24.15.0 <25";
 const expectedTools = [
   "administrateme_state",
+  "administrateme_calendar",
   "administrateme_what_now",
   "administrateme_capabilities",
   "administrateme_settings_context",
