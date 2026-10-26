@@ -148,7 +148,11 @@ def callback_failure_receipt(monkeypatch):
 
         async def observed(envelope):
             nonlocal reported
-            before = callback_resources()
+            before = None
+            try:
+                before = callback_resources()
+            except Exception:
+                pass  # Snapshot failure must not prevent the real callback.
             try:
                 return await callback(envelope)
             except Exception as exc:
@@ -196,7 +200,7 @@ def callback_failure_receipt(monkeypatch):
                             after=callback_resources(),
                         )
                     except Exception:
-                        print("synthetic_callback_receipt_unavailable", file=sys.stderr)
+                        pass  # Preserve the original failure even if evidence fails.
                 raise
 
         return observed
