@@ -1237,6 +1237,17 @@ def test_member_calendar_tool_reads_current_imported_calendar_without_internal_s
             result["coverage"]["source_observed_at_means"]
             == "source_metadata_change_not_last_poll"
         )
+        replay = client.post(
+            "/api/openclaw/v1/tools/calendar", headers=OPENCLAW_HEADERS, json=body
+        )
+        assert replay.status_code == 200, replay.text
+        assert replay.json()["events"] == result["events"]
+        conflicting_replay = client.post(
+            "/api/openclaw/v1/tools/calendar",
+            headers=OPENCLAW_HEADERS,
+            json={**body, "calendar_external_ids": ["absent-calendar"]},
+        )
+        assert conflicting_replay.status_code == 409
         selected = client.post(
             "/api/openclaw/v1/tools/calendar",
             headers=OPENCLAW_HEADERS,
