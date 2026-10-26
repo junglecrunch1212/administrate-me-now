@@ -897,3 +897,340 @@ def test_browser_source_selection_requires_protected_controller_and_exact_instal
             "controller_commit": controller,
             "installed_source": {"tracked_source_tree_matches": True},
         }
+
+
+def _computer_use_fixture(tmp_path, monkeypatch, *, disable=False):
+    """Reuse the real deployment-coordinate fixture with synthetic Codex policy."""
+    fixture = _reconciliation_fixture(tmp_path, monkeypatch)
+    previous = deepcopy(fixture.previous)
+    config = {
+        "codexPlugins": {"enabled": False},
+        "appServer": {"sandbox": "workspace-write"},
+    }
+    if disable:
+        config["computerUse"] = deepcopy(browser.COMPUTER_USE_CONFIG)
+    previous["plugins"]["entries"]["codex"] = {"enabled": True, "config": config}
+    # Existing browser settings and all service/member grants must survive.
+    previous["browser"] = {"enabled": True, "allowSystemProfileImport": False}
+    prior_raw = json.dumps(previous, indent=2).encode() + b"\n"
+    _private_write(fixture.gateway, prior_raw)
+    before = capture_deployment_snapshot(fixture.paths)
+    evidence = json.loads(fixture.readiness_bytes)
+    evidence["deployment_binding"] = browser._browser_binding(before)
+    evidence["provider_effect_window"] = {
+        "started_at": "2026-08-27T10:00:00Z",
+        "ended_at": "2026-08-27T10:30:00Z",
+    }
+    readiness_bytes = json.dumps(evidence, indent=2).encode() + b"\n"
+    _private_write(fixture.readiness_path, readiness_bytes)
+    _private_write(fixture.arguments["previous_gateway_path"], prior_raw)
+    old_snapshot = {
+        "valid": True,
+        "hash": hashlib.sha256(prior_raw).hexdigest(),
+        "config": previous,
+    }
+    prepared = browser.prepare_computer_use_patch(old_snapshot, disable=disable)
+    private_file(fixture.arguments["approved_patch_path"], prepared)
+    current = deepcopy(previous)
+    current_config = current["plugins"]["entries"]["codex"]["config"]
+    if disable:
+        del current_config["computerUse"]
+    else:
+        current_config["computerUse"] = deepcopy(browser.COMPUTER_USE_CONFIG)
+    _private_write(fixture.gateway, json.dumps(current, indent=4).encode() + b"\n")
+    private_file(
+        fixture.arguments["native_snapshot_path"],
+        {
+            "valid": True,
+            "hash": hashlib.sha256(fixture.gateway.read_bytes()).hexdigest(),
+        },
+    )
+    fixture.arguments.update(
+        approved_patch_sha256=hashlib.sha256(
+            fixture.arguments["approved_patch_path"].read_bytes()
+        ).hexdigest(),
+        authorization_reference="owner-request:synthetic-computer-use",
+        component="computer-use",
+    )
+    fixture.previous = previous
+    fixture.prior_raw = prior_raw
+    fixture.current = current
+    fixture.readiness_bytes = readiness_bytes
+    fixture.before = before
+    fixture.old_snapshot = old_snapshot
+    return fixture
+
+
+@pytest.mark.parametrize("disable", [False, True])
+def test_computer_use_preparation_and_reconciliation_preserve_exact_other_authority(
+    tmp_path, monkeypatch, disable
+):
+    fixture = _computer_use_fixture(tmp_path, monkeypatch, disable=disable)
+    current_raw = fixture.gateway.read_bytes()
+    original_other_files = {
+        path: path.read_bytes()
+        for path in fixture.readiness_path.parent.iterdir()
+        if path != fixture.readiness_path
+    }
+    # Exercise the supported file preparation; resolved/redacted config is ignored.
+    _private_write(fixture.gateway, fixture.prior_raw)
+    native = fixture.arguments["native_snapshot_path"]
+    private_file(native, {**fixture.old_snapshot, "config": {"redacted": True}})
+    patch_path = fixture.artifacts / "computer-use-patch.json"
+    prior_path = fixture.artifacts / "computer-use-prior.json"
+    prepared = browser.write_patch(
+        native,
+        fixture.paths,
+        patch_path,
+        previous_config_output=prior_path,
+        disable=disable,
+        component="computer-use",
+    )
+    expected = None if disable else browser.COMPUTER_USE_CONFIG
+    assert json.loads(json.loads(patch_path.read_bytes())["raw"]) == {
+        "plugins": {"entries": {"codex": {"config": {"computerUse": expected}}}}
+    }
+    assert prior_path.read_bytes() == fixture.prior_raw
+    assert fixture.gateway.read_bytes() == fixture.prior_raw
+    assert fixture.readiness_path.read_bytes() == fixture.readiness_bytes
+    assert "synthetic-private-credential" not in patch_path.read_text()
+    assert patch_path.stat().st_mode & 0o777 == 0o600
+    fixture.arguments.update(
+        previous_gateway_path=prior_path,
+        approved_patch_path=patch_path,
+        approved_patch_sha256=prepared["approved_patch_sha256"],
+    )
+    _private_write(fixture.gateway, current_raw)
+    private_file(
+        native, {"valid": True, "hash": hashlib.sha256(current_raw).hexdigest()}
+    )
+    digest = _reconcile(fixture)["plan_sha256"]
+    assert fixture.readiness_path.read_bytes() == fixture.readiness_bytes
+    result = _reconcile(fixture, plan_sha256=digest, apply=True)
+    assert result["state"] == "computer_use_readiness_reconciled"
+    assert result["native_config_written"] is False
+    assert result["acceptance_evidence_refreshed"] is False
+    assert fixture.gateway.read_bytes() == current_raw
+    assert all(path.read_bytes() == raw for path, raw in original_other_files.items())
+    expected_evidence = json.loads(fixture.readiness_bytes)
+    expected_evidence["deployment_binding"] = browser._browser_binding(
+        capture_deployment_snapshot(fixture.paths)
+    )
+    assert json.loads(fixture.readiness_path.read_bytes()) == expected_evidence
+    receipt = fixture.paths.app_dir / f"computer-use-readiness-{digest}.json"
+    record = json.loads(receipt.read_bytes())
+    assert record["plan"]["contract"] == browser.COMPUTER_USE_TRANSITION
+    assert digest == browser._digest_domain(
+        browser.COMPUTER_USE_TRANSITION, record["plan"]
+    )
+    assert digest != browser._digest_domain(
+        browser.READINESS_TRANSITION, record["plan"]
+    )
+    assert (
+        base64.b64decode(record["plan"]["previous_readiness_base64"])
+        == fixture.readiness_bytes
+    )
+    assert "synthetic-private-credential" not in receipt.read_text()
+    monkeypatch.setattr(
+        browser,
+        "_write_private_at",
+        lambda *args, **kwargs: pytest.fail("completed reconciliation must not write"),
+    )
+    assert _reconcile(fixture, plan_sha256=digest, apply=True) == result
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "apps",
+        "sandbox",
+        "member",
+        "route",
+        "credential",
+        "browser",
+        "agent-shape",
+        "numeric-boolean",
+    ],
+)
+def test_computer_use_reconciliation_refuses_every_unrelated_gateway_change(
+    tmp_path, monkeypatch, mutation
+):
+    fixture = _computer_use_fixture(tmp_path, monkeypatch)
+    current = fixture.current
+    config = current["plugins"]["entries"]["codex"]["config"]
+    if mutation == "apps":
+        config["codexPlugins"]["enabled"] = True
+    elif mutation == "sandbox":
+        config["appServer"]["sandbox"] = "danger-full-access"
+    elif mutation == "member":
+        current["agents"]["entries"]["member-agent"]["tools"]["allow"].append("browser")
+    elif mutation == "route":
+        current["bindings"].append({"agentId": "unapproved"})
+    elif mutation == "credential":
+        current["gateway"]["auth"]["token"] = "different-synthetic-credential"
+    elif mutation == "browser":
+        current["browser"]["allowSystemProfileImport"] = True
+    elif mutation == "numeric-boolean":
+        config["computerUse"]["enabled"] = 1
+    else:
+        current["agents"]["list"] = [
+            {"id": key, **value}
+            for key, value in current["agents"].pop("entries").items()
+        ]
+    _private_write(fixture.gateway, json.dumps(current).encode())
+    private_file(
+        fixture.arguments["native_snapshot_path"],
+        {
+            "valid": True,
+            "hash": hashlib.sha256(fixture.gateway.read_bytes()).hexdigest(),
+        },
+    )
+    with pytest.raises(ValueError, match="unrelated Computer Use"):
+        _reconcile(fixture)
+    assert fixture.readiness_path.read_bytes() == fixture.readiness_bytes
+
+
+@pytest.mark.parametrize("disable", [False, True])
+@pytest.mark.parametrize("phase", ["journal", "readiness", "receipt", "cleanup"])
+def test_computer_use_exact_component_recovers_interrupted_enable_and_disable(
+    tmp_path, monkeypatch, disable, phase
+):
+    fixture = _computer_use_fixture(tmp_path, monkeypatch, disable=disable)
+    digest = _reconcile(fixture)["plan_sha256"]
+    target = {
+        "journal": browser.READINESS_JOURNAL,
+        "readiness": fixture.readiness_path.name,
+        "receipt": f"computer-use-readiness-{digest}.json",
+    }.get(phase)
+    write, unlink = browser._write_private_at, browser.os.unlink
+
+    def interrupted_write(descriptor, name, payload, *, replace):
+        write(descriptor, name, payload, replace=replace)
+        if name == target:
+            raise RuntimeError("synthetic interruption")
+
+    def interrupted_unlink(name, **kwargs):
+        if name == browser.READINESS_JOURNAL:
+            raise RuntimeError("synthetic interruption")
+        return unlink(name, **kwargs)
+
+    with monkeypatch.context() as interrupted:
+        interrupted.setattr(browser, "_write_private_at", interrupted_write)
+        if phase == "cleanup":
+            interrupted.setattr(browser.os, "unlink", interrupted_unlink)
+        with pytest.raises(RuntimeError, match="interruption"):
+            _reconcile(fixture, plan_sha256=digest, apply=True)
+    with pytest.raises(CandidateReadinessError, match="readiness transition"):
+        capture_deployment_snapshot(fixture.paths)
+    with pytest.raises(ValueError, match="journal is invalid"):
+        _reconcile(fixture, plan_sha256=digest, apply=True, component="browser")
+    with pytest.raises(ValueError, match="exact pending"):
+        _reconcile(fixture)
+    assert (
+        _reconcile(fixture, plan_sha256=digest, apply=True)["state"]
+        == "computer_use_readiness_reconciled"
+    )
+    assert not (fixture.paths.app_dir / browser.READINESS_JOURNAL).exists()
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "missing-plugin",
+        "disabled-plugin",
+        "apps-enabled",
+        "apps-absent",
+        "already-configured",
+        "wrong-path",
+        "extra-setting",
+        "numeric-boolean",
+    ],
+)
+def test_computer_use_preparation_requires_exact_closed_account_and_feature_policy(
+    tmp_path, monkeypatch, mutation
+):
+    fixture = _computer_use_fixture(tmp_path, monkeypatch)
+    snapshot = deepcopy(fixture.old_snapshot)
+    entries = snapshot["config"]["plugins"]["entries"]
+    config = entries["codex"]["config"]
+    disable = mutation in {"wrong-path", "extra-setting", "numeric-boolean"}
+    if mutation == "missing-plugin":
+        del entries["codex"]
+    elif mutation == "disabled-plugin":
+        entries["codex"]["enabled"] = False
+    elif mutation == "apps-enabled":
+        config["codexPlugins"]["enabled"] = True
+    elif mutation == "apps-absent":
+        del config["codexPlugins"]
+    elif mutation == "already-configured":
+        config["computerUse"] = {}
+    else:
+        config["computerUse"] = deepcopy(browser.COMPUTER_USE_CONFIG)
+        if mutation == "wrong-path":
+            config["computerUse"]["marketplacePath"] = (
+                "/tmp/unreviewed/marketplace.json"
+            )
+        elif mutation == "numeric-boolean":
+            config["computerUse"]["enabled"] = 1
+        else:
+            config["computerUse"]["autoRepairExtra"] = True
+    with pytest.raises(ValueError):
+        browser.prepare_computer_use_patch(snapshot, disable=disable)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "patch-hash",
+        "prior-raw",
+        "current-hash",
+        "unapproved-patch",
+        "blank-authority",
+        "cutoff",
+        "grant",
+    ],
+)
+def test_computer_use_reconciliation_keeps_hash_evidence_and_grant_boundaries(
+    tmp_path, monkeypatch, mutation
+):
+    fixture = _computer_use_fixture(tmp_path, monkeypatch)
+    if mutation == "patch-hash":
+        fixture.arguments["approved_patch_sha256"] = "0" * 64
+    elif mutation == "prior-raw":
+        _private_write(
+            fixture.arguments["previous_gateway_path"], fixture.prior_raw + b" "
+        )
+    elif mutation == "current-hash":
+        private_file(
+            fixture.arguments["native_snapshot_path"], {"valid": True, "hash": "0" * 64}
+        )
+    elif mutation == "unapproved-patch":
+        path = fixture.arguments["approved_patch_path"]
+        approved = json.loads(path.read_bytes())
+        patch = json.loads(approved["raw"])
+        patch["plugins"]["entries"]["codex"]["config"]["codexPlugins"] = {
+            "enabled": True
+        }
+        approved["raw"] = json.dumps(patch)
+        private_file(path, approved)
+        fixture.arguments["approved_patch_sha256"] = hashlib.sha256(
+            path.read_bytes()
+        ).hexdigest()
+    elif mutation == "blank-authority":
+        fixture.arguments["authorization_reference"] = " "
+    elif mutation == "grant":
+        _private_write(
+            fixture.readiness_path.parent / "cos-channel-operation.json",
+            b'{"changed":true}',
+        )
+    else:
+        digest = _reconcile(fixture)["plan_sha256"]
+        evidence = json.loads(fixture.readiness_bytes)
+        evidence["provider_effect_window"]["started_at"] = "2026-08-28T10:00:00Z"
+        private_file(fixture.readiness_path, evidence)
+        with pytest.raises(ValueError, match="source, authority or deployment changed"):
+            _reconcile(fixture, plan_sha256=digest, apply=True)
+        return
+    with pytest.raises(ValueError):
+        _reconcile(fixture)
+    assert fixture.readiness_path.read_bytes() == fixture.readiness_bytes
