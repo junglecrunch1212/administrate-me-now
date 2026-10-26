@@ -83,6 +83,8 @@ def main():
     elif mode == "staged-bounded":
         os.environ["ADMINME_SYNTHETIC_STAGED_MEASUREMENT"] = "1"
         selection = "tests/acceptance/test_finance_staging_measurement.py::test_one_staged_import_replay_and_loaded_queries"
+    elif mode == "summary-metadata":
+        selection = "tests/acceptance/test_finance_summary_metadata.py"
     elif mode == "allocation-profile":
         selection = "tests/acceptance/test_finance_allocation_profile.py::test_bounded_three_import_allocation_profile"
     elif mode == "focused-import":
@@ -101,10 +103,12 @@ def main():
         "cache_dir=" + str(root / "scratch/cache"),
         str(REPO / selection),
     ]
+    if mode == "summary-metadata":
+        args += ["--maxfail=1", "-p", "no:cacheprovider"]
     if mode == "contracts":
         args += ["-k", "not phased_setup"]
     code = pytest.main(args)
-    if mode == "contracts":
+    if mode in {"contracts", "summary-metadata"}:
         notify("work_finished", at=time.monotonic())
     return code
 

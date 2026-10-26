@@ -115,6 +115,14 @@ def mode_budget(mode):
     if mode == "staged-bounded":
         work = 330.0
         limits.update(runtime_executor_cpu_seconds=180, whole_tree_cpu_seconds=240)
+    if mode == "summary-metadata":
+        work, cleanup = 120.0, 5.0
+        grace, term, kill = 0.5, 1.0, 1.0
+        limits.update(
+            runtime_executor_rss_bytes=1024 * MIB,
+            runtime_executor_cpu_seconds=60,
+            whole_tree_cpu_seconds=60,
+        )
     return {
         "work": work,
         "cleanup": cleanup,
@@ -187,6 +195,7 @@ def main(mode, directory):
         "focused-import",
         "allocation-profile",
         "staged-bounded",
+        "summary-metadata",
         "setup",
         "setup-stop-before",
         "setup-stop-packets",
@@ -211,7 +220,11 @@ def main(mode, directory):
     if ctypes.CDLL(None, use_errno=True).prctl(36, 1, 0, 0, 0) != 0:
         raise OSError(ctypes.get_errno(), "watchdog_subreaper_required")
     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
-    resource.setrlimit(resource.RLIMIT_CPU, (180, 180))
+    cpu_cap = 60 if mode == "summary-metadata" else 180
+    resource.setrlimit(resource.RLIMIT_CPU, (cpu_cap, cpu_cap))
+    if mode == "summary-metadata":
+        resource.setrlimit(resource.RLIMIT_AS, (1024 * MIB, 1024 * MIB))
+        resource.setrlimit(resource.RLIMIT_FSIZE, (8 * MIB, 8 * MIB))
     contract = mode.startswith("contract-")
     budget = mode_budget(mode)
     work, cleanup = budget["work"], budget["cleanup"]
@@ -243,6 +256,9 @@ def main(mode, directory):
         "subreaper": True,
         "qualification": False,
     }
+    if mode == "summary-metadata":
+        report["evidence_limit_bytes"] = 16 * MIB
+        report["evidence_max_bytes"] = 0
 
     def event(kind, **fields):
         report["events"].append({"at": time.monotonic(), "kind": kind, **fields})
@@ -341,7 +357,12 @@ def main(mode, directory):
     signal.signal(signal.SIGALRM, alarm)
     signal.setitimer(
         signal.ITIMER_REAL,
-        max(0.001, absolute - (1 if contract else 5) - time.monotonic()),
+        max(
+            0.001,
+            absolute
+            - (1 if contract or mode == "summary-metadata" else 5)
+            - time.monotonic(),
+        ),
     )
     alarm_test_started = False
     try:
@@ -368,6 +389,15 @@ def main(mode, directory):
                     work + cleanup
                 )  # Fixed fault: independent alarm must interrupt.
             exceeded = [key for key, bound in limits.items() if row[key] > bound]
+            if mode == "summary-metadata":
+                evidence_bytes = sum(
+                    p.stat().st_size for p in root.iterdir() if p.is_file()
+                )
+                report["evidence_max_bytes"] = max(
+                    report["evidence_max_bytes"], evidence_bytes
+                )
+                if evidence_bytes > 16 * MIB - 65536:
+                    exceeded.append("evidence_bytes")
             if exceeded:
                 stop("containment:" + ",".join(exceeded), now)
             for _, _ in selector.select(timeout=0):
@@ -561,10 +591,13 @@ def main(mode, directory):
             shutil.copyfile(path, root / ("emergency-" + str(index) + "-" + path.name))
         report["scratch_removed"] = remove_scratch(
             scratch,
-            retain_unknown=mode == "staged-bounded",
+            retain_unknown=mode in {"staged-bounded", "summary-metadata"},
             remaining_owned=report["remaining_owned"],
         )
-        if mode == "staged-bounded" and not report["scratch_removed"]:
+        if (
+            mode in {"staged-bounded", "summary-metadata"}
+            and not report["scratch_removed"]
+        ):
             report["faults"].append("uncertain_ownership_scratch_retained")
         if cleanup_sampler is not None:
             cleanup_sampling_stop.set()
@@ -586,6 +619,18 @@ def main(mode, directory):
             report["finished"] - finish_at if finish_at else None
         )
         report["absolute_bound_met"] = report["finished"] <= absolute
+        if mode == "summary-metadata":
+            for key, bound in limits.items():
+                if report["maxima"][key] > bound:
+                    report["faults"].append("final_containment:" + key)
+            evidence_bytes = sum(
+                p.stat().st_size for p in root.iterdir() if p.is_file()
+            )
+            report["evidence_max_bytes"] = max(
+                report["evidence_max_bytes"], evidence_bytes
+            )
+            if evidence_bytes > 16 * MIB - 65536:
+                report["faults"].append("final_containment:evidence_bytes")
         (root / "watchdog.json").write_text(json.dumps(report, indent=2) + "\n")
     signal.setitimer(signal.ITIMER_REAL, 0)
     clean = (

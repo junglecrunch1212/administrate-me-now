@@ -1,4 +1,4 @@
-name: Bounded representative Finance callback diagnostics
+name: Focused Finance summary metadata compatibility
 on:
   push:
     branches: ['codex/finance-encrypted-staging']
@@ -8,9 +8,9 @@ concurrency:
   group: finance-encrypted-staging-correctness
   cancel-in-progress: false
 jobs:
-  callback-representative:
+  summary-metadata:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 8
     env:
       ADMINME_TEST_MODE: '1'
       PYTHONDONTWRITEBYTECODE: '1'
@@ -19,8 +19,8 @@ jobs:
     steps:
       - name: Bind isolated evidence directories
         run: |
-          printf 'FINANCE_STORAGE_ARTIFACT_DIR=%s/finance-callback-representative\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
-          printf 'FINANCE_MEASUREMENT_PINS=%s/finance-callback-representative-pins\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+          printf 'FINANCE_STORAGE_ARTIFACT_DIR=%s/finance-summary-metadata\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+          printf 'FINANCE_SUMMARY_PINS=%s/finance-summary-pins\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           persist-credentials: false
@@ -30,171 +30,100 @@ jobs:
           python-version: '3.14.7'
       - run: pipx install poetry==2.4.1
       - run: poetry sync --with dev --no-interaction
-      - name: Bind frozen callback sources and unchanged workload
+      - name: Bind exact candidate and focused selection
         run: |
-          mkdir "$FINANCE_MEASUREMENT_PINS"
-          git rev-parse HEAD HEAD:adminme HEAD:poetry.lock > "$FINANCE_MEASUREMENT_PINS/source-pins.txt"
+          mkdir "$FINANCE_SUMMARY_PINS"
           .venv/bin/python - <<'PY_CHECK'
           import ast, hashlib, json, os, pathlib, subprocess, sys
-          assert sys.version_info[:3]==(3,14,7)
+          assert sys.version_info[:3] == (3,14,7)
           assert 'ADMINME_SYNTHETIC_CALLBACK_DIAGNOSTICS' not in os.environ
+          baseline='9bf5bd55292fb770e9285db0fd6dca06c5a5fa4b'
           assert subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()==os.environ['GITHUB_SHA']
-          baseline='4b9ccdf521fd8bf48d7fc0580953458e4dd38eca'
-          expected={'tests/acceptance/test_finance_storage_isolation.py', 'tests/unit/test_finance_callback_transport.py', '.github/workflows/finance-encrypted-staging.yml', 'tests/unit/test_finance_diagnostic_observers.py', 'tests/fixtures/finance_watchdog.py'}
+          expected=['adminme/finance/planning_store.py', 'tests/acceptance/test_finance_summary_metadata.py', 'tests/fixtures/finance_watchdog.py', 'tests/fixtures/finance_watchdog_controller.py', '.github/workflows/finance-encrypted-staging.yml']
           actual=set(subprocess.check_output(['git','diff','--name-only',baseline,'HEAD'],text=True).splitlines())
-          assert actual==expected,actual
-          pins={'tests/fixtures/finance_callback_diagnostics.py': '801c623469fcd8f6a2df342cded217e61585ca59e045c8b3114845178d6685ce', 'tests/fixtures/finance_staging_measurement.py': 'da1e3e0c1b2d1d25e35f0295e45252a173e3efcefb054aaf657c796e21ba78ee', 'tests/unit/test_finance_callback_diagnostics.py': 'ff51a9efc65dd326f2c2442e5395693e4f0cbdcd523e9736af62b5ec54d65f55', 'tests/unit/test_finance_diagnostic_observers.py': '1dfd1f22511aba019bc1183c5c0ef3b795e521ce3b0cfc3023830e55ca0df53f', 'tests/unit/test_finance_callback_transport.py': 'd05d2bcebb1d8911e23ce25b608c2a51027e09887f085419ac2a9951867e3258', 'tests/fixtures/finance_watchdog.py': '94aa41acb9e76969be76b5639e23bd80402b0298b14cbd44482e5df9712a4089', 'tests/acceptance/test_finance_storage_isolation.py': '30c1b19cba97ec0cf193d42fc95e839014e3f2c7857356c9139d2aea83a2b5b5'}
-          interfaces={'adminme/finance/planning_store.py': 'e0b2ca4529414b5cddbbeed7cbcd1f5ceb90409c42087c21e2ab4aa5da622268',
-           'adminme/projections/runner.py': 'ce762f5fb40eee0a6d9b1b1cd0a58a1ac1ed77d14da39a20be2437b2cbfb4fee',
-           'adminme/projections/money/schema.sql': 'd90df84bb436136a598b8ae63e442bb69106e27a76dfee9e92e96f8c1b4a87f0',
-           'adminme/products/member/main.py': 'cd6d274a25616d4a8af623afc603b13e289a5f6c9689775971154b9316e20950',
-           'tests/fixtures/finance_storage_measurement.py': '6c60cac5d32bc1c7e15652bcd0b4e880450334831fdb85ef15b10428fe88e7f0',
-           'tests/fixtures/finance_planning.py': 'b1c14038604d9d6a4077b45135b1ea206ad49432450655eddbbb8f015fa84ca0',
-           'tests/fixtures/finance_import_load.py': '79fb003c716a5485e6f5e1cf18ae5e6b9f0aa445c6a32ec82cd7fc6fbe537a09',
-           'tests/acceptance/test_finance_storage_isolation.py': '30c1b19cba97ec0cf193d42fc95e839014e3f2c7857356c9139d2aea83a2b5b5',
-           'tests/acceptance/test_finance_staging_measurement.py': 'c363b611b7c979e3d05182c10742641d7ad75bd245f48ea07efdf71f676f6f71',
-           'tests/fixtures/finance_staging_measurement_report.py': 'daf1b904c01a97aab84fa52201c721bffb1457e7f178d22d612a32185c17191f'}
-          interfaces['tests/unit/test_finance_diagnostic_spans.py']='e6ab4eaee2057a07fd02537bc7125a49d9c7b79f8890b76bb48a97e07b1cc029'
-          for p,h in (pins|interfaces).items():assert hashlib.sha256(pathlib.Path(p).read_bytes()).hexdigest()==h,p
-          assert subprocess.check_output(['git','rev-parse','HEAD:adminme'],text=True).strip()=='1873e65d8a36d8af74ed5608b49b62dac6934d73'
+          assert actual==set(expected),actual
+          pins={'adminme/finance/planning_store.py': 'a528512a67fb7090af12062cf07fa4a6c331908bb642d3bb223ee4114eed25bc', 'tests/acceptance/test_finance_summary_metadata.py': '82c637091397ff78c1cba862d6eee82bb75d79d90237459256fc766a303344ab', 'tests/fixtures/finance_watchdog.py': 'dc177e2a4d4923191d7e84ad610a4df7d87dc7725b16e09a4f19915e55c7e060', 'tests/fixtures/finance_watchdog_controller.py': '4486d4e70e2120b11adc832d31dcf6283fa84fa857688ad7f1e7ff4d1a025fcb'}
+          for path,digest in pins.items():
+              raw=pathlib.Path(path).read_bytes()
+              assert hashlib.sha256(raw).hexdigest()==digest,path
+              ast.parse(raw)
           assert subprocess.check_output(['git','rev-parse','HEAD:poetry.lock'],text=True).strip()=='cc2102f6e9dd2fd029bd636566806493c1df91dc'
-          paths=subprocess.check_output(['git','diff','--name-only','35b4f0615c4ece0bc4fc0ed927b39507ea9774b2','HEAD'],text=True).splitlines()
-          assert len(paths)==28
-          for p in paths:
-              data=pathlib.Path(p).read_bytes()
-              if p.endswith('.py'):ast.parse(data)
-              if p not in expected:assert data==subprocess.check_output(['git','show',baseline+':'+p]),p
-          source=ast.parse(pathlib.Path('tests/fixtures/finance_storage_isolation.py').read_text())
-          files=ast.literal_eval(next(n.value for n in source.body if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='ARTIFACT_FILES' for t in n.targets)))
-          assert len(files)==19
-          digest=hashlib.sha256()
-          for p in files:
-              digest.update(p.encode());digest.update(pathlib.Path(p).read_bytes())
-          assert digest.hexdigest()=='ce01d08e6462af13a83bb6eb3fef3977532dc0a0a652149e0f8c2593add8e750'
-          out=pathlib.Path(os.environ['FINANCE_MEASUREMENT_PINS'])
-          for name,selected in [('source-sha256.json',paths),('dependency-sha256.json',files),('reviewed-source-sha256.json',pins),('interface-sha256.json',interfaces)]:
-              (out/name).write_text(json.dumps({p:hashlib.sha256(pathlib.Path(p).read_bytes()).hexdigest() for p in selected},indent=2)+'\n')
-          expected_cases={'tests.unit.test_finance_callback_transport': ['test_controller_launch_preserves_exact_allowlist[staged-on]', 'test_controller_launch_preserves_exact_allowlist[absent]', 'test_controller_launch_preserves_exact_allowlist[disabled]', 'test_controller_launch_preserves_exact_allowlist[invalid]', 'test_controller_launch_preserves_exact_allowlist[wrong-full-mode]', 'test_controller_launch_preserves_exact_allowlist[wrong-contract-mode]', 'test_runtime_launch_preserves_exact_allowlist[staged-on]', 'test_runtime_launch_preserves_exact_allowlist[absent]', 'test_runtime_launch_preserves_exact_allowlist[disabled]', 'test_runtime_launch_preserves_exact_allowlist[invalid]', 'test_runtime_launch_preserves_exact_allowlist[wrong-mode]', 'test_runtime_launch_preserves_exact_allowlist[wrong-script]', 'test_runtime_launch_preserves_exact_allowlist[wrong-case]']}
-          assert len(expected_cases['tests.unit.test_finance_callback_transport'])==13
+          # The production builder is the exact baseline after reversing only
+          # the new metadata SQL assignment and its execute argument.
+          path='adminme/finance/planning_store.py'
+          old=ast.parse(subprocess.check_output(['git','show',baseline+':'+path],text=True))
+          new=ast.parse(pathlib.Path(path).read_text())
+          old_query=next(n for n in old.body if isinstance(n,ast.FunctionDef) and n.name=='query_projection')
+          new_query=next(n for n in new.body if isinstance(n,ast.FunctionDef) and n.name=='query_projection')
+          new_query.body=[n for n in new_query.body if not (isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='metadata_sql' for t in n.targets))]
+          legacy=next(n.value for n in ast.walk(old_query) if isinstance(n,ast.Constant) and isinstance(n.value,str) and n.value.startswith('SELECT metadata_json FROM finance_dated_projections '))
+          replacements=0
+          for node in ast.walk(new_query):
+              if isinstance(node,ast.Call) and isinstance(node.func,ast.Attribute) and node.func.attr=='execute' and node.args and isinstance(node.args[0],ast.Name) and node.args[0].id=='metadata_sql':
+                  node.args[0]=ast.Constant(legacy);replacements+=1
+          assert replacements==1 and ast.dump(old,include_attributes=False)==ast.dump(new,include_attributes=False)
+          expected_cases=['test_summary_equivalence_all_contexts_horizons_views', 'test_summary_selection_errors[negative-offset]', 'test_summary_selection_errors[invalid-limit]', 'test_summary_selection_errors[bool-horizon]', 'test_summary_selection_errors[invalid-horizon]', 'test_summary_selection_errors[invalid-view]', 'test_summary_selection_errors[incomplete-selector]', 'test_summary_selection_errors[ambiguous-selector]', 'test_summary_selection_errors[unknown-context]', 'test_summary_selection_errors[unknown-projection]', 'test_summary_selection_errors[case-sensitive]', 'test_summary_selection_errors[context-and-selector]', 'test_summary_selection_errors[reference-filter]', 'test_summary_selection_errors[gap-filter]', 'test_summary_corruption_and_decoder_parity[removed-null]', 'test_summary_corruption_and_decoder_parity[removed-number]', 'test_summary_corruption_and_decoder_parity[removed-bool]', 'test_summary_corruption_and_decoder_parity[removed-string]', 'test_summary_corruption_and_decoder_parity[removed-object]', 'test_summary_corruption_and_decoder_parity[removed-mixed]', 'test_summary_corruption_and_decoder_parity[removed-nested]', 'test_summary_corruption_and_decoder_parity[removed-over-limit-int]', 'test_summary_corruption_and_decoder_parity[removed-deep]', 'test_summary_corruption_and_decoder_parity[removed-malformed]', 'test_summary_corruption_and_decoder_parity[removed-empty]', 'test_summary_corruption_and_decoder_parity[missing-removed]', 'test_summary_corruption_and_decoder_parity[duplicate-target-before]', 'test_summary_corruption_and_decoder_parity[duplicate-target-after]', 'test_summary_corruption_and_decoder_parity[duplicate-over-limit-before]', 'test_summary_corruption_and_decoder_parity[duplicate-over-limit-after]', 'test_summary_corruption_and_decoder_parity[escaped-target]', 'test_summary_corruption_and_decoder_parity[escaped-duplicate-before]', 'test_summary_corruption_and_decoder_parity[escaped-duplicate-after]', 'test_summary_corruption_and_decoder_parity[duplicate-used-key]', 'test_summary_corruption_and_decoder_parity[duplicate-used-key-reversed]', 'test_summary_corruption_and_decoder_parity[duplicate-used-over-limit-before]', 'test_summary_corruption_and_decoder_parity[duplicate-used-over-limit-after]', 'test_summary_corruption_and_decoder_parity[escaped-used-key]', 'test_summary_corruption_and_decoder_parity[duplicate-collection-key]', 'test_summary_corruption_and_decoder_parity[used-over-limit-int]', 'test_summary_corruption_and_decoder_parity[used-large-int]', 'test_summary_corruption_and_decoder_parity[used-negative-zero]', 'test_summary_corruption_and_decoder_parity[used-float-underflow]', 'test_summary_corruption_and_decoder_parity[used-float-overflow]', 'test_summary_corruption_and_decoder_parity[removed-nan]', 'test_summary_corruption_and_decoder_parity[removed-infinity]', 'test_summary_corruption_and_decoder_parity[used-nan]', 'test_summary_corruption_and_decoder_parity[used-infinity]', 'test_summary_corruption_and_decoder_parity[utf8-literal]', 'test_summary_corruption_and_decoder_parity[utf8-escaped]', 'test_summary_corruption_and_decoder_parity[escape-control]', 'test_summary_corruption_and_decoder_parity[escape-surrogate]', 'test_summary_corruption_and_decoder_parity[escape-slash]', 'test_summary_corruption_and_decoder_parity[json5-comment]', 'test_summary_corruption_and_decoder_parity[json5-trailing-comma]', 'test_summary_corruption_and_decoder_parity[json5-single-quote]', 'test_summary_corruption_and_decoder_parity[truncated]', 'test_summary_corruption_and_decoder_parity[missing-contexts]', 'test_summary_corruption_and_decoder_parity[wrong-contexts]', 'test_summary_corruption_and_decoder_parity[unselected-malformed-context]', 'test_summary_corruption_and_decoder_parity[missing-horizon]', 'test_summary_corruption_and_decoder_parity[missing-used-field]', 'test_summary_corruption_and_decoder_parity[wrong-root]', 'test_summary_corruption_and_decoder_parity[blob-valid]', 'test_summary_corruption_and_decoder_parity[blob-invalid-utf8]', 'test_summary_decode_allocation_and_other_reports', 'test_summary_scope_and_current_historical_heads', 'test_summary_replay_and_idempotent_import', 'test_summary_ingestion_keeps_revision_membership[first]', 'test_summary_ingestion_keeps_revision_membership[last]', 'test_summary_authority_revoked_after_read[native]', 'test_summary_authority_revoked_after_read[member]', 'test_summary_native_member_delivery_contract', 'test_summary_import_boundary[disabled]', 'test_summary_import_boundary[wrong_owner]', 'test_summary_import_boundary[wrong_hash]', 'test_summary_import_boundary[conflicting_retry]', 'test_summary_runtime_bounds_and_native_versions']
+          assert len(expected_cases)==len(set(expected_cases))==78
+          out=pathlib.Path(os.environ['FINANCE_SUMMARY_PINS'])
           (out/'expected-tests.json').write_text(json.dumps(expected_cases,indent=2)+'\n')
-          reused={'head': '4b9ccdf521fd8bf48d7fc0580953458e4dd38eca', 'run': 40250697052, 'job': 121341725274, 'artifact_id': 12620114878, 'zip_sha256': 'bf8604a9abe64a09e7b9f46afa9ae0d2579f59f2be49eb2482cbf9042de396fd', 'summary_sha256': '8ad455297f227afe7c2d8b07e5cb1452b1658ec297800f47d0f48dac778f0dbf', 'passed': 45, 'repeated': 0, 'basis': 'Unchanged callback observer implementation and tested functions; only launch allowlists and OwnedRun source-pin metadata changed. New transport seams require their own13-case proof. Historical45-case evidence is not a new whole-file launch proof.'}
-          (out/'reused-observer-proof.json').write_text(json.dumps(reused,indent=2)+'\n')
+          tracked=subprocess.check_output(['git','ls-files','adminme','tests/fixtures','tests/acceptance/test_finance_planning.py','tests/acceptance/test_finance_summary_metadata.py','pyproject.toml','poetry.lock'],text=True).splitlines()
+          source={p:hashlib.sha256(pathlib.Path(p).read_bytes()).hexdigest() for p in tracked if pathlib.Path(p).is_file()}
+          (out/'source-pins.json').write_text(json.dumps({'candidate':os.environ['GITHUB_SHA'],'baseline':baseline,'changed':expected,'pins':pins,'source':source},indent=2)+'\n')
+          (out/'prior-evidence.json').write_text(json.dumps({'failed_representative':40252645394,'zip_sha256':'3ad9e51bea70055999bc488d7c96853fe2bbf43319a393ad5fa97a32c1ac928f','previous_observer45_run':40250697052,'previous_launch13_run':40252645394,'repeated_previous_tests':0,'previous_proofs_do_not_prove_this_read_path':True,'resource_qualified':False,'production_qualified':False},indent=2)+'\n')
           PY_CHECK
-          .venv/bin/ruff check tests/fixtures/finance_watchdog.py tests/acceptance/test_finance_storage_isolation.py tests/unit/test_finance_diagnostic_observers.py tests/unit/test_finance_callback_transport.py
-          .venv/bin/ruff format --check tests/fixtures/finance_watchdog.py tests/acceptance/test_finance_storage_isolation.py tests/unit/test_finance_diagnostic_observers.py tests/unit/test_finance_callback_transport.py
-      - name: Check exactly 13 synthetic launch environment cases
-        id: preflight
-        timeout-minutes: 2
-        env:
-          ADMINME_SYNTHETIC_CALLBACK_TRANSPORT_PREFLIGHT: '1'
-        run: |
-          unset ADMINME_SYNTHETIC_CALLBACK_DIAGNOSTICS
-          ulimit -t 60
-          ulimit -v 1048576
-          timeout --signal=TERM --kill-after=5s 60s .venv/bin/python -m pytest -p no:cacheprovider -q --runxfail --maxfail=1 \
-            -o tmp_path_retention_policy=all \
-            --basetemp="$RUNNER_TEMP/finance-callback-transport-unit" \
-            --junitxml="$FINANCE_MEASUREMENT_PINS/preflight.xml" \
-            tests/unit/test_finance_callback_transport.py
-          .venv/bin/python - <<'PY_CHECK'
-          import json, os, pathlib, xml.etree.ElementTree as E
-          pins=pathlib.Path(os.environ['FINANCE_MEASUREMENT_PINS'])
-          rows=E.parse(pins/'preflight.xml').findall('.//testcase')
-          expected=json.loads((pins/'expected-tests.json').read_text())
-          expected_ids={(module,name) for module,names in expected.items() for name in names}
-          actual_ids=[(r.attrib.get('classname'),r.attrib.get('name')) for r in rows]
-          exact=len(expected_ids)==len(actual_ids)==len(set(actual_ids))==13 and set(actual_ids)==expected_ids
-          clean=all(not any(r.find(k) is not None for k in ('failure','error','skipped')) for r in rows)
-          result={'expected':13,'executed':len(rows),'exact_selection':exact,'zero_failed_error_skipped':clean,'permits_representative_step':bool(exact and clean)}
-          (pins/'preflight-result.json').write_text(json.dumps(result,indent=2)+'\n')
-          assert result['permits_representative_step'],'transport preflight failed or incomplete; representative must not start'
-          PY_CHECK
-      - name: One unchanged representative workload with callback observer
-        id: measurement
-        if: steps.preflight.outcome == 'success'
-        timeout-minutes: 7
-        env:
-          ADMINME_SYNTHETIC_CALLBACK_DIAGNOSTICS: '1'
+          .venv/bin/ruff check adminme/finance/planning_store.py tests/acceptance/test_finance_summary_metadata.py tests/fixtures/finance_watchdog.py tests/fixtures/finance_watchdog_controller.py
+          .venv/bin/ruff format --check adminme/finance/planning_store.py tests/acceptance/test_finance_summary_metadata.py tests/fixtures/finance_watchdog.py tests/fixtures/finance_watchdog_controller.py
+      - name: One bounded focused compatibility suite
+        id: focused
+        timeout-minutes: 3
         run: |
           mkdir "$FINANCE_STORAGE_ARTIFACT_DIR"
-          .venv/bin/python -I -B tests/fixtures/finance_watchdog.py staged-bounded "$FINANCE_STORAGE_ARTIFACT_DIR"
-      - name: Preserve unchanged comparisons and partial failure verdicts
-        id: report
-        if: always() && steps.measurement.outcome != 'skipped' && steps.measurement.outcome != ''
-        run: .venv/bin/python -I -B tests/fixtures/finance_staging_measurement_report.py "$FINANCE_STORAGE_ARTIFACT_DIR"
-      - name: Retain bounded source outcome and cleanup evidence
+          .venv/bin/python -I -B tests/fixtures/finance_watchdog.py summary-metadata "$FINANCE_STORAGE_ARTIFACT_DIR"
+      - name: Preserve exact outcome and bounded evidence
         if: always()
         env:
-          PREFLIGHT_OUTCOME: ${{ steps.preflight.outcome }}
-          MEASUREMENT_OUTCOME: ${{ steps.measurement.outcome }}
-          REPORT_OUTCOME: ${{ steps.report.outcome }}
+          FOCUSED_OUTCOME: ${{ steps.focused.outcome }}
         run: |
           python - <<'PY_CHECK'
-          import hashlib, json, os, pathlib, shutil, sys, xml.etree.ElementTree as E
-          pins=pathlib.Path(os.environ['FINANCE_MEASUREMENT_PINS']);pins.mkdir(exist_ok=True)
+          import hashlib,json,os,pathlib,shutil,sys,xml.etree.ElementTree as E
           root=pathlib.Path(os.environ['FINANCE_STORAGE_ARTIFACT_DIR']);root.mkdir(exist_ok=True)
-          scratch=pathlib.Path(os.environ['RUNNER_TEMP'])/'finance-callback-transport-unit'
-          def digest(path):
-              with path.open('rb') as stream:return hashlib.file_digest(stream,'sha256').hexdigest()
-          names={'watchdog-trace.jsonl','controller-output.txt','synthetic_transport.stderr.txt'}
-          existing=[p for parent in (pins,root) for p in parent.iterdir() if p.is_file() and not p.is_symlink()]
-          used=sum(p.stat().st_size for p in existing);count=len(existing)
-          collected=[];omitted=[]
-          for p in sorted(scratch.rglob('*')) if scratch.exists() and not scratch.is_symlink() else []:
-              if p.is_symlink() or not p.is_file() or p.name not in names:continue
-              relative=p.relative_to(scratch)
-              if any((scratch/part).is_symlink() for part in relative.parents):continue
-              name='unit__'+'__'.join(relative.parts);size=p.stat().st_size
-              if count>=60 or used+size>32*1024*1024-131072:
-                  omitted.append({'relative_path':str(relative),'bytes':size});continue
-              target=root/name;assert not target.exists()
-              shutil.copyfile(p,target);used+=size;count+=1
-              collected.append({'name':name,'bytes':size,'sha256':digest(target)})
-          def outcome(path,expected_ids):
-              rows=[];error=None
-              try:rows=E.parse(path).findall('.//testcase')
-              except (OSError,E.ParseError) as exc:error=type(exc).__name__
-              ids=[(r.attrib.get('classname'),r.attrib.get('name')) for r in rows]
-              return {'expected':len(expected_ids),'executed':len(rows),'passed':sum(not any(r.find(k) is not None for k in ('failure','error','skipped')) for r in rows),'failed':sum(any(r.find(k) is not None for k in ('failure','error')) for r in rows),'skipped':sum(r.find('skipped') is not None for r in rows),'exact_selection':len(ids)==len(set(ids))==len(expected_ids) and set(ids)==expected_ids,'parse_error':error,'cases':ids}
-          expected=json.loads((pins/'expected-tests.json').read_text()) if (pins/'expected-tests.json').is_file() else {}
-          unit=outcome(pins/'preflight.xml',{(m,n) for m,names in expected.items() for n in names})
-          measurement=outcome(root/'results.xml',{('tests.acceptance.test_finance_staging_measurement','test_one_staged_import_replay_and_loaded_queries')})
-          observer={};observer_error=None
+          pins=pathlib.Path(os.environ['FINANCE_SUMMARY_PINS']);pins.mkdir(exist_ok=True)
+          expected=[];rows=[];parse_error=None;watch={}
           try:
-              path=root/'staged_bounded-diagnostic-observer.json'
-              with path.open('rb') as stream:raw=stream.read(65537)
-              if len(raw)>65536:raise ValueError('observer_size')
-              observer=json.loads(raw)
-          except (OSError,ValueError) as exc:observer_error=type(exc).__name__
-          callback=observer.get('callback_diagnostics',{})
-          callback_complete=observer.get('diagnostic_complete') is True and callback.get('complete') is True and callback.get('installed') is True and callback.get('removed') is True and len(callback.get('callbacks',[]))==5
-          cleanup_error=None
-          try:
-              if scratch.is_symlink():scratch.unlink()
-              elif scratch.exists():shutil.rmtree(scratch)
-          except OSError as exc:cleanup_error=type(exc).__name__
-          removed=not scratch.exists() and not scratch.is_symlink()
-          complete=all(os.environ[k]=='success' for k in ('PREFLIGHT_OUTCOME','MEASUREMENT_OUTCOME','REPORT_OUTCOME')) and unit['expected']==13 and unit['exact_selection'] and unit['passed']==13 and not unit['failed'] and not unit['skipped'] and measurement['exact_selection'] and measurement['passed']==1 and not measurement['failed'] and not measurement['skipped'] and callback_complete and observer_error is None and len(collected)==19 and not omitted and removed and cleanup_error is None
-          result={'candidate':os.environ['GITHUB_SHA'],'preflight_outcome':os.environ['PREFLIGHT_OUTCOME'],'measurement_outcome':os.environ['MEASUREMENT_OUTCOME'],'report_outcome':os.environ['REPORT_OUTCOME'],'unit':unit,'measurement':measurement,'reused_observer_run':40250697052,'reused_observer_tests':45,'repeated_observer_tests':0,'collected':collected,'omitted':omitted,'expected_unit_raw_files':19,'unit_scratch_removed':removed,'cleanup_error':cleanup_error,'callback_observer_present':'callback_diagnostics' in observer,'callback_observer_complete':callback_complete,'callback_observer_read_error':observer_error,'complete':complete,'resource_qualified':False,'production_qualified':False}
-          (pins/'selection-result.json').write_text(json.dumps(result,indent=2)+'\n')
-          output=pathlib.Path(os.environ['RUNNER_TEMP'])/'finance-callback-representative-upload';output.mkdir()
-          files=sorted((p for parent in (pins,root) for p in parent.iterdir() if p.is_file() and not p.is_symlink()),key=lambda p:p.name)
+              expected=json.loads((pins/'expected-tests.json').read_text())
+              rows=E.parse(root/'results.xml').findall('.//testcase')
+              watch=json.loads((root/'watchdog.json').read_text())
+          except (OSError,ValueError,E.ParseError) as exc:parse_error=type(exc).__name__
+          ids=[(r.attrib.get('classname'),r.attrib.get('name')) for r in rows]
+          required={('tests.acceptance.test_finance_summary_metadata',name) for name in expected}
+          exact=len(ids)==len(set(ids))==len(required)==78 and set(ids)==required
+          clean_cases=all(not any(r.find(k) is not None for k in ('failure','error','skipped')) for r in rows)
+          cleaned=watch.get('scratch_removed') is True and watch.get('remaining_owned')==[] and not (root/'scratch').exists()
+          bounded=watch.get('absolute_bound_met') is True and not watch.get('faults') and not watch.get('forced') and watch.get('controller_exit')==0
+          complete=os.environ['FOCUSED_OUTCOME']=='success' and exact and clean_cases and cleaned and bounded and parse_error is None
+          selection={'candidate':os.environ['GITHUB_SHA'],'expected':78,'executed':len(rows),'cases':ids,'exact_selection':exact,'clean_cases':clean_cases,'cleanup_confirmed':cleaned,'bounded':bounded,'parse_error':parse_error,'complete':complete,'resource_qualified':False,'production_qualified':False,'representative_run_started':False}
+          (pins/'selection-result.json').write_text(json.dumps(selection,indent=2)+'\n')
+          files=sorted([p for parent in (root,pins) for p in parent.iterdir() if p.is_file() and not p.is_symlink()],key=lambda p:p.name)
           assert len({p.name for p in files})==len(files)
-          records=[{'name':p.name,'bytes':p.stat().st_size,'sha256':digest(p)} for p in files]
-          bounded=len(files)<=63 and sum(r['bytes'] for r in records)<=32*1024*1024-65536
-          manifest=json.dumps({'bounded':bounded,'files':records,'resource_qualified':False,'production_qualified':False},indent=2)+'\n'
+          records=[]
+          for p in files:
+              with p.open('rb') as stream:digest=hashlib.file_digest(stream,'sha256').hexdigest()
+              records.append({'name':p.name,'bytes':p.stat().st_size,'sha256':digest})
+          export_bounded=len(files)<=31 and sum(r['bytes'] for r in records)<=16*1024*1024-65536
+          output=pathlib.Path(os.environ['RUNNER_TEMP'])/'finance-summary-upload';output.mkdir()
+          manifest=json.dumps({'bounded':export_bounded,'files':records,'complete':complete,'resource_qualified':False,'production_qualified':False},indent=2)+'\n'
           assert len(manifest.encode())<=65536
           (output/'artifact-manifest.json').write_text(manifest)
-          if bounded:
+          if export_bounded:
               for p in files:shutil.copyfile(p,output/p.name)
-          if not bounded or not complete:sys.exit('representative callback diagnostic failed or incomplete; bounded raw evidence retained, no qualification or retry')
+          if not export_bounded or not complete:sys.exit('focused compatibility failed/incomplete; preserve evidence, no retry or qualification')
           PY_CHECK
-      - name: Upload representative callback diagnostic receipts
+      - name: Upload focused compatibility evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: finance-callback-representative-diagnostic
-          path: ${{ runner.temp }}/finance-callback-representative-upload
+          name: finance-summary-metadata-compatibility
+          path: ${{ runner.temp }}/finance-summary-upload
           if-no-files-found: error
           retention-days: 7
           compression-level: 9

@@ -471,8 +471,27 @@ def query_projection(
     key = _coordinates(session, book_id)
     head_id = projection_head(conn, session, book_id)
     requested = projection_id or head_id
+    # Only omit an unambiguous flat string array. The original decoder must
+    # still see corrupt shapes (including oversized integers) and duplicate
+    # target keys. Escaped text takes the raw path, avoiding escaped-key aliasing and
+    # any SQL/Python escape-normalization difference. Keep every context and
+    # horizon and the existing Python result builder; native JSON work remains.
+    metadata_sql = (
+        "SELECT CASE "
+        "WHEN typeof(metadata_json)!='text' THEN metadata_json "
+        "WHEN instr(metadata_json,char(92))!=0 THEN metadata_json "
+        "WHEN NOT json_valid(metadata_json) THEN metadata_json "
+        "WHEN json_type(metadata_json)!='object' THEN metadata_json "
+        "WHEN (SELECT count(*) FROM json_each(metadata_json) WHERE key='accounting_revision_ids')!=1 THEN metadata_json "
+        "WHEN json_type(metadata_json,'$.accounting_revision_ids')!='array' THEN metadata_json "
+        "WHEN EXISTS(SELECT 1 FROM json_each(metadata_json,'$.accounting_revision_ids') WHERE type!='text') THEN metadata_json "
+        "ELSE json_remove(metadata_json,'$.accounting_revision_ids') END "
+        "FROM finance_dated_projections WHERE tenant_id=? AND owner_id=? AND book_id=? AND projection_id=?"
+        if report_id == "planning_projection"
+        else "SELECT metadata_json FROM finance_dated_projections WHERE tenant_id=? AND owner_id=? AND book_id=? AND projection_id=?"
+    )
     row = conn.execute(
-        "SELECT metadata_json FROM finance_dated_projections WHERE tenant_id=? AND owner_id=? AND book_id=? AND projection_id=?",
+        metadata_sql,
         (*key, requested),
     ).fetchone()
     if row is None:
