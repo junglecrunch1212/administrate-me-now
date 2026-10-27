@@ -1785,3 +1785,328 @@ def test_containment_does_not_reserve_an_unrequested_future_release(
         controller.enter_observation(plan.observation_request())
         assert controller.services.stops == stops + 1
         assert controller.services.runtime_diagnostics()["observation_active"] is True
+
+
+def _paused_tooling_controller(tmp_path, monkeypatch, *, messages=True):
+    """Real channel/audit transition; only OS/source/Doctor boundaries are fixtures."""
+    controller, request = _maintenance_controller(
+        tmp_path, monkeypatch, messages=messages
+    )
+    plan = _prepare_maintenance(controller, request)
+    normal_settle = controller._settle
+
+    def old_doctor(_release):
+        raise CoSActivationError("original Doctor: runtime_and_package_versions")
+
+    monkeypatch.setattr(controller, "_settle", old_doctor)
+    with pytest.raises(CoSActivationError, match="original Doctor"):
+        controller.pause_maintenance(plan)
+    original = json.loads(controller.journal_path.read_text())
+    assert original["phase"] == "verifying"
+    assert original["controller_commit"] == plan.target_commit
+    monkeypatch.setattr(controller, "_settle", normal_settle)
+    monkeypatch.setattr(
+        controller, "_observation_selection", lambda: ("a" * 40, ROOT, "c" * 40)
+    )
+    monkeypatch.setattr("bootstrap.doctor_tooling.RETAINED_DOCTORS", {"a" * 40})
+    monkeypatch.setattr(
+        "bootstrap.cos_channel_activation.load_git_tree", lambda *_args, **_kwargs: {}
+    )
+    from bootstrap.doctor_tooling import COMPATIBILITY_KEY
+    from tests.unit.bootstrap.test_doctor_tooling import report
+
+    original_report = report()
+    qualified = {
+        "status": "healthy",
+        COMPATIBILITY_KEY: {
+            "decision": "compatible",
+            "release_commit": "a" * 40,
+            "controller_commit": "c" * 40,
+            "original_report": original_report,
+        },
+    }
+    monkeypatch.setattr(
+        controller, "_require_tooling_doctor", lambda _release: copy.deepcopy(qualified)
+    )
+    return controller, plan, original, qualified
+
+
+@pytest.mark.parametrize("messages", [False, True])
+def test_tooling_recovery_restores_same_release_exact_grants_and_native_preferences(
+    tmp_path, monkeypatch, messages
+):
+    controller, plan, original, qualified = _paused_tooling_controller(
+        tmp_path, monkeypatch, messages=messages
+    )
+    immutable_plan = plan.model_dump(mode="json")
+    policy, events = asyncio.run(_audit(controller))
+    fixed = [
+        controller.config_dir / "adapters.json",
+        controller.config_dir / "member-mapping.json",
+    ]
+    if messages:
+        fixed += [
+            controller.config_dir / "cos-imsg-guard.json",
+            controller.paths.instance_dir / "openclaw/runtime/openclaw.json",
+        ]
+    original_bytes = {path: path.read_bytes() for path in fixed}
+    readiness = json.loads(
+        (controller.config_dir / "deployment-readiness.json").read_text()
+    )
+    result = controller.recover_tooling_maintenance(plan)
+    assert result["status"] == "observation_entered"
+    history_path = controller.directory / "history" / f"{plan.plan_id}.json"
+    history_bytes = history_path.read_bytes()
+    history = json.loads(history_bytes)
+    assert history["controller_commit"] == original["controller_commit"]
+    assert history["maintenance_plan_sha256"] == plan.digest()
+    assert history["tooling_recovery_admission"] == qualified
+    assert history["tooling_recovery_controller"]["original_plan"] == immutable_plan
+    assert controller.recover_tooling_maintenance(plan)["replayed"] is True
+    assert history_path.read_bytes() == history_bytes
+    restored = controller.restore_tooling_maintenance(plan)
+    assert restored["status"] == "activated" and restored["observation_active"] is False
+    assert not controller.journal_path.exists()
+    assert plan.model_dump(mode="json") == immutable_plan
+    assert history_path.read_bytes() == history_bytes
+    assert {path: path.read_bytes() for path in fixed} == original_bytes
+    receipt = json.loads(
+        (controller.config_dir / "cos-channel-operation.json").read_text()
+    )
+    assert receipt["activation"]["release_commit"] == "a" * 40
+    assert receipt["activation"]["self_reply_bindings"] == plan.self_reply_bindings
+    assert asyncio.run(_audit(controller))[0] == policy
+    after_events = asyncio.run(_audit(controller))[1]
+    assert after_events[: len(events)] == events
+    assert controller.services.effects == 0
+    after_readiness = json.loads(
+        (controller.config_dir / "deployment-readiness.json").read_text()
+    )
+    assert (
+        after_readiness["prior_provider_effect_windows"][
+            : len(readiness["prior_provider_effect_windows"])
+        ]
+        == readiness["prior_provider_effect_windows"]
+    )
+    assert (
+        after_readiness["provider_effect_window"]["started_at"]
+        == readiness["provider_effect_window"]["started_at"]
+    )
+    stops = controller.services.stops
+    with pytest.raises(CoSActivationError):
+        controller.restore_tooling_maintenance(plan)
+    assert controller.services.stops == stops
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "expired",
+        "controller",
+        "plan_hash",
+        "grant",
+        "config",
+        "window",
+        "effect",
+        "selected",
+        "doctor",
+    ],
+)
+def test_tooling_successor_rejects_drift_before_stop(tmp_path, monkeypatch, mutation):
+    controller, plan, _original, _qualified = _paused_tooling_controller(
+        tmp_path, monkeypatch
+    )
+    if mutation == "expired":
+        plan = plan.model_copy(
+            update={
+                "expires_at": (
+                    datetime.now(timezone.utc) - timedelta(seconds=1)
+                ).isoformat()
+            }
+        )
+    elif mutation in {"controller", "plan_hash"}:
+        journal = json.loads(controller.journal_path.read_text())
+        journal[
+            "controller_commit"
+            if mutation == "controller"
+            else "maintenance_plan_sha256"
+        ] = "f" * (40 if mutation == "controller" else 64)
+        _write(controller.journal_path, journal)
+    elif mutation == "grant":
+        plan = plan.model_copy(update={"self_reply_bindings": []})
+    elif mutation == "config":
+        path = controller.paths.instance_dir / "openclaw/runtime/openclaw.json"
+        value = json.loads(path.read_text())
+        value["models"]["retained"] = "unrelated"
+        _write(path, value)
+    elif mutation == "window":
+        path = controller.config_dir / "deployment-readiness.json"
+        value = json.loads(path.read_text())
+        value["provider_effect_window"]["started_at"] = datetime.now(
+            timezone.utc
+        ).isoformat()
+        _write(path, value)
+    elif mutation == "effect":
+        controller.services.effects = 1
+    elif mutation == "selected":
+        monkeypatch.setattr(
+            controller, "_observation_selection", lambda: ("f" * 40, ROOT, "c" * 40)
+        )
+    else:
+        monkeypatch.setattr(
+            controller,
+            "_require_tooling_doctor",
+            lambda _release: (_ for _ in ()).throw(
+                CoSActivationError("additional Doctor failure")
+            ),
+        )
+    stops = controller.services.stops
+    journal_bytes = controller.journal_path.read_bytes()
+    with pytest.raises(CoSActivationError):
+        controller.recover_tooling_maintenance(plan)
+    assert controller.services.stops == stops
+    assert controller.journal_path.read_bytes() == journal_bytes
+
+
+def test_tooling_admission_recovers_after_crash_with_services_stopped(
+    tmp_path, monkeypatch
+):
+    controller, plan, _original, qualified = _paused_tooling_controller(
+        tmp_path, monkeypatch
+    )
+    complete = controller._complete_enter_observation
+    monkeypatch.setattr(
+        controller,
+        "_complete_enter_observation",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(KeyboardInterrupt()),
+    )
+    with pytest.raises(KeyboardInterrupt):
+        controller.recover_tooling_maintenance(plan)
+    assert (
+        json.loads(controller.journal_path.read_text())["tooling_recovery_admission"]
+        == qualified
+    )
+    monkeypatch.setattr(controller, "_complete_enter_observation", complete)
+    diagnostics = controller.services.runtime_diagnostics
+    monkeypatch.setattr(controller.services, "runtime_diagnostics", lambda: None)
+    start = controller.services.start
+
+    def restart():
+        start()
+        monkeypatch.setattr(controller.services, "runtime_diagnostics", diagnostics)
+
+    monkeypatch.setattr(controller.services, "start", restart)
+    monkeypatch.setattr(
+        "bootstrap.doctor_tooling.retained_tooling_report",
+        lambda *_args, **_kwargs: copy.deepcopy(qualified),
+    )
+    assert controller.recover()["status"] == "observation_entered"
+    assert not controller.journal_path.exists()
+    assert controller.services.runtime_diagnostics()["observation_active"] is True
+
+
+def test_tooling_does_not_admit_stopped_unqualified_runtime(tmp_path, monkeypatch):
+    controller, plan, _original, _qualified = _paused_tooling_controller(
+        tmp_path, monkeypatch
+    )
+    monkeypatch.setattr(controller.services, "runtime_diagnostics", lambda: None)
+    stops = controller.services.stops
+    with pytest.raises(CoSActivationError, match="boundary changed"):
+        controller.recover_tooling_maintenance(plan)
+    assert controller.services.stops == stops
+
+
+def test_tooling_restore_failure_compensates_under_same_controller(
+    tmp_path, monkeypatch
+):
+    controller, plan, _original, _qualified = _paused_tooling_controller(
+        tmp_path, monkeypatch
+    )
+    controller.recover_tooling_maintenance(plan)
+    gateway_path = controller.paths.instance_dir / "openclaw/runtime/openclaw.json"
+    gateway = gateway_path.read_bytes()
+    attempts = 0
+
+    def settle(_release):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise CoSActivationError("genuine new Doctor failure")
+        return {"status": "healthy"}
+
+    monkeypatch.setattr(controller, "_settle", settle)
+    with pytest.raises(CoSActivationError, match="genuine new Doctor failure"):
+        controller.restore_tooling_maintenance(plan)
+    assert attempts == 2
+    assert gateway_path.read_bytes() == gateway
+    assert not controller.journal_path.exists()
+    assert controller.services.runtime_diagnostics()["observation_active"] is True
+    assert all(
+        row["enabled"] is False
+        for row in json.loads((controller.config_dir / "adapters.json").read_text())[
+            "adapters"
+        ]
+    )
+
+
+@pytest.mark.parametrize("operation", ["prepare", "pause"])
+def test_actual_tooling_preflight_refuses_before_any_service_stop(
+    tmp_path, monkeypatch, operation
+):
+    controller, request = _maintenance_controller(tmp_path, monkeypatch)
+    plan = _prepare_maintenance(controller, request)
+    monkeypatch.setattr(controller, "test_mode", False)
+    monkeypatch.setattr(
+        "bootstrap.cos_channel_activation.probe_release_tooling",
+        lambda *_args: (_ for _ in ()).throw(ValueError("unsupported tooling")),
+    )
+    stops = controller.services.stops
+    with pytest.raises(ValueError, match="unsupported tooling"):
+        if operation == "prepare":
+            _prepare_maintenance(controller, request)
+        else:
+            controller.pause_maintenance(plan)
+    assert controller.services.stops == stops
+    assert not controller.journal_path.exists()
+
+
+def test_interrupted_tooling_restoration_uses_original_link_and_compensation(
+    tmp_path, monkeypatch
+):
+    controller, plan, _original, _qualified = _paused_tooling_controller(
+        tmp_path, monkeypatch
+    )
+    controller.recover_tooling_maintenance(plan)
+    compensate = controller._recover_locked
+    settle = controller._settle
+    monkeypatch.setattr(
+        controller,
+        "_settle",
+        lambda _release: (_ for _ in ()).throw(CoSActivationError("new fault")),
+    )
+    monkeypatch.setattr(
+        controller,
+        "_recover_locked",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(KeyboardInterrupt()),
+    )
+    with pytest.raises(KeyboardInterrupt):
+        controller.restore_tooling_maintenance(plan)
+    journal = json.loads(controller.journal_path.read_text())
+    assert journal["tooling_restoration"]["original_plan_sha256"] == plan.digest()
+    monkeypatch.setattr(controller, "_recover_locked", compensate)
+    monkeypatch.setattr(controller, "_settle", settle)
+    # A different controller cannot claim the recorded restoration operation.
+    monkeypatch.setattr(
+        controller, "_observation_selection", lambda: ("a" * 40, ROOT, "d" * 40)
+    )
+    stops = controller.services.stops
+    with pytest.raises(CoSActivationError, match="binding changed"):
+        controller.recover()
+    assert controller.services.stops == stops
+    monkeypatch.setattr(
+        controller, "_observation_selection", lambda: ("a" * 40, ROOT, "c" * 40)
+    )
+    result = controller.recover()
+    assert result["status"] == "recovered" and result["all_polling_paused"] is True
+    assert not controller.journal_path.exists()
+    assert controller.services.runtime_diagnostics()["observation_active"] is True

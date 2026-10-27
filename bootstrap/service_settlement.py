@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import os
@@ -12,10 +13,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from bootstrap.contracts import DeploymentPaths
+from bootstrap.contracts import DeploymentPaths, load_versions
 from bootstrap.deployment_budget import deployment_clock
 from bootstrap.deployment_failure import settlement_diagnostic_evidence
 from bootstrap.doctor import Doctor
+from bootstrap.doctor_tooling import (
+    TOOLING_POLICY,
+    retained_tooling_report,
+    tooling_versions_supported,
+    verify_retained_tooling_source,
+)
 from bootstrap.services import (
     RUNTIME_DIAGNOSTICS_TIMEOUT_SECONDS,
     ServiceManager,
@@ -711,6 +718,7 @@ def run_release_doctor(
     test_mode: bool = False,
     require_runtime: bool = False,
     doctor_factory: Callable[..., Any] = Doctor,
+    controller_root: Path | None = None,
     error_type: type[RuntimeError] = RuntimeError,
     timeout_seconds: float = RELEASE_DOCTOR_TIMEOUT_SECONDS,
 ) -> dict[str, Any]:
@@ -783,4 +791,73 @@ def run_release_doctor(
         ) from exc
     if not isinstance(result, dict):
         raise error_type("candidate Doctor returned an invalid diagnostic report")
-    return result
+    return (
+        retained_tooling_report(
+            paths,
+            release,
+            controller_root,
+            result,
+            include_synthetic_proof=include_synthetic_proof,
+        )
+        if controller_root is not None
+        else result
+    )
+
+
+def probe_release_tooling(
+    paths: DeploymentPaths, release: Path, controller: Path
+) -> dict[str, Any]:
+    """Check only actual tooling before a healthy service can be paused."""
+    environment = os.environ.copy()
+    environment.pop("PYTHONPATH", None)
+    environment.pop("VIRTUAL_ENV", None)
+    environment.update(
+        {
+            "PATH": service_environment_path(paths, release),
+            "ADMINME_INSTANCE_ROOT": str(paths.root),
+            "ADMINME_INSTANCE_DIR": str(paths.instance_dir),
+            "ADMINME_REPOSITORY_ROOT": str(release),
+            "OPENCLAW_STATE_DIR": str(paths.instance_dir / "openclaw/runtime"),
+            "OPENCLAW_CONFIG_PATH": str(
+                paths.instance_dir / "openclaw/runtime/openclaw.json"
+            ),
+        }
+    )
+    program = (
+        "import json,platform; from bootstrap.doctor import _command_output; "
+        "print(json.dumps({'python':platform.python_version(),"
+        "'node':_command_output(['node','-p','process.versions.node']),"
+        "'npm':_command_output(['npm','--version']),"
+        "'homebrew':_command_output(['brew','--version']),"
+        "'openclaw':_command_output(['openclaw','--version'])}))"
+    )
+    completed = subprocess.run(
+        [str(release / ".venv/bin/python"), "-c", program],
+        cwd=release,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=90,
+    )
+    if completed.returncode:
+        raise ValueError("maintenance tooling probe failed")
+    observed = json.loads(completed.stdout)
+    if not isinstance(observed, dict) or not tooling_versions_supported(
+        observed, load_versions(release)["openclaw"]["version"]
+    ):
+        raise ValueError("maintenance tooling is incompatible before service pause")
+    # A current policy must actually be understood by this selected Doctor, or
+    # be the exact retained implementation supported by our explicit receipt.
+    source = hashlib.sha256((release / "bootstrap/doctor.py").read_bytes()).hexdigest()
+    current = hashlib.sha256(
+        (controller / "bootstrap/doctor.py").read_bytes()
+    ).hexdigest()
+    if source != current:
+        verify_retained_tooling_source(paths, release, controller)
+    return {
+        "contract": "maintenance-tooling-preflight-v1",
+        "policy": TOOLING_POLICY,
+        "versions": observed,
+        "release_commit": release.name,
+    }

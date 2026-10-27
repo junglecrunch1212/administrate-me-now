@@ -2132,6 +2132,7 @@ class BackupManager:
                 test_mode=self.test_mode,
                 require_runtime=not self.test_mode,
                 doctor_factory=Doctor,
+                controller_root=self.root,
                 error_type=BackupError,
             )
             validate_selection()
