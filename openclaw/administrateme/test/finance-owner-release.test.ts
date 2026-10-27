@@ -16,7 +16,7 @@ it("omits all five Finance tools and refuses stale calls without tainting ordina
   const sig = createHmac("sha256", process.env.ADMINME_OPENCLAW_SHARED_SECRET!).update(`portal-session|${peer}`).digest("hex").slice(0,32);
   const context = {agentId:agent, sessionKey:`agent:${agent}:administrateme-portal-${peer}-${sig}`, runId:"ordinary-run"};
   const api = fakeApi({memberAgentIds:[agent]});
-  expect(api.tools.size).toBe(40);
+  expect(api.tools.size).toBe(41);
   for (const name of FINANCE_ADVISOR_TOOL_NAMES) expect(api.tools.has(name)).toBe(false);
   for (const h of api.hooks.get("before_agent_reply")!) await h.handler({cleanedBody:"An ordinary private question"}, context);
   for (const name of FINANCE_ADVISOR_TOOL_NAMES) {
