@@ -126,7 +126,7 @@ whole remote-human-CoS ambition is complete.
 
 No destructive storage migration is introduced. Tasks projection v10 retains record kind/source metadata and adds an indexed
 metadata-only source-read receipt table, reconstructed from retained audit events.
-Additive task.created v5 and openclaw.tool_call.recorded v3 preserve older meanings. The log itself is not rewritten.
+Additive task.created v5/v6 and openclaw.tool_call.recorded v3 preserve older meanings. The log itself is not rewritten.
 Old v3/v1 delegation events remain registered and replayable. Focused hosted
 Linux/macOS checks cover principal/scope/schema contracts, process lifecycle,
 pagination, retry conflicts, member canaries, two-head working context, source
@@ -135,19 +135,23 @@ tool boundaries, topology selection and maintenance recovery. CI retains its pro
 revision check and falls back for changes outside the reviewed scope.
 
 Before new events exist, an immutable predecessor may be selected through the
-supported updater. Once v4/v5 task or v2/v3 audit history exists, keep a schema-aware runtime and
-disable the feature through the supported managed Gateway configuration:
+supported updater. After new history exists, binary rollback requires demonstrated
+compatibility with that retained history. The focused predecessor fixture opens
+the same v6 encrypted log using the exact protected e78 application, rebuilds its
+Tasks projection, checks all 26 source authorities and prior events, and proves
+revocation still denies read/reuse. This is runtime history compatibility evidence
+when passing, not a substitute for the supported updater's activation and state
+checks or permission to discard later history. Before using another predecessor,
+verify the relevant reader/schema/projection contracts still match that proof.
 
-```sh
-openclaw config set plugins.entries.administrateme.config.serviceWorkEnabled false --strict-json
-openclaw gateway restart
-```
-
-The plugin denies both the operator entry and service tools when disabled;
-normal installer reconciliation preserves this explicit setting. Verify the
-entry refuses new runs and existing runtime health remains good. Keep the
-schema-aware runtime; do not erase history or assume an older registry can read new events. A later binary
-rollback requires demonstrated compatibility with the retained history.
+If compatibility is unproved, retain the schema-aware runtime. The native
+`serviceWorkEnabled=false` flag denies both the operator entry and service tools,
+but a generic config edit plus `openclaw gateway restart` is not a complete
+recovery procedure for this managed deployment: it changes the readiness binding
+and does not target AdministrateMe's custom service owner. A closed managed
+feature-disable reconciliation is required before claiming that recovery path.
+Do not erase history, alter retained grants, or claim a healthy recovery from an
+unverified flag change.
 Workspace selection/removal retains prior immutable instruction directories
 and private data. Maintenance must match the exact planned target agent,
 workspace and tool allowlist while retaining all prior member grants.
@@ -220,7 +224,13 @@ records source authorities and a one-way digest of the authenticated native run;
 it contains no body or signed session secret. The Tasks projection indexes these
 receipts. A new note inherits every source read in its run (also sources from
 retained notes/history), so omitting IDs or changing policy between read and save
-cannot discard restrictions. A note is bounded to 20 sources; a broader run must
+cannot discard restrictions. Additive `task.created@6` raises retained provenance
+capacity to 256 sources without changing ownership, read authority, currentness
+or confidentiality checks. Records with at most 20 sources retain their existing
+v4/v5 schema; older event meanings remain unchanged. The union includes every
+explicit and consumed source, keeping the strongest read restriction. The 257th
+source refuses creation with a fixed, safe capacity diagnostic before any task
+append; no sources are silently dropped. A run exceeding that capacity must
 start a fresh narrowly scoped session before saving. Each new native run already
 has a fresh authenticated nonce. Receipt replay/restart/restore preserves the
 same floor. Narrowed policy or a revoked member grant blocks saved-note reuse;
@@ -229,10 +239,13 @@ restoring sufficient authority allows it again without rewriting history.
 Focused production-composition coverage includes own/unrouted mail, wrong owner
 and member identity, mixed privileged provenance, plaintext bounds, policy modes,
 in-run omission/downgrade and derived-note laundering, exact currentness, replay,
-restart and encrypted restore with zero provider effects. The existing focused
+restart and encrypted restore of v5/v6 history with zero provider effects. The
+actual 26-source state-read/scratchpad regression, 20/21/256/257 schema boundaries,
+revocation after restart/restore and exact provenance round trips are covered.
+The existing focused
 `cos-service-work` checks now also bind the typed audit schema; an unreviewed
-schema still falls back to broader validation. Recovery uses the feature-disable
-command above on a runtime that understands all retained event versions.
+schema still falls back to broader validation. Recovery uses the qualified predecessor through the supported updater, or a
+schema-aware managed disable once that reconciliation exists; see the limits above.
 
 This slice does not complete full-body/attachment access, explicit-demand content,
 Apple/Drive/Contacts setup or provider writes. Those remain separate usable deliverables under the full prompt.

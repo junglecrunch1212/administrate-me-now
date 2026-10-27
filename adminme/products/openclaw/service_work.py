@@ -625,7 +625,9 @@ async def create_work(
                 runtime,
                 session,
                 event_type="task.created",
-                version=5
+                version=6
+                if len(authorities) > 20
+                else 5
                 if any(
                     source.get("authority_kind") == "service_self"
                     for source in authorities

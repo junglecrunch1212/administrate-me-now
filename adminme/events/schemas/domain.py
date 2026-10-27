@@ -416,6 +416,14 @@ class TaskCreatedV5(TaskCreatedV4):
     )
 
 
+class TaskCreatedV6(TaskCreatedV5):
+    """Expand storage capacity while retaining every source authority check."""
+
+    source_authorities: list[ServiceWorkSourceAuthority] = Field(
+        default_factory=list, max_length=256
+    )
+
+
 class CoSWorkStateChangedV1(BaseModel):
     """Existing delegated work lifecycle retains its mandatory exact grant."""
 
@@ -921,6 +929,7 @@ registry.register("task.created", 2, TaskCreatedV2)
 registry.register("task.created", 3, TaskCreatedV3)
 registry.register("task.created", 4, TaskCreatedV4)
 registry.register("task.created", 5, TaskCreatedV5)
+registry.register("task.created", 6, TaskCreatedV6)
 registry.register("cos.work.state_changed", 1, CoSWorkStateChangedV1)
 registry.register("cos.work.state_changed", 2, CoSWorkStateChangedV2)
 registry.register("task.completed", 1, TaskCompletedV1)

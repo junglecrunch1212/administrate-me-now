@@ -12,7 +12,10 @@ from adminme.events.schemas.domain import (
     ServiceSourceAuthority,
     TaskCreatedV3,
     TaskCreatedV4,
+    TaskCreatedV5,
+    TaskCreatedV6,
 )
+from adminme.events.registry import registry
 from adminme.lib.principal import PrincipalIdentity, ServiceSession
 from adminme.lib.scope import allowed_read, filter_rows, privacy_filter
 from adminme.lib.session import Session
@@ -415,3 +418,91 @@ def test_source_authorities_are_bounded_and_cannot_duplicate_a_fact() -> None:
                 ],
             }
         )
+
+
+def test_task_created_v6_only_expands_the_source_authority_bound() -> None:
+    twenty = [
+        {**_source_authority(), "source_event_id": f"source-{index}"}
+        for index in range(20)
+    ]
+    v5 = TaskCreatedV5.model_validate({**_created(), "source_authorities": twenty})
+    v6 = TaskCreatedV6.model_validate({**_created(), "source_authorities": twenty})
+    assert v6.model_dump(mode="json") == v5.model_dump(mode="json")
+    with pytest.raises(ValidationError):
+        TaskCreatedV5.model_validate(
+            {
+                **_created(),
+                "source_authorities": [
+                    {**_source_authority(), "source_event_id": f"source-{index}"}
+                    for index in range(21)
+                ],
+            }
+        )
+    assert (
+        len(
+            TaskCreatedV6.model_validate(
+                {
+                    **_created(),
+                    "source_authorities": [
+                        {**_source_authority(), "source_event_id": f"source-{index}"}
+                        for index in range(256)
+                    ],
+                }
+            ).source_authorities
+        )
+        == 256
+    )
+    with pytest.raises(ValidationError):
+        TaskCreatedV6.model_validate(
+            {
+                **_created(),
+                "source_authorities": [
+                    {**_source_authority(), "source_event_id": f"source-{index}"}
+                    for index in range(257)
+                ],
+            }
+        )
+    assert registry.get("task.created", 6) is TaskCreatedV6
+
+
+@pytest.mark.parametrize("count", [20, 21, 256, 257])
+def test_v6_boundaries_preserve_legacy_source_capacity(count: int) -> None:
+    payload = {
+        **_created(),
+        "source_authorities": [
+            {**_source_authority(), "source_event_id": f"boundary-source-{index}"}
+            for index in range(count)
+        ],
+    }
+    for version in (4, 5, 6):
+        model = registry.get("task.created", version)
+        assert model is not None
+        if count > (256 if version == 6 else 20):
+            with pytest.raises(ValidationError):
+                model.model_validate(payload)
+        else:
+            actual = model.model_validate(payload).model_dump(mode="json")
+            assert actual["source_authorities"] == [
+                ServiceSourceAuthority.model_validate(source).model_dump(mode="json")
+                for source in payload["source_authorities"]
+            ]
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"owner_member_id": "not-a-service-owner"},
+        {"provider_effect_count": 1},
+        {"source_authorities": [_source_authority(), _source_authority()]},
+        {
+            "source_authorities": [
+                {**_source_authority(), "restriction": "unrestricted"}
+            ]
+        },
+    ],
+)
+def test_v6_capacity_does_not_change_authority_boundaries(
+    change: dict[str, Any],
+) -> None:
+    with pytest.raises(ValidationError):
+        TaskCreatedV6.model_validate({**_created(), **change})

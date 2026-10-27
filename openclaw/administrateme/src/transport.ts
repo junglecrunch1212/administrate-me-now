@@ -26,15 +26,23 @@ const REQUEST_FAILURES = {
   request_clarification_required: "The proposed action did not match a clear current request. Clarify only the ambiguous intent; no action was confirmed or executed.",
 } as const;
 
+const SOURCE_PROVENANCE_LIMIT_PATH = "/api/openclaw/v1/tools/service-private-work";
+const SOURCE_PROVENANCE_LIMIT_CODE = "source_provenance_limit_exceeded";
+const SOURCE_PROVENANCE_LIMIT_FAILURE = "This private record would retain more than 256 source authorities. No work was created. Start a fresh, narrowly scoped run and do not retry this request in the same accumulated session.";
+
 async function safeRequestFailure(response: Response, path: string): Promise<string | undefined> {
-  if (response.status !== 409 || !["/api/openclaw/v1/tools/confirm-apple-reminder", "/api/openclaw/v1/tools/cos-apple-reminders/confirm", "/api/openclaw/v1/tools/confirm-requested-email"].includes(path)) return undefined;
+  if (response.status !== 409) return undefined;
   try {
     const body: unknown = await response.json();
     if (!body || typeof body !== "object" || !("detail" in body)) return undefined;
     const detail = body.detail;
     if (!detail || typeof detail !== "object" || !("code" in detail)) return undefined;
     const code = detail.code;
-    if (code === "request_authorization_unavailable" || code === "request_clarification_required") {
+    if (path === SOURCE_PROVENANCE_LIMIT_PATH && code === SOURCE_PROVENANCE_LIMIT_CODE) {
+      return `${SOURCE_PROVENANCE_LIMIT_CODE}: ${SOURCE_PROVENANCE_LIMIT_FAILURE}`;
+    }
+    if (["/api/openclaw/v1/tools/confirm-apple-reminder", "/api/openclaw/v1/tools/cos-apple-reminders/confirm", "/api/openclaw/v1/tools/confirm-requested-email"].includes(path) &&
+        (code === "request_authorization_unavailable" || code === "request_clarification_required")) {
       return `${code}: ${REQUEST_FAILURES[code]}`;
     }
   } catch { /* Keep unknown or malformed failures opaque. */ }
