@@ -187,6 +187,111 @@ def _service(account: str, name: str) -> str:
     return f"com.administrateme.{account}.{name}"
 
 
+def _python_identity(executable: Path) -> dict[str, Any]:
+    """Read the actual base interpreter without loading application or user code."""
+    probe = (
+        "import hashlib,json,pathlib,sys; "
+        "p=pathlib.Path(getattr(sys,'_base_executable',sys.executable)).resolve(); "
+        "f=p.open('rb'); "
+        "print(json.dumps({'path':str(p),'sha256':hashlib.file_digest(f,'sha256').hexdigest(),"
+        "'version':list(sys.version_info[:3])})); f.close()"
+    )
+    try:
+        result = subprocess.run(
+            [str(executable), "-I", "-c", probe],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=15,
+        )
+        value = json.loads(result.stdout)
+        if (
+            result.returncode
+            or not isinstance(value, dict)
+            or set(value) != {"path", "sha256", "version"}
+            or not isinstance(value["path"], str)
+            or not Path(value["path"]).is_absolute()
+            or not isinstance(value["sha256"], str)
+            or re.fullmatch(r"[0-9a-f]{64}", value["sha256"]) is None
+            or not isinstance(value["version"], list)
+            or len(value["version"]) != 3
+            or any(type(part) is not int for part in value["version"])
+        ):
+            raise ValueError("invalid interpreter identity")
+    except (OSError, subprocess.TimeoutExpired, ValueError) as exc:
+        raise KeychainRuntimeMigrationError(
+            "cannot establish the Python runtime identity before credential migration"
+        ) from exc
+    return value
+
+
+def python_runtime_boundary(
+    *, instance_root: Path, candidate_manifest: Path, candidate_python: Path
+) -> dict[str, Any]:
+    """Classify a runtime change without reading or modifying any credentials.
+
+    Only identical declared Python coordinates and the same actual interpreter
+    establish a Node-only migration. Unknown identity never permits a skip.
+    """
+    root = instance_root.expanduser().resolve()
+    pointer = root / "app/current-release.json"
+    try:
+        if pointer.is_symlink():
+            raise ValueError("symlinked active pointer")
+        active = json.loads(pointer.read_text("utf-8"))
+        commit = active["commit"]
+        release = Path(active["path"])
+        if (
+            not isinstance(commit, str)
+            or not _COMMIT_PATTERN.fullmatch(commit)
+            or release != root / "app/releases" / commit
+            or release.is_symlink()
+        ):
+            raise ValueError("invalid active coordinate")
+        before = json.loads((release / "bootstrap/versions.json").read_text("utf-8"))[
+            "python"
+        ]
+        after = json.loads(candidate_manifest.read_text("utf-8"))["python"]
+        keys = ("formula", "preferred", "compatible")
+        for manifest in (before, after):
+            if not isinstance(manifest, dict) or any(
+                not isinstance(manifest.get(key), str) or not manifest[key]
+                for key in keys
+            ):
+                raise ValueError("missing Python coordinates")
+            if (
+                not _PYTHON_FORMULA_PATTERN.fullmatch(manifest["formula"])
+                or re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", manifest["preferred"])
+                is None
+            ):
+                raise ValueError("invalid Python coordinates")
+    except (OSError, KeyError, TypeError, ValueError) as exc:
+        raise KeychainRuntimeMigrationError(
+            "cannot establish the declared Python migration boundary"
+        ) from exc
+    required = any(before[key] != after[key] for key in keys)
+    if not required:
+        active_identity = _python_identity(release / ".venv/bin/python")
+        candidate_identity = _python_identity(candidate_python)
+        expected_version = [int(part) for part in after["preferred"].split(".")]
+        if any(
+            identity["version"] != expected_version
+            for identity in (active_identity, candidate_identity)
+        ):
+            raise KeychainRuntimeMigrationError(
+                "actual Python does not match the unchanged declared runtime"
+            )
+        if active_identity != candidate_identity:
+            raise KeychainRuntimeMigrationError(
+                "unchanged Python manifest resolves to a different interpreter"
+            )
+    return {
+        "status": "python-runtime-boundary-verified",
+        "credential_migration_required": required,
+        "credentials_accessed": False,
+    }
+
+
 def _atomic_write(path: Path, document: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     if path.is_symlink():
@@ -389,10 +494,31 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--candidate-python", type=Path)
     parser.add_argument("--candidate-commit")
     parser.add_argument("--runtime-tag")
+    parser.add_argument("--candidate-manifest", type=Path)
+    parser.add_argument("--preserve-unchanged-python", action="store_true")
+    parser.add_argument("--check-runtime-boundary", action="store_true")
     args = parser.parse_args(argv)
     try:
         if args.child:
             return _child()
+        if args.preserve_unchanged_python or args.check_runtime_boundary:
+            if not all(
+                (args.instance_root, args.candidate_python, args.candidate_manifest)
+            ):
+                parser.error(
+                    "runtime boundary requires instance, candidate Python and manifest"
+                )
+            boundary = python_runtime_boundary(
+                instance_root=args.instance_root,
+                candidate_manifest=args.candidate_manifest,
+                candidate_python=args.candidate_python,
+            )
+            if (
+                args.check_runtime_boundary
+                or not boundary["credential_migration_required"]
+            ):
+                print(json.dumps(boundary, sort_keys=True))
+                return 0
         if not all(
             (
                 args.instance_root,

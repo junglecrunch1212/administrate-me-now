@@ -3008,3 +3008,176 @@ def test_legacy_rollback_requires_quiescence_and_current_capacity_before_selecti
         assert json.loads(pointer.read_text("utf-8")) == current
         assert pins == plugins == agents == [current_release]
         assert starts == 1
+
+
+def _python_boundary_fixture(tmp_path):
+    root = tmp_path / "deployment"
+    release = root / "app/releases" / ("a" * 40)
+    (release / "bootstrap").mkdir(parents=True)
+    (release / ".venv/bin").mkdir(parents=True)
+    (release / ".venv/bin/python").symlink_to(sys.executable)
+    (root / "app/current-release.json").write_text(
+        json.dumps({"commit": "a" * 40, "path": str(release)})
+    )
+    python = {
+        "formula": f"python@{sys.version_info.major}.{sys.version_info.minor}",
+        "preferred": ".".join(map(str, sys.version_info[:3])),
+        "compatible": ">=3.11,<4",
+    }
+    (release / "bootstrap/versions.json").write_text(
+        json.dumps({"python": python, "node": {"preferred": "24.19.0"}})
+    )
+    candidate = tmp_path / "versions.json"
+    candidate.write_text(
+        json.dumps({"python": python, "node": {"preferred": "24.22.1"}})
+    )
+    config = root / "state/config"
+    config.mkdir(parents=True)
+    (config / ALIAS_FILENAME).write_text('{"retained":"alias fixture"}\n')
+    return root, release, candidate
+
+
+def test_node_only_updater_branch_never_reads_or_writes_credentials(tmp_path):
+    root, _release, candidate = _python_boundary_fixture(tmp_path)
+    alias = root / "state/config" / ALIAS_FILENAME
+    before = alias.read_bytes()
+    controller = tmp_path / "controller"
+    (controller / "bin").mkdir(parents=True)
+    (controller / "bin/python").symlink_to(sys.executable)
+    source = (REPO_ROOT / "bootstrap/update.sh").read_text()
+    start = source.index('if [[ -n "$approve_flag" ]]; then\n  runtime_tag=')
+    block = source[start : source.index("\nfi", start) + len("\nfi")]
+    # Execute the actual public updater credential branch. A mistaken migration
+    # fails on the invalid alias map, including in the isolated macOS run.
+    script = (
+        """set -euo pipefail
+approve_flag=--approve-runtime-migration
+active_python="$1"
+fixed_controller_root="$2"
+ADMINME_INSTANCE_ROOT="$3"
+controller="$4"
+manifest="$5"
+python_minor="$6"
+candidate_commit=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+"""
+        + block
+    )
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            script,
+            "updater-credential-boundary",
+            sys.executable,
+            str(REPO_ROOT),
+            str(root),
+            str(controller),
+            str(candidate),
+            f"{sys.version_info.major}.{sys.version_info.minor}",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=45,
+    )
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == {
+        "status": "python-runtime-boundary-verified",
+        "credential_migration_required": False,
+        "credentials_accessed": False,
+    }
+    assert alias.read_bytes() == before
+
+
+@pytest.mark.parametrize("change", ["none", "manifest", "binary", "unknown", "version"])
+def test_runtime_boundary_routes_only_proven_python_changes_to_migration(
+    tmp_path, monkeypatch, capsys, change
+):
+    import bootstrap.keychain_runtime_migration as migration
+
+    root, release, candidate = _python_boundary_fixture(tmp_path)
+    version = list(sys.version_info[:3])
+    identity = {"path": "/fixture/python", "sha256": "d" * 64, "version": version}
+    calls = []
+
+    def probe(executable):
+        if change == "unknown":
+            raise KeychainRuntimeMigrationError("cannot establish identity")
+        value = copy.deepcopy(identity)
+        if executable != release / ".venv/bin/python":
+            if change == "binary":
+                value["sha256"] = "e" * 64
+            if change == "version":
+                value["version"][2] += 1
+        return value
+
+    if change == "manifest":
+        document = json.loads(candidate.read_text())
+        document["python"]["preferred"] = "3.15.0"
+        candidate.write_text(json.dumps(document))
+
+    def migrate(**kwargs):
+        calls.append(kwargs)
+        return {"status": "fixture-migration-complete"}
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("preflight accessed credentials")
+
+    monkeypatch.setattr(migration, "_python_identity", probe)
+    monkeypatch.setattr(migration, "migrate", migrate)
+    monkeypatch.setattr(migration.keyring, "get_password", forbidden)
+    monkeypatch.setattr(migration, "_atomic_write", forbidden)
+    args = [
+        "--instance-root",
+        str(root),
+        "--candidate-python",
+        sys.executable,
+        "--candidate-commit",
+        "b" * 40,
+        "--runtime-tag",
+        "py315",
+        "--candidate-manifest",
+        str(candidate),
+        "--preserve-unchanged-python",
+    ]
+    result = migration.main(args)
+    output = capsys.readouterr()
+    if change in {"unknown", "version", "binary"}:
+        assert result == 1 and not calls
+    elif change == "none":
+        assert result == 0 and not calls
+        assert json.loads(output.out)["credentials_accessed"] is False
+    else:
+        assert result == 0 and len(calls) == 1
+        assert calls[0]["candidate_commit"] == "b" * 40
+        assert json.loads(output.out)["status"] == "fixture-migration-complete"
+    calls.clear()
+    if change not in {"unknown", "version", "binary"}:
+        assert migration.main(args + ["--check-runtime-boundary"]) == 0
+        assert not calls
+        assert json.loads(capsys.readouterr().out)["credential_migration_required"] == (
+            change != "none"
+        )
+
+
+@pytest.mark.parametrize("mutation", ["pointer", "manifest", "coordinates"])
+def test_runtime_boundary_refuses_unknown_selection_before_credentials(
+    tmp_path, mutation
+):
+    from bootstrap.keychain_runtime_migration import python_runtime_boundary
+
+    root, _release, candidate = _python_boundary_fixture(tmp_path)
+    if mutation == "pointer":
+        (root / "app/current-release.json").write_text(
+            json.dumps({"commit": "a" * 40, "path": str(tmp_path / "outside")})
+        )
+    elif mutation == "manifest":
+        candidate.write_text("invalid json")
+    else:
+        candidate.write_text(json.dumps({"python": {"preferred": "3.14.7"}}))
+    with pytest.raises(KeychainRuntimeMigrationError, match="declared Python"):
+        python_runtime_boundary(
+            instance_root=root,
+            candidate_manifest=candidate,
+            candidate_python=Path(sys.executable),
+        )
