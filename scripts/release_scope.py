@@ -779,6 +779,8 @@ COS_SERVICE_WORK_TEST_PATHS = frozenset(
         "tests/unit/test_service_work_principal.py",
         "tests/unit/bootstrap/test_native_account_policy.py",
         "openclaw/administrateme/scripts/check-cos-native-account-policy.mjs",
+        "openclaw/administrateme/test/cos-permission-preflight.test.ts",
+        "openclaw/administrateme/test/cos-permission-database.test.ts",
         "tests/acceptance/test_cos_owned_apple_reminder.py",
         "tests/unit/adapters/reminders/test_cos_reminders_write.py",
         "tests/unit/adapters/reminders/test_cos_reminders_write_policy.py",
@@ -874,6 +876,8 @@ COMPUTER_USE_NATIVE_PATHS = frozenset(
     {
         COMPUTER_USE_CONTROLLER,
         "openclaw/administrateme/scripts/check-cos-native-account-policy.mjs",
+        "openclaw/administrateme/test/cos-permission-preflight.test.ts",
+        "openclaw/administrateme/test/cos-permission-database.test.ts",
         "tests/unit/bootstrap/test_workstation_browser.py",
         COS_SERVICE_WORK_NATIVE_INSTALL,
         COS_SERVICE_WORK_CHECK_SCRIPT,
