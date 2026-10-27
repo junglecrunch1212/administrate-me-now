@@ -1,0 +1,578 @@
+name: Finance development
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - 'adminme/finance/**'
+      - 'adminme/events/schemas/finance*'
+      - 'adminme/projections/money/**'
+      - 'tests/**/test_finance*'
+      - 'tests/fixtures/finance*'
+      - 'scripts/finance_resource_acceptance.py'
+      - 'scripts/finance_performance_policy.py'
+      - '.github/workflows/finance-development.yml'
+  # Manual dispatch becomes available once this workflow is on the default branch.
+  workflow_dispatch:
+    inputs:
+      owner_production:
+        description: 'One separately admitted owner-only import/replay driver; excludes all other jobs'
+        type: boolean
+        default: false
+      owner_candidate_sha:
+        description: 'Exact reviewed 40-character commit required for owner_production'
+        type: string
+        default: ''
+      import_allocations:
+        description: 'Separate bounded allocation diagnostic; excludes normal resource/latency qualification'
+        type: boolean
+        default: false
+      legacy_relative_gates:
+        description: 'Explicitly reproduce the superseded v1 10-percent gate (historical only)'
+        type: boolean
+        default: false
+      sustained_resources:
+        description: 'Explicitly repeat the completed fixed Linux resource pair (not acceptance)'
+        type: boolean
+        default: false
+      exploratory_profiles:
+        description: 'Explicitly repeat the preserved exploratory profiles (not acceptance)'
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: ${{ inputs.owner_production && 'finance-owner-production' || format('finance-development-{0}', github.event.pull_request.number) }}
+  cancel-in-progress: ${{ !inputs.owner_production }}
+jobs:
+  synthetic-finance:
+    if: ${{ !inputs.import_allocations && !inputs.owner_production }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      ADMINME_TEST_MODE: '1'
+      PYTHONPATH: bridge
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.14.7'
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24.22.1'
+      - run: pipx install poetry==2.4.1
+      - run: poetry sync --with dev
+      - name: Generate synthetic lifecycle contract in hosted environment
+        run: poetry run python scripts/generate_event_lifecycle_catalog.py --output "${{ runner.temp }}/finance-event-lifecycle-catalog.json"
+      - name: Retain lifecycle contract for reviewed source update
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: finance-event-lifecycle-catalog
+          path: ${{ runner.temp }}/finance-event-lifecycle-catalog.json
+          if-no-files-found: error
+          retention-days: 7
+      - name: Diagnose synthetic idle connection handoff without retries
+        timeout-minutes: 2
+        env:
+          ADMINME_FINANCE_IDLE_DIAGNOSTIC: '1'
+          FINANCE_IDLE_ARTIFACT_DIR: ${{ runner.temp }}/finance-idle
+        run: poetry run pytest -q -s tests/acceptance/test_finance_idle_connection.py
+      - name: Retain idle connection diagnostic
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: finance-idle-linux
+          path: ${{ runner.temp }}/finance-idle
+          if-no-files-found: error
+          retention-days: 7
+      - name: Verify exact historical interrupted recovery regression
+        run: >-
+          poetry run pytest -q
+          'tests/acceptance/test_source_currentness_revision.py::test_currentness_interrupted_publication_retains_authority_and_attempts[unchanged-revision]'
+      - name: Source classifier and candidate continuity after shared scheduling changes
+        run: >-
+          poetry run pytest -q
+          tests/acceptance/test_disposable_test_acquisition.py::test_empty_selection_can_admit_new_ids_without_reimporting_old_sources
+          tests/acceptance/test_disposable_test_acquisition.py::test_legacy_source_aliases_preserve_classifier_and_candidate_continuity
+      - name: Bounded Finance worker and owner import smoke
+        if: '!cancelled()'
+        timeout-minutes: 3
+        run: >-
+          poetry run pytest -q
+          --junitxml="${{ runner.temp }}/finance-worker-results.xml"
+          tests/unit/test_finance_worker.py
+          tests/unit/test_finance_native_resources.py
+          tests/acceptance/test_finance_money_worker.py
+          tests/acceptance/test_finance_activation.py::test_persisted_activation_import_disclosure_restart_and_disable
+          tests/acceptance/test_finance_activation.py::test_partial_dated_import_and_conflicting_accounting_preserve_last_good_head
+          tests/integration/test_runtime_application.py::test_source_assurance_refresh_never_blocks_readiness
+      - name: Retain worker and boundary smoke results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: finance-worker-results
+          path: ${{ runner.temp }}/finance-worker-results.xml
+          if-no-files-found: error
+          retention-days: 7
+      - name: Finance synthetic process and numerical checks
+        if: '!cancelled()'
+        run: >-
+          poetry run pytest -q --runxfail
+          --junitxml="${{ runner.temp }}/finance-functional-results.xml"
+          tests/unit/test_event_log.py
+          tests/unit/test_event_bus.py
+          tests/unit/test_pipeline_runner.py
+          tests/unit/events/test_event_writer.py
+          tests/unit/test_governance.py
+          tests/unit/test_observation.py
+          tests/unit/test_skill_wrapper.py
+          tests/unit/test_historical_attribution.py
+          tests/unit/test_finance_worker.py
+          tests/acceptance/test_finance_money_worker.py
+          tests/unit/test_finance_capabilities.py
+          tests/unit/test_finance_resources.py
+          tests/unit/test_finance_resource_diagnostic.py
+          tests/unit/test_finance_native_resources.py
+          tests/unit/test_finance_resource_acceptance.py
+          tests/unit/test_finance_performance_policy.py
+          tests/unit/test_finance_readiness.py
+          tests/unit/test_finance_delegation_snapshot.py
+          tests/unit/test_finance_admission.py
+          tests/unit/test_what_now_gate6.py
+          tests/unit/test_finance_workflows.py
+          tests/unit/test_finance_provenance.py
+          tests/unit/test_finance_calculators.py
+          tests/unit/test_finance_answers.py
+          tests/unit/test_finance_book_scope.py
+          tests/unit/test_finance_binding_history.py
+          tests/unit/test_finance_owner_phase_clock.py
+          tests/unit/bootstrap/test_member_bridge_component.py
+          tests/unit/daemons/test_adapter_supervisor.py
+          tests/unit/test_projection_money.py
+          tests/unit/test_projection_parties.py
+          tests/unit/test_operating_agreements.py
+          tests/acceptance/test_cos_work_coordination_operating_agreements.py::test_startup_retains_newer_constitution_without_appending_an_older_floor
+          tests/acceptance/test_cos_work_coordination_operating_agreements.py::test_parties_version_replays_late_old_constitution_without_rewriting_history
+          tests/integration/test_projection_rebuild.py
+          tests/unit/test_xlsx_finance_workbook.py
+          tests/unit/test_xlsx_reverse_finance.py
+          tests/acceptance/test_finance_activation.py
+          tests/acceptance/test_finance_shared_advisor.py
+          tests/acceptance/test_finance_owner_release.py
+          tests/acceptance/test_bounded_member_readiness.py
+          tests/acceptance/test_finance_publications.py
+          tests/acceptance/test_finance_metadata.py
+          tests/acceptance/test_finance_metadata_owner.py
+          tests/acceptance/test_finance_metadata_history.py
+          tests/acceptance/test_finance_metadata_capability.py
+          tests/acceptance/test_finance_provenance.py
+          tests/acceptance/test_finance_planning.py
+          tests/acceptance/test_finance_planning_windows.py
+          tests/acceptance/test_finance_native_facade.py
+          tests/acceptance/test_finance_disclosure.py
+          tests/acceptance/test_finance_foreground_reads.py
+          tests/acceptance/test_finance_authority_reader.py
+          tests/acceptance/test_finance_choices.py
+          tests/acceptance/test_member_chat_subscription.py
+          tests/acceptance/test_cos_self_replies.py
+          tests/acceptance/test_cos_identity_delegation_kernel.py
+          tests/acceptance/test_gate7_household_experience.py
+      - name: Retain functional results before resource diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: finance-functional-results
+          path: ${{ runner.temp }}/finance-functional-results.xml
+          if-no-files-found: error
+          retention-days: 7
+      - name: Measure dedicated authority reader memory and shutdown
+        if: '!cancelled()'
+        env:
+          ADMINME_FINANCE_READER_MEMORY: '1'
+        run: poetry run pytest -q -s tests/acceptance/test_finance_authority_memory.py
+      - name: Diagnose shared planning query plans and deep-page work
+        if: '!cancelled()'
+        env:
+          ADMINME_FINANCE_QUERY_COST: '1'
+        run: poetry run pytest -q -s tests/acceptance/test_finance_planning_query_cost.py
+      - name: Static checks
+        if: '!cancelled()'
+        run: |
+          poetry run ruff check adminme bridge/adminme_bridge
+          poetry run mypy adminme bridge/adminme_bridge
+          bash scripts/verify_invariants.sh
+      - name: Native plugin
+        if: '!cancelled()'
+        run: |
+          npm --prefix openclaw/administrateme ci
+          npm --prefix openclaw/administrateme run check
+          npm --prefix openclaw/administrateme test
+      - name: Synthetic owner choice browser smoke
+        if: '!cancelled()'
+        env:
+          ADMINME_FINANCE_BROWSER: '1'
+          FINANCE_BROWSER_ARTIFACT_DIR: ${{ runner.temp }}/finance-browser
+        run: poetry run pytest -q -s tests/acceptance/test_finance_browser.py
+      - name: Retain synthetic browser proof
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: finance-browser-synthetic
+          path: ${{ runner.temp }}/finance-browser
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Measure actual-size approved closed import in isolated Linux runtime
+        if: '!cancelled()'
+        timeout-minutes: 5
+        env:
+          ADMINME_FINANCE_IMPORT_RESOURCES: '1'
+          FINANCE_IMPORT_ARTIFACT_DIR: ${{ runner.temp }}/finance-import-resources
+          FINANCE_CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: poetry run pytest -q -s tests/acceptance/test_finance_import_resources.py
+      - name: Retain synthetic import resource and terminal evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: finance-import-resources-synthetic
+          path: ${{ runner.temp }}/finance-import-resources
+          if-no-files-found: error
+          retention-days: 7
+      - name: Synthetic light mixed-load measurement
+        if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && inputs.legacy_relative_gates }}
+        env:
+          ADMINME_FINANCE_BENCHMARK: '1'
+        run: poetry run pytest -q -s tests/acceptance/test_finance_mixed_load.py
+      - name: Synthetic accepted-planning mixed-load measurement
+        if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && inputs.legacy_relative_gates }}
+        env:
+          ADMINME_FINANCE_PLANNING_BENCHMARK: '1'
+        run: poetry run pytest -q -s tests/acceptance/test_finance_mixed_load.py::test_accepted_planning_mixed_load_p95_gate
+      - name: Profile shared request cost in a separate synthetic server
+        if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && inputs.exploratory_profiles }}
+        env:
+          ADMINME_FINANCE_PROFILE: '1'
+          FINANCE_PROFILE_ARTIFACT_DIR: ${{ runner.temp }}/finance-profiles
+        run: poetry run pytest -q -s tests/acceptance/test_finance_mixed_load.py::test_profile_light_finance_request_cost
+      - name: Profile accepted-planning queries in a separate synthetic server
+        if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && inputs.exploratory_profiles }}
+        env:
+          ADMINME_FINANCE_PLANNING_PROFILE: '1'
+          FINANCE_PROFILE_ARTIFACT_DIR: ${{ runner.temp }}/finance-profiles
+        run: poetry run pytest -q -s tests/acceptance/test_finance_mixed_load.py::test_profile_accepted_planning_request_cost
+      - name: Isolate final authority SQL cost with an unqualified synthetic control
+        if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && inputs.exploratory_profiles }}
+        env:
+          ADMINME_FINANCE_AUTHORITY_CONTROL: '1'
+          FINANCE_PROFILE_ARTIFACT_DIR: ${{ runner.temp }}/finance-profiles
+        run: poetry run pytest -q -s tests/acceptance/test_finance_mixed_load.py::test_profile_final_authority_sql_control
+      - name: Check the diagnostic Tasks control against fixed durable history
+        if: '!cancelled()'
+        env:
+          ADMINME_FINANCE_TASKS_NOOP_DIAGNOSTIC: '1'
+        run: poetry run pytest -q -s tests/acceptance/test_finance_tasks_noop.py::test_fixed_corpus_order_projection_checkpoint_replay_restart_and_cancellation
+      - name: Single matched Tasks no-op diagnostic across both workloads
+        if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && inputs.exploratory_profiles }}
+        env:
+          ADMINME_FINANCE_TASKS_NOOP_DIAGNOSTIC: '1'
+          FINANCE_PROFILE_ARTIFACT_DIR: ${{ runner.temp }}/finance-profiles
+        run: poetry run pytest -q -s tests/acceptance/test_finance_tasks_noop.py::test_paired_tasks_noop_diagnostic
+      - name: Retain synthetic operation queue and execution spans
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: finance-profiles-synthetic
+          path: ${{ runner.temp }}/finance-profiles
+          if-no-files-found: warn
+          retention-days: 7
+
+  resource-diagnostic:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.sustained_resources && !inputs.owner_production }}
+    name: Diagnostic resource envelope (${{ matrix.workload }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        workload: [light, planning]
+    env:
+      ADMINME_TEST_MODE: '1'
+      PYTHONPATH: bridge
+      PYTHONDONTWRITEBYTECODE: '1'
+      FINANCE_CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.14.7'
+      - run: pipx install poetry==2.4.1
+      - run: poetry sync --with dev
+      - name: Validate diagnostic evidence and owned runtime cleanup
+        env:
+          ADMINME_FINANCE_RESOURCE_SMOKE: '1'
+          FINANCE_RESOURCE_ARTIFACT_DIR: ${{ runner.temp }}/finance-resources
+        run: >-
+          poetry run pytest -q
+          tests/unit/test_finance_resource_diagnostic.py
+          tests/acceptance/test_finance_sustained_resources.py::test_resource_diagnostic_smoke
+      - name: One fixed sustained and burst diagnostic (not acceptance)
+        env:
+          ADMINME_FINANCE_RESOURCE_DIAGNOSTIC: '1'
+          FINANCE_RESOURCE_ARTIFACT_DIR: ${{ runner.temp }}/finance-resources
+        run: >-
+          poetry run pytest -q -s
+          'tests/acceptance/test_finance_sustained_resources.py::test_sustained_resource_diagnostic[${{ matrix.workload }}]'
+      - name: Retain all diagnostic samples, failures and cleanup evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: finance-resource-diagnostic-${{ matrix.workload }}
+          path: ${{ runner.temp }}/finance-resources
+          if-no-files-found: error
+          retention-days: 7
+
+  native-resource-smoke:
+    if: ${{ !inputs.import_allocations && !inputs.owner_production }}
+    name: Native macOS self-report correctness
+    runs-on: macos-15
+    timeout-minutes: 20
+    env:
+      ADMINME_TEST_MODE: '1'
+      PYTHONPATH: bridge
+      PYTHONDONTWRITEBYTECODE: '1'
+      FINANCE_CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.14.7'
+      - run: pipx install poetry==2.4.1
+      - run: poetry sync --with dev
+      - name: Diagnose synthetic idle connection handoff without retries
+        timeout-minutes: 2
+        env:
+          ADMINME_FINANCE_IDLE_DIAGNOSTIC: '1'
+          FINANCE_IDLE_ARTIFACT_DIR: ${{ runner.temp }}/finance-idle
+        run: poetry run pytest -q -s tests/acceptance/test_finance_idle_connection.py
+      - name: Retain idle connection diagnostic
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: finance-idle-macos
+          path: ${{ runner.temp }}/finance-idle
+          if-no-files-found: error
+          retention-days: 7
+      - name: Reproduce committed history loss on unchanged old application source
+        timeout-minutes: 3
+        run: |
+          poetry run python - <<'PY_REPRO'
+          import ast
+          import io
+          import os
+          from pathlib import Path
+          import shutil
+          import subprocess
+          import sys
+          import tarfile
+          import tempfile
+          import xml.etree.ElementTree as ET
+
+          baseline = "75b79007f6eff6abf007d27f8b060fcce535ab4e"
+          test_file = "tests/unit/test_event_log.py"
+          test_name = "test_close_preserves_committed_tail_in_encrypted_database_copy"
+          output = Path(os.environ["RUNNER_TEMP"]) / "native-finance"
+          output.mkdir(parents=True, exist_ok=True)
+          archive = subprocess.run(
+              ["git", "archive", baseline], check=True, capture_output=True, timeout=60
+          ).stdout
+          with tempfile.TemporaryDirectory(prefix="finance-shutdown-before-") as directory:
+              before = Path(directory)
+              with tarfile.open(fileobj=io.BytesIO(archive), mode="r:") as source:
+                  source.extractall(before, filter="data")
+              # Only the new regression fixture is overlaid; old application,
+              # migrations, dependencies and configuration remain unchanged.
+              shutil.copyfile(test_file, before / test_file)
+              environment = dict(os.environ, PYTHONPATH=os.pathsep.join((str(before), str(before / "bridge"))))
+              command = (
+                  "from pathlib import Path; import adminme.events.log as event_log; "
+                  "assert Path(event_log.__file__).resolve() == Path('adminme/events/log.py').resolve(); "
+                  "import pytest; raise SystemExit(pytest.main("
+                  + repr(["-q", "--junitxml=" + str(output / "shutdown-before.xml"), test_file + "::" + test_name])
+                  + "))"
+              )
+              result = subprocess.run(
+                  [sys.executable, "-c", command], cwd=before, env=environment,
+                  text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=90,
+              )
+              (output / "shutdown-before.log").write_text(result.stdout)
+              print(result.stdout)
+              assert result.returncode == 1, "old application did not reproduce the semantic failure"
+              cases = list(ET.parse(output / "shutdown-before.xml").iter("testcase"))
+              assert len(cases) == 2
+              for case in cases:
+                  failure = case.find("failure")
+                  assert case.get("name", "").startswith(test_name + "[")
+                  assert failure is not None and case.find("error") is None
+                  assert "committed tail was stranded outside events.db" in failure.get("message", "")
+                  detail = failure.get("message", "").split("observed=", 1)[1]
+                  observed_text, expected_text = detail.split("; expected=", 1)
+                  observed = ast.literal_eval(observed_text)
+                  expected = ast.literal_eval(expected_text.splitlines()[0])
+                  assert observed["tail_payload"] is None and observed["count"] == 1
+                  assert expected["tail_payload"] == {"i": 2} and expected["count"] == 2
+                  assert observed["watermark"] != expected["watermark"]
+          PY_REPRO
+      - name: Verify committed metadata reads and native connection cleanup
+        timeout-minutes: 2
+        run: >-
+          poetry run pytest -q
+          --junitxml="${{ runner.temp }}/native-finance/metadata-results.xml"
+          tests/unit/test_finance_binding_history.py
+          tests/unit/test_event_log.py
+          tests/unit/test_event_bus.py::test_subscriber_status_pairs_one_count_with_its_captured_checkpoint
+          tests/unit/test_event_bus.py::test_subscriber_status_batch_preserves_filters_and_missing_contract
+          tests/unit/test_event_bus.py::test_projection_status_preserves_fields_with_one_metadata_dispatch
+          tests/unit/test_finance_worker.py::test_chunked_text_frame_and_hash_preserve_every_utf8_byte
+          tests/unit/test_finance_worker.py::test_text_frame_rejects_invalid_or_oversize_before_writing_header
+          tests/unit/test_finance_worker.py::test_receipt_hash_checks_changes_after_multiple_utf8_chunks
+          tests/integration/test_runtime_application.py::test_source_assurance_refresh_never_blocks_readiness
+      - name: Verify original retired-history export and encrypted recovery
+        timeout-minutes: 5
+        run: >-
+          poetry run pytest -q
+          --junitxml="${{ runner.temp }}/native-finance/shutdown-recovery.xml"
+          tests/acceptance/test_retired_provider_history.py
+          tests/acceptance/test_event_log_metadata_migration.py
+          tests/acceptance/test_disposable_dataset_continuity.py::test_accepted_bounded_dataset_survives_upgrade_rollback_and_forward_reactivation
+          tests/unit/bootstrap/test_submission_repair_readiness.py::test_encrypted_failed_forward_exports_exact_degraded_repair_review
+      - name: Verify self counters, registered lifecycle and short production composition
+        timeout-minutes: 5
+        env:
+          ADMINME_FINANCE_NATIVE_SMOKE: '1'
+          FINANCE_PERFORMANCE_POLICY: finance-resource-v3.2026-10-26
+          FINANCE_NATIVE_ARTIFACT_DIR: ${{ runner.temp }}/native-finance
+        run: >-
+          poetry run pytest -q -s
+          -o faulthandler_timeout=60 --durations=10
+          --junitxml="${{ runner.temp }}/native-finance/results.xml"
+          tests/unit/test_finance_native_resources.py
+          tests/unit/test_finance_resource_acceptance.py
+          tests/unit/test_finance_performance_policy.py
+          tests/acceptance/test_finance_native_resources.py
+      - name: Retain raw synthetic evidence including failure and cleanup
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: finance-native-self-report
+          path: |
+            ${{ runner.temp }}/native-finance/**/*.json
+            ${{ runner.temp }}/native-finance/**/*.jsonl
+            ${{ runner.temp }}/native-finance/results.xml
+            ${{ runner.temp }}/native-finance/metadata-results.xml
+            ${{ runner.temp }}/native-finance/shutdown-before.xml
+            ${{ runner.temp }}/native-finance/shutdown-before.log
+            ${{ runner.temp }}/native-finance/shutdown-recovery.xml
+          if-no-files-found: error
+          retention-days: 7
+
+  import-allocation-diagnostic:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.import_allocations && !inputs.owner_production }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      ADMINME_TEST_MODE: '1'
+      PYTHONPATH: bridge
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.14.7'
+      - name: Install locked diagnostic environment
+        run: |
+          python -m pip install poetry==2.4.1
+          poetry sync --with dev --no-interaction
+      - name: Attribute live Python allocations after import and subscriber drain
+        timeout-minutes: 5
+        env:
+          ADMINME_FINANCE_IMPORT_ALLOCATIONS: '1'
+          FINANCE_IMPORT_ARTIFACT_DIR: ${{ runner.temp }}/finance-import-allocations
+          FINANCE_CANDIDATE_SHA: ${{ github.sha }}
+        run: poetry run pytest -q -s tests/acceptance/test_finance_import_resources.py::test_closed_import_allocation_diagnostic
+      - name: Retain bounded allocation evidence including failures
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: finance-import-allocations-synthetic
+          path: ${{ runner.temp }}/finance-import-allocations
+          if-no-files-found: error
+          retention-days: 7
+
+
+  owner-production:
+    if: ${{ (github.event_name == 'pull_request' && !github.event.pull_request.draft) || (github.event_name == 'workflow_dispatch' && inputs.owner_production) }}
+    name: Admitted owner import and Money replay
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      ADMINME_TEST_MODE: '1'
+      PYTHONPATH: bridge
+      PYTHONDONTWRITEBYTECODE: '1'
+      FINANCE_OWNER_CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || inputs.owner_candidate_sha }}
+      FINANCE_OWNER_EVENT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      FINANCE_OWNER_OTHER_MODES: ${{ inputs.import_allocations || inputs.legacy_relative_gates || inputs.sustained_resources || inputs.exploratory_profiles }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.14.7'
+      - name: Verify exact event head and clean checkout; require exclusive manual mode
+        run: |
+          python - <<'PY_CHECK'
+          import json, os, re, subprocess
+          expected = os.environ["FINANCE_OWNER_CANDIDATE_SHA"]
+          event_head = os.environ["FINANCE_OWNER_EVENT_SHA"]
+          assert re.fullmatch(r"[0-9a-f]{40}", expected), "exact reviewed commit required"
+          assert re.fullmatch(r"[0-9a-f]{40}", event_head), "exact event head required"
+          if os.environ["GITHUB_EVENT_NAME"] == "workflow_dispatch":
+              assert os.environ["FINANCE_OWNER_OTHER_MODES"] == "false", "owner mode must be exclusive"
+          head = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+          assert head == expected == event_head, "candidate/event head mismatch"
+          assert not subprocess.check_output(["git", "status", "--porcelain"], text=True).strip(), "dirty checkout"
+          print(json.dumps({"verified_candidate_head": head, "event_head": event_head, "actions_sha": os.environ["GITHUB_SHA"], "event": os.environ["GITHUB_EVENT_NAME"], "clean": True}))
+          PY_CHECK
+      - name: Install locked synthetic environment
+        run: |
+          python -m pip install poetry==2.4.1
+          poetry sync --with dev --no-interaction
+      - name: Verify fixed phase deadlines with delayed supervisor receipt
+        run: poetry run pytest -q tests/unit/test_finance_owner_phase_clock.py
+      - name: Run owner-production once under recorded v3 budgets; retain v2 verdict
+        timeout-minutes: 7
+        env:
+          FINANCE_OWNER_ARTIFACT_DIR: ${{ runner.temp }}/finance-owner-production
+        run: |
+          mkdir -m 700 "$FINANCE_OWNER_ARTIFACT_DIR"
+          # The driver records the verified checkout head, not the PR merge ref.
+          GITHUB_SHA="$FINANCE_OWNER_CANDIDATE_SHA" poetry run python -m tests.fixtures.finance_watchdog owner-production "$FINANCE_OWNER_ARTIFACT_DIR"
+      - name: Retain all raw evidence including failure and cleanup
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: finance-owner-production-${{ env.FINANCE_OWNER_CANDIDATE_SHA }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/finance-owner-production
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7

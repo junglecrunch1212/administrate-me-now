@@ -1,3 +1,4 @@
+import { FINANCE_ADVISOR_AVAILABLE } from "./finance-release.js";
 import { prepareRequestedApproval } from "./request-policy.js";
 import type {
   OpenClawPluginApi,
@@ -14,6 +15,7 @@ import type { PluginRuntime } from "./runtime.js";
 import { rememberSelfReply, registerSelfReplies, bindReminderTool } from "./self-replies.js";
 import { TransportError } from "./transport.js";
 import { provenanceFromServiceTool, SERVICE_PRIVATE_TOOL_NAMES } from "./service-private.js";
+import { bindFinanceTurn, FINANCE_TOOLS, METADATA_TOOLS, registerFinanceTurns } from "./finance-turns.js";
 import { COS_REMINDER_INPUT_TOOLS } from "./cos-reminders.js";
 import { REQUESTED_EMAIL_INPUT_TOOLS } from "./requested-email.js";
 import { APPLE_REMINDER_INPUT_TOOLS } from "./apple-reminders.js";
@@ -25,10 +27,22 @@ type BridgeMarker = {
 };
 
 export function registerHooks(api: OpenClawPluginApi, runtime: PluginRuntime): void {
+  registerFinanceTurns(api, runtime);
   registerSelfReplies(api, runtime);
   api.on(
     "before_tool_call",
     async (event, context) => {
+      if (FINANCE_TOOLS.has(event.toolName) || METADATA_TOOLS.has(event.toolName)) {
+        if (!FINANCE_ADVISOR_AVAILABLE) return { block: true, blockReason: "Finance advisor is unavailable in this release." };
+        if (!bindFinanceTurn(runtime, {
+          runId: typeof context.runId === "string" ? context.runId : undefined,
+          sessionKey: typeof context.sessionKey === "string" ? context.sessionKey : undefined,
+          agentId: typeof context.agentId === "string" ? context.agentId : undefined,
+        }, typeof context.toolCallId === "string" ? context.toolCallId : event.toolCallId, FINANCE_TOOLS.has(event.toolName))) {
+          return { block: true, blockReason: "Finance requires a current host-bound private turn." };
+        }
+        return;
+      }
       if ((SERVICE_PRIVATE_TOOL_NAMES as readonly string[]).includes(event.toolName)) {
         try {
           provenanceFromServiceTool(context, runtime.transport.config.sharedSecretEnv, runtime.transport.config.serviceWorkEnabled);

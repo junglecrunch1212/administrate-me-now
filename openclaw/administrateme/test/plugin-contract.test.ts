@@ -1,3 +1,4 @@
+import { privateFinanceTranscript } from "../src/finance-turns.js";
 import { readFile } from "node:fs/promises";
 import { createHash, createHmac, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
@@ -6,12 +7,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   AnyAgentTool,
   GatewayHandlerOptions,
-  OpenClawPluginApi,
-  OpenClawPluginCommandDefinition,
-  OpenClawPluginService,
   OpenClawPluginToolContext,
 } from "openclaw/plugin-sdk/plugin-entry";
-import plugin from "../src/index.js";
 import { approvalRequestFingerprint } from "../src/approval.js";
 import { OPENCLAW_COMMIT, OPENCLAW_VERSION } from "../src/contract.js";
 import { AdministrateMeTransport, TransportError } from "../src/transport.js";
@@ -21,64 +18,7 @@ import { fixtureApprovalRuntimes } from "./fixtures/openclaw-2026.7.2/approval-r
 import * as approvalRuntimeFixture from "./fixtures/openclaw-2026.7.2/approval-runtime.js";
 import type { PluginApprovalRequest } from "openclaw/plugin-sdk/approval-runtime";
 
-type ToolFactory = (context: OpenClawPluginToolContext) => AnyAgentTool | AnyAgentTool[];
-type GatewayRegistration = {
-  handler: (options: GatewayHandlerOptions) => void | Promise<void>;
-  scope: string | undefined;
-};
-type HookRegistration = {
-  handler: (event: Record<string, unknown>, context: Record<string, unknown>) => unknown;
-};
-
-function fakeApi(
-  config: Record<string, unknown> = {},
-  registrationMode = "full",
-) {
-  const tools = new Map<string, ToolFactory>();
-  const commands = new Map<string, OpenClawPluginCommandDefinition>();
-  const gateways = new Map<string, GatewayRegistration>();
-  const hooks = new Map<string, HookRegistration[]>();
-  const services: OpenClawPluginService[] = [];
-  const api = {
-    id: "administrateme",
-    name: "AdministrateMe",
-    version: "2.0.0-gate8",
-    source: "fixture",
-    registrationMode: registrationMode as OpenClawPluginApi["registrationMode"],
-    pluginConfig: config,
-    logger: {
-      debug: vi.fn(),
-      info: vi.fn(),
-      warn: vi.fn(),
-      error: vi.fn(),
-    },
-    registerTool(factory: AnyAgentTool | ToolFactory, opts?: { name?: string }) {
-      if (typeof factory !== "function" || !opts?.name) throw new Error("expected named factory");
-      tools.set(opts.name, factory);
-    },
-    registerCommand(command: OpenClawPluginCommandDefinition) {
-      commands.set(command.name, command);
-    },
-    registerGatewayMethod(
-      method: string,
-      handler: GatewayRegistration["handler"],
-      opts?: { scope?: "operator.read" | "operator.write" | "operator.admin" },
-    ) {
-      gateways.set(method, { handler, scope: opts?.scope });
-    },
-    registerAgentToolResultMiddleware: vi.fn(),
-    registerService(service: OpenClawPluginService) {
-      services.push(service);
-    },
-    on(hook: string, handler: HookRegistration["handler"]) {
-      const registrations = hooks.get(hook) ?? [];
-      registrations.push({ handler });
-      hooks.set(hook, registrations);
-    },
-  } as unknown as OpenClawPluginApi;
-  plugin.register(api);
-  return { api, tools, commands, gateways, hooks, services };
-}
+import { fakeApi } from "./fixtures/plugin-api.js";
 
 function jsonResponse(value: unknown, status = 200): Response {
   return new Response(JSON.stringify(value), {
@@ -188,7 +128,7 @@ describe("native OpenClaw contract fixture", () => {
     const runtime = fakeApi();
     expect(pkg.peerDependencies.openclaw).toBe(OPENCLAW_VERSION);
     expect(pkg.openclaw.build.openclawCommit).toBe(OPENCLAW_COMMIT);
-    expect([...runtime.tools]).toHaveLength(41);
+    expect([...runtime.tools]).toHaveLength(46);
     expect([...runtime.commands]).toHaveLength(9);
     expect([...runtime.gateways]).toHaveLength(19);
     expect(runtime.gateways.has("administrateme.conversation.prepare")).toBe(true);
@@ -527,7 +467,10 @@ describe("native OpenClaw contract fixture", () => {
   it("exposes tools without starting services during tool discovery", () => {
     const runtime = fakeApi({}, "tool-discovery");
     expect([...runtime.gateways]).toHaveLength(14);
-    expect([...runtime.tools]).toHaveLength(41);
+    expect([...runtime.tools]).toHaveLength(46);
+    for (const name of ["bindings", "status", "query", "calculate", "job"]) {
+      expect(runtime.tools.has(`administrateme_finance_${name}`)).toBe(true);
+    }
     expect(runtime.services).toHaveLength(0);
   });
 
@@ -1329,5 +1272,26 @@ describe("native OpenClaw contract fixture", () => {
     expect((caught as TransportError).state).toBe("incompatible");
     expect(String(caught)).not.toContain("fixture-secret");
     expect(String(caught)).not.toContain("remote diagnostics");
+  });
+});
+
+
+describe("authorized household Finance retention", () => {
+  it("preserves authorized tool evidence and ordinary conversation", () => {
+    const runtime = fakeApi();
+    const persist = runtime.hooks.get("tool_result_persist")![0]!.handler;
+    const message = { role: "toolResult", toolName: "administrateme_finance_calculate",
+      content: [{ type: "text", text: JSON.stringify({ answer_ref: "a".repeat(64), value_minor: 123456 }) }] };
+    expect(persist({ toolName: message.toolName, message }, {})).toEqual({ message });
+    expect(privateFinanceTranscript(message, true)).toBe(message);
+    const hook = runtime.hooks.get("before_message_write")![0]!.handler;
+    const ordinary = { message: { role: "assistant", content: [{ type: "text", text: "Ordinary follow-up" }] } };
+    expect(hook(ordinary, { sessionKey: "unrelated" })).toBeUndefined();
+  });
+  it("retains references, interpretation and the original member transcript", () => {
+    const message = { role: "assistant", content: [{ type: "text", text: JSON.stringify({ finance_answer: {
+      result_refs: ["b".repeat(64)], interpretation: [{ text: "The estimate is conditional.", result_refs: ["b".repeat(64)] }],
+    } }) }] };
+    expect(privateFinanceTranscript(message, false)).toBe(message);
   });
 });

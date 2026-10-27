@@ -488,12 +488,13 @@ class PipelineRunner:
         subscriber status (checkpoint, lag, degraded flag) so the future
         bootstrap CLI can render a single-screen view."""
         out: dict[str, dict[str, Any]] = {}
+        statuses = await self._bus.subscriber_statuses(
+            [f"pipeline:{pack.pack_id}" for pack in self._packs.values()],
+            ignore_missing=True,
+        )
         for pack in self._packs.values():
             subscriber_id = f"pipeline:{pack.pack_id}"
-            try:
-                bus_status = await self._bus.subscriber_status(subscriber_id)
-            except KeyError:
-                bus_status = {}
+            bus_status = statuses.get(subscriber_id, {})
             out[pack.pack_id] = {
                 "version": pack.version,
                 "subscriber_id": subscriber_id,

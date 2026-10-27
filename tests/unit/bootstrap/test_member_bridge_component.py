@@ -174,21 +174,31 @@ def _cos_overlay_repository(directory: Path) -> tuple[Path, str, str]:
     return repository, retained, _commit(repository)
 
 
-def _gateway_probe_revisions() -> tuple[bytes, bytes]:
-    retained = subprocess.run(
+# These tests cover a historical reviewed pair, independently of later central
+# probe changes. Never broaden the production allowlist to follow HEAD.
+_GATEWAY_PROBE_CANDIDATE_FIXTURE_COMMIT = "e2571b1797528d7ab146a47d73eea8acefd1b721"
+_LATER_FINANCE_PROBE_FIXTURE_COMMIT = "9a23c9372650e6502bf2f76d08f318fcca891729"
+
+
+def _gateway_probe_at(revision: str) -> bytes:
+    return subprocess.run(
         [
             "/usr/bin/git",
             "-C",
             str(ROOT),
             "show",
-            f"{PERMISSION_RECOVERY_COS_RETAINED_COMMIT}:{PERMISSION_RECOVERY_GATEWAY_PROBE_PATH}",
+            f"{revision}:{PERMISSION_RECOVERY_GATEWAY_PROBE_PATH}",
         ],
         env=sanitized_git_environment(),
         capture_output=True,
         check=True,
         timeout=30,
     ).stdout
-    candidate = (ROOT / PERMISSION_RECOVERY_GATEWAY_PROBE_PATH).read_bytes()
+
+
+def _gateway_probe_revisions() -> tuple[bytes, bytes]:
+    retained = _gateway_probe_at(PERMISSION_RECOVERY_COS_RETAINED_COMMIT)
+    candidate = _gateway_probe_at(_GATEWAY_PROBE_CANDIDATE_FIXTURE_COMMIT)
     assert (
         hashlib.sha256(retained).hexdigest()
         == PERMISSION_RECOVERY_GATEWAY_PROBE_RETAINED_SHA256
@@ -284,6 +294,23 @@ def test_exact_hosted_gateway_probe_pair_is_independent_and_retains_old_archive(
         assert (
             hashlib.sha256(stream.read()).hexdigest()
             == PERMISSION_RECOVERY_GATEWAY_PROBE_RETAINED_SHA256
+        )
+
+
+def test_later_finance_probe_does_not_inherit_historical_compatibility(tmp_path):
+    repository, retained, _ = _gateway_probe_repository(tmp_path)
+    later = _gateway_probe_at(_LATER_FINANCE_PROBE_FIXTURE_COMMIT)
+    assert hashlib.sha256(later).hexdigest() == (
+        "9646417e8dc5b957696904b9fdd82dfe84002cae56e072e50b56dfac16fbd9a6"
+    )
+    (repository / PERMISSION_RECOVERY_GATEWAY_PROBE_PATH).write_bytes(later)
+    candidate = _commit(repository)
+    with pytest.raises(RuntimeError, match="reviewed hosted Gateway probe changed"):
+        inspect_helper_component(
+            repository,
+            candidate,
+            retained,
+            compatibility_contract=PERMISSION_RECOVERY_COMPATIBILITY,
         )
 
 

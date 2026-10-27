@@ -74,8 +74,8 @@ GOAL_HEADERS = [
 ]
 
 
-def _money(value: Any) -> float:
-    return float(int(value or 0) / 100)
+def _money(value: Any) -> float | str:
+    return "Unavailable" if value is None else float(int(value) / 100)
 
 
 def _title(ws: Worksheet, title: str, subtitle: str, *, width: int) -> None:
@@ -150,7 +150,7 @@ def build_dashboard(
         cell.fill = PatternFill("solid", fgColor=TEAL)
     baseline = next(
         (item for item in model["scenarios"] if item["is_baseline"]),
-        model["scenarios"][0],
+        None,
     )
     rows = [
         (
@@ -163,7 +163,7 @@ def build_dashboard(
         ),
         (
             "Monthly plan",
-            _money(baseline["monthly_net_minor"]),
+            _money(baseline["monthly_net_minor"] if baseline else None),
             "",
             "Expenses MTD",
             _money(summary["mtd_expenses_minor"]),
@@ -171,20 +171,25 @@ def build_dashboard(
         ),
         (
             "Cash-out month",
-            baseline["cash_out_month"] or "Not in horizon",
+            (baseline["cash_out_month"] or "Not in modeled horizon")
+            if baseline
+            else "Unavailable",
             "",
             "Net MTD",
             _money(summary["mtd_net_minor"]),
             "",
         ),
         (
-            "Net worth",
-            _money(summary["net_worth_minor"]),
+            "Listed net value",
+            _money(summary["observed_listed_net_minor"]),
             "",
             "Forecast month-end",
             _money(
                 summary["projected_month_income_minor"]
                 - summary["projected_month_expenses_minor"]
+                if summary["projected_month_income_minor"] is not None
+                and summary["projected_month_expenses_minor"] is not None
+                else None
             ),
             "",
         ),
@@ -471,8 +476,8 @@ def build_balance_sheet(
 ) -> None:
     _title(
         ws,
-        "BALANCE SHEET",
-        "Liabilities subtract from assets. Every amount has a protected source or an explicit workbook assumption.",
+        "OBSERVED ASSET AND LIABILITY REGISTER",
+        "Partial listed inputs only. A reconciled balance sheet is unavailable until coverage and release checks pass.",
         width=4,
     )
     headers = ["type", "item", "amount", "source"]
@@ -512,10 +517,10 @@ def build_balance_sheet(
         row_index += 1
     ws.append(
         [
-            "Net worth",
+            "Listed net value",
             "Assets − liabilities",
-            _money(model["summary"]["net_worth_minor"]),
-            "Deterministic projection",
+            _money(model["summary"]["observed_listed_net_minor"]),
+            "Observed inputs; not a reconciled balance sheet",
         ]
     )
     ws.cell(row_index, 3).number_format = "$#,##0;[Red]-$#,##0"
@@ -546,12 +551,16 @@ def build_checks(
     rows = [
         (
             "workbook_validation",
-            "PASS"
-            if not model["workbook"] or model["workbook"]["validation_state"] == "valid"
+            "UNAVAILABLE"
+            if not model["workbook"]
+            else "PASS"
+            if model["workbook"]["validation_state"] == "valid"
             else "FAIL",
             "blocking",
-            "Latest workbook save passed schema and planning invariants."
-            if not model["workbook"] or model["workbook"]["validation_state"] == "valid"
+            "No authorized workbook publication is available."
+            if not model["workbook"]
+            else "Latest workbook save passed schema and planning invariants."
+            if model["workbook"]["validation_state"] == "valid"
             else "; ".join(model["workbook"]["validation_failures"][:3]),
         ),
         (

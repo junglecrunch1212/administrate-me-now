@@ -261,6 +261,46 @@ def _wait_for_settled_source_assurance(client: TestClient) -> Response:
         client.portal.call(asyncio.sleep, 0.01)
 
 
+def _wait_for_runtime_consumers(client: TestClient) -> str | None:
+    """Settle actual fixture deliveries before comparing separate requests."""
+
+    runtime: AdministrateMeRuntime = client.app.state.runtime
+
+    async def wait_for_consumers() -> str | None:
+        assert runtime.bus is not None
+        assert runtime.event_log is not None
+        deadline = time.monotonic() + 5.0
+        while True:
+            before = await runtime.event_log.latest_event_id()
+            subscribers = runtime.bus._subscribers  # noqa: SLF001
+            statuses = await runtime.bus.subscriber_statuses(list(subscribers))
+            after = await runtime.event_log.latest_event_id()
+            for name, status in statuses.items():
+                assert not status["degraded"], (name, status)
+                assert status["consecutive_failures"] == 0, (name, status)
+                assert status["poison_event_id"] is None, (name, status)
+            pending = {
+                name: status
+                for name, status in statuses.items()
+                if status["lag_count"]
+                or status["draining"]
+                or subscribers[name].draining
+                or subscribers[name].trigger.is_set()
+            }
+            if before == after and not pending:
+                return after
+            assert time.monotonic() < deadline, (
+                "fixture consumers did not settle within 5 seconds",
+                before,
+                after,
+                pending,
+            )
+            # The metadata reads above yield to real delivery work. No elapsed
+            # sleep or repeated endpoint comparison stands in for settlement.
+
+    return client.portal.call(wait_for_consumers)
+
+
 @pytest.mark.parametrize("window_age_days", [0, 400])
 def test_strict_deployment_readiness_is_shared_by_ready_and_settings(
     tmp_path: Path, window_age_days: int
@@ -275,6 +315,9 @@ def test_strict_deployment_readiness_is_shared_by_ready_and_settings(
     app = create_application(runtime_settings)
     with TestClient(app) as client:
         _report_strict_openclaw(client)
+        # A current audit can still represent an earlier consumer checkpoint.
+        # Wait for startup/health delivery before comparing separate requests.
+        _wait_for_runtime_consumers(client)
         ready = _wait_for_settled_source_assurance(client)
         assert ready.status_code == 200, ready.text
         diagnostics = ready.json()
@@ -327,6 +370,155 @@ def test_strict_deployment_readiness_is_shared_by_ready_and_settings(
         drift = client.get("/api/system/ready")
         assert drift.status_code == 503
         assert "openclaw" in drift.json()["deployment_readiness"]["blocking_dimensions"]
+
+
+def test_strict_readiness_tracks_real_health_checkpoint_transition(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app = create_application(_strict_settings(tmp_path))
+    with TestClient(app) as client:
+        runtime: AdministrateMeRuntime = app.state.runtime
+        _wait_for_runtime_consumers(client)
+        assert runtime.bus is not None
+        assert runtime.event_log is not None
+        subscriber_id = "projection:context_fabric"
+        subscriber = runtime.bus._subscribers[subscriber_id]  # noqa: SLF001
+        original_callback = subscriber.callback
+        previous_checkpoint = subscriber.checkpoint
+        delivery_entered = asyncio.Event()
+        delivery_release = asyncio.Event()
+        refresh_entered = asyncio.Event()
+        refresh_release = asyncio.Event()
+        delivered_event: dict[str, Any] = {}
+        refresh_revision: dict[str, Any] = {}
+
+        async def held_callback(event: dict[str, Any]) -> None:
+            if event["type"] == "openclaw.integration.state_changed":
+                delivered_event.update(event)
+                delivery_entered.set()
+                await asyncio.wait_for(delivery_release.wait(), timeout=5)
+            await original_callback(event)
+
+        async def held_audit(*args: Any, **kwargs: Any) -> dict[str, Any]:
+            refresh_revision.update(kwargs)
+            refresh_entered.set()
+            await asyncio.wait_for(refresh_release.wait(), timeout=5)
+            return await audit_source_assurance(*args, **kwargs)
+
+        async def wait_for_signal(signal: asyncio.Event) -> None:
+            await asyncio.wait_for(signal.wait(), timeout=5)
+
+        async def release_and_join_refresh() -> None:
+            task = runtime._source_assurance_refresh_task
+            assert task is not None and not task.done()
+            refresh_release.set()
+            await asyncio.wait_for(asyncio.shield(task), timeout=5)
+            assert task.done() and not task.cancelled()
+            assert runtime._source_assurance_refresh_task is None
+
+        monkeypatch.setattr(subscriber, "callback", held_callback)
+        try:
+            _report_strict_openclaw(client)
+            client.portal.call(wait_for_signal, delivery_entered)
+            ready = _wait_for_settled_source_assurance(client)
+            assert ready.status_code == 200, ready.text
+            baseline = ready.json()["deployment_readiness"]
+            assert baseline["ready"] is True
+            audited_revision = runtime._source_assurance_revision
+            assert audited_revision is not None
+            event_id = delivered_event["event_id"]
+            assert audited_revision[0] == event_id
+            audited_capabilities = {row[0]: row[1:] for row in audited_revision[1]}
+            assert audited_capabilities[subscriber_id][1] == previous_checkpoint
+            assert subscriber.checkpoint == previous_checkpoint
+            assert subscriber.draining is True
+
+            # Finish the real callback and durable checkpoint without asking
+            # diagnostics to refresh. The log head itself does not change.
+            client.portal.call(delivery_release.set)
+            assert _wait_for_runtime_consumers(client) == event_id
+            assert subscriber.checkpoint == event_id
+            assert runtime._source_assurance_revision == audited_revision
+            monkeypatch.setattr(
+                "adminme.runtime.application.audit_source_assurance", held_audit
+            )
+            response = client.get(
+                "/api/member/v1/surfaces/settings",
+                headers={"Tailscale-User-Login": "member-a.ts.net"},
+            )
+            assert response.status_code == 200, response.text
+            settings = response.json()
+            observed = settings["control"]["readiness"]
+            assert observed == settings["system"]["runtime"]["deployment_readiness"]
+            assert observed["ready"] is False
+            assert observed["blocking_dimensions"] == ["observation_effects"]
+            effects = observed["dimensions"]["observation_effects"]
+            assert effects["state"] == "blocked"
+            evidence = effects["evidence"]
+            assert evidence["source_assurance_state"] == "healthy"
+            assert evidence["source_assurance_freshness"] == "fresh"
+            assert evidence["source_assurance_revision_current"] is False
+            assert evidence["source_assurance_refresh_in_progress"] is True
+            assert evidence["source_assurance_refresh_error"] is None
+            prior_evidence = baseline["dimensions"]["observation_effects"]["evidence"]
+            assert evidence == {
+                **prior_evidence,
+                "source_assurance_revision_current": False,
+                "source_assurance_refresh_in_progress": True,
+            }
+            for name, dimension in baseline["dimensions"].items():
+                if name != "observation_effects":
+                    assert observed["dimensions"][name] == dimension
+            client.portal.call(wait_for_signal, refresh_entered)
+            assert refresh_revision["through_event_id"] == event_id
+            refreshed_capabilities = refresh_revision["capabilities"]
+            changed = [
+                name
+                for name, previous in audited_capabilities.items()
+                if (
+                    refreshed_capabilities[name]["state"],
+                    refreshed_capabilities[name]["details"].get("checkpoint_event_id"),
+                    refreshed_capabilities[name]["details"].get("consecutive_failures"),
+                    refreshed_capabilities[name]["details"].get("poison_event_id"),
+                )
+                != previous
+            ]
+            assert changed == [subscriber_id]
+            assert (
+                refreshed_capabilities[subscriber_id]["details"]["checkpoint_event_id"]
+                == event_id
+            )
+            print(
+                json.dumps(
+                    {
+                        "readiness_transition": "real_health_event_checkpoint",
+                        "event_type": delivered_event["type"],
+                        "event_head_unchanged": True,
+                        "changed_capabilities": changed,
+                        "old_checkpoint": previous_checkpoint,
+                        "new_checkpoint": event_id,
+                        "ready_before": baseline["ready"],
+                        "ready_during_refresh": observed["ready"],
+                        "settings_views_equal": True,
+                    },
+                    sort_keys=True,
+                )
+            )
+            client.portal.call(release_and_join_refresh)
+            settled = _wait_for_settled_source_assurance(client)
+            assert settled.status_code == 200, settled.text
+            assert settled.json()["deployment_readiness"] == baseline
+            final_settings = client.get(
+                "/api/member/v1/surfaces/settings",
+                headers={"Tailscale-User-Login": "member-a.ts.net"},
+            ).json()
+            assert final_settings["control"]["readiness"] == baseline
+            assert (
+                final_settings["system"]["runtime"]["deployment_readiness"] == baseline
+            )
+        finally:
+            client.portal.call(delivery_release.set)
+            client.portal.call(refresh_release.set)
 
 
 @pytest.mark.parametrize("skip_device_check", [False, True])
@@ -1099,72 +1291,102 @@ def test_source_assurance_refresh_never_blocks_readiness(
 ) -> None:
     app = create_application(_settings(tmp_path))
     with TestClient(app) as client:
+        # The refresh below owns one settled revision. Startup checkpoint
+        # movement may legitimately request another audit and is not its delay.
+        _wait_for_settled_source_assurance(client)
         runtime: AdministrateMeRuntime = app.state.runtime
         assert runtime._source_assurance_cache is not None
+        assert runtime._source_assurance_refresh_task is None
+        settled_revision = runtime._source_assurance_revision
         cached = dict(runtime._source_assurance_cache)
         runtime._source_assurance_revision = ("ev_outdated", ())
         runtime._source_assurance_refreshed_monotonic = (
             time.monotonic() - runtime.SOURCE_ASSURANCE_REFRESH_SECONDS - 1
         )
         refresh_calls = 0
+        refresh_entered = asyncio.Event()
+        refresh_release = asyncio.Event()
 
-        async def slow_refresh(*_args: object, **_kwargs: object) -> dict[str, object]:
+        async def held_refresh(*_args: object, **_kwargs: object) -> dict[str, object]:
             nonlocal refresh_calls
             refresh_calls += 1
-            await asyncio.sleep(0.5)
+            refresh_entered.set()
+            await asyncio.wait_for(refresh_release.wait(), timeout=5)
             return cached
 
+        async def wait_for_held_refresh() -> None:
+            await asyncio.wait_for(refresh_entered.wait(), timeout=5)
+            task = runtime._source_assurance_refresh_task
+            assert task is not None and not task.done()
+
+        async def release_and_join_refresh() -> None:
+            task = runtime._source_assurance_refresh_task
+            assert task is not None and not task.done()
+            refresh_release.set()
+            # Join the real generation, including its finally cleanup; elapsed
+            # wall time alone is not evidence that a background task completed.
+            await asyncio.wait_for(asyncio.shield(task), timeout=5)
+            assert task.done() and not task.cancelled()
+            assert runtime._source_assurance_refresh_task is None
+            assert runtime._source_assurance_revision == settled_revision
+
         monkeypatch.setattr(
-            "adminme.runtime.application.audit_source_assurance", slow_refresh
+            "adminme.runtime.application.audit_source_assurance", held_refresh
         )
 
-        started = time.perf_counter()
-        first = client.get("/api/system/ready")
-        elapsed = time.perf_counter() - started
-        second = client.get("/api/system/ready")
+        try:
+            started = time.perf_counter()
+            first = client.get("/api/system/ready")
+            elapsed = time.perf_counter() - started
+            client.portal.call(wait_for_held_refresh)
+            second = client.get("/api/system/ready")
 
-        assert elapsed < 0.2
-        assert (
-            first.json()["capabilities"]["policy:source-assurance"]["details"][
-                "freshness"
-            ]["state"]
-            == "fresh"
-        )
-        assert (
-            first.json()["capabilities"]["policy:source-assurance"]["details"][
-                "freshness"
-            ]["refresh_in_progress"]
-            is True
-        )
-        assert (
-            first.json()["capabilities"]["policy:source-assurance"]["details"][
-                "freshness"
-            ]["revision_current"]
-            is False
-        )
-        assert second.status_code == first.status_code
-        assert refresh_calls == 1
+            assert elapsed < 0.2
+            assert (
+                first.json()["capabilities"]["policy:source-assurance"]["details"][
+                    "freshness"
+                ]["state"]
+                == "fresh"
+            )
+            assert (
+                first.json()["capabilities"]["policy:source-assurance"]["details"][
+                    "freshness"
+                ]["refresh_in_progress"]
+                is True
+            )
+            assert (
+                first.json()["capabilities"]["policy:source-assurance"]["details"][
+                    "freshness"
+                ]["revision_current"]
+                is False
+            )
+            assert second.status_code == first.status_code
+            assert refresh_calls == 1
+            assert runtime._source_assurance_revision == ("ev_outdated", ())
 
-        client.portal.call(asyncio.sleep, 0.55)
-        refreshed = client.get("/api/system/ready").json()
-        assert (
-            refreshed["capabilities"]["policy:source-assurance"]["details"][
-                "freshness"
-            ]["state"]
-            == "fresh"
-        )
-        assert (
-            refreshed["capabilities"]["policy:source-assurance"]["details"][
-                "freshness"
-            ]["refresh_in_progress"]
-            is False
-        )
-        assert (
-            refreshed["capabilities"]["policy:source-assurance"]["details"][
-                "freshness"
-            ]["revision_current"]
-            is True
-        )
+            client.portal.call(release_and_join_refresh)
+            refreshed = client.get("/api/system/ready").json()
+            assert (
+                refreshed["capabilities"]["policy:source-assurance"]["details"][
+                    "freshness"
+                ]["state"]
+                == "fresh"
+            )
+            assert (
+                refreshed["capabilities"]["policy:source-assurance"]["details"][
+                    "freshness"
+                ]["refresh_in_progress"]
+                is False
+            )
+            assert (
+                refreshed["capabilities"]["policy:source-assurance"]["details"][
+                    "freshness"
+                ]["revision_current"]
+                is True
+            )
+            assert refresh_calls == 1
+        finally:
+            client.portal.call(refresh_release.set)
 
 
 def test_settled_current_source_assurance_proof_does_not_rescan_on_age(

@@ -365,6 +365,13 @@ async def test_supervisor_restarts_on_crash_with_backoff(
     # adapter.error events emitted with doubling retry_after_s.
     error_calls = [c for c in event_log.calls if c.get("type") == "adapter.error"]
     assert len(error_calls) >= 2
+    # Provider exception bodies may contain account IDs or receipt data; shared
+    # supervisor events and public status retain only a fixed safe message.
+    assert "crash #" not in repr(error_calls)
+    assert "crash #" not in repr(snapshot)
+    assert error_calls[0]["payload"]["error_message"] == (
+        "Adapter failed; inspect the authorized source status."
+    )
     first_retry = error_calls[0]["payload"]["retry_after_s"]
     second_retry = error_calls[1]["payload"]["retry_after_s"]
     assert first_retry == int(INITIAL_BACKOFF_S)

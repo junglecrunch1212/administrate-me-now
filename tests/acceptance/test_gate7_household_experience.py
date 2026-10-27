@@ -801,6 +801,97 @@ def test_ten_surfaces_three_modes_and_independent_route_denial(
         )
 
 
+def test_finance_without_publication_is_unavailable_through_production_root(
+    tmp_path: Path,
+) -> None:
+    instance = tmp_path / "instance"
+    instance.mkdir()
+    with TestClient(create_application(_settings(instance))) as client:
+        for member in (PRINCIPAL, ADULT):
+            response = client.get(
+                "/api/member/v1/surfaces/finance", headers=HEADERS[member]
+            )
+            assert response.status_code == 200
+            cockpit = response.json()["cockpit"]
+            assert all(value is None for value in cockpit["summary"].values())
+            assert cockpit["scenarios"] == []
+            assert cockpit["workbook"] is None
+            assert cockpit["data_health"]["latest_source_at"] is None
+            assert cockpit["reports"]["balance_sheet"]["state"] == "missing_evidence"
+            assert cockpit["accepted_books"]["state"] == "disabled"
+
+
+def test_accepted_books_reaches_finance_surface_without_reinterpreting_metrics(
+    tmp_path: Path,
+) -> None:
+    from adminme.finance.importer import import_publication
+    from adminme.finance.publication import content_hash
+    from adminme.lib.session import build_internal_session
+
+    instance = tmp_path / "instance"
+    instance.mkdir()
+    settings = replace(_settings(instance), finance_publications_enabled=True)
+    publication = json.loads(
+        (
+            REPO_ROOT / "tests/fixtures/finance/accepted-publication.synthetic.json"
+        ).read_text()
+    )
+    publication["tenant_id"] = settings.instance.tenant_id
+    publication["owner_id"] = PRINCIPAL
+    for report in publication["reports"]:
+        for metric in report["metrics"]:
+            metric["owner_id"] = PRINCIPAL
+    publication["content_sha256"] = content_hash(publication)
+    app = create_application(settings)
+    with TestClient(app) as client:
+        owner = build_internal_session(
+            PRINCIPAL, "principal", settings.instance.tenant_id
+        )
+        assert client.portal
+        client.portal.call(import_publication, app.state.runtime, owner, publication)
+        response = client.get(
+            "/api/member/v1/surfaces/finance", headers=HEADERS[PRINCIPAL]
+        )
+        assert response.status_code == 200
+        cockpit = response.json()["cockpit"]
+        assert response.json()["freshness"]["state"] == "degraded"
+        assert response.json()["freshness"]["latest_source_at"] is not None
+        books = cockpit["accepted_books"]
+        assert books["publication_id"] == publication["publication_id"]
+        assert books["content_hash"] == publication["content_sha256"]
+        reports = {report["report_id"]: report for report in books["reports"]}
+        assert [
+            metric["value_minor"] for metric in reports["scenarios"]["metrics"]
+        ] == [
+            12500,
+            13500,
+            14500,
+            15500,
+        ]
+        assert reports["scenarios"]["freshness_state"] == "historical_snapshot"
+        assert reports["balance_sheet"]["release_state"] == "unavailable"
+        assert reports["balance_sheet"]["metrics"] == []
+        assert reports["actuals"]["metrics"][0]["evidence_ids"] == ["evidence-1"]
+        assert "owner_id" not in reports["actuals"]["metrics"][0]
+        assert all(value is None for value in cockpit["summary"].values())
+        other = client.get(
+            "/api/member/v1/surfaces/finance", headers=HEADERS[ADULT]
+        ).json()
+        assert other["cockpit"]["accepted_books"]["state"] == "missing_evidence"
+        assert other["cockpit"]["accepted_books"]["reports"] == []
+        assert "publication_id" not in other["cockpit"]["accepted_books"]
+
+    # Turning the integration off suppresses a previously accepted snapshot.
+    with TestClient(
+        create_application(replace(settings, finance_publications_enabled=False))
+    ) as client:
+        cockpit = client.get(
+            "/api/member/v1/surfaces/finance", headers=HEADERS[PRINCIPAL]
+        ).json()["cockpit"]
+        assert cockpit["accepted_books"]["state"] == "disabled"
+        assert "publication_id" not in cockpit["accepted_books"]
+
+
 def test_ac32_finance_workbook_to_cockpit_replay_and_member_isolation(
     tmp_path: Path,
 ) -> None:
@@ -822,6 +913,10 @@ def test_ac32_finance_workbook_to_cockpit_replay_and_member_isolation(
         assert cockpit["summary"]["cash_minor"] == 500_000
         assert cockpit["summary"]["base_monthly_income_minor"] == 600_000
         assert cockpit["summary"]["base_monthly_expenses_minor"] == 400_000
+        # Observed bank cash does not supply the missing planning opening cash
+        # or reserve. The browser's complete fixture chooses those separately.
+        assert cockpit["scenarios"] == []
+        assert cockpit["reports"]["monthly_scenarios"]["state"] == "missing_evidence"
         assert cockpit["budgets"][0]["state"] == "watch"
         assert cockpit["focus"]["state"] == "budget_watch"
         assert cockpit["goals"][0]["status"] == "active"
@@ -842,7 +937,7 @@ def test_ac32_finance_workbook_to_cockpit_replay_and_member_isolation(
             "/api/member/v1/surfaces/finance", headers=HEADERS[ADULT]
         ).json()["cockpit"]
         assert other_adult["data_health"]["account_count"] == 0
-        assert other_adult["summary"]["cash_minor"] == 0
+        assert other_adult["summary"]["cash_minor"] is None
 
         goal = cockpit["goals"][0]
         paused = client.post(
@@ -1047,8 +1142,8 @@ def test_ac32_finance_workbook_to_cockpit_replay_and_member_isolation(
         for copy in (
             "Cash flow plan",
             "Scenario lab",
-            "Goals and capital plans",
-            "Net worth inputs",
+            "Workbook goals and capital plans",
+            "Observed asset and liability inputs",
             "Source and model health",
         ):
             assert copy in js

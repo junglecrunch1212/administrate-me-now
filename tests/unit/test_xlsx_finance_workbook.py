@@ -411,8 +411,47 @@ async def test_finance_workbook_excludes_private_member_planning_rows(
     assert "private_plan" not in ids
 
 
+async def test_missing_cash_and_plan_remain_unavailable_in_workbook(
+    populated: dict[str, Any],
+) -> None:
+    config = populated["config"]
+    path = config.xlsx_workbooks_dir / "adminme-finance.xlsx"
+    build_finance_workbook(
+        path, populated["ctx"], tenant_id=config.tenant_id, last_event_id="ev_test"
+    )
+    workbook = load_workbook(str(path))
+    assert workbook["Dashboard"].cell(5, 2).value == "Unavailable"
+    assert workbook["Dashboard"].cell(6, 2).value == "Unavailable"
+    assert workbook["Dashboard"].cell(7, 2).value == "Unavailable"
+    assert workbook["Cash Flow Plan"].cell(5, 3).value is None
+    assert (
+        "reconciled balance sheet is unavailable"
+        in workbook["Balance Sheet"].cell(2, 1).value
+    )
+
+
 async def test_cash_flow_plan_columns_match_contract(populated: dict[str, Any]) -> None:
     config = populated["config"]
+    # Deliberately chosen zeros are different from absent inputs.
+    for assumption_id, unit in (
+        ("opening_cash", "USD"),
+        ("base_monthly_income", "USD/month"),
+        ("base_monthly_expenses", "USD/month"),
+        ("minimum_cash_floor", "USD"),
+    ):
+        await populated["log"].append(
+            _envelope(
+                "finance.assumption_set",
+                {
+                    "assumption_id": assumption_id,
+                    "category": "cash_flow",
+                    "label": assumption_id,
+                    "value_decimal": "0",
+                    "unit": unit,
+                    "as_of": "2026-04-01",
+                },
+            )
+        )
     last = await populated["log"].append(
         _envelope(
             "finance.scenario_set",

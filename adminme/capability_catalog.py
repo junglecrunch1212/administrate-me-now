@@ -16,6 +16,7 @@ from typing import Any
 
 import yaml
 
+from adminme.finance import release as finance_release
 from adminme.openclaw_topology import member_agent_id
 from adminme.openclaw_contract import OPENCLAW_COMMIT, OPENCLAW_VERSION
 from adminme.projections.parties.queries import (
@@ -30,6 +31,11 @@ CATALOG_CONTRACT = "administrateme-capability-catalog-v1"
 VERBS = ("read", "observe", "draft", "prepare", "hold", "execute")
 
 _TOOL_PERMISSION_OPTIONS: dict[str, frozenset[str]] = {
+    "administrateme_finance_bindings": frozenset({"read_context"}),
+    "administrateme_finance_status": frozenset({"read_context"}),
+    "administrateme_finance_query": frozenset({"read_context"}),
+    "administrateme_finance_calculate": frozenset({"read_context"}),
+    "administrateme_finance_job": frozenset({"read_context"}),
     "administrateme_state": frozenset({"read_context"}),
     "administrateme_calendar": frozenset({"read_context"}),
     "administrateme_what_now": frozenset({"read_context"}),
@@ -86,6 +92,21 @@ _APPLE_REMINDER_TOOL_PERMISSIONS = {
 
 
 _DOMAIN_DEFINITIONS: tuple[dict[str, Any], ...] = (
+    {
+        "capability_id": "domain.household_finance",
+        "category": "finance",
+        "label": "Understand accepted household finance",
+        "outcome": "Check private accepted reports, bounded hypothetical models and topic prerequisites; preparation grants no financial action.",
+        "source": "product:household-finance",
+        "verbs": {"read": "supported", "prepare": "supported"},
+        "sensitivity": ["privileged"],
+        "openclaw_tools": [
+            "administrateme_finance_status",
+            "administrateme_finance_query",
+            "administrateme_finance_calculate",
+            "administrateme_finance_job",
+        ],
+    },
     {
         "capability_id": "domain.cos_requested_email",
         "category": "communications",
@@ -277,6 +298,7 @@ _DOMAIN_DEFINITIONS: tuple[dict[str, Any], ...] = (
 
 
 _DOMAIN_IMPLEMENTATION_PATHS = {
+    "product:household-finance": "adminme/finance/capabilities.py",
     "product:cos-requested-email": "adminme/products/openclaw/requested_email.py",
     "product:cos-owned-apple-reminders": "adminme/products/openclaw/cos_apple_reminders.py",
     "product:member-chat": "adminme/member_chat.py",
@@ -769,6 +791,17 @@ def load_catalog(repository_root: Path) -> dict[str, Any]:
         ):
             raise RuntimeError("capability ids must be stable and unique")
         ids.add(capability_id)
+        if (
+            capability_id == "domain.household_finance"
+            and not finance_release.ADVISOR_AVAILABLE
+        ):
+            definition.update(
+                verbs={},
+                implementation="planned_finance_advisor",
+                implementation_present=False,
+                openclaw_tools=[],
+                unavailable_reason="Finance advisor is unavailable in this release. Owner Books remain available in Finance.",
+            )
         definition["catalog_version"] = CATALOG_VERSION
         definition["owner_kinds"] = list(definition.get("owner_kinds") or ["member"])
         definition["verbs"] = _verb_matrix(definition.get("verbs"))
@@ -1224,6 +1257,24 @@ def compose_member_catalog(
             )
         )
         declared_tools = sorted(set(row.get("openclaw_tools") or []) & plugin_tools)
+        if capability_id == "domain.household_finance":
+            from adminme.finance.access_control import analysis_enabled
+
+            read_available = bool(
+                read_available
+                and not viewing_as
+                and session.auth_role == "principal"
+                and "read_context" in permissions
+                and analysis_enabled(runtime, session)
+            )
+            setup = (
+                "unavailable"
+                if not finance_release.ADVISOR_AVAILABLE
+                else "explicit_activation_required"
+                if not read_available
+                else "configured"
+            )
+            freshness = "unknown"  # Topic-specific evidence is checked on demand.
         required_permissions = set().union(
             *(
                 _TOOL_PERMISSION_OPTIONS.get(
@@ -1371,6 +1422,10 @@ def compose_member_catalog(
                             "administrateme_what_now",
                             "administrateme_capabilities",
                             "administrateme_settings_context",
+                            "administrateme_finance_status",
+                            "administrateme_finance_query",
+                            "administrateme_finance_calculate",
+                            "administrateme_finance_job",
                         }
                         for tool in declared_tools
                     ),

@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+import pytest
 import sqlcipher3
 
 from adminme.events.schemas.operating_agreement import (
@@ -111,8 +112,10 @@ def _event(payload: dict[str, Any], event_id: str) -> dict[str, Any]:
     }
 
 
+@pytest.mark.parametrize("prior_first", [True, False], ids=["upgrade", "late-prior"])
 def test_constitution_upgrade_retains_prior_references_and_replays_additively(
     tmp_path: Path,
+    prior_first: bool,
 ) -> None:
     current = _payload(tmp_path)
     prior = deepcopy(current)
@@ -123,6 +126,8 @@ def test_constitution_upgrade_retains_prior_references_and_replays_additively(
         json.dumps(prior["rule"], sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
     events = [_event(prior, "constitution-v1"), _event(current, "constitution-v2")]
+    if not prior_first:
+        events.reverse()
     projection = PartiesProjection()
     member = build_internal_session("member-a", "principal", "tenant-fixture")
     other_tenant = build_internal_session("member-a", "principal", "tenant-other")

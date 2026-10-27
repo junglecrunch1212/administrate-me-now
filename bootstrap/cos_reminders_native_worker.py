@@ -193,7 +193,7 @@ def artifact_sha256(app: Path) -> str:
 
 def native_identity(request: dict[str, Any]) -> dict[str, Any]:
     # Foundation here must report the native main bundle AFTER Python embedding.
-    from Foundation import NSBundle  # type: ignore[import-not-found]
+    from Foundation import NSBundle  # type: ignore[import-not-found,import-untyped]
 
     bundle = NSBundle.mainBundle()
     app = Path(str(bundle.bundlePath()))
@@ -274,7 +274,7 @@ def native_identity(request: dict[str, Any]) -> dict[str, Any]:
 
 
 def permission_status() -> int:
-    from EventKit import EKEntityTypeReminder, EKEventStore  # type: ignore[import-not-found]
+    from EventKit import EKEntityTypeReminder, EKEventStore  # type: ignore[import-not-found,import-untyped]
 
     return int(EKEventStore.authorizationStatusForEntityType_(EKEntityTypeReminder))
 
@@ -390,7 +390,7 @@ def run_with_main_loop(
     request: dict[str, Any], identity: dict[str, Any]
 ) -> dict[str, Any]:
     """Keep the app's main run loop available while EventKit callbacks settle."""
-    from Foundation import NSDate, NSRunLoop  # type: ignore[import-not-found]
+    from Foundation import NSDate, NSRunLoop  # type: ignore[import-not-found,import-untyped]
 
     complete = threading.Event()
     outcome: dict[str, Any] = {}

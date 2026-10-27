@@ -185,6 +185,148 @@ CREATE TABLE IF NOT EXISTS finance_workbook_state (
     published_by_party_id    TEXT NOT NULL,
     validation_state         TEXT NOT NULL CHECK (validation_state IN ('valid','rejected')),
     validation_failures_json TEXT NOT NULL DEFAULT '[]',
+    owner_scope              TEXT NOT NULL DEFAULT '',
+    visibility_scope         TEXT NOT NULL DEFAULT '',
+    sensitivity              TEXT NOT NULL DEFAULT 'privileged'
+                             CHECK (sensitivity IN ('normal','sensitive','privileged')),
     last_event_id            TEXT NOT NULL,
     PRIMARY KEY (tenant_id, workbook_name)
+);
+
+-- Accepted Books is a separate private book namespace; never legacy shared XLSX.
+CREATE TABLE IF NOT EXISTS finance_publications (
+    tenant_id TEXT NOT NULL,
+    owner_id TEXT NOT NULL,
+    book_id TEXT NOT NULL,
+    publication_id TEXT NOT NULL,
+    content_sha256 TEXT NOT NULL,
+    publication_json TEXT NOT NULL,
+    metadata_json TEXT NOT NULL,
+    last_event_id TEXT NOT NULL,
+    PRIMARY KEY (tenant_id, owner_id, book_id, publication_id)
+);
+CREATE TABLE IF NOT EXISTS finance_publication_heads (
+    tenant_id TEXT NOT NULL,
+    owner_id TEXT NOT NULL,
+    book_id TEXT NOT NULL,
+    publication_id TEXT NOT NULL,
+    PRIMARY KEY (tenant_id, owner_id, book_id)
+);
+CREATE TABLE IF NOT EXISTS finance_publication_metrics (
+    tenant_id TEXT NOT NULL,
+    owner_id TEXT NOT NULL,
+    book_id TEXT NOT NULL,
+    publication_id TEXT NOT NULL,
+    report_id TEXT NOT NULL,
+    metric_id TEXT NOT NULL,
+    ordinal INTEGER NOT NULL,
+    metric_json TEXT NOT NULL,
+    PRIMARY KEY (tenant_id, owner_id, book_id, publication_id, metric_id)
+);
+CREATE INDEX IF NOT EXISTS idx_finance_publication_report
+ON finance_publication_metrics(tenant_id,owner_id,book_id,publication_id,report_id,ordinal);
+
+
+-- Explicit planning intent; accepted Books reports remain immutable.
+CREATE TABLE IF NOT EXISTS finance_choices (
+    tenant_id TEXT NOT NULL,
+    owner_id TEXT NOT NULL,
+    book_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    choice_id TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    last_event_id TEXT NOT NULL,
+    PRIMARY KEY (tenant_id, owner_id, book_id, kind, choice_id)
+);
+
+CREATE TABLE IF NOT EXISTS finance_choice_heads (
+    tenant_id TEXT NOT NULL,
+    owner_id TEXT NOT NULL,
+    book_id TEXT NOT NULL,
+    last_event_id TEXT NOT NULL,
+    PRIMARY KEY (tenant_id, owner_id, book_id)
+);
+
+-- Independent verified planning exports anchored to immutable accounting.
+CREATE TABLE IF NOT EXISTS finance_dated_projections (
+    tenant_id TEXT NOT NULL,
+    owner_id TEXT NOT NULL,
+    book_id TEXT NOT NULL,
+    projection_id TEXT NOT NULL,
+    content_sha256 TEXT NOT NULL,
+    metadata_json TEXT NOT NULL,
+    last_event_id TEXT NOT NULL,
+    PRIMARY KEY (tenant_id, owner_id, book_id, projection_id)
+);
+CREATE TABLE IF NOT EXISTS finance_dated_projection_heads (
+    tenant_id TEXT NOT NULL,
+    owner_id TEXT NOT NULL,
+    book_id TEXT NOT NULL,
+    projection_id TEXT NOT NULL,
+    PRIMARY KEY (tenant_id, owner_id, book_id)
+);
+CREATE TABLE IF NOT EXISTS finance_dated_projection_events (
+    tenant_id TEXT NOT NULL,
+    owner_id TEXT NOT NULL,
+    book_id TEXT NOT NULL,
+    projection_id TEXT NOT NULL,
+    context_id TEXT NOT NULL,
+    ordinal INTEGER NOT NULL,
+    event_id TEXT NOT NULL,
+    event_json TEXT NOT NULL,
+    PRIMARY KEY (tenant_id, owner_id, book_id, projection_id, context_id, ordinal),
+    UNIQUE (tenant_id, owner_id, book_id, projection_id, context_id, event_id)
+);
+CREATE TABLE IF NOT EXISTS finance_dated_projection_refs (
+    tenant_id TEXT NOT NULL,
+    owner_id TEXT NOT NULL,
+    book_id TEXT NOT NULL,
+    projection_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    reference_id TEXT NOT NULL,
+    context_id TEXT NOT NULL,
+    ordinal INTEGER NOT NULL,
+    record_json TEXT NOT NULL,
+    PRIMARY KEY (tenant_id, owner_id, book_id, projection_id, kind, context_id, reference_id)
+);
+CREATE INDEX IF NOT EXISTS idx_finance_dated_projection_refs_page
+ON finance_dated_projection_refs(tenant_id,owner_id,book_id,projection_id,kind,context_id,ordinal);
+
+-- Shared detail bodies stay owner/projection scoped; selectors only add order.
+CREATE TABLE IF NOT EXISTS finance_dated_shared_events (
+    tenant_id TEXT NOT NULL,
+    owner_id TEXT NOT NULL,
+    book_id TEXT NOT NULL,
+    projection_id TEXT NOT NULL,
+    record_id TEXT NOT NULL,
+    event_json TEXT NOT NULL,
+    PRIMARY KEY (tenant_id, owner_id, book_id, projection_id, record_id)
+);
+CREATE TABLE IF NOT EXISTS finance_dated_event_bindings (
+    tenant_id TEXT NOT NULL,
+    owner_id TEXT NOT NULL,
+    book_id TEXT NOT NULL,
+    projection_id TEXT NOT NULL,
+    context_id TEXT NOT NULL,
+    ordinal INTEGER NOT NULL,
+    record_id TEXT NOT NULL,
+    PRIMARY KEY (tenant_id, owner_id, book_id, projection_id, context_id, ordinal),
+    UNIQUE (tenant_id, owner_id, book_id, projection_id, context_id, record_id),
+    FOREIGN KEY (tenant_id, owner_id, book_id, projection_id, record_id)
+      REFERENCES finance_dated_shared_events(tenant_id, owner_id, book_id, projection_id, record_id)
+);
+
+
+-- Immutable closed proof blobs, rebuilt from privileged encrypted events.
+CREATE TABLE IF NOT EXISTS finance_provenance_blobs (
+    tenant_id TEXT NOT NULL,
+    owner_id TEXT NOT NULL,
+    book_id TEXT NOT NULL,
+    root_sha256 TEXT NOT NULL,
+    content_sha256 TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('index','chunk','evidence')),
+    canonical_json TEXT NOT NULL,
+    approved_evidence_json TEXT NOT NULL,
+    last_event_id TEXT NOT NULL,
+    PRIMARY KEY (tenant_id,owner_id,book_id,root_sha256,content_sha256)
 );

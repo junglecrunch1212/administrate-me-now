@@ -40,7 +40,9 @@ TEST_KEY = b"g" * 32
 
 
 class _NoopBus:
-    async def notify(self, _event_id: str) -> None:
+    async def notify(
+        self, _event_id: str, *, event_types: frozenset[str] | None = None
+    ) -> None:
         return None
 
 

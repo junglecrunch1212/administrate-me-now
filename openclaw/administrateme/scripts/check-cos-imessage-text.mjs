@@ -164,7 +164,7 @@ print(json.dumps(_build_request_body(pack=pack, session_key="agent:main:adminme:
   console.log("Pinned llm-task grounding boundary passed: explicit root contract, routed isolated runtime, valid and malformed completions");
   const { createPluginRegistryState } = await jiti.import(path.join(sourceRoot, "src/plugins/registry-state.ts"));
   const { createToolHookRegistrars } = await jiti.import(path.join(sourceRoot, "src/plugins/registry-registrars-tools-hooks.ts"));
-  const preparedPolicies = JSON.parse(execFileSync("python3", ["-c", `
+  const preparedPolicies = JSON.parse(execFileSync("poetry", ["run", "python", "-c", `
 import json
 from bootstrap.cos_reply_hooks import configure_reply_hook
 entry = {"hooks": {"allowPromptInjection": False}}
@@ -278,7 +278,19 @@ print(json.dumps([enabled, entry["hooks"]]))
     registerTool: (factory, options) => appleTools.set(options.name, factory) };
   registerHooks(appleApi, appleRuntime);
   registerAppleReminderTools(appleApi, appleRuntime);
-  const nativeHook = (name) => appleRegistration.state.registry.typedHooks.find((row) => row.hookName === name).handler;
+  const nativeHook = (name) => {
+    const hooks = appleRegistration.state.registry.typedHooks.filter((row) => row.hookName === name);
+    assert.ok(hooks.length > 0, `Missing registered native hook: ${name}`);
+    if (name === "before_agent_reply") {
+      // Finance and member-request admission share this native lifecycle hook.
+      // Exercise every registered observer; selecting the first skips admission.
+      return async (...args) => {
+        for (const hook of hooks) assert.equal(await hook.handler(...args), undefined);
+      };
+    }
+    assert.equal(hooks.length, 1, `Use native composition for multiple ${name} hooks`);
+    return hooks[0].handler;
+  };
   const appleContext = { runId: "native-apple-run", agentId: agent, sessionKey: incoming.sessionKey };
   await nativeHook("message_received")(appleInbound, { agentId: agent, sessionKey: incoming.sessionKey, channelId: "imessage", accountId: "fixture" });
   const appleEnvelope = buildReplyPromptEnvelope({ ctx: {}, sessionCtx: {}, baseBody: appleMessage,
@@ -375,7 +387,19 @@ print(json.dumps([enabled, entry["hooks"]]))
   } };
   const policyApi = { ...api, on: policyRegistration.on, registerTool: (factory, options) => policyTools.set(options.name, factory) };
   registerHooks(policyApi, policyRuntime); registerAppleReminderTools(policyApi, policyRuntime); registerCoSReminderTools(policyApi, policyRuntime); registerTools(policyApi, policyRuntime);
-  const policyHook = (name) => policyRegistration.state.registry.typedHooks.find((row) => row.hookName === name).handler;
+  const policyHook = (name) => {
+    const hooks = policyRegistration.state.registry.typedHooks.filter((row) => row.hookName === name);
+    assert.ok(hooks.length > 0, `Missing registered native policy hook: ${name}`);
+    if (name === "before_agent_reply") {
+      // The host dispatches every observer. Finance admission and current
+      // request binding are separate observers on the same lifecycle event.
+      return async (...args) => {
+        for (const hook of hooks) await hook.handler(...args);
+      };
+    }
+    assert.equal(hooks.length, 1, `Unexpected multiple native policy hooks: ${name}`);
+    return hooks[0].handler;
+  };
   const runner = createHookRunner(policyRegistration.state.registry, { catchErrors: false });
   const deliverPolicyInput = async (messageId, content) => {
     const received = hookSdk.toPluginMessageReceivedEvent(hookSdk.deriveInboundMessageHookContext({

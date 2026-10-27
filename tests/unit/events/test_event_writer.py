@@ -81,7 +81,9 @@ async def test_failed_append_never_notifies_delivery() -> None:
         def __init__(self) -> None:
             self.notifications: list[str] = []
 
-        async def notify(self, event_id: str) -> None:
+        async def notify(
+            self, event_id: str, *, event_types: frozenset[str] | None = None
+        ) -> None:
             self.notifications.append(event_id)
 
     bus = RecordingBus()

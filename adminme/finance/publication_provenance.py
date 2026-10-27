@@ -357,6 +357,7 @@ def _verified_with_receipt(publication, package, previous):
             }
         )
     ).hexdigest()
+    del publication_raw, previous_raw  # Only their digests are needed below.
     with _proof_receipt_lock:
         cached = _proof_receipts.get(fingerprint)
         if cached is not None:
