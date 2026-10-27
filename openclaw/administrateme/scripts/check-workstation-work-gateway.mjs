@@ -14,6 +14,7 @@ import { startBrowserTransport } from "../../../tests/fixtures/openclaw_browser_
 import { startNativeFailureBackend, startWorkstationWorkFixtures } from "../../../tests/fixtures/openclaw_workstation_work_probe.mjs";
 
 assert.equal(process.env.GITHUB_ACTIONS, "true", "Use isolated hosted CI for candidate execution");
+assert.equal(process.env.RUNNER_ENVIRONMENT, "github-hosted", "Use isolated hosted CI for candidate execution");
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const candidateCommit = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repository, encoding: "utf8" }).trim();
 assert.match(candidateCommit, /^[0-9a-f]{40}$/);
@@ -78,8 +79,7 @@ Object.assign(env, { OPENCLAW_STATE_DIR: state, OPENCLAW_CONFIG_PATH: configPath
   OPENCLAW_SKIP_GMAIL_WATCHER: "1", OPENCLAW_SKIP_CANVAS_HOST: "1", OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1", ADMINME_OPENCLAW_SHARED_SECRET: secret });
 if (browserProbe) {
   delete env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER;
-  Object.assign(env, { GITHUB_ACTIONS: process.env.GITHUB_ACTIONS, RUNNER_ENVIRONMENT: process.env.RUNNER_ENVIRONMENT,
-    ADMINME_SYNTHETIC_BROWSER_DNS_TRACE: "1" });
+  env.ADMINME_SYNTHETIC_BROWSER_DNS_TRACE = directory;
 }
 async function start() {
   const diagnostic = browserProbe ? ["--import", pathToFileURL(path.join(repository, "tests/fixtures/openclaw_browser_dns_trace.mjs")).href] : [];

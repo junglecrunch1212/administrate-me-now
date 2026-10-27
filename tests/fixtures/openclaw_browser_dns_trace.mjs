@@ -1,16 +1,21 @@
 /** Hosted synthetic Gateway diagnostic only; never substitutes DNS answers. */
 import assert from "node:assert/strict";
 import dns from "node:dns/promises";
+import { realpathSync } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
+import path from "node:path";
+import { isMainThread, threadId } from "node:worker_threads";
 
-assert.equal(process.env.GITHUB_ACTIONS, "true");
-assert.equal(process.env.RUNNER_ENVIRONMENT, "github-hosted");
-assert.equal(process.env.ADMINME_SYNTHETIC_BROWSER_DNS_TRACE, "1");
-// The original probe's Gateway environment excludes these three variables.
-// Restore that exact environment before OpenClaw's CI-dependent code loads.
-delete process.env.GITHUB_ACTIONS;
-delete process.env.RUNNER_ENVIRONMENT;
-delete process.env.ADMINME_SYNTHETIC_BROWSER_DNS_TRACE;
+// The hosted parent asserts runner identity before spawning the Gateway. Native
+// workers inherit --import, so retain only this inert, exact fixture coordinate;
+// never inject CI flags that could change OpenClaw's runtime behavior.
+const fixture = process.env.ADMINME_SYNTHETIC_BROWSER_DNS_TRACE;
+assert.equal(typeof fixture, "string");
+assert(path.isAbsolute(fixture));
+assert(path.basename(fixture).startsWith("adminme-service-gateway-"));
+assert.equal(process.env.OPENCLAW_STATE_DIR, path.join(fixture, "state"));
+assert.equal(process.env.OPENCLAW_CONFIG_PATH, path.join(fixture, "openclaw.json"));
+assert.equal(realpathSync(process.cwd()), realpathSync(fixture));
 
 const lookup = dns.lookup;
 const hosts = new Map([["example.com", "fixture_page"], ["mail.google.com", "gmail_self"]]);
@@ -18,7 +23,7 @@ let sequence = 0;
 function record(entry) {
   // No address, caller options, hostname outside the two synthetic destinations,
   // error text, credential or page content is retained. Observation cannot throw.
-  try { process.stderr.write(`SYNTHETIC_BROWSER_DNS ${JSON.stringify({ ...entry, at_ms: Date.now() })}\n`); }
+  try { process.stderr.write(`SYNTHETIC_BROWSER_DNS ${JSON.stringify({ ...entry, pid: process.pid, thread_id: threadId, is_main_thread: isMainThread, at_ms: Date.now() })}\n`); }
   catch { /* A missing trace is missing evidence, not a changed DNS outcome. */ }
 }
 dns.lookup = function (...args) {
