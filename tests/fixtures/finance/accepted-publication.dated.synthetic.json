@@ -1,0 +1,545 @@
+{
+  "accepted_at": "2026-01-31T12:00:00Z",
+  "accepted_journal_revision_ids": [
+    "revision-1",
+    "revision-2"
+  ],
+  "audience_policy_id": "owner-only",
+  "audience_policy_version": "1",
+  "book_id": "book-synthetic",
+  "cash_projection": {
+    "as_of_date": "2026-01-01",
+    "chosen_floor_minor": 50000,
+    "currency": "USD",
+    "mandatory_flow_coverage": "complete",
+    "model_id": "books-dated-cash",
+    "model_version": "synthetic-1",
+    "opening_liquid_minor": 100000,
+    "opening_reconciled": true,
+    "scenarios": [
+      {
+        "cash_events": [
+          {
+            "amount_minor": 60000,
+            "cash_event_id": "event-outflow",
+            "certainty": "confirmed",
+            "direction": "outflow",
+            "earliest_date": "2026-01-03",
+            "evidence_ids": [
+              "evidence-1"
+            ],
+            "kind": "bill",
+            "latest_date": "2026-01-03"
+          }
+        ],
+        "horizons": [
+          {
+            "closing_minor": 40000,
+            "days": 7,
+            "end_date": "2026-01-08",
+            "evidence_ids": [
+              "evidence-1"
+            ],
+            "first_shortage_date": "2026-01-03",
+            "first_surplus_date": null,
+            "minimum_minor": 40000,
+            "release_state": "qualified",
+            "required_evidence": [
+              "current-source-freshness"
+            ]
+          },
+          {
+            "closing_minor": 40000,
+            "days": 30,
+            "end_date": "2026-01-31",
+            "evidence_ids": [
+              "evidence-1"
+            ],
+            "first_shortage_date": "2026-01-03",
+            "first_surplus_date": null,
+            "minimum_minor": 40000,
+            "release_state": "qualified",
+            "required_evidence": [
+              "current-source-freshness"
+            ]
+          },
+          {
+            "closing_minor": 40000,
+            "days": 90,
+            "end_date": "2026-04-01",
+            "evidence_ids": [
+              "evidence-1"
+            ],
+            "first_shortage_date": "2026-01-03",
+            "first_surplus_date": null,
+            "minimum_minor": 40000,
+            "release_state": "qualified",
+            "required_evidence": [
+              "current-source-freshness"
+            ]
+          },
+          {
+            "closing_minor": 40000,
+            "days": 180,
+            "end_date": "2026-06-30",
+            "evidence_ids": [
+              "evidence-1"
+            ],
+            "first_shortage_date": "2026-01-03",
+            "first_surplus_date": null,
+            "minimum_minor": 40000,
+            "release_state": "qualified",
+            "required_evidence": [
+              "current-source-freshness"
+            ]
+          },
+          {
+            "closing_minor": 40000,
+            "days": 365,
+            "end_date": "2027-01-01",
+            "evidence_ids": [
+              "evidence-1"
+            ],
+            "first_shortage_date": "2026-01-03",
+            "first_surplus_date": null,
+            "minimum_minor": 40000,
+            "release_state": "qualified",
+            "required_evidence": [
+              "current-source-freshness"
+            ]
+          }
+        ],
+        "scenario_id": "current"
+      },
+      {
+        "cash_events": [
+          {
+            "amount_minor": 60000,
+            "cash_event_id": "event-outflow",
+            "certainty": "confirmed",
+            "direction": "outflow",
+            "earliest_date": "2026-01-03",
+            "evidence_ids": [
+              "evidence-1"
+            ],
+            "kind": "bill",
+            "latest_date": "2026-01-03"
+          },
+          {
+            "amount_minor": 30000,
+            "cash_event_id": "event-inflow",
+            "certainty": "expected",
+            "direction": "inflow",
+            "earliest_date": "2026-01-04",
+            "evidence_ids": [
+              "evidence-1"
+            ],
+            "kind": "income",
+            "latest_date": "2026-01-04"
+          }
+        ],
+        "horizons": [
+          {
+            "closing_minor": 70000,
+            "days": 7,
+            "end_date": "2026-01-08",
+            "evidence_ids": [
+              "evidence-1"
+            ],
+            "first_shortage_date": "2026-01-03",
+            "first_surplus_date": null,
+            "minimum_minor": 40000,
+            "release_state": "qualified",
+            "required_evidence": [
+              "current-source-freshness"
+            ]
+          },
+          {
+            "closing_minor": 70000,
+            "days": 30,
+            "end_date": "2026-01-31",
+            "evidence_ids": [
+              "evidence-1"
+            ],
+            "first_shortage_date": "2026-01-03",
+            "first_surplus_date": null,
+            "minimum_minor": 40000,
+            "release_state": "qualified",
+            "required_evidence": [
+              "current-source-freshness"
+            ]
+          },
+          {
+            "closing_minor": 70000,
+            "days": 90,
+            "end_date": "2026-04-01",
+            "evidence_ids": [
+              "evidence-1"
+            ],
+            "first_shortage_date": "2026-01-03",
+            "first_surplus_date": null,
+            "minimum_minor": 40000,
+            "release_state": "qualified",
+            "required_evidence": [
+              "current-source-freshness"
+            ]
+          },
+          {
+            "closing_minor": 70000,
+            "days": 180,
+            "end_date": "2026-06-30",
+            "evidence_ids": [
+              "evidence-1"
+            ],
+            "first_shortage_date": "2026-01-03",
+            "first_surplus_date": null,
+            "minimum_minor": 40000,
+            "release_state": "qualified",
+            "required_evidence": [
+              "current-source-freshness"
+            ]
+          },
+          {
+            "closing_minor": 70000,
+            "days": 365,
+            "end_date": "2027-01-01",
+            "evidence_ids": [
+              "evidence-1"
+            ],
+            "first_shortage_date": "2026-01-03",
+            "first_surplus_date": null,
+            "minimum_minor": 40000,
+            "release_state": "qualified",
+            "required_evidence": [
+              "current-source-freshness"
+            ]
+          }
+        ],
+        "scenario_id": "expected"
+      },
+      {
+        "cash_events": [
+          {
+            "amount_minor": 30000,
+            "cash_event_id": "event-outflow",
+            "certainty": "chosen",
+            "direction": "outflow",
+            "earliest_date": "2026-01-03",
+            "evidence_ids": [
+              "evidence-1"
+            ],
+            "kind": "bill",
+            "latest_date": "2026-01-03"
+          }
+        ],
+        "horizons": [
+          {
+            "closing_minor": 70000,
+            "days": 7,
+            "end_date": "2026-01-08",
+            "evidence_ids": [
+              "evidence-1"
+            ],
+            "first_shortage_date": null,
+            "first_surplus_date": null,
+            "minimum_minor": 70000,
+            "release_state": "qualified",
+            "required_evidence": [
+              "current-source-freshness"
+            ]
+          },
+          {
+            "closing_minor": 70000,
+            "days": 30,
+            "end_date": "2026-01-31",
+            "evidence_ids": [
+              "evidence-1"
+            ],
+            "first_shortage_date": null,
+            "first_surplus_date": null,
+            "minimum_minor": 70000,
+            "release_state": "qualified",
+            "required_evidence": [
+              "current-source-freshness"
+            ]
+          },
+          {
+            "closing_minor": 70000,
+            "days": 90,
+            "end_date": "2026-04-01",
+            "evidence_ids": [
+              "evidence-1"
+            ],
+            "first_shortage_date": null,
+            "first_surplus_date": null,
+            "minimum_minor": 70000,
+            "release_state": "qualified",
+            "required_evidence": [
+              "current-source-freshness"
+            ]
+          },
+          {
+            "closing_minor": 70000,
+            "days": 180,
+            "end_date": "2026-06-30",
+            "evidence_ids": [
+              "evidence-1"
+            ],
+            "first_shortage_date": null,
+            "first_surplus_date": null,
+            "minimum_minor": 70000,
+            "release_state": "qualified",
+            "required_evidence": [
+              "current-source-freshness"
+            ]
+          },
+          {
+            "closing_minor": 70000,
+            "days": 365,
+            "end_date": "2027-01-01",
+            "evidence_ids": [
+              "evidence-1"
+            ],
+            "first_shortage_date": null,
+            "first_surplus_date": null,
+            "minimum_minor": 70000,
+            "release_state": "qualified",
+            "required_evidence": [
+              "current-source-freshness"
+            ]
+          }
+        ],
+        "scenario_id": "chosen"
+      }
+    ],
+    "timezone": "UTC"
+  },
+  "content_sha256": "f7f944ca8b8405a146413a58f650f6b93601d98f03d88b0095dd3873763fa274",
+  "contract": "household-books.accepted-publication.v1",
+  "entity_id": "entity-synthetic",
+  "entity_kind": "household",
+  "excluded_pending_revision_ids": [
+    "revision-pending"
+  ],
+  "owner_id": "member-synthetic",
+  "planning_input_version": "input-1",
+  "planning_model_id": "books-scenarios",
+  "planning_model_version": "model-1",
+  "prior_publication_id": null,
+  "publication_id": "publication-1",
+  "published_at": "2026-01-31T12:00:00Z",
+  "quality_issues": [
+    "opening-missing",
+    "coverage-partial"
+  ],
+  "recovery_state": "paused",
+  "reports": [
+    {
+      "basis": "accounting_actual",
+      "metrics": [
+        {
+          "allocation": "sole",
+          "basis": "accounting_actual",
+          "currency": "USD",
+          "evidence_ids": [
+            "evidence-1"
+          ],
+          "inclusion_policy_id": "accepted-only",
+          "metric_id": "actuals-metric-0",
+          "owner_id": "member-synthetic",
+          "period_end": "2026-01-31",
+          "period_start": "2026-01-01",
+          "quality": "qualified",
+          "revision_ids": [
+            "revision-1",
+            "revision-2"
+          ],
+          "scenario_id": null,
+          "unit": "minor_units",
+          "value_minor": 12500
+        }
+      ],
+      "model_id": "books-report",
+      "model_version": "model-1",
+      "period_end": "2026-01-31",
+      "period_start": "2026-01-01",
+      "quality": {
+        "classification": "partial",
+        "coverage": "partial",
+        "freshness": "partial",
+        "model_validity": "partial",
+        "reconciliation": "partial"
+      },
+      "release_state": "qualified",
+      "report_id": "actuals",
+      "required_evidence": [
+        "complete-coverage"
+      ]
+    },
+    {
+      "basis": "cash_movement",
+      "metrics": [],
+      "model_id": "books-report",
+      "model_version": "model-1",
+      "period_end": "2026-01-31",
+      "period_start": "2026-01-01",
+      "quality": {
+        "classification": "partial",
+        "coverage": "partial",
+        "freshness": "partial",
+        "model_validity": "partial",
+        "reconciliation": "partial"
+      },
+      "release_state": "unavailable",
+      "report_id": "cash",
+      "required_evidence": [
+        "reconciled-opening"
+      ]
+    },
+    {
+      "basis": "accounting_actual",
+      "metrics": [],
+      "model_id": "books-report",
+      "model_version": "model-1",
+      "period_end": "2026-01-31",
+      "period_start": "2026-01-01",
+      "quality": {
+        "classification": "partial",
+        "coverage": "partial",
+        "freshness": "partial",
+        "model_validity": "partial",
+        "reconciliation": "partial"
+      },
+      "release_state": "unavailable",
+      "report_id": "balance_sheet",
+      "required_evidence": [
+        "complete-coverage"
+      ]
+    },
+    {
+      "basis": "forecast",
+      "metrics": [
+        {
+          "allocation": "sole",
+          "basis": "forecast",
+          "currency": "USD",
+          "evidence_ids": [
+            "evidence-1"
+          ],
+          "inclusion_policy_id": "accepted-only",
+          "metric_id": "scenarios-metric-0",
+          "owner_id": "member-synthetic",
+          "period_end": "2026-01-31",
+          "period_start": "2026-01-01",
+          "quality": "qualified",
+          "revision_ids": [
+            "revision-1",
+            "revision-2"
+          ],
+          "scenario_id": "scenario-1",
+          "unit": "minor_units",
+          "value_minor": 12500
+        },
+        {
+          "allocation": "sole",
+          "basis": "forecast",
+          "currency": "USD",
+          "evidence_ids": [
+            "evidence-1"
+          ],
+          "inclusion_policy_id": "accepted-only",
+          "metric_id": "scenarios-metric-1",
+          "owner_id": "member-synthetic",
+          "period_end": "2026-01-31",
+          "period_start": "2026-01-01",
+          "quality": "qualified",
+          "revision_ids": [
+            "revision-1",
+            "revision-2"
+          ],
+          "scenario_id": "scenario-2",
+          "unit": "minor_units",
+          "value_minor": 13500
+        },
+        {
+          "allocation": "sole",
+          "basis": "forecast",
+          "currency": "USD",
+          "evidence_ids": [
+            "evidence-1"
+          ],
+          "inclusion_policy_id": "accepted-only",
+          "metric_id": "scenarios-metric-2",
+          "owner_id": "member-synthetic",
+          "period_end": "2026-01-31",
+          "period_start": "2026-01-01",
+          "quality": "qualified",
+          "revision_ids": [
+            "revision-1",
+            "revision-2"
+          ],
+          "scenario_id": "scenario-3",
+          "unit": "minor_units",
+          "value_minor": 14500
+        },
+        {
+          "allocation": "sole",
+          "basis": "forecast",
+          "currency": "USD",
+          "evidence_ids": [
+            "evidence-1"
+          ],
+          "inclusion_policy_id": "accepted-only",
+          "metric_id": "scenarios-metric-3",
+          "owner_id": "member-synthetic",
+          "period_end": "2026-01-31",
+          "period_start": "2026-01-01",
+          "quality": "qualified",
+          "revision_ids": [
+            "revision-1",
+            "revision-2"
+          ],
+          "scenario_id": "scenario-4",
+          "unit": "minor_units",
+          "value_minor": 15500
+        }
+      ],
+      "model_id": "books-scenarios",
+      "model_version": "model-1",
+      "period_end": "2026-01-31",
+      "period_start": "2026-01-01",
+      "quality": {
+        "classification": "partial",
+        "coverage": "partial",
+        "freshness": "partial",
+        "model_validity": "partial",
+        "reconciliation": "partial"
+      },
+      "release_state": "qualified",
+      "report_id": "scenarios",
+      "required_evidence": [
+        "complete-coverage"
+      ]
+    }
+  ],
+  "schema_sha256": "c69ac4bb68cbb7b6d66694dc294724a557eda6f3f480a8b7399bf8ac5b424307",
+  "source_coverage": [
+    {
+      "accepted_at": "2026-01-31T12:00:00Z",
+      "account_id": "account-synthetic",
+      "coverage": "partial",
+      "observed_at": "2026-01-30T12:00:00Z",
+      "opening_state": "missing",
+      "source_id": "source-synthetic",
+      "valuation_date": null
+    }
+  ],
+  "source_references": [
+    {
+      "access": "owner_only",
+      "evidence_id": "evidence-1",
+      "source_kind": "accepted_books"
+    }
+  ],
+  "tenant_id": "tenant-synthetic"
+}

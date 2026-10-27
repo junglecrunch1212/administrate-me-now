@@ -396,7 +396,7 @@ async function seed(baseUrl) {
     identities.principal,
     "POST",
   );
-  record("Finance fixture seeded", finance.response.ok && finance.value.seeded === 10, finance.value);
+  record("Finance fixture seeded", finance.response.ok && finance.value.seeded === 11, finance.value);
   await settle(baseUrl);
   return {
     triage_pagination_candidates: triagePagination.value.seeded,
@@ -1394,6 +1394,14 @@ async function run() {
         record("Finance identifies deterministic planning and no bank writes", await principal.page.locator("#mode-label").textContent() === "Private · deterministic planning · no bank writes", await principal.page.locator("#mode-label").textContent());
         record("Finance leads with cash safety and one explained review", await principal.page.locator(".finance-hero-stats dd").count() === 4 && (await principal.page.locator(".finance-hero").textContent()).includes("Review Groceries"), await principal.page.locator(".finance-hero").textContent());
         record("Finance compares explicit scenarios without changing baseline", await principal.page.locator(".finance-scenario-button").count() === 2 && await principal.page.locator(".finance-scenario-button").first().getAttribute("aria-pressed") === "true", await principal.page.locator(".finance-scenarios").textContent());
+        const financeBefore = await jsonRequest(server.baseUrl, "/api/member/v1/surfaces/finance", identities.principal);
+        const chosenBaseline = financeBefore.value.cockpit?.scenarios?.find((row) => row.is_baseline);
+        record("Finance scenarios use chosen opening cash independently of observed balance", financeBefore.response.ok && financeBefore.value.cockpit.summary.cash_minor === 2400000 && chosenBaseline?.opening_cash_minor === 2000000 && chosenBaseline?.monthly_net_minor === 180000 && chosenBaseline?.ending_cash_minor === 8480000, financeBefore.value.cockpit?.scenarios);
+        await principal.page.getByRole("button", { name: "Reduce monthly burn", exact: true }).click();
+        record("Finance scenario comparison selects its own projected result", await principal.page.getByRole("button", { name: "Reduce monthly burn", exact: true }).getAttribute("aria-pressed") === "true" && (await principal.page.locator(".finance-scenario-stats").textContent()).includes("102,800"), await principal.page.locator(".finance-scenario-stats").textContent());
+        const financeAfter = await jsonRequest(server.baseUrl, "/api/member/v1/surfaces/finance", identities.principal);
+        record("Finance scenario comparison preserves the published baseline", financeAfter.response.ok && JSON.stringify(financeAfter.value.cockpit.scenarios) === JSON.stringify(financeBefore.value.cockpit.scenarios), financeAfter.value.cockpit?.scenarios);
+        await principal.page.getByRole("button", { name: "Current plan", exact: true }).click();
         record("Finance shows goals as planning without moving money", (await principal.page.locator(".finance-goals").textContent()).includes("never move funds") && await principal.page.locator(".finance-goal-list li").count() === 1, await principal.page.locator(".finance-goals").textContent());
         await screenshot(principal.page, "surface-finance-overview-desktop.png");
         await principal.page.getByRole("button", { name: "Spending", exact: true }).click();
@@ -1401,7 +1409,7 @@ async function run() {
         await principal.page.reload({ waitUntil: "networkidle" });
         record("Finance view survives URL reload", await principal.page.getByRole("button", { name: "Spending", exact: true }).getAttribute("aria-pressed") === "true", principal.page.url());
         await principal.page.getByRole("button", { name: "Data health", exact: true }).click();
-        record("Finance data health exposes source and workbook truth", (await principal.page.locator(".finance-health").textContent()).includes("Latest source") && (await principal.page.locator(".finance-health").textContent()).includes("Plaid owns provider facts"), await principal.page.locator(".finance-health").textContent());
+        record("Finance data health exposes source and workbook truth", (await principal.page.locator(".finance-health").textContent()).includes("Latest source") && (await principal.page.locator(".finance-health").textContent()).includes("Provider observations alone do not release reports"), await principal.page.locator(".finance-health").textContent());
         await screenshot(principal.page, "surface-finance-health-desktop.png");
       } else if (surface === "scoreboard") {
         const scoreboardText = await principal.page.locator("#surface").textContent();

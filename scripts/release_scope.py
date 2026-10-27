@@ -526,6 +526,57 @@ UPDATER_TOOLING_SHARED = {
         "6aa680807216ac0d3c6d3e56a6346a95a69e9a62266c06dbe737c5ac072174ab",
     ),
 }
+# Closed Node-only credential boundary; unrelated launcher/secret changes fall back.
+UPDATER_PYTHON_BOUNDARY_SOURCE = "bootstrap/keychain_runtime_migration.py"
+UPDATER_PYTHON_BOUNDARY_SHA256 = (
+    "9af922f722284bde4c80f7902b66cf50f5cc3f1620d6f3d4b185c9f79c0a9c31",
+    "57aeb2a09624c5f17bbfd220593f4645cf76bbfae39698d787927f412c5a1608",
+)
+UPDATER_PYTHON_BOUNDARY_LAUNCHER_SHA256 = (
+    "d5d74ca1590eeda364f79a955c540c11d159fa5f26ba5c0dd636148ddf777a74",
+    "d5d7a6b4fc54998110c623ce2df6cde4e0a7996f89661f12e0dabb132425c25f",
+)
+UPDATER_PYTHON_BOUNDARY_TEST = "tests/unit/bootstrap/test_phase5_operations.py"
+UPDATER_PYTHON_BOUNDARY_PATHS = {
+    UPDATER_PYTHON_BOUNDARY_SOURCE,
+    UPDATER_PYTHON_BOUNDARY_TEST,
+}
+
+# Exact additive public-preflight wiring; neighboring launcher/CLI changes
+# remain part of the dependency fingerprint and require a different lane.
+UPDATER_RUNTIME_PREFLIGHT_SHARED = {
+    "bootstrap/cli.py": (
+        "2fd0c17a07bd73023f5b867e1855cf1fe939ca3d99f7a87ea0b5c2210e2b491f",
+        "b2c1b0b6c8c1da1669328f1fea48ce85de46d5b1b9daab9975991feac700c03b",
+    ),
+    "bootstrap/update.sh": (
+        "f9dca946b18fb5b59f5af90bd797383b7e31359242f4f45b8133f9122888100f",
+        "1f179619e32d47def9b5b24cd86df0f3bfa410c6b72a8ab2f2fbd049ea6e541b",
+    ),
+}
+UPDATER_RUNTIME_PREFLIGHT_BOUNDARY_SHA256 = (
+    "308a6476aa813dd561a37ce8337512ae379c92a5e1ad5ec63d3544af249e1553"
+)
+UPDATER_RUNTIME_PREFLIGHT_CHECK_SHA256 = (
+    "9a664ed034b65e0b24495f139a3cc41fd1a45e6420a740a9cd6b96762f590684"
+)
+UPDATER_RUNTIME_PREFLIGHT_WORKFLOW = ".github/workflows/macos-bootstrap.yml"
+UPDATER_RUNTIME_PREFLIGHT_WORKFLOW_PAIRS = (
+    (
+        "  updater-delivery-validation:\n    name: Updater delivery release (macos)\n    needs: [release-scope]\n    if: ${{ needs.release-scope.outputs.scope == 'updater-delivery' }}\n    runs-on: macos-14\n",
+        "  updater-delivery-validation:\n    name: Updater delivery release (macos)\n    needs: [release-scope]\n    if: ${{ needs.release-scope.outputs.scope == 'updater-delivery' }}\n    runs-on: macos-15\n",
+    ),
+    (
+        "      - name: Validate updater preparation, activation and recovery\n        run: bash scripts/acceptance/updater-delivery-release.sh macos\n",
+        '      - name: Provision declared tooling for the real public updater preflight\n        run: |\n          test "$(uname -m)" = arm64\n          test "$(sw_vers -productVersion | cut -d. -f1)" = 15\n          test "$(/opt/homebrew/opt/python@3.14/bin/python3.14 --version)" = \'Python 3.14.7\'\n          # Preserve the image\'s reviewed Python; refreshing Node must not upgrade it.\n          HOMEBREW_NO_AUTO_UPDATE=1 brew info --json=v2 python@3.14 > "$RUNNER_TEMP/updater-python-formula.json"\n          jq -e \'.formulae | length == 1 and (.[0] | .name == "python@3.14" and ([.installed[] | select(.version == "3.14.7")] | length == 1))\' "$RUNNER_TEMP/updater-python-formula.json"\n          HOMEBREW_NO_AUTO_UPDATE=1 brew pin python@3.14\n          brew update\n          HOMEBREW_NO_AUTO_UPDATE=1 brew info --json=v2 node@24 > "$RUNNER_TEMP/updater-node-formula.json"\n          jq -e \'.formulae | length == 1 and (.[0] | .name == "node@24" and .versions.stable == "24.22.1" and .ruby_source_checksum.sha256 == "bf391a780600dd8ad64b7a6d91cb041582828dc5cdf4faef09cffc40268f1fd6" and .bottle.stable.files.arm64_sequoia.sha256 == "be87643df531ff6128e5a0f6aaf51a4a164406729ebed8a7cc56c8cb9cf0210f")\' "$RUNNER_TEMP/updater-node-formula.json"\n          HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_CLEANUP=1 brew install --force-bottle node@24\n          test "$(/opt/homebrew/opt/python@3.14/bin/python3.14 --version)" = \'Python 3.14.7\'\n          test "$(/opt/homebrew/opt/node@24/bin/node --version)" = v24.22.1\n      - name: Validate updater preparation, activation and recovery\n        run: bash scripts/acceptance/updater-delivery-release.sh macos\n',
+    ),
+    (
+        "          name: updater-delivery-macos\n          path: ${{ runner.temp }}/updater-delivery.xml\n",
+        "          name: updater-delivery-macos\n          path: |\n            ${{ runner.temp }}/updater-public-preflight.xml\n            ${{ runner.temp }}/updater-delivery.xml\n",
+    ),
+)
+UPDATER_RUNTIME_PREFLIGHT_TEST = "tests/acceptance/test_macos_bootstrap_operations.py"
+
 UPDATER_TOOLING_PATHS = frozenset(
     {
         "bootstrap/doctor_tooling.py",
@@ -1034,8 +1085,9 @@ def choose_scope(
                 | UPDATER_EFFECT_CONTEXT_SHARED_PATHS
                 | {UPDATER_EMAIL_ATTRIBUTION}
                 | UPDATER_TOOLING_SHARED.keys()
+                | UPDATER_PYTHON_BOUNDARY_PATHS
                 | POLICY_PATHS
-                or path == UPDATER_CHECK_SCRIPT
+                or path in {UPDATER_CHECK_SCRIPT, UPDATER_RUNTIME_PREFLIGHT_WORKFLOW}
                 or _prose(path)
             )
             and path_modes.get(path) == {_updater_mode(path)}
@@ -1043,6 +1095,7 @@ def choose_scope(
         )
         and any(
             path in UPDATER_COMPONENT_PATHS | UPDATER_EFFECT_CONTEXT_SHARED_PATHS
+            or path == UPDATER_PYTHON_BOUNDARY_SOURCE
             or path == UPDATER_CHECK_SCRIPT
             for _, path in changes
         )
@@ -1358,10 +1411,27 @@ def _updater_mode(path: str) -> str:
 def _updater_effect_context_shared_source(
     path: str, source: str
 ) -> tuple[str, bool] | None:
+    reviewed_preflight = UPDATER_RUNTIME_PREFLIGHT_SHARED.get(path)
+    if (
+        reviewed_preflight
+        and hashlib.sha256(source.encode()).hexdigest() == reviewed_preflight[0]
+    ):
+        return reviewed_preflight[1], True
     if path == UPDATER_SOURCE_ASSURANCE:
         normalized = _updater_source_assurance(source)
         return (
             (normalized, "cos_instruction_references" in source) if normalized else None
+        )
+    if path == "bootstrap/update.sh" and "--preserve-unchanged-python" in source:
+        if (
+            hashlib.sha256(source.encode()).hexdigest()
+            != UPDATER_PYTHON_BOUNDARY_LAUNCHER_SHA256[1]
+        ):
+            return None
+        source = source.replace(
+            '    --runtime-tag "$runtime_tag" \\\n    --candidate-manifest "$manifest" \\\n    --preserve-unchanged-python\n',
+            '    --runtime-tag "$runtime_tag"\n',
+            1,
         )
     replacements = UPDATER_EFFECT_CONTEXT_SHARED_REPLACEMENTS[path]
     counts = [source.count(new) for _, new in replacements]
@@ -1417,6 +1487,87 @@ def _updater_dependency_fingerprint(
     )
     shared_identities: list[tuple[str, str, str]] = []
     inventory = {entry.path: entry for entry in entries}
+    preflight = any(
+        "runtime-preflight" in _git(repository, "show", f"{revision}:{path}")
+        for path in UPDATER_RUNTIME_PREFLIGHT_SHARED
+        if path in inventory
+    )
+    if preflight:
+        required = {
+            UPDATER_PYTHON_BOUNDARY_SOURCE: UPDATER_RUNTIME_PREFLIGHT_BOUNDARY_SHA256,
+            UPDATER_CHECK_SCRIPT: UPDATER_RUNTIME_PREFLIGHT_CHECK_SHA256,
+            **{
+                path: pair[0] for path, pair in UPDATER_RUNTIME_PREFLIGHT_SHARED.items()
+            },
+        }
+        for path, digest in required.items():
+            entry = inventory.get(path)
+            if (
+                entry is None
+                or entry.mode != _updater_mode(path)
+                or hashlib.sha256(
+                    _git(repository, "show", f"{revision}:{path}").encode()
+                ).hexdigest()
+                != digest
+            ):
+                return None
+        for path in (UPDATER_PYTHON_BOUNDARY_TEST, UPDATER_RUNTIME_PREFLIGHT_TEST):
+            if path not in inventory or inventory[path].mode != "100644":
+                return None
+    workflow = inventory.get(UPDATER_RUNTIME_PREFLIGHT_WORKFLOW)
+    if workflow is not None:
+        if workflow.mode != "100644":
+            return None
+        workflow_source = _git(repository, "show", f"{revision}:{workflow.path}")
+        for old, new in UPDATER_RUNTIME_PREFLIGHT_WORKFLOW_PAIRS:
+            if workflow_source.count(new) != int(preflight):
+                return None
+            workflow_source = workflow_source.replace(new, old)
+        shared_identities.append(
+            (
+                workflow.path,
+                workflow.mode,
+                hashlib.sha256(workflow_source.encode()).hexdigest(),
+            )
+        )
+    elif preflight:
+        return None
+    boundary = inventory.get(UPDATER_PYTHON_BOUNDARY_SOURCE)
+    if boundary is not None:
+        digest = hashlib.sha256(
+            _git(repository, "show", f"{revision}:{boundary.path}").encode()
+        ).hexdigest()
+        if boundary.mode != "100644" or digest not in (
+            *UPDATER_PYTHON_BOUNDARY_SHA256,
+            UPDATER_RUNTIME_PREFLIGHT_BOUNDARY_SHA256,
+        ):
+            return None
+        launcher = _git(repository, "show", f"{revision}:bootstrap/update.sh")
+        launcher_digest = hashlib.sha256(launcher.encode()).hexdigest()
+        if digest == UPDATER_RUNTIME_PREFLIGHT_BOUNDARY_SHA256 and not preflight:
+            return None
+        enabled = digest != UPDATER_PYTHON_BOUNDARY_SHA256[0]
+        if enabled:
+            if (
+                launcher_digest
+                != (
+                    UPDATER_RUNTIME_PREFLIGHT_SHARED["bootstrap/update.sh"][0]
+                    if preflight
+                    else UPDATER_PYTHON_BOUNDARY_LAUNCHER_SHA256[1]
+                )
+                or UPDATER_PYTHON_BOUNDARY_TEST not in inventory
+                or inventory[UPDATER_PYTHON_BOUNDARY_TEST].mode != "100644"
+            ):
+                return None
+        elif "--preserve-unchanged-python" in launcher:
+            return None
+        shared_identities.append(
+            (boundary.path, boundary.mode, "reviewed-python-runtime-boundary-v1")
+        )
+    elif "bootstrap/update.sh" in inventory and "--preserve-unchanged-python" in _git(
+        repository, "show", f"{revision}:bootstrap/update.sh"
+    ):
+        return None
     tooling_present = "bootstrap/doctor_tooling.py" in inventory
     if tooling_present and not UPDATER_TOOLING_PATHS <= inventory.keys():
         return None
@@ -1469,8 +1620,9 @@ def _updater_dependency_fingerprint(
         | UPDATER_TEST_PATHS
         | UPDATER_EFFECT_CONTEXT_SHARED_PATHS
         | UPDATER_TOOLING_SHARED.keys()
+        | UPDATER_PYTHON_BOUNDARY_PATHS
         | POLICY_PATHS
-        | {UPDATER_CHECK_SCRIPT}
+        | {UPDATER_CHECK_SCRIPT, UPDATER_RUNTIME_PREFLIGHT_WORKFLOW}
     )
     coordinates = sorted(
         (entry.path, entry.mode, entry.object_id)
@@ -2342,7 +2494,23 @@ def select_scope(
     head = _commit(repository, pull.get("head", {}).get("sha"))
     parents = _git(repository, "rev-list", "--parents", "-n", "1", checkout).split()[1:]
     if checkout != head and parents != [base, head]:
-        raise ValueError("test merge does not bind the exact event base and head")
+        # GitHub may regenerate a merge after main advances while retaining the
+        # event's original base. Admit it only if head already integrates that
+        # first parent and the merge adds no bytes or modes beyond exact head.
+        try:
+            regenerated = (
+                len(parents) == 2
+                and parents[1] == head
+                and _git(repository, "merge-base", base, parents[0]).strip() == base
+                and _git(repository, "merge-base", parents[0], head).strip()
+                == parents[0]
+                and _git(repository, "rev-parse", f"{checkout}^{{tree}}").strip()
+                == _git(repository, "rev-parse", f"{head}^{{tree}}").strip()
+            )
+        except subprocess.CalledProcessError:
+            regenerated = False
+        if not regenerated:
+            raise ValueError("test merge does not bind the exact event base and head")
     raw = _git(repository, "diff", "--no-renames", "--name-status", "-z", base, head)
     fields = raw.rstrip("\0").split("\0") if raw else []
     if len(fields) % 2:

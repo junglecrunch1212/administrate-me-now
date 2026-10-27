@@ -2853,3 +2853,217 @@ def test_member_bridge_provider_capability_requires_enable_evidence_and_attestat
     with pytest.raises(BridgeEnrollmentError, match="injected attestation"):
         manager.attest(member_id, [pack])
     assert manager.index_path.read_bytes() == prior_index
+
+
+def _runtime_preflight_instance(tmp_path: Path, interpreter: Path) -> DeploymentPaths:
+    """Only isolated application coordinates; deliberately invalid secret aliases."""
+    paths = DeploymentPaths.from_root(tmp_path / "runtime-preflight-instance")
+    paths.root.mkdir(mode=0o700)
+    paths.app_dir.mkdir(mode=0o700)
+    release = paths.app_dir / "releases" / ("a" * 40)
+    (release / "bootstrap").mkdir(mode=0o700, parents=True)
+    release.chmod(0o700)
+    versions = load_versions(REPO_ROOT)
+    versions["node"]["preferred"] = "24.19.0"
+    (release / "bootstrap/versions.json").write_text(json.dumps(versions))
+    subprocess.run(
+        [str(interpreter), "-m", "venv", "--without-pip", str(release / ".venv")],
+        check=True,
+        timeout=60,
+    )
+    pointer = paths.app_dir / "current-release.json"
+    pointer.write_text(json.dumps({"commit": "a" * 40, "path": str(release)}))
+    pointer.chmod(0o600)
+    config = paths.root / "state/config"
+    config.mkdir(mode=0o700, parents=True)
+    (config / "keychain-runtime-aliases.json").write_text("INVALID ALIAS SENTINEL\n")
+    (config / "credential-fixture.json").write_text(
+        json.dumps({"secret_ref": f"keychain://{paths.keychain_account()}/never-read"})
+    )
+    return paths
+
+
+def _preflight_application_bytes(paths: DeploymentPaths) -> dict[str, bytes]:
+    return {
+        str(path.relative_to(paths.root)): path.read_bytes()
+        for parent in (paths.app_dir / "releases", paths.root / "state")
+        for path in parent.rglob("*")
+        if path.is_file()
+    } | {
+        "app/current-release.json": (
+            paths.app_dir / "current-release.json"
+        ).read_bytes()
+    }
+
+
+def test_supported_public_runtime_preflight_prepares_production_controller(
+    tmp_path: Path,
+) -> None:
+    # Selected only in the macOS updater worker, whose real declared Homebrew
+    # formulae are provisioned before pytest. Never substitute ADMINME_TEST_MODE.
+    assert sys.platform == "darwin"
+    assert _reviewed_release_runtimes_available()
+    versions = load_versions(REPO_ROOT)
+    interpreter = (
+        Path("/opt/homebrew/opt") / versions["python"]["formula"] / "bin/python3.14"
+    )
+    assert (
+        subprocess.check_output([str(interpreter), "--version"], text=True).strip()
+        == "Python " + versions["python"]["preferred"]
+    )
+    candidate = tmp_path / "runtime-preflight-candidate"
+    commit = _committed_candidate_from_worktree(REPO_ROOT, candidate)
+    paths = _runtime_preflight_instance(tmp_path, interpreter)
+    before = _preflight_application_bytes(paths)
+    environment = os.environ.copy()
+    # The public entry must strip even this hostile inherited test-mode flag.
+    environment.update(ADMINME_INSTANCE_ROOT=str(paths.root), ADMINME_TEST_MODE="1")
+    completed = subprocess.run(
+        [
+            str(candidate / "bootstrap/update.sh"),
+            "--runtime-preflight",
+            "--approve-runtime-migration",
+            str(candidate),
+        ],
+        cwd=candidate,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=600,
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    start = completed.stdout.rfind("\n{")
+    report = json.loads(
+        completed.stdout[start + 1 :] if start >= 0 else completed.stdout
+    )
+    assert report["status"] == "runtime-preflight-verified"
+    assert report["controller_commit"] == commit
+    assert report["branch"] == "unchanged-python-no-credential-access"
+    assert report["active_python"] == report["candidate_python"]
+    executable = Path(report["controller_executable"])
+    assert executable.parent.parent.name == "controller"
+    assert executable.parent.parent.parent.name == "runtime"
+    assert str(executable).startswith(
+        str(paths.app_dir / "tooling/.upgrade-controller-source-")
+    )
+    assert (
+        report["controller_executable_sha256"] == report["candidate_python"]["sha256"]
+    )
+    assert (
+        report["controller_source_sha256"]
+        == hashlib.sha256((candidate / "bootstrap/upgrade.py").read_bytes()).hexdigest()
+    )
+    assert Path(report["controller_home"]).parent == executable.parent.parent.parent
+    assert report["credentials_accessed"] is False
+    assert (
+        report["credential_reference_count"] is None
+        and report["credential_probe_count"] == 0
+    )
+    for key in (
+        "credential_migration_performed",
+        "keychain_writes",
+        "source_selection_changed",
+        "release_published",
+        "services_changed",
+    ):
+        assert report[key] is False
+    assert _preflight_application_bytes(paths) == before
+    assert not (paths.app_dir / "activation").exists()
+    assert not list((paths.app_dir / "tooling").glob(".upgrade-controller-source-*"))
+    assert not (paths.app_dir / "releases" / commit).exists()
+    assert not paths.backup_dir.exists()
+
+
+@pytest.mark.parametrize(
+    "failure", [None, "identity", "manifest", "python-change", "journal", "source"]
+)
+def test_runtime_preflight_production_cli_retains_application_state(
+    tmp_path: Path, failure: str | None
+) -> None:
+    candidate = tmp_path / "runtime-preflight-cli-candidate"
+    commit = _committed_candidate_from_worktree(REPO_ROOT, candidate)
+    paths = _runtime_preflight_instance(tmp_path, Path(sys.executable))
+    fixed = tmp_path / "fixed-controller"
+    _extract_git_archive(candidate, commit, fixed)
+    (fixed / ".administrateme-source-commit").write_text(commit + "\n")
+    (fixed / ".administrateme-source-commit").chmod(0o600)
+    private_home = tmp_path / "private-home"
+    private_home.mkdir(mode=0o700)
+    release = paths.app_dir / "releases" / ("a" * 40)
+    if failure == "identity":
+        (release / ".venv/bin/python").unlink()
+    elif failure == "manifest":
+        (release / "bootstrap/versions.json").write_text("{}")
+    elif failure == "python-change":
+        manifest_path = release / "bootstrap/versions.json"
+        document = json.loads(manifest_path.read_text())
+        document["python"]["compatible"] += ",!=3.14.0"
+        manifest_path.write_text(json.dumps(document))
+    elif failure == "journal":
+        (paths.app_dir / "activation").mkdir(mode=0o700)
+        (paths.app_dir / "activation/active.json").write_text(
+            "retained active operation"
+        )
+    elif failure == "source":
+        (fixed / "bootstrap/upgrade.py").write_text(
+            (fixed / "bootstrap/upgrade.py").read_text() + "\n# unreviewed\n"
+        )
+    before = _preflight_application_bytes(paths)
+    environment = os.environ.copy()
+    for name in (
+        "ADMINME_TEST_MODE",
+        "PYTHONPATH",
+        "VIRTUAL_ENV",
+        "ADMINME_UPGRADE_OPERATION_LOCK_FD",
+    ):
+        environment.pop(name, None)
+    environment.update(
+        HOME=str(private_home),
+        PYTHONDONTWRITEBYTECODE="1",
+        ADMINME_REPOSITORY_ROOT=str(fixed),
+        ADMINME_UPGRADE_CONTROLLER_ROOT=str(fixed),
+        ADMINME_UPGRADE_CONTROLLER_COMMIT=commit,
+    )
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "bootstrap.cli",
+            "--instance-root",
+            str(paths.root),
+            "runtime-preflight",
+            "--approve-runtime-migration",
+            str(candidate),
+        ],
+        cwd=fixed,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=120,
+    )
+    report = json.loads(completed.stdout)
+    assert completed.returncode == (0 if failure is None else 1), (
+        completed.stdout + completed.stderr
+    )
+    if failure is None:
+        assert report["status"] == "runtime-preflight-verified"
+        assert report["credentials_accessed"] is False
+        assert report["active_python"] == report["candidate_python"]
+        assert report["controller_executable"] == sys.executable
+        assert report["controller_home"] == str(private_home)
+    elif failure in {"identity", "manifest"}:
+        assert report["message"] == "runtime prerequisite: python_identity_unverified"
+    elif failure == "python-change":
+        assert report["message"] == "runtime prerequisite: credential_probe_failed"
+    else:
+        assert (
+            "journal" in report["message"]
+            if failure == "journal"
+            else "source" in report["message"]
+        )
+    assert "never-read" not in completed.stdout + completed.stderr
+    assert _preflight_application_bytes(paths) == before
+    assert not (paths.app_dir / "releases" / commit).exists()
+    assert not paths.backup_dir.exists()

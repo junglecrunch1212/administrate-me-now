@@ -14,7 +14,7 @@ import json
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import Field, model_validator
+from pydantic import Field, PrivateAttr, model_validator
 
 from adminme.cos_channel_operation import runtime_live_authorization
 from adminme.cos_responses import RESPONSE_CONTRACT, content_fingerprint
@@ -27,10 +27,12 @@ router = APIRouter(tags=["cos-self-replies"])
 
 
 class SelfReplyRequest(seam.ContextRequest):
+    _verified_finance_body: str | None = PrivateAttr(default=None)
     source_message_event_id: str = Field(min_length=1, max_length=240)
     host_binding: str = Field(pattern=r"^[0-9a-f]{64}$")
     body: str = Field(min_length=1, max_length=3500)
     reply_index: int = Field(default=0, ge=0, le=15)
+    finance_run_id: str | None = Field(default=None, min_length=1, max_length=200)
 
     @model_validator(mode="after")
     def bounded_text(self) -> SelfReplyRequest:
@@ -43,6 +45,12 @@ class SelfReplyRequest(seam.ContextRequest):
         if len(self.body.encode("utf-16-le")) // 2 > 3500:
             raise ValueError("self reply exceeds the native chunk limit")
         return self
+
+
+def _reply_body(body: SelfReplyRequest) -> str:
+    if body._verified_finance_body is None or body._verified_finance_body == body.body:
+        return body.body
+    return " ".join(body._verified_finance_body.split())
 
 
 def _host_bindings(runtime: Any) -> list[str]:
@@ -131,12 +139,28 @@ async def _context(
         raise HTTPException(
             403, "domain standing reply permission is absent or revoked"
         )
+    from adminme.finance.disclosure import FinanceDisclosureError, check_disclosure
+
+    try:
+        body._verified_finance_body = await check_disclosure(
+            runtime,
+            session,
+            p.session_key or "",
+            run_id=body.finance_run_id,
+            require_run=not scheduled,
+            answer_text=None if scheduled else body.body,
+        )
+    except FinanceDisclosureError as exc:
+        raise HTTPException(403, str(exc)) from None
     return runtime, session, activation, binding
 
 
 @router.post("/api/openclaw/v1/cos-responses/self-reply")
 async def self_reply(body: SelfReplyRequest, request: Request) -> dict[str, Any]:
     runtime, session, activation, binding = await _context(body, request)
+    reply_body = _reply_body(body)
+    if len(reply_body.encode("utf-16-le")) // 2 > 3500:
+        raise HTTPException(422, "finance_answer_smaller_selection_required")
     source_id = body.source_message_event_id
     request_id = hashlib.sha256(
         f"self-reply|{source_id}|{body.reply_index}".encode()
@@ -150,7 +174,7 @@ async def self_reply(body: SelfReplyRequest, request: Request) -> dict[str, Any]
     if len(matches) != 1:
         raise HTTPException(403, "exact self reply service channel is unavailable")
     values = {key: value for key, value in matches[0].items() if key != "label"}
-    values.update(recipient=p.actor_id, subject="", body=body.body)
+    values.update(recipient=p.actor_id, subject="", body=reply_body)
     async with runtime.settings_command_locks.setdefault(
         f"self-reply:{source_id}", asyncio.Lock()
     ):
@@ -206,7 +230,7 @@ async def self_reply(body: SelfReplyRequest, request: Request) -> dict[str, Any]
                         account_id=str(p.account_id),
                         recipient=p.actor_id,
                         subject="",
-                        body=body.body,
+                        body=reply_body,
                     ),
                     "policy_event_id": policy["event_id"],
                     "policy_revision": policy["revision"],
@@ -262,6 +286,7 @@ async def self_reply(body: SelfReplyRequest, request: Request) -> dict[str, Any]
                 if (
                     current["event_id"] != activation["event_id"]
                     or current_binding != binding
+                    or _reply_body(body) != reply_body
                 ):
                     raise HTTPException(403, "standing reply permission changed")
 
@@ -270,7 +295,7 @@ async def self_reply(body: SelfReplyRequest, request: Request) -> dict[str, Any]
                 request_id=request_id,
                 approval_event_id=approved["event_id"],
             )
-            return await responses._execute_locked(
+            result = await responses._execute_locked(
                 runtime,
                 session,
                 approved,
@@ -280,3 +305,9 @@ async def self_reply(body: SelfReplyRequest, request: Request) -> dict[str, Any]
                 standing_check=standing_check,
                 standing_host_event_id=host_id,
             )
+
+            if reply_body != body.body:
+                result["finance_verified_input_sha256"] = hashlib.sha256(
+                    body.body.encode("utf-8")
+                ).hexdigest()
+            return result

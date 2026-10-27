@@ -140,3 +140,11 @@ observation behavior, terminal audit, and change order.
 - **DEFER:** only real Plaid Link/OAuth consent, per-account sharing grants,
   provider propagation evidence, and optional future providers. Finance core
   and workbook round-trip are not deferred.
+
+## Books-owned publications (2026-10-23)
+
+For a Books-owned book, ADR-0010 supersedes this ADR's editable XLSX authority.
+The accepted-publication namespace preserves Books scenario outputs and never
+uses the shared-scope reverse importer. Existing legacy installations are not
+silently migrated. Activation requires an explicit reviewed exclusion of the
+legacy planning import for that book and adoption of the canonical schema/hash.

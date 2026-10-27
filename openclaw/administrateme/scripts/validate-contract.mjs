@@ -12,6 +12,11 @@ const expectedVersion = "2026.7.2";
 const expectedCommit = "ce67ffb70e83e5ebb56ea02e814e577153f84f61";
 const expectedNode = ">=24.15.0 <25";
 const expectedTools = [
+  "administrateme_finance_bindings",
+  "administrateme_finance_status",
+  "administrateme_finance_query",
+  "administrateme_finance_calculate",
+  "administrateme_finance_job",
   "administrateme_state",
   "administrateme_calendar",
   "administrateme_what_now",

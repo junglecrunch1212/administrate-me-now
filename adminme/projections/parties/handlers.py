@@ -1241,9 +1241,18 @@ def on_constitution_registered(
     conn.execute(
         """UPDATE operating_agreements SET state='superseded',
                   lifecycle_reason_code='superseded'
-            WHERE tenant_id=? AND agreement_id=? AND revision<?
+            WHERE tenant_id=? AND agreement_id=?
+              AND revision < (
+                  SELECT MAX(revision) FROM operating_agreements
+                   WHERE tenant_id=? AND agreement_id=? AND layer='constitutional'
+              )
               AND layer='constitutional' AND state='active'""",
-        (envelope["tenant_id"], payload["agreement_id"], payload["revision"]),
+        (
+            envelope["tenant_id"],
+            payload["agreement_id"],
+            envelope["tenant_id"],
+            payload["agreement_id"],
+        ),
     )
 
 

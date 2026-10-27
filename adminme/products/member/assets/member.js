@@ -150,13 +150,30 @@ function card(title, items, emptyCopy = "Nothing needs your attention here.") {
 }
 
 function moneyMinor(value, { compact = false } = {}) {
-  const amount = Number(value || 0) / 100;
+  if (value == null || !Number.isFinite(Number(value))) return "Unavailable";
+  const amount = Number(value) / 100;
   return new Intl.NumberFormat(undefined, {
     style: "currency",
     currency: "USD",
     maximumFractionDigits: compact ? 0 : 2,
     notation: compact ? "compact" : "standard",
   }).format(amount);
+}
+
+
+function publishedMoneyMinor(value, currency) {
+  if (value == null) return "Unknown";
+  if (!Number.isSafeInteger(value)) return "Unavailable";
+  if (typeof Intl.supportedValuesOf !== "function" || !Intl.supportedValuesOf("currency").includes(currency)) return `${value} ${currency} minor units`;
+  const formatter = new Intl.NumberFormat(undefined, { style: "currency", currency, currencyDisplay: "code", numberingSystem: "latn" });
+  const digits = formatter.resolvedOptions().maximumFractionDigits;
+  const minor = BigInt(value); const scale = 10n ** BigInt(digits);
+  const major = minor / scale; const remainder = minor < 0n ? -(minor % scale) : minor % scale;
+  // Keep every producer-rounded digit, including near the safe integer bound.
+  // Floating-point division can lose a cent at that magnitude.
+  const fraction = remainder.toString().padStart(digits, "0");
+  const signedMajor = minor < 0n && major === 0n ? -0 : major;
+  return formatter.formatToParts(signedMajor).map(part => part.type === "fraction" ? fraction : part.value).join("");
 }
 
 function triageReviewView(item) {
@@ -3810,6 +3827,10 @@ const FINANCE_VIEWS = [
   ["health", "Data health"],
 ];
 
+function financeDifference(left, right) {
+  return left == null || right == null ? null : left - right;
+}
+
 function financeControls() {
   const controls = document.createElement("nav"); controls.className = "finance-controls"; controls.setAttribute("aria-label", "Finance views");
   for (const [value, label] of FINANCE_VIEWS) {
@@ -3825,25 +3846,74 @@ function financeHero(cockpit) {
   const focus = cockpit.focus || {};
   const hero = document.createElement("section"); hero.className = `hero-card finance-hero finance-${focus.state || "steady"}`;
   const copy = document.createElement("div");
-  copy.append(text("p", "HOUSEHOLD CASH-FLOW COCKPIT", "eyebrow"), text("h2", focus.title || "Finance plan", "action-title"), text("p", focus.why || "Deterministic workbook and transaction state.", "brief-summary"), text("p", focus.action || "", "microstep"));
+  const hasBooks = Boolean(cockpit.accepted_books?.publication_id);
+  copy.append(text("p", hasBooks ? "OTHER FINANCIAL OBSERVATIONS" : "HOUSEHOLD CASH-FLOW COCKPIT", "eyebrow"), text("h2", focus.title || "Finance plan", "action-title"), text("p", focus.why || "Deterministic workbook and transaction state.", "brief-summary"), text("p", hasBooks ? "Accepted Books reports are shown separately above." : focus.action || "", "microstep"));
   const baseline = (cockpit.scenarios || []).find((item) => item.is_baseline) || cockpit.scenarios?.[0];
   const quick = document.createElement("dl"); quick.className = "finance-hero-stats";
   for (const [label, value] of [
     ["Cash", moneyMinor(cockpit.summary.cash_minor, { compact: true })],
     ["Month-to-date", moneyMinor(cockpit.summary.mtd_net_minor, { compact: true })],
     ["Monthly plan", moneyMinor((baseline || {}).monthly_net_minor, { compact: true })],
-    ["Cash runway", baseline?.cash_out_month ? `${baseline.cash_out_month} mo` : `>${baseline?.horizon_months || 60} mo`],
+    ["Cash safety", "Not established"],
   ]) { const item = document.createElement("div"); item.append(text("dt", label), text("dd", value)); quick.append(item); }
   hero.append(copy, quick); return hero;
+}
+
+function financeAcceptedBooks(cockpit) {
+  const books = cockpit.accepted_books || { state: "missing_evidence", reports: [] };
+  const section = document.createElement("section"); section.className = "card finance-accepted-books";
+  section.append(text("h2", "Accepted Books reports"));
+  if (!books.publication_id) {
+    const messages = {
+      disabled: "Accepted Books integration is not enabled.",
+      permission_required: "Books reports require your authorized private session.",
+      selection_required: "Select an authorized book through Finance query before reviewing its reports.",
+      missing_evidence: "No accepted publication is available in this scope. Missing values are unavailable, not zero.",
+    };
+    section.append(text("p", messages[books.state] || "Accepted Books reports are temporarily unavailable.", "empty"));
+    return section;
+  }
+  section.append(text("p", `Qualified historical snapshot · accepted ${books.as_of} · publication ${books.publication_id}`, "state-note"));
+  for (const limitation of books.limitations || []) section.append(text("p", limitation, "state-note"));
+  const provenance = document.createElement("details"); provenance.append(text("summary", "Publication provenance"));
+  provenance.append(text("p", `Book: ${books.book_id} · contract: ${books.schema_version} · content hash: ${books.content_hash}`));
+  const clocks = books.source_clock_summary || {};
+  provenance.append(text("p", `Oldest source observation: ${clocks.oldest_observed_at || "Unavailable"}. Current source freshness is unverified.`));
+  section.append(provenance);
+  for (const report of books.reports || []) {
+    const details = document.createElement("details"); details.open = true;
+    details.append(text("summary", `${titleCase(report.report_id)} · ${titleCase(report.release_state)}`));
+    details.append(text("p", `${titleCase(report.basis)} · ${report.period_start} to ${report.period_end} · model ${report.model_id} ${report.model_version}`, "meta"));
+    details.append(text("p", `Quality: ${Object.entries(report.quality || {}).map(([dimension, value]) => `${titleCase(dimension)} ${value}`).join("; ")}.`, "state-note"));
+    if (report.required_evidence?.length) details.append(text("p", `Required evidence: ${report.required_evidence.join(", ")}.`, "state-note"));
+    if (!(report.metrics || []).length) details.append(text("p", report.release_state === "unavailable" ? "This report has not been released." : "No metrics in this bounded view.", "empty"));
+    else {
+      const table = document.createElement("table"); table.className = "finance-table";
+      const head = document.createElement("thead"); const heading = document.createElement("tr");
+      for (const label of ["Published metric", "Exact value", "Scenario / evidence"]) heading.append(text("th", label));
+      head.append(heading); table.append(head); const body = document.createElement("tbody");
+      for (const metric of report.metrics) {
+        const row = document.createElement("tr");
+        const value = metric.value_minor == null ? "Unavailable" : publishedMoneyMinor(metric.value_minor, metric.currency);
+        row.append(text("th", metric.metric_id), text("td", value), text("td", `${metric.scenario_id || "No scenario"} · ${(metric.evidence_ids || []).join(", ") || "No evidence reference"}`));
+        body.append(row);
+      }
+      table.append(body); details.append(table);
+    }
+    if (report.more_metrics) details.append(text("p", "Additional metrics require a bounded Finance report query.", "state-note"));
+    section.append(details);
+  }
+  if (books.details_state === "report_query_required") section.append(text("p", "Report details exceed this display budget. Request one bounded report before relying on its values.", "state-note"));
+  return section;
 }
 
 function financeKpis(cockpit) {
   const grid = document.createElement("section"); grid.className = "finance-kpi-grid"; grid.setAttribute("aria-label", "Finance summary");
   const values = [
-    ["Forecast month-end", cockpit.summary.projected_month_income_minor - cockpit.summary.projected_month_expenses_minor, "Current pace, not a promise"],
-    ["Monthly plan", cockpit.summary.base_monthly_income_minor - cockpit.summary.base_monthly_expenses_minor, "Workbook baseline"],
-    ["Net worth", cockpit.summary.net_worth_minor, "Observed accounts + workbook assets − liabilities"],
-    ["Spending vs prior", cockpit.summary.mtd_expenses_minor - cockpit.summary.prior_month_expenses_minor, "Same elapsed time last month"],
+    ["Observed month-end pace", financeDifference(cockpit.summary.projected_month_income_minor, cockpit.summary.projected_month_expenses_minor), "Partial observations; coverage unverified"],
+    ["Monthly plan", financeDifference(cockpit.summary.base_monthly_income_minor, cockpit.summary.base_monthly_expenses_minor), "Chosen assumptions; not actuals"],
+    ["Listed net value", cockpit.summary.observed_listed_net_minor, "Observed inputs; not a reconciled balance sheet"],
+    ["Spending vs prior", financeDifference(cockpit.summary.mtd_expenses_minor, cockpit.summary.prior_month_expenses_minor), "Same elapsed time; coverage unverified"],
   ];
   for (const [label, value, note] of values) { const item = document.createElement("article"); item.className = "card finance-kpi"; item.append(text("span", label, "eyebrow"), text("strong", moneyMinor(value, { compact: true })), text("small", note)); grid.append(item); }
   return grid;
@@ -3854,7 +3924,7 @@ function financeCashFlow(cockpit) {
   const rows = [
     ["Income", cockpit.summary.mtd_income_minor, cockpit.summary.base_monthly_income_minor],
     ["Expenses", cockpit.summary.mtd_expenses_minor, cockpit.summary.base_monthly_expenses_minor],
-    ["Net", cockpit.summary.mtd_net_minor, cockpit.summary.base_monthly_income_minor - cockpit.summary.base_monthly_expenses_minor],
+    ["Net", cockpit.summary.mtd_net_minor, financeDifference(cockpit.summary.base_monthly_income_minor, cockpit.summary.base_monthly_expenses_minor)],
   ];
   const table = document.createElement("table"); table.className = "finance-table"; const head = document.createElement("thead"); const headRow = document.createElement("tr"); for (const value of ["Measure", "Month to date", "Monthly plan"]) headRow.append(text("th", value)); head.append(headRow); const body = document.createElement("tbody");
   for (const [label, actual, plan] of rows) { const row = document.createElement("tr"); row.append(text("th", label), text("td", moneyMinor(actual)), text("td", moneyMinor(plan))); body.append(row); }
@@ -3865,26 +3935,26 @@ function financeBudgets(cockpit) {
   const section = document.createElement("section"); section.className = "card finance-budget"; section.append(text("h2", "Spending plan"));
   if (!(cockpit.budgets || []).length) { section.append(text("p", "No category budgets are published yet. Add them in the workbook; the dashboard will not invent targets.", "empty")); return section; }
   const list = document.createElement("ul"); list.className = "finance-budget-list";
-  for (const item of cockpit.budgets) { const row = document.createElement("li"); const heading = document.createElement("div"); heading.append(text("strong", item.category), text("span", item.state === "watch" ? "Review" : "Within plan", `pill state-label state-${item.state === "watch" ? "degraded" : "healthy"}`)); const progress = document.createElement("div"); progress.className = "finance-progress"; const fill = document.createElement("span"); const ratio = item.planned_minor ? Math.min(1.2, item.actual_minor / item.planned_minor) : 0; fill.style.width = `${Math.min(100, ratio * 100)}%`; progress.append(fill); row.append(heading, progress, text("small", `${moneyMinor(item.actual_minor)} of ${moneyMinor(item.planned_minor)} · ${moneyMinor(item.remaining_minor)} remaining`)); list.append(row); }
+  for (const item of cockpit.budgets) { const row = document.createElement("li"); const heading = document.createElement("div"); heading.append(text("strong", item.category), text("span", item.state === "watch" ? "Review" : item.state === "unavailable" ? "Unavailable" : "Partial observations", `pill state-label state-${item.state === "watch" ? "degraded" : "healthy"}`)); const progress = document.createElement("div"); progress.className = "finance-progress"; const fill = document.createElement("span"); const ratio = item.planned_minor && item.actual_minor != null ? Math.min(1.2, item.actual_minor / item.planned_minor) : 0; fill.style.width = `${Math.min(100, ratio * 100)}%`; progress.append(fill); row.append(heading, progress, text("small", `${moneyMinor(item.actual_minor)} of ${moneyMinor(item.planned_minor)} · ${moneyMinor(item.remaining_minor)} remaining`)); list.append(row); }
   section.append(list); return section;
 }
 
 function financeScenarios(cockpit) {
   const section = document.createElement("section"); section.className = "card finance-scenarios"; section.append(text("h2", "Scenario lab"), text("p", "Scenarios are workbook-authored deltas. Switching here compares projections; it does not change the baseline.", "state-note"));
   const scenarios = cockpit.scenarios || [];
-  if (!scenarios.length) { section.append(text("p", "No scenario is available.", "empty")); return section; }
+  if (!scenarios.length) { section.append(text("p", "A scenario needs explicit opening cash, income, expenses and reserve inputs. Missing inputs do not establish zero spending or safe runway.", "empty")); return section; }
   if (!state.financeScenario || !scenarios.some((item) => item.scenario_id === state.financeScenario)) state.financeScenario = (scenarios.find((item) => item.is_baseline) || scenarios[0]).scenario_id;
   const switcher = document.createElement("div"); switcher.className = "finance-scenario-switcher";
   for (const scenario of scenarios) { const button = text("button", scenario.name, "finance-scenario-button"); button.type = "button"; button.setAttribute("aria-pressed", String(scenario.scenario_id === state.financeScenario)); button.addEventListener("click", () => { state.financeScenario = scenario.scenario_id; renderFinance(state.surface); }); switcher.append(button); }
   const selected = scenarios.find((item) => item.scenario_id === state.financeScenario) || scenarios[0]; const stats = document.createElement("dl"); stats.className = "finance-scenario-stats";
   for (const [label, value] of [["Monthly net", moneyMinor(selected.monthly_net_minor)], ["Ending cash", moneyMinor(selected.ending_cash_minor)], ["Below reserve", selected.below_floor_month ? `Month ${selected.below_floor_month}` : "Not in horizon"], ["Cash out", selected.cash_out_month ? `Month ${selected.cash_out_month}` : "Not in horizon"]]) { const item = document.createElement("div"); item.append(text("dt", label), text("dd", value)); stats.append(item); }
   const chart = document.createElement("div"); chart.className = "finance-spark"; chart.setAttribute("aria-label", `${selected.name} cash forecast`); const points = selected.points || []; const max = Math.max(...points.map((item) => Math.abs(item.cash_minor)), 1); for (const point of points.filter((_item, index) => index % Math.max(1, Math.ceil(points.length / 24)) === 0)) { const bar = document.createElement("span"); bar.style.height = `${Math.max(4, Math.abs(point.cash_minor) / max * 100)}%`; bar.classList.toggle("negative", point.cash_minor < 0); bar.title = `Month ${point.month}: ${moneyMinor(point.cash_minor)}`; chart.append(bar); }
-  section.append(switcher, stats, chart); if (selected.notes) section.append(text("p", selected.notes, "meta")); return section;
+  section.append(switcher, stats, chart); for (const limitation of selected.limitations || []) section.append(text("p", limitation, "state-note")); if (selected.notes) section.append(text("p", selected.notes, "meta")); return section;
 }
 
 function financeGoals(cockpit) {
   const section = document.createElement("section"); section.className = "card finance-goals";
-  section.append(text("h2", "Goals and capital plans"), text("p", "Goals organize future uses of money. They never move funds or silently change a scenario.", "state-note"));
+  section.append(text("h2", "Workbook goals and capital plans"), text("p", "Goals organize future uses of money. They never move funds or silently change a scenario.", "state-note"));
   const goals = cockpit.goals || [];
   if (!goals.length) { section.append(text("p", "No goals are published yet. Add a target in the workbook when it is useful.", "empty")); return section; }
   const list = document.createElement("ul"); list.className = "finance-goal-list";
@@ -3938,6 +4008,218 @@ function financeGoalLifecycleDialog(goal, action) {
   openActionDialog(action === "complete" ? "Complete this goal?" : "Pause this goal?", form);
 }
 
+function financePlanningCard(books) {
+  const section = document.createElement("section"); section.className = "card finance-planning";
+  section.append(text("h2", "Dated Books projections"));
+  if (!books?.publication_id) { section.append(text("p", "An accepted accounting publication is required.", "empty")); return section; }
+  const status = text("p", "Loading verified projection contexts…", "state-note"); section.append(status);
+  const controls = document.createElement("div"); controls.className = "button-row";
+  const contextSelect = document.createElement("select"); contextSelect.setAttribute("aria-label", "Projection context"); contextSelect.style.maxWidth = "100%";
+  const horizonSelect = document.createElement("select"); horizonSelect.setAttribute("aria-label", "Projection horizon");
+  for (const days of [7, 30, 90, 180, 365]) { const option = text("option", `${days} days`); option.value = String(days); horizonSelect.append(option); }
+  horizonSelect.value = "30";
+  controls.append(contextSelect, horizonSelect);
+  const content = document.createElement("div"); const detail = document.createElement("div");
+  section.append(controls, content, detail); controls.hidden = true;
+  let projectionId = null; let requestNumber = 0;
+  const request = (report, extra = {}) => api(`/api/member/v1/finance/planning?${new URLSearchParams({ book_id: books.book_id, report_id: report, ...(projectionId ? { projection_id: projectionId } : {}), ...extra })}`);
+  const exact = publishedMoneyMinor;
+  const range = (values, currency) => !values ? "Unknown" : values[0] === values[1] ? exact(values[0], currency) : `${exact(values[0], currency)} to ${exact(values[1], currency)}`;
+  const incomeLabel = (basis) => basis === "OBSERVED_BASE_ONLY" ? "Observed income only" : "Modeled net funding (not payroll)";
+  const openingLabel = (basis) => basis === "verified_unrestricted" ? "Verified unrestricted opening" : "Hypothetical observed opening";
+  async function events(offset, generation) {
+    const answer = await request("planning_events", { context_id: contextSelect.value, horizon_days: horizonSelect.value, offset: String(offset) });
+    if (generation !== requestNumber || !section.isConnected) return;
+    detail.replaceChildren(text("h3", "Dated events"), text("p", `Full context manifest: ${answer.manifest.row_count} events. This page lists original date windows overlapping the ${answer.horizon_days}-day horizon, plus undated items that remain unplaced. Bounds are not clipped. Overlap and the source included flag do not prove occurrence within this horizon; producer totals are unchanged.`, "state-note"));
+    const table = document.createElement("table"); table.className = "finance-table";
+    const head = document.createElement("tr"); for (const label of ["Dates / route", "Type", "Amount range", "Source included"]) head.append(text("th", label)); table.append(head);
+    for (const item of answer.events || []) {
+      const row = document.createElement("tr"); row.append(text("td", `${item.earliest_date ? `${item.earliest_date} – ${item.latest_date}` : `Undated (${titleCase(item.date_unknown_reason)})`} · ${item.account_route_id}`), text("td", titleCase(item.kind)), text("td", range([item.amount.lower_minor, item.amount.upper_minor], answer.context.currency)), text("td", item.included ? "Yes" : "No")); table.append(row);
+    }
+    detail.append(table);
+    for (const [label, next] of [["Previous events", offset > 0 ? Math.max(0, offset - 50) : null], ["Next events", answer.next_offset]]) {
+      if (next == null) continue;
+      const button = text("button", label, "button button-quiet"); button.type = "button";
+      button.addEventListener("click", () => { button.disabled = true; void events(next, generation).catch(() => { status.textContent = "Event details could not be loaded. Retry the selected context."; }); }); detail.append(button);
+    }
+  }
+  async function load() {
+    const generation = ++requestNumber;
+    content.replaceChildren(); detail.replaceChildren(); status.textContent = "Loading selected projection…";
+    try {
+      const answer = await request("planning_projection", { context_id: contextSelect.value, horizon_days: horizonSelect.value });
+      if (generation !== requestNumber || !section.isConnected) return;
+      const c = answer.context; const h = answer.summary;
+      status.textContent = `${c.measure === "BANK_CASH_SUBSET" ? "Bank cash subset" : "Cash-equivalent funding — not bank cash"} · ${h.completeness_state} · ${h.estimate_state}`;
+      content.append(text("p", `${titleCase(c.scenario_id)} · Plan case ${c.plan_case_id} · ${incomeLabel(c.income_basis)} · ${openingLabel(c.opening_basis)}`, "state-note"));
+      content.append(text("p", `${h.start_inclusive} inclusive to ${h.end_exclusive} exclusive · ${c.timezone}. Cash safety: ${h.safety_state === "SOURCE_VERIFIED" ? "historically verified by source; current safety unverified" : "not established"}.`, "state-note"));
+      const stats = document.createElement("dl"); stats.className = "finance-scenario-stats";
+      for (const [label, value] of [["Opening range", h.opening], ["Closing range", h.closing], [Array.isArray(h.minimum) ? "Minimum range" : "Conservative minimum", h.minimum], ["Encumbered range", h.encumbered], ["Cash-in range", h.cash_in], ["Cash-out range", h.cash_out]]) { const item = document.createElement("div"); item.append(text("dt", label), text("dd", Array.isArray(value) ? range(value, c.currency) : `${exact(value.value_minor, c.currency)}${value.unknown_reason ? ` (${titleCase(value.unknown_reason)})` : ""}`)); stats.append(item); }
+      content.append(stats, text("p", "These measures cannot be added. Positive remainder is not available surplus. Modeled net funding is not payroll or guaranteed bank income.", "state-note"));
+      content.append(text("p", `Reserve threshold: ${exact(h.reserve_threshold, c.currency)}. Checking threshold: ${exact(h.checking_threshold, c.currency)}.`, "state-note"));
+      for (const [label, value] of [["Reserve breach", h.reserve_breach], ["Negative bank cash", h.negative_bank_cash], ["Checking shortage", h.checking_shortage]]) content.append(text("p", `${label}: ${value == null ? "Unknown" : value ? "Yes" : "No"}.`, "state-note"));
+      for (const [label, key] of [["Minimum date", "minimum_date"], ["First negative date", "first_negative_date"], ["First zero-crossing date", "first_zero_crossing_date"], ["First reserve-breach date", "first_reserve_breach_date"]]) { const dated = h[key]; content.append(text("p", `${label}: ${dated.date || `Unknown (${titleCase(dated.unknown_reason)})`}.`, "state-note")); }
+      const references = document.createElement("div"); references.className = "finance-gap-details";
+      async function reference(report, referenceId, target, offset = 0, gapGroupId = null) {
+        const info = await request(report, { context_id:c.context_id, horizon_days:String(h.days), offset:String(offset), ...(gapGroupId ? {gap_group_id:gapGroupId} : {}), ...(referenceId ? {reference_id:referenceId} : {}) });
+        if (generation !== requestNumber || !section.isConnected) return;
+        target.replaceChildren();
+        for (const record of info.records || []) {
+          if (report === "planning_gaps" || report === "planning_issues") {
+            if (record.issue_id) target.append(text("p", `${record.required ? "Required" : "Optional"} source issue: ${record.issue_id}`, "state-note"));
+            if (record.issue_group) {
+              target.append(text("p", `${record.issue_counts.required} required of ${record.issue_counts.total} original issues in this context and horizon.`, "state-note"));
+              const issues = text("button", "Original source issues", "button button-quiet"); issues.type = "button"; const issueBody = document.createElement("div");
+              issues.addEventListener("click", () => { void reference("planning_issues", null, issueBody, 0, record.gap_id).catch(() => { issueBody.textContent = "Source issues are unavailable in this private context."; }); }); target.append(issues, issueBody);
+            }
+            target.append(text("p", record.explanation), text("p", `Required input: ${record.required_input}`), text("p", `When: ${titleCase(record.timing)}`, "state-note"));
+            for (const evidenceId of record.evidence_ids) { const evidence = text("button", "Evidence details", "button button-quiet"); evidence.type = "button"; const evidenceBody = document.createElement("div"); evidence.addEventListener("click", () => { void reference("planning_evidence", evidenceId, evidenceBody).catch(() => { evidenceBody.textContent = "Evidence details are unavailable in this private context."; }); }); target.append(evidence, evidenceBody); }
+          } else {
+            if (record.description) target.append(text("p", record.description));
+            if (record.source_content_state === "not_included") target.append(text("p", "Source content is not included; this is its protected reference and declared hash.", "state-note"));
+            target.append(text("pre", JSON.stringify(record, null, 2), "notes-body"));
+          }
+        }
+        for (const [label, next] of [["Previous references", offset > 0 ? Math.max(0, offset - 50) : null], ["Next references", info.next_offset]]) {
+          if (next == null) continue;
+          const button = text("button", label, "button button-quiet"); button.type = "button";
+          button.addEventListener("click", () => { button.disabled = true; void reference(report, referenceId, target, next, gapGroupId).catch(() => { button.disabled = false; status.textContent = "Reference details could not be loaded."; }); }); target.append(button);
+        }
+      }
+      for (const condition of h.conditions) {
+        const item = document.createElement("details"); item.append(text("summary", `Resolve: ${titleCase(condition.replaceAll("-", " "))}`)); const target = text("div", "Open to view the required input and evidence."); item.append(target); let loaded = false;
+        item.addEventListener("toggle", () => { if (item.open && !loaded) { loaded = true; void reference("planning_gaps", condition, target).catch(() => { loaded = false; target.textContent = "This gap is unavailable in the current private context."; }); } }); references.append(item);
+      }
+      content.append(references);
+      content.append(text("p", `Unsupported collections: ${(answer.unsupported_collections || []).map(titleCase).join(", ")}.`, "state-note"));
+      const sources = document.createElement("details"); sources.append(text("summary", "Per-source clocks and references")); const sourceBody = document.createElement("div"); sources.append(sourceBody); let sourcesLoaded = false;
+      sources.addEventListener("toggle", () => { if (sources.open && !sourcesLoaded) { sourcesLoaded = true; void reference("planning_sources", null, sourceBody).catch(() => { sourcesLoaded = false; sourceBody.textContent = "Source provenance is unavailable."; }); } }); content.append(sources);
+      for (const [field, reason] of Object.entries(h.unknowns)) content.append(text("p", `${titleCase(field)}: ${titleCase(reason)}`, "state-note"));
+      content.append(text("p", `Source refresh: ${answer.refresh_state}.`, "state-note"));
+      for (const [name, clock] of Object.entries(answer.source_clocks)) content.append(text("p", `${titleCase(name)}: ${clock.value || `Unknown (${titleCase(clock.unknown_reason)})`}`, "meta"));
+      for (const limit of answer.limits) content.append(text("p", titleCase(limit), "meta"));
+      const show = text("button", "Show dated events", "button button-quiet"); show.type = "button"; show.addEventListener("click", () => { show.disabled = true; void events(0, generation).catch(() => { status.textContent = "Event details could not be loaded. Retry the selected context."; show.disabled = false; }); }); content.append(show);
+    } catch { if (generation === requestNumber) { content.replaceChildren(); detail.replaceChildren(); status.textContent = "This projection is unavailable in the current private session."; } }
+  }
+  contextSelect.addEventListener("change", () => { void load(); }); horizonSelect.addEventListener("change", () => { void load(); });
+  void (async () => {
+    try {
+      const index = await request("planning_contexts");
+      if (!section.isConnected) return;
+      if (!index.contexts?.length) { status.textContent = "No verified dated projection is available. Accounting acceptance alone does not establish a forecast."; return; }
+      projectionId = index.projection.id;
+      for (const c of index.contexts) { const option = text("option", `${c.measure === "BANK_CASH_SUBSET" ? "Bank cash" : "Funding, not bank cash"} · ${titleCase(c.scenario_id)} · ${c.income_basis === "OBSERVED_BASE_ONLY" ? "Observed income" : "Modeled funding"} · ${c.opening_basis === "verified_unrestricted" ? "Verified opening" : "Hypothetical opening"} · ${c.plan_case_id}`); option.value = c.context_id; contextSelect.append(option); }
+      controls.hidden = false; await load();
+    } catch { status.textContent = "Dated projections are unavailable in the current private session."; }
+  })();
+  return section;
+}
+
+function financeChoicesCard(books) {
+  const section = document.createElement("section"); section.className = "card finance-choices";
+  section.append(text("h2", "Your finance choices"), text("p", "Save a goal or an explicit preference against this accepted snapshot. These choices do not change Books, schedule reviews, move money, or give anyone else access.", "state-note"));
+  const identity = state.bootstrap?.member; const trust = state.bootstrap?.trust;
+  if (!books?.publication_id || !identity || identity.authenticated_role !== "principal" || identity.viewing_as || identity.authenticated_id !== identity.id || trust?.actions_as !== trust?.reads_as) {
+    section.append(text("p", "An accepted publication and your own private view are required.", "empty")); return section;
+  }
+  const endpoint = "/api/member/v1/finance/choices";
+  const status = text("p", "Loading your saved choices…", "state-note"); status.setAttribute("role", "status");
+  const list = document.createElement("ul"); list.className = "finance-goal-list";
+  const actions = document.createElement("div"); actions.className = "button-row";
+  const add = text("button", "Add a goal", "button button-primary"); add.type = "button"; add.disabled = true;
+  const prefer = text("button", "Choose a preference", "button button-secondary"); prefer.type = "button"; prefer.disabled = true;
+  const refresh = text("button", "Refresh choices", "button button-quiet"); refresh.type = "button";
+  actions.append(add, prefer, refresh); section.append(status, list, actions);
+  let current = null; let busy = false;
+  const preferenceOptions = {
+    grocery_substitution: ["ask_before_substitution", "keep_menu", "compare_unit_prices"],
+    service_time_tradeoff: ["ask_about_time_value", "minimize_cost", "prioritize_time"],
+    reserve_policy: ["ask_before_using_reserve", "review_chosen_floor", "preserve_chosen_floor"],
+    support_intent: ["discuss_before_committing", "prefer_gift", "prefer_documented_loan", "optional_reserve"],
+    review_cadence: ["on_request", "monthly", "annually"],
+    decision_priority: ["compare_cost_and_risk", "prioritize_flexibility", "ask_each_time"],
+  };
+  function select(values, prompt) {
+    const control = document.createElement("select"); control.required = true;
+    const empty = text("option", prompt); empty.value = ""; control.append(empty);
+    for (const value of values) { const option = text("option", titleCase(value)); option.value = value; control.append(option); }
+    return control;
+  }
+  async function load() {
+    add.disabled = true; prefer.disabled = true;
+    try {
+      current = await api(`${endpoint}?book_id=${encodeURIComponent(books.book_id)}`);
+      list.replaceChildren();
+      for (const item of current.items || []) {
+        const record = item.record; const row = document.createElement("li");
+        if (item.kind === "goal") {
+          row.append(text("strong", record.label || titleCase(record.kind)), text("p", `${titleCase(record.status)} · ${record.target_minor == null ? "Target not selected" : new Intl.NumberFormat(undefined, { style: "currency", currency: record.currency }).format(record.target_minor / (10 ** new Intl.NumberFormat(undefined, { style: "currency", currency: record.currency }).resolvedOptions().maximumFractionDigits))}${record.target_date ? ` · ${record.target_date}` : ""}`));
+          const controls = document.createElement("div"); controls.className = "button-row";
+          for (const [value, label] of (record.status === "selected" ? [["paused", "Pause"], ["completed", "Mark complete"]] : [["selected", "Resume"]])) {
+            const button = text("button", label, "button button-quiet"); button.type = "button";
+            button.addEventListener("click", () => { if (busy) return; const body = { request_id: crypto.randomUUID(), book_id: books.book_id, publication_id: current.publication.publication_id, expected_event_id: item.event_id, label: record.label || titleCase(record.kind), kind: record.kind, status: value, target_minor: record.target_minor, currency: record.currency, target_date: record.target_date, priority: record.priority }; void save(`/goals/${encodeURIComponent(record.goal_id)}`, body); }); controls.append(button);
+          }
+          row.append(controls);
+        } else row.append(text("strong", titleCase(record.dimension)), text("p", titleCase(record.selected_option_id)));
+        const provenance = document.createElement("details"); provenance.append(text("summary", "Saved choice evidence"), text("p", `Publication ${record.scope.baseline_publication_id} · recorded ${record.recorded_at}`));
+        const evidence = text("button", "View recorded choice", "link-button"); evidence.type = "button"; evidence.addEventListener("click", () => showEvidence(item.event_id)); provenance.append(evidence); row.append(provenance); list.append(row);
+      }
+      status.textContent = current.can_record ? ((current.items || []).length ? "Your explicit choices are saved privately." : "No explicit choices have been saved yet.") : "An accepted publication is required before saving a choice.";
+      if (current.next_offset != null) status.textContent += " More choices exist beyond this page.";
+      add.disabled = !current.can_record; prefer.disabled = !current.can_record;
+    } catch (error) { status.textContent = `${error.message} Saved choices could not be checked.`; }
+  }
+  async function save(path, body, submit = null) {
+    if (busy) return; busy = true; if (submit) submit.disabled = true; status.textContent = "Saving your explicit choice…";
+    const notice = submit?.closest("form")?.querySelector(".choice-save-status"); if (notice) notice.textContent = status.textContent;
+    try {
+      await api(endpoint + path, { method: "POST", headers: { "Content-Type": "application/json", "X-Correlation-Id": crypto.randomUUID() }, body: JSON.stringify(body) });
+      closeActionDialog(); await load();
+    } catch (error) { status.textContent = `${error.message} Save is unconfirmed. Retry this same choice or refresh to inspect saved choices.`; if (notice) notice.textContent = status.textContent; }
+    finally { busy = false; if (submit) submit.disabled = false; }
+  }
+  add.addEventListener("click", () => {
+    if (!current?.can_record || busy) return;
+    const form = document.createElement("form"); form.className = "dialog-form";
+    const label = document.createElement("input"); label.required = true; label.maxLength = 120; label.addEventListener("input", () => label.setCustomValidity(""));
+    const kind = select(["reserve", "purchase", "education", "retirement", "support", "debt"], "Choose a goal type");
+    const amount = document.createElement("input"); amount.inputMode = "decimal"; amount.placeholder = "Leave blank if undecided"; amount.pattern = "[0-9]{1,10}(\\.[0-9]{1,2})?";
+    const due = document.createElement("input"); due.type = "date";
+    const priority = select(["unranked", "essential", "preferred", "optional"], "Choose a priority");
+    const submit = text("button", "Save my goal", "button button-primary"); submit.type = "submit";
+    const requestId = crypto.randomUUID(); const goalId = crypto.randomUUID(); let pending = null;
+    const notice = text("p", "", "choice-save-status"); notice.setAttribute("role", "status");
+    form.append(field("Goal name", label), field("Goal type", kind), field("Target in USD (optional)", amount), field("Target date (optional)", due), field("Priority", priority), submit, notice);
+    form.addEventListener("submit", (event) => {
+      event.preventDefault(); if (busy) return;
+      if (!pending) {
+        if (!label.value.trim()) { label.setCustomValidity("Enter a goal name."); label.reportValidity(); return; }
+        label.setCustomValidity("");
+        const parts = amount.value.trim().split("."); const minor = amount.value.trim() ? Number(parts[0]) * 100 + Number((parts[1] || "").padEnd(2, "0")) : null;
+        pending = { request_id: requestId, book_id: books.book_id, publication_id: current.publication.publication_id, label: label.value.trim(), kind: kind.value, status: "selected", target_minor: minor, currency: "USD", target_date: due.value || null, priority: priority.value };
+        for (const control of form.querySelectorAll("input,select")) control.disabled = true;
+      }
+      void save(`/goals/${goalId}`, pending, submit);
+    }); openActionDialog("Save a finance goal", form);
+  });
+  prefer.addEventListener("click", () => {
+    if (!current?.can_record || busy) return;
+    const form = document.createElement("form"); form.className = "dialog-form";
+    const dimension = select(Object.keys(preferenceOptions), "Choose a topic"); const option = select([], "Choose your preference");
+    dimension.addEventListener("change", () => { const replacement = select(preferenceOptions[dimension.value] || [], "Choose your preference"); option.replaceChildren(...replacement.childNodes); });
+    const submit = text("button", "Save my preference", "button button-primary"); submit.type = "submit";
+    const requestId = crypto.randomUUID(); let pending = null; let selectedDimension = null;
+    const notice = text("p", "", "choice-save-status"); notice.setAttribute("role", "status");
+    form.append(field("Topic", dimension), field("Your explicit choice", option), submit, notice);
+    form.addEventListener("submit", (event) => {
+      event.preventDefault(); if (busy) return;
+      if (!pending) { selectedDimension = dimension.value; const prior = current.items.find((item) => item.kind === "preference" && item.record.dimension === selectedDimension); pending = { request_id: requestId, book_id: books.book_id, publication_id: current.publication.publication_id, expected_event_id: prior?.event_id || null, selected_option_id: option.value }; dimension.disabled = true; option.disabled = true; }
+      void save(`/preferences/${encodeURIComponent(selectedDimension)}`, pending, submit);
+    }); openActionDialog("Save an explicit preference", form);
+  });
+  refresh.addEventListener("click", () => { if (!busy) void load(); }); void load(); return section;
+}
+
 function financeTransactions(cockpit) {
   const section = document.createElement("section"); section.className = "card finance-transactions"; section.append(text("h2", "Recent money movement"));
   const flows = cockpit.recent_flows || [];
@@ -3953,9 +4235,9 @@ function financeTransactions(cockpit) {
 }
 
 function financeAccounts(cockpit) {
-  const section = document.createElement("section"); section.className = "card"; section.append(text("h2", "Net worth inputs"), text("p", `Computed net worth: ${moneyMinor(cockpit.summary.net_worth_minor)}. Account details remain member-scoped and privileged.`, "state-note"));
+  const section = document.createElement("section"); section.className = "card"; section.append(text("h2", "Observed asset and liability inputs"), text("p", `Listed net value: ${moneyMinor(cockpit.summary.observed_listed_net_minor)}. Coverage is unverified; a reconciled balance sheet is unavailable.`, "state-note"));
   if (!(cockpit.accounts || []).length) { section.append(text("p", "No visible provider accounts. Workbook asset and liability assumptions still participate in the total.", "empty")); return section; }
-  const list = document.createElement("ul"); list.className = "finance-account-list"; for (const account of cockpit.accounts) { const row = document.createElement("li"); const body = document.createElement("div"); const liability = ["credit", "loan"].includes(account.account_type); body.append(text("strong", account.display_name), text("small", `${account.institution_name} · ${liability ? "Liability" : "Asset"} · ${titleCase(account.account_type)} · •••• ${account.last4 || "—"}`)); const signed = liability ? -Math.abs(Number(account.current_balance_minor || 0)) : Number(account.current_balance_minor || 0); row.append(body, text("strong", moneyMinor(signed), liability ? "finance-outflow" : "")); list.append(row); } section.append(list); return section;
+  const list = document.createElement("ul"); list.className = "finance-account-list"; for (const account of cockpit.accounts) { const row = document.createElement("li"); const body = document.createElement("div"); const liability = ["credit", "loan"].includes(account.account_type); body.append(text("strong", account.display_name), text("small", `${account.institution_name} · ${liability ? "Liability" : "Asset"} · ${titleCase(account.account_type)} · •••• ${account.last4 || "—"}`)); const signed = account.current_balance_minor == null ? null : liability ? -Math.abs(Number(account.current_balance_minor)) : Number(account.current_balance_minor); row.append(body, text("strong", moneyMinor(signed), liability ? "finance-outflow" : "")); list.append(row); } section.append(list); return section;
 }
 
 function financeHealth(cockpit) {
@@ -3963,18 +4245,38 @@ function financeHealth(cockpit) {
   const section = document.createElement("section"); section.className = "card finance-health"; section.append(text("h2", "Source and model health"));
   const facts = document.createElement("dl"); facts.className = "finance-health-grid"; for (const [label, value] of [["State", titleCase(health.state)], ["Transactions", health.transaction_count || 0], ["Accounts", health.account_count || 0], ["Accounts needing attention", health.unhealthy_account_count || 0], ["Pending", health.pending_count || 0], ["Uncategorized", health.uncategorized_count || 0], ["Non-USD rows excluded", health.unsupported_currency_count || 0], ["Latest source", health.latest_source_at ? new Date(health.latest_source_at).toLocaleString() : "No source watermark"], ["Workbook", workbook ? `${titleCase(workbook.validation_state)} · schema ${workbook.workbook_schema_version}` : "Not published"]]) facts.append(text("dt", label), text("dd", value)); section.append(facts);
   if (workbook?.validation_failures?.length) { const list = document.createElement("ul"); list.className = "settings-rule-list"; for (const failure of workbook.validation_failures) list.append(text("li", failure)); section.append(text("h3", "Workbook checks"), list); }
-  section.append(text("p", "Authority split: Plaid owns provider facts; the workbook owns reviewed planning inputs and manual overrides; the event log preserves provenance and replay.", "review-state")); return section;
+  for (const [report, status] of Object.entries(cockpit.reports || {})) section.append(text("h3", titleCase(report)), text("p", `${titleCase(status.state)} · ${status.reason}`, "state-note"));
+  section.append(text("p", "Accepted Books publications own accounting and planning. Provider observations alone do not release reports; the event log preserves accepted provenance and replay.", "review-state")); return section;
+}
+
+function financeBooksOverview(books) {
+  const hero = document.createElement("section"); hero.className = "hero-card finance-hero";
+  const copy = document.createElement("div");
+  copy.append(text("p", "YOUR HOUSEHOLD BOOKS", "eyebrow"), text("h2", "Your financial picture", "action-title"), text("p", "Review the published plan, explore dated cash and funding estimates, and keep your choices alongside their evidence.", "brief-summary"));
+  copy.append(text("p", "Books owns these outputs. A planning estimate is not a verified bank balance or permission to spend.", "state-note"));
+  const facts = document.createElement("dl"); facts.className = "finance-hero-stats";
+  for (const [label, value] of [["Publication accepted", books.as_of || "Unknown"], ["Source observed", books.source_clock_summary?.oldest_observed_at || "Unknown"], ["Current freshness", "Not established"], ["Cash safety", "Not established"]]) {
+    const fact = document.createElement("div"); fact.append(text("dt", label), text("dd", value)); facts.append(fact);
+  }
+  hero.append(copy, facts); return hero;
 }
 
 function renderFinance(data) {
   const root = $("#surface"); root.replaceChildren(); $("#mode-label").textContent = "Private · deterministic planning · no bank writes";
   const cockpit = data.cockpit || { summary: {}, budgets: [], scenarios: [], accounts: [], data_health: {} };
   const requested = new URLSearchParams(location.search).get("view"); if (FINANCE_VIEWS.some(([value]) => value === requested)) state.financeView = requested;
-  root.append(freshnessStrip(data), financeHero(cockpit), financeControls());
-  if (state.financeView === "overview") root.append(financeKpis(cockpit), financeCashFlow(cockpit), financeBudgets(cockpit), financeScenarios(cockpit), financeGoals(cockpit));
+  if (cockpit.accepted_books?.publication_id) {
+    // Accepted Books is the finance authority for this owner. Legacy workbook
+    // scenarios and provider observations must not appear as a second plan.
+    $("#mode-label").textContent = "Private · Books outputs · source assumptions preserved";
+    root.append(freshnessStrip(data), financeBooksOverview(cockpit.accepted_books), financePlanningCard(cockpit.accepted_books), financeChoicesCard(cockpit.accepted_books), financeAcceptedBooks(cockpit));
+    return;
+  }
+  root.append(freshnessStrip(data), financeAcceptedBooks(cockpit), financePlanningCard(cockpit.accepted_books), financeHero(cockpit), financeControls());
+  if (state.financeView === "overview") root.append(financeKpis(cockpit), financeCashFlow(cockpit), financeBudgets(cockpit), financeScenarios(cockpit), financeGoals(cockpit), financeChoicesCard(cockpit.accepted_books));
   else if (state.financeView === "cashflow") root.append(financeCashFlow(cockpit), financeScenarios(cockpit));
   else if (state.financeView === "spending") root.append(financeBudgets(cockpit), financeTransactions(cockpit));
-  else if (state.financeView === "scenarios") root.append(financeScenarios(cockpit), financeGoals(cockpit));
+  else if (state.financeView === "scenarios") root.append(financeScenarios(cockpit), financeGoals(cockpit), financeChoicesCard(cockpit.accepted_books));
   else if (state.financeView === "networth") root.append(financeAccounts(cockpit));
   else root.append(financeHealth(cockpit));
 }
@@ -5240,6 +5542,116 @@ function cosPrivatePermissionsCard(data, updateDelegations) {
   lock(); void reconcile(); return card;
 }
 
+function financeAccessSettingsCard(data) {
+  const card = document.createElement("section"); card.className = "card finance-access-settings";
+  card.append(text("h2", "My Books dashboard and CoS analysis"), text("p", "Choose the reviewed book that supplies your Finance dashboard. Importing an accepted snapshot preserves its source date and completeness. Daily refresh and changes to the source workbook remain separate."));
+  const identity = data.control.identity;
+  if (!identity.can_mutate || identity.authenticated_role !== "principal" || identity.viewing_as || identity.authenticated_member_id !== identity.view_member_id) {
+    card.append(text("p", "Available only in your own authenticated principal view.", "state-note")); return card;
+  }
+  let policy = null, busy = false, manifest = null, approval = null;
+  const status = text("p", "Checking Books access…", "state-note"); status.setAttribute("role", "status");
+  const form = document.createElement("form"); form.className = "dialog-form";
+  const bindings = {};
+  const bindingReview = document.createElement("details"); bindingReview.append(text("summary", "Reviewed book identity"), text("p", "Use the existing identifiers from the approved Books binding receipt. These become fixed after the first save."));
+  for (const [name, label] of [["book_id", "Book ID"], ["entity_id", "Entity ID"], ["audience_policy_id", "Audience policy ID"], ["audience_policy_version", "Audience policy version"]]) {
+    const input = document.createElement("input"); input.type = "text"; input.name = name; input.maxLength = 96; input.required = true; bindings[name] = input; bindingReview.append(field(label, input));
+  }
+  form.append(bindingReview);
+  const audience = document.createElement("fieldset"); audience.append(text("legend", "People who can read this book"));
+  const audienceChoices = new Map();
+  form.append(audience);
+  const books = document.createElement("input"); books.type = "checkbox"; books.name = "books_enabled";
+  const cos = document.createElement("input"); cos.type = "checkbox"; cos.name = "cos_analysis_enabled";
+  for (const [input, label] of [[books, "Use this book for the selected readers’ Finance dashboards"], [cos, "Allow CoS to analyze this book with the selected readers"]]) {
+    const wrap = document.createElement("label"); wrap.className = "bridge-capability-choice"; wrap.append(input, text("span", label)); form.append(wrap);
+  }
+  form.append(text("p", "Select yourself and at most one other principal. This shares only the selected book. Turning analysis off stops new Finance tool access and retained-result retrieval; it preserves accepted history and conversations already delivered. CoS may still reason from or retrieve that earlier discussion.", "state-note"));
+  const save = text("button", "Save Books access", "button button-primary"); save.type = "submit";
+  const refresh = text("button", "Check Books access", "button button-secondary"); refresh.type = "button"; form.append(save, refresh);
+  const transfer = document.createElement("details"); transfer.append(text("summary", "Import a reviewed Books snapshot"));
+  const manifestFile = document.createElement("input"); manifestFile.type = "file"; manifestFile.accept = ".json,application/json";
+  const preview = text("pre", "Select the separately reviewed manifest first."); preview.style.whiteSpace = "pre-wrap"; preview.style.overflowWrap = "anywhere";
+  const reviewed = document.createElement("input"); reviewed.type = "checkbox";
+  const reviewLabel = document.createElement("label"); reviewLabel.className = "bridge-capability-choice"; reviewLabel.append(reviewed, text("span", "I reviewed this source snapshot, binding and evidence hashes independently of the upload."));
+  const approve = text("button", "Approve this manifest for 30 minutes", "button button-secondary"); approve.type = "button";
+  const packetFile = document.createElement("input"); packetFile.type = "file"; packetFile.accept = ".json,application/json";
+  const upload = text("button", "Import exact approved snapshot", "button button-primary"); upload.type = "button";
+  transfer.append(field("Reviewed manifest", manifestFile), preview, reviewLabel, approve, field("Closed Books package", packetFile), upload);
+  const receipt = text("pre", ""); receipt.style.whiteSpace = "pre-wrap"; receipt.style.overflowWrap = "anywhere"; transfer.append(receipt);
+  function controls() {
+    for (const el of [books, cos, save, ...Object.values(bindings), ...audienceChoices.values()]) el.disabled = busy || !policy;
+    for (const el of Object.values(bindings)) el.readOnly = Boolean(policy?.revision);
+    const own = audienceChoices.get(identity.authenticated_member_id); if (own) { own.disabled = true; own.checked = true; }
+    refresh.disabled = busy; cos.disabled = busy || !policy || !books.checked || !policy.advisor_available;
+    for (const el of [manifestFile, packetFile, reviewed]) el.disabled = busy || !policy?.books_enabled;
+    approve.disabled = busy || !policy?.books_enabled || !manifest || !reviewed.checked || Boolean(approval);
+    upload.disabled = busy || !approval || !packetFile.files.length;
+  }
+  function apply(value) {
+    if (value.eligible_readers) {
+      audience.replaceChildren(text("legend", "People who can read this book")); audienceChoices.clear();
+      for (const reader of value.eligible_readers) {
+        const input = document.createElement("input"); input.type = "checkbox"; input.value = reader.member_id;
+        const label = document.createElement("label"); label.className = "bridge-capability-choice"; label.append(input, text("span", reader.label)); audience.append(label); audienceChoices.set(reader.member_id, input);
+      }
+    }
+    for (const [member, input] of audienceChoices) input.checked = (value.reader_member_ids || [identity.authenticated_member_id]).includes(member);
+    policy = value; books.checked = value.books_enabled; cos.checked = value.cos_analysis_enabled;
+    for (const [key, input] of Object.entries(bindings)) input.value = value.binding?.[key] || "";
+    bindingReview.open = !value.binding;
+  }
+  async function reload() {
+    busy = true; approval = null; controls();
+    try { apply(await api("/api/member/v1/settings/finance")); status.textContent = `Books dashboard ${policy.books_enabled ? "enabled" : "disabled"}. CoS Finance ${!policy.advisor_available ? "is unavailable in this release" : policy.cos_analysis_enabled ? "analysis enabled" : "analysis disabled"}.`; }
+    catch (error) { policy = null; status.textContent = `Books access could not be verified. ${error.message}`; }
+    finally { busy = false; controls(); }
+  }
+  books.addEventListener("change", () => { if (!books.checked) cos.checked = false; controls(); });
+  refresh.addEventListener("click", () => { void reload(); });
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault(); if (busy || !policy) return;
+    const body = { request_id: crypto.randomUUID(), expected_revision: policy.revision, binding: Object.fromEntries(Object.entries(bindings).map(([key, input]) => [key, input.value.trim()])), books_enabled: books.checked, cos_analysis_enabled: cos.checked, reader_member_ids: [...audienceChoices].filter(([, input]) => input.checked).map(([member]) => member) };
+    if (body.reader_member_ids.length > 2) { status.textContent = "Select at most two readers, including yourself."; return; }
+    busy = true; approval = null; controls();
+    try { apply(await api("/api/member/v1/settings/finance", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })); status.textContent = "Books access saved. Accepted history and existing CoS grants are preserved."; }
+    catch (error) { policy = null; status.textContent = `Save could not be verified. Check Books access before another change. ${error.message}`; }
+    finally { busy = false; controls(); }
+  });
+  manifestFile.addEventListener("change", async () => {
+    manifest = null; approval = null; reviewed.checked = false; controls();
+    const file = manifestFile.files[0]; if (!file) return;
+    try {
+      if (file.size > 32768) throw new Error("The reviewed manifest exceeds the supported size.");
+      const value = JSON.parse(await file.text());
+      if (value.contract !== "household-books.closed-import.v1" || !value.binding || !policy?.binding || Object.keys(bindings).some(key => value.binding[key] !== policy.binding[key])) throw new Error("The manifest must match your saved book binding.");
+      manifest = value; preview.textContent = JSON.stringify(value, null, 2);
+    } catch (error) { preview.textContent = error.message; }
+    controls();
+  });
+  reviewed.addEventListener("change", controls); packetFile.addEventListener("change", controls);
+  approve.addEventListener("click", async () => {
+    if (busy || !manifest || !reviewed.checked || !policy?.books_enabled) return;
+    busy = true; controls();
+    try { approval = await api("/api/member/v1/finance/import-approvals", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ request_id: crypto.randomUUID(), expected_policy_revision: policy.revision, manifest }) }); status.textContent = `This exact manifest is approved until ${new Date(approval.expires_at).toLocaleTimeString()}.`; }
+    catch (error) { approval = null; status.textContent = `Approval could not be verified. No package was uploaded. ${error.message}`; }
+    finally { busy = false; controls(); }
+  });
+  upload.addEventListener("click", async () => {
+    const file = packetFile.files[0]; if (busy || !approval || !file) return;
+    if (file.size > 64 * 1024 * 1024) { status.textContent = "The package exceeds the supported size."; return; }
+    busy = true; controls(); status.textContent = "Checking and importing the exact approved snapshot…";
+    try {
+      const result = await api(`/api/member/v1/finance/imports/${encodeURIComponent(approval.approval_event_id)}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: file });
+      receipt.textContent = JSON.stringify(result, null, 2); status.textContent = "Approved snapshot accepted. Open Finance to review its source date, completeness and projections.";
+    } catch (error) {
+      receipt.textContent = JSON.stringify(error.body?.detail || {}, null, 2);
+      status.textContent = `Import was not confirmed complete. Review the receipt and current Finance data before another upload. ${error.message}`;
+    } finally { busy = false; approval = null; packetFile.value = ""; controls(); }
+  });
+  card.append(status, form, transfer); controls(); void reload(); return card;
+}
+
 function financeMetadataSettingsCard(data) {
   const card = document.createElement("section"); card.className = "card finance-metadata-settings";
   const identity = data.control.identity;
@@ -5311,7 +5723,7 @@ function howCosWorksSettings(data) {
     if (!items.length) delegationList.append(text("li", "No delegation is visible in this context.", "empty"));
   }
   updateDelegations(model.delegations || []);
-  fragment.append(cosPrivatePermissionsCard(data, updateDelegations), financeMetadataSettingsCard(data), delegations);
+  fragment.append(cosPrivatePermissionsCard(data, updateDelegations), financeAccessSettingsCard(data), financeMetadataSettingsCard(data), delegations);
   const compiled = model.compiled_context; if (compiled) { const contextCard = document.createElement("details"); contextCard.className = "card settings-advanced"; contextCard.append(text("summary", "Compiled effective CoS context"), text("p", `Digest ${compiled.digest} · built only from typed state.`, "state-note")); contextCard.append(permissionList("Explicitly excluded", compiled.excluded || [])); fragment.append(contextCard); }
   return fragment;
 }
@@ -5511,7 +5923,8 @@ function freshnessStrip(data) {
   const strip = document.createElement("div"); strip.className = "freshness-strip";
   if (!value) return strip;
   strip.append(text("span", titleCase(value.state), `pill state-label state-${String(value.state).replaceAll("_", "-")}`));
-  const latest = value.latest_source_at ? `Latest source ${new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(value.latest_source_at))}` : "No source watermark yet";
+  const sourceLabel = data.surface === "finance" && data.cockpit?.accepted_books?.publication_id ? "Books source watermark" : "Latest source";
+  const latest = value.latest_source_at ? `${sourceLabel} ${new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(value.latest_source_at))}` : "No source watermark yet";
   strip.append(text("span", `${latest} · ${value.row_count} visible record${value.row_count === 1 ? "" : "s"}`));
   if (value.checkpoint_required) strip.append(text("span", value.checkpoint_event_id ? `Checkpoint ${String(value.checkpoint_event_id).slice(-10)}` : "No processing checkpoint yet"));
   if (Number(value.lag_count || 0) > 0) strip.append(text("strong", `${value.lag_count} event${value.lag_count === 1 ? "" : "s"} waiting to process`));

@@ -424,11 +424,13 @@ async def test_opt_in_delivery_concurrency_is_bounded_and_checkpoints_batch(
 
 @pytest.mark.parametrize("has_checkpoint", [False, True])
 @pytest.mark.parametrize("failure_during_count", [False, True])
+@pytest.mark.parametrize("batched", [False, True])
 async def test_subscriber_status_pairs_one_count_with_its_captured_checkpoint(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     has_checkpoint: bool,
     failure_during_count: bool,
+    batched: bool,
 ) -> None:
     log = EventLog(tmp_path / "events.db", TEST_KEY)
     bus = EventBus(log, tmp_path / "bus.db")
@@ -443,23 +445,24 @@ async def test_subscriber_status_pairs_one_count_with_its_captured_checkpoint(
     state.checkpoint = captured_checkpoint
     entered_count = asyncio.Event()
     release_count = asyncio.Event()
-    original_count_since = log.count_since
+    method = "count_since_many" if batched else "count_since"
+    original_count_since = getattr(log, method)
     call_count = 0
 
-    async def controlled_count_since(
-        cursor: str | None,
-        *,
-        types: list[str] | None = None,
-    ) -> int:
+    async def controlled_count_since(*args, **kwargs):
         nonlocal call_count
         call_count += 1
         if call_count == 1:
             entered_count.set()
             await release_count.wait()
-        return await original_count_since(cursor, types=types)
+        return await original_count_since(*args, **kwargs)
 
-    monkeypatch.setattr(log, "count_since", controlled_count_since)
-    status_task = asyncio.create_task(bus.subscriber_status("status-race"))
+    monkeypatch.setattr(log, method, controlled_count_since)
+    status_task = asyncio.create_task(
+        bus.subscriber_statuses(["status-race"])
+        if batched
+        else bus.subscriber_status("status-race")
+    )
     await entered_count.wait()
     state.checkpoint = event_ids[-1]
     state.last_success_at_ms = 100
@@ -470,6 +473,8 @@ async def test_subscriber_status_pairs_one_count_with_its_captured_checkpoint(
         state.poison_event_id = event_ids[-1]
     release_count.set()
     status = await status_task
+    if batched:
+        status = status["status-race"]
 
     assert call_count == 1
     assert status["checkpoint_event_id"] == captured_checkpoint
@@ -571,3 +576,132 @@ async def test_start_is_idempotent_and_subscribe_rejected_while_running(rig) -> 
 def test_lag_warn_threshold_is_large_enough() -> None:
     # sanity: the constant is the documented threshold
     assert LAG_WARN_THRESHOLD >= 10_000
+
+
+async def test_typed_notification_wakes_only_matching_and_wildcard_consumers(rig):
+    _, bus, _ = rig
+
+    async def callback(event):
+        pass
+
+    bus.subscribe("foo-only", ["foo"], callback)
+    bus.subscribe("bar-only", ["bar"], callback)
+    bus.subscribe("all", "*", callback)
+    # Inspect wake hints before workers consume them; no checkpoints are changed.
+    bus._running = True
+    await bus.notify("committed-hint", event_types=frozenset({"foo"}))
+    assert bus._subscribers["foo-only"].trigger.is_set()
+    assert bus._subscribers["all"].trigger.is_set()
+    assert not bus._subscribers["bar-only"].trigger.is_set()
+    assert all(state.checkpoint is None for state in bus._subscribers.values())
+    await bus.notify("legacy-hint")
+    assert bus._subscribers["bar-only"].trigger.is_set()
+
+
+async def test_typed_writer_batch_delivers_every_matching_type_and_restart_recovers(
+    rig,
+):
+    from adminme.events.writer import EventWriter
+
+    log, bus, root = rig
+    received = []
+    other = []
+
+    async def callback(event):
+        received.append(event["payload"]["i"])
+
+    async def other_callback(event):
+        other.append(event["payload"]["i"])
+
+    bus.subscribe("foo-only", ["foo"], callback)
+    bus.subscribe("bar-only", ["bar"], other_callback)
+    await bus.start()
+    writer = EventWriter(log, bus)
+    await writer.write_batch(
+        [_event(1, type="foo"), _event(2, type="bar"), _event(3, type="foo")]
+    )
+    await _wait_for(lambda: received == [1, 3] and other == [2])
+    await bus.stop()
+    # A commit without a wake hint is recovered on startup from its checkpoint.
+    await log.append(_event(4, type="foo"))
+    replacement = EventBus(log, root / "bus.db")
+    replacement.subscribe("foo-only", ["foo"], callback)
+    try:
+        await replacement.start()
+        await _wait_for(lambda: received == [1, 3, 4])
+    finally:
+        await replacement.stop()
+
+
+async def test_subscriber_status_batch_preserves_filters_and_missing_contract(rig):
+    log, bus, _ = rig
+
+    async def callback(_event):
+        pass
+
+    bus.subscribe("foo-only", ["foo"], callback)
+    bus.subscribe("bar-only", ["bar"], callback)
+    await log.append(_event(1, type="foo"))
+    await log.append(_event(2, type="bar"))
+    statuses = await bus.subscriber_statuses(["foo-only", "bar-only"])
+    assert statuses["foo-only"]["lag_count"] == statuses["bar-only"]["lag_count"] == 1
+    with pytest.raises(KeyError, match="missing"):
+        await bus.subscriber_statuses(["foo-only", "missing"])
+    assert await bus.subscriber_statuses(
+        ["foo-only", "missing"], ignore_missing=True
+    ) == {"foo-only": statuses["foo-only"]}
+    assert await bus.subscriber_statuses([]) == {}
+
+
+@pytest.mark.parametrize("include_row_counts", [False, True])
+async def test_projection_status_preserves_fields_with_one_metadata_dispatch(
+    rig, monkeypatch, include_row_counts
+):
+    from types import SimpleNamespace
+    from adminme.projections.runner import ProjectionRunner
+
+    log, bus, _ = rig
+
+    async def callback(_event):
+        pass
+
+    for name in ["one", "two"]:
+        bus.subscribe(f"projection:{name}", ["foo"], callback)
+    await log.append(_event(1, type="foo"))
+    state = bus._subscribers["projection:two"]
+    state.degraded = True
+    state.consecutive_failures = 2
+    state.poison_event_id = "poison-fixture"
+    runner = object.__new__(ProjectionRunner)
+    runner._bus = bus
+    runner._projections = {
+        name: SimpleNamespace(version="1.0.0") for name in ["one", "two"]
+    }
+
+    async def row_counts(_function, name):
+        return {name: 3}
+
+    runner._run_on_worker = row_counts
+    reader = log._metadata_reader
+    submit = reader._executor.submit
+    submissions = 0
+
+    def counted_submit(*args, **kwargs):
+        nonlocal submissions
+        submissions += 1
+        return submit(*args, **kwargs)
+
+    monkeypatch.setattr(reader._executor, "submit", counted_submit)
+    status = await runner.status(include_row_counts=include_row_counts)
+    assert submissions == (2 if include_row_counts else 1)
+    assert list(status) == ["one", "two"]
+    assert status["one"]["lag_count"] == status["two"]["lag_count"] == 1
+    assert status["one"]["checkpoint"] is None
+    assert not status["one"]["degraded"]
+    assert status["two"]["degraded"]
+    assert status["two"]["consecutive_failures"] == 2
+    assert status["two"]["poison_event_id"] == "poison-fixture"
+    for name in status:
+        assert ("row_counts" in status[name]) is include_row_counts
+        if include_row_counts:
+            assert status[name]["row_counts"] == {name: 3}

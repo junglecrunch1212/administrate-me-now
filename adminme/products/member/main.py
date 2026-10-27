@@ -14,8 +14,10 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from dateutil.rrule import rrulestr
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.encoders import jsonable_encoder
 from fastapi.responses import (
     FileResponse,
+    JSONResponse,
     RedirectResponse,
     Response,
     StreamingResponse,
@@ -8214,10 +8216,17 @@ async def chat_history(
 ) -> dict[str, Any]:
     runtime = _runtime(request)
     _, session_key = _require_chat(runtime, session)
+    from adminme.finance.disclosure import FinanceDisclosureError, check_disclosure
+
     try:
+        await check_disclosure(runtime, session, session_key)
         items = await runtime.member_chat.history(
             session_key=session_key, limit=min(max(limit, 1), 50)
         )
+        await check_disclosure(runtime, session, session_key)
+        _require_chat(runtime, session)
+    except FinanceDisclosureError as exc:
+        raise HTTPException(403, str(exc)) from None
     except MemberChatError as exc:
         runtime.member_chat_last_failure = {
             "code": exc.code,
@@ -8269,11 +8278,26 @@ async def chat_stream(
         )
 
     async def generate() -> AsyncIterator[bytes]:
+        from adminme.finance.disclosure import (
+            FinanceDisclosureError,
+            check_disclosure,
+            session_has_finance,
+            session_marked_in_memory,
+        )
+
         lock = runtime.member_chat_locks.setdefault(
             session.auth_member_id, asyncio.Lock()
         )
         try:
             async with lock:
+                marked = await session_has_finance(runtime, session, session_key)
+                await check_disclosure(runtime, session, session_key)
+                from adminme.finance.access_control import analysis_enabled
+
+                buffer_text = marked or analysis_enabled(runtime, session)
+                pending_text = ""
+                run_id = None
+                saw_final = False
                 async for chunk in runtime.member_chat.stream(
                     session_key=session_key,
                     message=body.message,
@@ -8283,12 +8307,68 @@ async def chat_stream(
                     else None,
                 ):
                     runtime.member_chat_last_failure = None
+                    if chunk.run_id is not None:
+                        if run_id is not None and chunk.run_id != run_id:
+                            raise FinanceDisclosureError(
+                                "finance_disclosure_run_changed"
+                            )
+                        run_id = chunk.run_id
+                    buffer_text = buffer_text or session_marked_in_memory(
+                        runtime, session, session_key
+                    )
+                    if buffer_text and chunk.kind == "delta":
+                        pending_text = (
+                            (chunk.text or "")
+                            if chunk.replace
+                            else pending_text + (chunk.text or "")
+                        )
+                        if len(pending_text.encode("utf-8")) > 24_000:
+                            raise FinanceDisclosureError(
+                                "finance_disclosure_answer_too_large"
+                            )
+                        continue
+                    if chunk.kind == "final":
+                        verified_text = await check_disclosure(
+                            runtime,
+                            session,
+                            session_key,
+                            run_id=run_id,
+                            require_run=True,
+                            answer_text=pending_text if buffer_text else None,
+                        )
+                        if buffer_text:
+                            pending_text = verified_text or ""
+                        _require_chat(runtime, session)
+                        saw_final = True
+                        if pending_text:
+                            yield _sse(
+                                {
+                                    "kind": "delta",
+                                    "text": pending_text,
+                                    "replace": True,
+                                    "retryable": False,
+                                    "correlation_id": correlation_id,
+                                }
+                            )
+                            pending_text = ""
                     public = chunk.public()
                     public["correlation_id"] = correlation_id
                     yield _sse(public)
                     if await request.is_disconnected():
                         await runtime.member_chat.abort(session_key=session_key)
                         return
+                if buffer_text and pending_text and not saw_final:
+                    raise FinanceDisclosureError("finance_disclosure_final_required")
+        except FinanceDisclosureError as exc:
+            await runtime.member_chat.abort(session_key=session_key)
+            yield _sse(
+                {
+                    "kind": "error",
+                    "code": str(exc),
+                    "retryable": False,
+                    "correlation_id": correlation_id,
+                }
+            )
         except asyncio.CancelledError:
             await runtime.member_chat.abort(session_key=session_key)
             raise
@@ -8626,6 +8706,233 @@ async def define_routine(
         "duplicate": False,
         "routine": get_routine(conn, session, routine_id=routine_id),
     }
+
+
+class FinanceChoiceRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    request_id: str = Field(min_length=8, max_length=120, pattern=r"^[A-Za-z0-9_.:-]+$")
+    book_id: str = Field(min_length=1, max_length=96, pattern=r"^[A-Za-z0-9_.:-]+$")
+    publication_id: str = Field(
+        min_length=1, max_length=96, pattern=r"^[A-Za-z0-9_.:-]+$"
+    )
+    expected_event_id: str | None = Field(default=None, min_length=1, max_length=160)
+
+
+class FinanceGoalChoiceRequest(FinanceChoiceRequest):
+    label: str = Field(min_length=1, max_length=120)
+    kind: Literal["reserve", "purchase", "education", "retirement", "support", "debt"]
+    status: Literal["selected", "paused", "completed"] = "selected"
+    target_minor: int | None = Field(default=None, strict=True, ge=0, le=10**15)
+    currency: str = Field(pattern=r"^[A-Z]{3}$")
+    target_date: date | None = None
+    priority: Literal["unranked", "essential", "preferred", "optional"] = "unranked"
+
+
+class FinancePreferenceChoiceRequest(FinanceChoiceRequest):
+    selected_option_id: str = Field(
+        min_length=1, max_length=160, pattern=r"^[A-Za-z0-9_.:-]+$"
+    )
+
+
+def _finance_choice_owner(runtime: Any, session: Session) -> None:
+    from adminme.finance.access_control import policy_for_session, FinanceAccessError
+
+    require_principal(session)
+    try:
+        enabled = policy_for_session(runtime, session).books_enabled
+    except FinanceAccessError:
+        enabled = False
+    if (
+        session.is_view_as
+        or session.service_context is not None
+        or runtime.settings.member_roles.get(session.auth_member_id) != "principal"
+        or not enabled
+    ):
+        raise HTTPException(403, "finance_explicit_owner_choice_required")
+
+
+@router.get("/api/member/v1/finance/choices")
+async def finance_choices(
+    request: Request,
+    session: SessionDep,
+    book_id: str | None = Query(default=None, max_length=96),
+    offset: int = Query(default=0, ge=0, le=1000),
+) -> dict[str, Any]:
+    from adminme.finance.choices import list_choices
+    from adminme.finance.queries import publication_status
+
+    runtime = _runtime(request)
+    _finance_choice_owner(runtime, session)
+    from adminme.finance.access_control import bound_book, FinanceAccessError
+
+    try:
+        book_id = bound_book(runtime, session, book_id)
+    except FinanceAccessError:
+        raise HTTPException(403, "finance_book_not_authorized") from None
+    conn = runtime.projections.connection("money")
+    try:
+        publication = publication_status(conn, session, book_id)
+    except ValueError:
+        return {"state": "book_selection_required", "can_record": False, "items": []}
+    if not publication.get("publication_id"):
+        return {
+            "state": "accepted_publication_required",
+            "can_record": False,
+            "items": [],
+        }
+    return {
+        "state": "available",
+        "can_record": True,
+        "publication": {
+            key: publication[key] for key in ("book_id", "publication_id", "as_of")
+        },
+        **list_choices(conn, session, publication["book_id"], offset),
+    }
+
+
+async def _save_finance_choice(
+    request: Request,
+    session: Session,
+    body: FinanceChoiceRequest,
+    choice_id: str,
+    kind: str,
+) -> dict[str, Any]:
+    from adminme.finance.choices import current_choice, validate_choice
+
+    runtime = _runtime(request)
+    _finance_choice_owner(runtime, session)
+    if (
+        not choice_id
+        or len(choice_id) > 160
+        or any(
+            c
+            not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.:-"
+            for c in choice_id
+        )
+    ):
+        raise HTTPException(422, "invalid_finance_choice_id")
+    event_type = (
+        "finance.goal_recorded" if kind == "goal" else "finance.preference_recorded"
+    )
+    from adminme.finance.access_control import bound_book, FinanceAccessError
+
+    try:
+        bound_book(runtime, session, body.book_id)
+    except FinanceAccessError:
+        raise HTTPException(403, "finance_book_not_authorized") from None
+    key = f"finance-choice:{session.tenant_id}:{session.auth_member_id}:{body.book_id}:{kind}:{choice_id}"
+    async with runtime.settings_command_locks.setdefault(key, asyncio.Lock()):
+        fingerprint = _member_command_fingerprint(kind, choice_id, body)
+        prior_command = await _prior_member_command(
+            runtime,
+            session,
+            event_type=event_type,
+            request_id=body.request_id,
+            fingerprint=fingerprint,
+        )
+        conn = runtime.projections.connection("money")
+        if prior_command is not None:
+            await runtime.wait_for_projection("money", prior_command["event_id"])
+            _finance_choice_owner(runtime, session)
+            return {
+                "event_id": prior_command["event_id"],
+                "duplicate": True,
+                "choice": current_choice(conn, session, body.book_id, kind, choice_id),
+                "provider_effect_count": 0,
+            }
+        current = current_choice(conn, session, body.book_id, kind, choice_id)
+        expected = current["event_id"] if current else None
+        if body.expected_event_id != expected:
+            raise HTTPException(409, "finance_choice_changed")
+        now = EventEnvelope.now_utc_iso()
+        scope = {
+            "book_id": body.book_id,
+            "owner_member_id": session.auth_member_id,
+            "applicable_adult_ids": [session.auth_member_id],
+            "audience_member_ids": [session.auth_member_id],
+            "policy_revision": "explicit-owner-choice-v1",
+            "baseline_publication_id": body.publication_id,
+        }
+        payload: dict[str, Any] = {"scope": scope, "recorded_at": now}
+        if isinstance(body, FinanceGoalChoiceRequest):
+            payload.update(
+                {
+                    key: value
+                    for key, value in body.model_dump(mode="json").items()
+                    if key
+                    not in {
+                        "request_id",
+                        "book_id",
+                        "publication_id",
+                        "expected_event_id",
+                    }
+                }
+            )
+            payload.update(
+                goal_id=choice_id,
+                revision=current["record"]["revision"] + 1 if current else 1,
+                supersedes_event_id=expected,
+                selected_by_member_id=session.auth_member_id,
+            )
+        elif isinstance(body, FinancePreferenceChoiceRequest):
+            payload.update(
+                preference_id=body.request_id,
+                chosen_by_member_id=session.auth_member_id,
+                dimension=choice_id,
+                selected_option_id=body.selected_option_id,
+            )
+        private = f"private:{session.auth_member_id}"
+        event = _member_command_event(
+            session,
+            event_type=event_type,
+            payload=payload,
+            request_id=body.request_id,
+            fingerprint=fingerprint,
+            causation_id=expected,
+            owner_scope=private,
+            visibility_scope=private,
+            sensitivity="privileged",
+        )
+        try:
+            payload = validate_choice(conn, event.model_dump(mode="json"))
+        except ValueError:
+            raise HTTPException(
+                422, "finance_choice_or_accepted_baseline_invalid"
+            ) from None
+        event = event.model_copy(update={"payload": payload})
+        await _guard_member_write(
+            runtime, session, event_type, {"operation": "record_private_finance_choice"}
+        )
+        _finance_choice_owner(runtime, session)
+        try:
+            event_id = await runtime.events.write(event)
+        except IdempotencyConflict:
+            raise HTTPException(409, "finance_choice_request_conflict") from None
+        await runtime.wait_for_projection("money", event_id)
+        _finance_choice_owner(runtime, session)
+        return {
+            "event_id": event_id,
+            "duplicate": False,
+            "choice": current_choice(conn, session, body.book_id, kind, choice_id),
+            "provider_effect_count": 0,
+        }
+
+
+@router.post("/api/member/v1/finance/choices/goals/{goal_id}")
+async def record_finance_goal_choice(
+    goal_id: str, body: FinanceGoalChoiceRequest, request: Request, session: SessionDep
+) -> dict[str, Any]:
+    return await _save_finance_choice(request, session, body, goal_id, "goal")
+
+
+@router.post("/api/member/v1/finance/choices/preferences/{dimension}")
+async def record_finance_preference_choice(
+    dimension: str,
+    body: FinancePreferenceChoiceRequest,
+    request: Request,
+    session: SessionDep,
+) -> dict[str, Any]:
+    return await _save_finance_choice(request, session, body, dimension, "preference")
 
 
 @router.post("/api/member/v1/finance/goals/{goal_id}/lifecycle")
@@ -9423,3 +9730,72 @@ async def record_attention_feedback(
 
 
 __all__ = ["router"]
+
+
+@router.get("/api/member/v1/finance/planning", response_model=dict[str, Any])
+async def finance_planning(
+    request: Request,
+    session: SessionDep,
+    book_id: str = Query(min_length=1, max_length=80),
+    projection_id: str | None = Query(default=None, max_length=80),
+    context_id: str | None = Query(default=None, max_length=80),
+    report_id: Literal[
+        "planning_contexts",
+        "planning_projection",
+        "planning_events",
+        "planning_gaps",
+        "planning_issues",
+        "planning_evidence",
+        "planning_sources",
+        "planning_engines",
+    ] = "planning_contexts",
+    reference_id: str | None = Query(default=None, min_length=1, max_length=80),
+    horizon_days: int = Query(default=30, ge=7, le=365),
+    gap_group_id: str | None = Query(default=None, min_length=1, max_length=80),
+    offset: int = Query(default=0, ge=0, le=10000),
+) -> Response:
+    from adminme.finance.planning_store import query_projection
+
+    runtime = _runtime(request)
+    from adminme.finance.access_control import read_scope, FinanceAccessError
+
+    def authorized_scope():
+        if session.service_context is not None:
+            raise HTTPException(403, "finance_member_reader_required")
+        try:
+            return read_scope(runtime, session, book_id)
+        except FinanceAccessError:
+            raise HTTPException(403, "finance_book_not_authorized") from None
+
+    scope = authorized_scope()
+
+    def query_encoded(conn: Any) -> bytes:
+        value = query_projection(
+            conn,
+            scope,
+            book_id=book_id,
+            projection_id=projection_id,
+            context_id=context_id,
+            report_id=report_id,
+            horizon_days=horizon_days,
+            offset=offset,
+            limit=50,
+            reference_id=reference_id,
+            gap_group_id=gap_group_id,
+        )
+        try:
+            return bytes(JSONResponse(jsonable_encoder(value)).body)
+        except ValueError as exc:
+            # Rendering failures remain server errors; only selection failures
+            # use the existing 422 below. Encoding stays on the Money worker.
+            raise RuntimeError("finance_planning_response_encoding_failed") from exc
+
+    try:
+        result = await runtime.projections.read("money", query_encoded)
+    except ValueError:
+        raise HTTPException(422, "finance_planning_selection_invalid") from None
+    if session_from_request(request) != session:
+        raise HTTPException(403, "finance_planning_identity_changed")
+    if authorized_scope() != scope:
+        raise HTTPException(403, "finance_authority_changed")
+    return Response(result, media_type="application/json")

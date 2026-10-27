@@ -84,6 +84,14 @@ async def set_metadata_control(
             request_fingerprint=fingerprint,
         )
         current = await current_control(runtime, session)
+        from adminme.finance import release
+
+        if (
+            body.cos_read_enabled
+            and not current["cos_read_enabled"]
+            and not release.ADVISOR_AVAILABLE
+        ):
+            raise HTTPException(409, "finance_advisor_not_released")
         if prior is not None:
             require_current_owner(request, session)
             return {**current, "idempotent": True, "provider_effect_count": 0}

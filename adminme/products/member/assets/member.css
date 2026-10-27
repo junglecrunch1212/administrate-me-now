@@ -490,7 +490,8 @@ main { min-width: 0; padding: 2rem clamp(1rem, 4vw, 4rem) 5rem; }
 .finance-hero-stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .5rem; margin: 0; }
 .finance-hero-stats div { padding: .7rem; border: 1px solid var(--line); border-radius: var(--radius); background: rgb(255 255 255 / .62); }
 .finance-hero-stats dt { color: var(--muted); font-size: .68rem; }
-.finance-hero-stats dd { margin: .15rem 0 0; font: 700 1.15rem/1.1 "Fraunces", Georgia, serif; }
+.finance-hero-stats dd { margin: .15rem 0 0; overflow-wrap: anywhere; font: 700 1.15rem/1.1 "Fraunces", Georgia, serif; }
+.finance-accepted-books, .finance-planning, .finance-choices { overflow-wrap: anywhere; }
 .finance-cash-gap { border-left: 4px solid var(--danger); }
 .finance-budget-watch, .finance-review-model, .finance-refresh { border-left: 4px solid #c99235; }
 .finance-steady { border-left: 4px solid var(--teal); }

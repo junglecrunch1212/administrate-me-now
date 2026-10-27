@@ -22,7 +22,7 @@ from fastapi.testclient import TestClient
 
 import adminme.runtime.application as application
 from bootstrap.contracts import DeploymentPaths, load_versions
-from bootstrap.upgrade import UpgradeError, UpgradeManager
+from bootstrap.upgrade import UpgradeError, UpgradeManager, validate_candidate
 from bootstrap.source_identity import verify_release_source_identity
 from adminme.events.log import EventLog
 from adminme.events.writer import EventWriter
@@ -566,17 +566,28 @@ def test_currentness_interrupted_publication_retains_authority_and_attempts(
 ):
     instance = tmp_path / "instance"
     config = settings(instance, ROOT, selected=["message-0"])
-    model = legacy._model(monkeypatch)
     predecessor = None
     if authority == "unchanged" and outcome == "revision":
-        # An actual rollback has predecessor history. Establish its fixed
-        # constitution before the successor registers its newer revision, so
-        # rollback must preserve every event rather than register a first use.
+        # Roll back to the runtime that actually preceded this upgrade. A fresh
+        # v2-only instance has no retained v1 baseline and is a different case.
         monkeypatch.setattr(legacy, "PREDECESSOR", PREDECESSOR)
         predecessor = legacy._predecessor(tmp_path)
+        # This immutable historical binary cannot acquire the new startup guard.
+        # The real updater refuses it for the current production policy epoch;
+        # only this explicitly pre-cutover legacy fixture starts it directly.
+        with pytest.raises(UpgradeError, match="policy-aware rollback baseline"):
+            validate_candidate(
+                predecessor,
+                active_root=ROOT,
+                approve_runtime_migration=True,
+                allow_openclaw_rollback=True,
+            )
         established = _predecessor_case(
             tmp_path, monkeypatch, config, [], {}, predecessor=predecessor
         )
+        assert established["constitutional_agreements"] == [
+            {"revision": 1, "state": "active"}
+        ]
         assert established["model_calls"] == []
         [constitution] = legacy._of_type(
             established["events"], "operating_agreement.constitution_registered"
@@ -591,6 +602,7 @@ def test_currentness_interrupted_publication_retains_authority_and_attempts(
             1,
             "active",
         )
+    model = legacy._model(monkeypatch)
     blocked = threading.Event()
     original = EventWriter.write
     crash = False
@@ -641,6 +653,10 @@ def test_currentness_interrupted_publication_retains_authority_and_attempts(
             tmp_path, monkeypatch, config, [], {}, predecessor=predecessor
         )
         assert rolled_back["model_calls"] == []
+        assert rolled_back["constitutional_agreements"] == [
+            {"revision": 1, "state": "superseded"},
+            {"revision": 2, "state": "active"},
+        ]
         assert _stable(rolled_back["events"]) == _stable(before)
         assert rolled_back["operating_agreements"] == policy_before
         assert len(legacy._of_type(rolled_back["events"], currentness.PLAN_TYPE)) == 1

@@ -233,6 +233,19 @@ their checks. An unrelated unrequired aggregate is not an extra gate. Unknown
 paths use the protected fallback; never claim missing, failed, cancelled, stale
 or skipped required evidence as a pass.
 
+Immutable Git binding is MODERNIZE under these delivery controls: when GitHub
+regenerates a test merge against a newer main while retaining the older event
+base, the selector accepts it only if its second parent is the exact event
+head, its first parent descends from the event base and is already an ancestor
+of that head, and its entire Git tree equals the head tree. This is the same
+source already eligible for a direct head checkout. Otherwise it fails closed;
+merge-only content, mode changes, unrelated ancestry and extra parents are
+rejected. Scope still includes every change from the original event base to
+head, so newly integrated dependencies are not exempted. The proof records the
+actual test-merge base and binding mode, and every required worker must still
+validate the exact checkout commit. Draft rules and required checks are
+PRESERVE; this does not qualify an untested newer main or relax release gates.
+
 The supported updater reuses completed preparation only while source, toolchain,
 release ownership and generated runtime bytes still match. Recovery evidence
 can be reused only within its original freshness limit, for the same candidate,

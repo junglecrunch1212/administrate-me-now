@@ -545,6 +545,42 @@ fixed commit materialization, and passes the exact commit to the manager. A miss
 mismatched, or active-release controller fails before backup, service stop, or
 pointer mutation.
 
+Before entering maintenance for a runtime change, run the protected candidate's
+complete read-only controller prerequisite:
+
+```bash
+./bootstrap/update.sh --runtime-preflight --approve-runtime-migration \
+  /absolute/path/to/clean-reviewed-candidate
+```
+
+This uses the same reviewed launcher, private supervisor environment, prepared
+controller executable and `UpgradeManager` credential prerequisite as the update.
+It prepares disposable tooling and holds the operation lock, but does not migrate
+credentials, publish a release, change the selected source, or control services.
+It refuses activation/repair flags and an active activation journal. Its nonsecret
+result identifies the exact controller source and executable hashes, actual base
+Python path/hash/version, selected predecessor, decision branch and probe count.
+The short-lived controller is cleaned up normally; the result does not authorize
+or replace the later candidate, backup, compatibility or maintenance checks.
+
+For a Node-only change, identical Python formula/version/compatibility and actual
+base interpreter path/hash/version cause the manager to skip reference discovery
+and every credential probe (`credential_reference_count: null` means deliberately
+not enumerated). Unknown identity or binary drift refuses before credentials.
+A declared Python change still requires explicit runtime-migration authority and
+runs the existing bounded read-only credential probes under the prepared
+controller environment; the actual update retains credential migration. Errors
+report a closed category, never reference names or backend stderr. A failed probe
+does not by itself identify an OS consent or HOME/backend cause. Do not retry an
+unchanged failure or alter the environment to evade it.
+
+The older `--check-runtime-boundary` helper checks only the Python identity
+boundary; it is not proof of the complete prepared-controller prerequisite.
+Before pausing, also establish the supported cancellation/restoration path for
+the exact current predecessor. Re-run the complete preflight if the protected
+candidate or runtime identity changes. No live application mutation is performed
+by this preflight, and a pass grants no additional authority.
+
 Do not reset the login Keychain or select **Allow all applications** when a
 Python-boundary migration encounters an access prompt. The explicit migration
 launcher preserves the existing items for rollback. Under the active

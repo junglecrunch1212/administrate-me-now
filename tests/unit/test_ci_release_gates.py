@@ -46,6 +46,11 @@ from scripts.release_scope import (
     UPDATER_COMPONENT_PATHS,
     UPDATER_TOOLING_SHARED,
     UPDATER_TOOLING_PATHS,
+    UPDATER_PYTHON_BOUNDARY_SOURCE,
+    UPDATER_PYTHON_BOUNDARY_TEST,
+    UPDATER_RUNTIME_PREFLIGHT_SHARED,
+    UPDATER_RUNTIME_PREFLIGHT_WORKFLOW,
+    UPDATER_RUNTIME_PREFLIGHT_TEST,
     UPDATER_TEST_PATHS,
     UPDATER_REQUIRED_PATHS,
     UPDATER_CHECK_SCRIPT,
@@ -457,6 +462,96 @@ def test_selector_binds_test_merge_to_exact_base_and_head(
     )
     with pytest.raises(ValueError, match="exact event"):
         select_scope(path, _event(head, base), checkout_sha=merged)
+
+
+@pytest.mark.parametrize(
+    "advanced_path, expected",
+    [(PROSE, "bridge-helper"), ("adminme/runtime.py", "system-wide")],
+)
+def test_regenerated_merge_keeps_original_base_scope_and_checkout_evidence(
+    repository, advanced_path, expected
+):
+    path, base = repository
+    advanced = _commit(path, advanced_path, "ADVANCED_MAIN = True\n")
+    head = _commit(path, HELPER, "#!/bin/bash\nexit 1\n")
+    merge = _git(
+        path,
+        "commit-tree",
+        _git(path, "rev-parse", f"{head}^{{tree}}"),
+        "-p",
+        advanced,
+        "-p",
+        head,
+        "-m",
+        "Regenerated head-equivalent merge",
+    )
+    _git(path, "checkout", "--detach", merge)
+    proof = select_scope(path, _event(base, head), checkout_sha=merge)
+    assert proof["scope"] == expected
+    assert proof["base_sha"] == base and proof["head_sha"] == head
+    assert proof["checkout_sha"] == merge
+    assert {row["path"] for row in proof["changes"]} == {advanced_path, HELPER}
+    for platform in ("linux", "macos"):
+        needs = _needs(proof, platform)
+        verify_gate(proof, needs, platform=platform)
+        for worker_name in required_workers(expected, platform):
+            stale = copy.deepcopy(needs)
+            stale[worker_name]["outputs"]["validated_sha"] = head
+            with pytest.raises(ValueError, match="stale revision"):
+                verify_gate(proof, stale, platform=platform)
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "unintegrated",
+        "merge-bytes",
+        "merge-mode",
+        "wrong-head",
+        "extra-parent",
+        "one-parent",
+        "unrelated-event-base",
+    ],
+)
+def test_regenerated_merge_rejects_unproven_relationship_or_tree(repository, fault):
+    path, base = repository
+    advanced = _commit(path, "adminme/runtime.py", "ADVANCED_MAIN = True\n")
+    if fault == "unintegrated":
+        _git(path, "checkout", "--detach", base)
+    head = _commit(path, HELPER, "#!/bin/bash\nexit 1\n")
+    parents = [advanced, head]
+    if fault == "merge-bytes":
+        (path / HELPER).write_text("#!/bin/bash\nexit 2\n")
+    elif fault == "merge-mode":
+        (path / HELPER).chmod(0o644)
+    elif fault == "wrong-head":
+        parents = [advanced, base]
+    elif fault == "extra-parent":
+        parents.append(base)
+    elif fault == "one-parent":
+        parents = [advanced]
+    event_base = base
+    if fault == "unrelated-event-base":
+        event_base = _git(
+            path,
+            "commit-tree",
+            _git(path, "rev-parse", f"{base}^{{tree}}"),
+            "-m",
+            "Unrelated root",
+        )
+    _git(path, "add", "--all")
+    parent_args = [part for parent in parents for part in ("-p", parent)]
+    merge = _git(
+        path,
+        "commit-tree",
+        _git(path, "write-tree"),
+        *parent_args,
+        "-m",
+        "Unproven regenerated merge",
+    )
+    _git(path, "checkout", "--detach", merge)
+    with pytest.raises(ValueError, match="exact event"):
+        select_scope(path, _event(event_base, head), checkout_sha=merge)
 
 
 def test_selector_uses_prose_modes_from_both_git_endpoints(
@@ -3888,6 +3983,20 @@ def _effect_context_shared_sources() -> dict[str, tuple[str, str]]:
     sources = {UPDATER_SOURCE_ASSURANCE: _email_audit_sources()}
     for path, replacements in UPDATER_EFFECT_CONTEXT_SHARED_REPLACEMENTS.items():
         after = (ROOT / path).read_text()
+        if path in {"bootstrap/update.sh", "bootstrap/cli.py"}:
+            historical = (
+                "80e8bd76f077f8b8f752a8251a158d46f259e6eb"
+                if path == "bootstrap/update.sh"
+                else "6de9f9bd2a4e0d56f1d81e948ff39b60baa4dce3"
+            )
+            after = (
+                _git(
+                    ROOT,
+                    "show",
+                    f"{historical}:{path}",
+                )
+                + "\n"
+            )
         before = after
         for old, new in replacements:
             assert before.count(new) == 1
@@ -4129,10 +4238,10 @@ def test_finance_metadata_historical_fixture_matches_reviewed_wiring():
         assert hashlib.sha256(source.encode()).hexdigest() == approved[1]
 
 
-def test_finance_metadata_rejects_repaired_event_log_from_historical_lane(repository):
+@pytest.mark.parametrize("name", sorted(FINANCE_METADATA_SHARED))
+def test_finance_metadata_rejects_broader_current_shared_source(repository, name):
     path, _ = repository
     base, _ = _finance_metadata_candidate(path)
-    name = "adminme/events/log.py"
     current = (ROOT / name).read_text()
     assert current != _finance_metadata_reviewed_source(name)
     head = _commit(path, name, current)
@@ -4347,3 +4456,220 @@ def test_updater_retains_protected_calendar_history_without_exempting_edits(
         )
     proof = select_scope(path, _event(base, head), checkout_sha=head)
     assert proof["scope"] == ("system-wide" if changed else "updater-delivery")
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "none",
+        "source_neighbor",
+        "launcher_neighbor",
+        "source_only",
+        "launcher_only",
+        "missing_test",
+        "source_mode",
+        "test_mode",
+        "runtime",
+        "uncommitted",
+    ],
+)
+def test_node_only_credential_scope_is_closed_and_has_existing_process_proof(
+    repository, mutation
+):
+    path, _ = repository
+    _effect_context_candidate(path)
+    old = "80e8bd76f077f8b8f752a8251a158d46f259e6eb"
+    for name in (UPDATER_PYTHON_BOUNDARY_SOURCE, "bootstrap/update.sh"):
+        # The existing fixture already authors one of these exact files. Stage
+        # the whole predecessor below instead of requiring an empty commit.
+        (path / name).write_text(_git(ROOT, "show", f"{old}:{name}") + "\n")
+    (path / "bootstrap/update.sh").chmod(0o755)
+    _commit(path, UPDATER_PYTHON_BOUNDARY_TEST, "# Existing phase5 coverage\n")
+    _git(path, "add", "--all")
+    _git(path, "commit", "--allow-empty", "-m", "Exact Node-only predecessor")
+    base = _git(path, "rev-parse", "HEAD")
+    if mutation != "launcher_only":
+        _commit(
+            path,
+            UPDATER_PYTHON_BOUNDARY_SOURCE,
+            _git(
+                ROOT,
+                "show",
+                f"6de9f9bd2a4e0d56f1d81e948ff39b60baa4dce3:{UPDATER_PYTHON_BOUNDARY_SOURCE}",
+            )
+            + "\n",
+        )
+    if mutation != "source_only":
+        _commit(
+            path,
+            "bootstrap/update.sh",
+            _git(
+                ROOT,
+                "show",
+                "6de9f9bd2a4e0d56f1d81e948ff39b60baa4dce3:bootstrap/update.sh",
+            )
+            + "\n",
+        )
+    _commit(path, UPDATER_PYTHON_BOUNDARY_TEST, "# Changed phase5 process coverage\n")
+    if mutation in {"source_neighbor", "launcher_neighbor"}:
+        name = (
+            UPDATER_PYTHON_BOUNDARY_SOURCE
+            if mutation == "source_neighbor"
+            else "bootstrap/update.sh"
+        )
+        _commit(path, name, (path / name).read_text() + "\nUNRELATED_CHANGE = True\n")
+    elif mutation == "missing_test":
+        _git(path, "rm", UPDATER_PYTHON_BOUNDARY_TEST)
+        _git(path, "commit", "-m", "Missing required process coverage")
+    elif mutation in {"source_mode", "test_mode"}:
+        name = (
+            UPDATER_PYTHON_BOUNDARY_SOURCE
+            if mutation == "source_mode"
+            else UPDATER_PYTHON_BOUNDARY_TEST
+        )
+        (path / name).chmod(0o755)
+        _git(path, "add", name)
+        _git(path, "commit", "-m", "Unexpected executable mode")
+    elif mutation == "runtime":
+        _commit(path, "bootstrap/versions.json", "{}\n")
+    head = _git(path, "rev-parse", "HEAD")
+    if mutation == "uncommitted":
+        (path / UPDATER_PYTHON_BOUNDARY_SOURCE).write_text("UNCOMMITTED = True\n")
+    proof = select_scope(path, _event(base, head), checkout_sha=head)
+    assert proof["scope"] == (
+        "updater-delivery" if mutation in {"none", "uncommitted"} else "system-wide"
+    )
+    script = (ROOT / UPDATER_CHECK_SCRIPT).read_text()
+    assert UPDATER_PYTHON_BOUNDARY_TEST in script
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "none",
+        "launcher_only",
+        "cli_only",
+        "boundary_only",
+        "missing_process_test",
+        "missing_unit_test",
+        "check_script_neighbor",
+        "workflow_neighbor",
+        "launcher_neighbor",
+        "cli_neighbor",
+        "workflow_mode",
+        "workflow_only",
+        "workflow_runner",
+        "workflow_bottle",
+        "workflow_python_installed_guard",
+        "workflow_version_guard",
+        "workflow_public_artifact",
+        "workflow_timeout",
+        "check_script_public_after_regression",
+        "check_script_public_duplicate",
+    ],
+)
+def test_full_runtime_preflight_scope_requires_closed_production_composition(
+    repository, mutation
+):
+    path, _ = repository
+    _effect_context_candidate(path)
+    names = {
+        *UPDATER_RUNTIME_PREFLIGHT_SHARED,
+        UPDATER_PYTHON_BOUNDARY_SOURCE,
+        UPDATER_PYTHON_BOUNDARY_TEST,
+        UPDATER_RUNTIME_PREFLIGHT_TEST,
+        UPDATER_CHECK_SCRIPT,
+        UPDATER_RUNTIME_PREFLIGHT_WORKFLOW,
+    }
+    historical = "6de9f9bd2a4e0d56f1d81e948ff39b60baa4dce3"
+    for name in sorted(names):
+        target = path / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(_git(ROOT, "show", f"{historical}:{name}") + "\n")
+        target.chmod(int(_updater_mode(name)[-3:], 8))
+    _git(path, "add", "--all")
+    _git(path, "commit", "-m", "Exact prior updater composition")
+    base = _git(path, "rev-parse", "HEAD")
+    only = {
+        "launcher_only": "bootstrap/update.sh",
+        "cli_only": "bootstrap/cli.py",
+        "boundary_only": UPDATER_PYTHON_BOUNDARY_SOURCE,
+        "workflow_only": UPDATER_RUNTIME_PREFLIGHT_WORKFLOW,
+    }.get(mutation)
+    for name in sorted(names):
+        if only is None or name == only:
+            (path / name).write_text((ROOT / name).read_text())
+    missing = {
+        "missing_process_test": UPDATER_RUNTIME_PREFLIGHT_TEST,
+        "missing_unit_test": UPDATER_PYTHON_BOUNDARY_TEST,
+    }.get(mutation)
+    if missing:
+        (path / missing).unlink()
+    neighbor = {
+        "check_script_neighbor": UPDATER_CHECK_SCRIPT,
+        "workflow_neighbor": UPDATER_RUNTIME_PREFLIGHT_WORKFLOW,
+        "launcher_neighbor": "bootstrap/update.sh",
+        "cli_neighbor": "bootstrap/cli.py",
+    }.get(mutation)
+    if neighbor:
+        target = path / neighbor
+        target.write_text(target.read_text() + "\n# unrelated neighboring edit\n")
+    if mutation == "workflow_mode":
+        (path / UPDATER_RUNTIME_PREFLIGHT_WORKFLOW).chmod(0o755)
+    workflow_mutations = {
+        "workflow_python_installed_guard": (
+            'and ([.installed[] | select(.version == "3.14.7")] | length == 1)',
+            'and .versions.stable == "3.14.7"',
+        ),
+        "workflow_runner": ("    runs-on: macos-15\n", "    runs-on: macos-14\n"),
+        "workflow_bottle": (
+            "be87643df531ff6128e5a0f6aaf51a4a164406729ebed8a7cc56c8cb9cf0210f",
+            "0" * 64,
+        ),
+        "workflow_version_guard": (
+            '          test "$(/opt/homebrew/opt/node@24/bin/node --version)" = v24.22.1\n',
+            "",
+        ),
+        "workflow_public_artifact": (
+            "            ${{ runner.temp }}/updater-public-preflight.xml\n",
+            "",
+        ),
+        "workflow_timeout": ("    timeout-minutes: 40\n", "    timeout-minutes: 60\n"),
+    }
+    if mutation in workflow_mutations:
+        target = path / UPDATER_RUNTIME_PREFLIGHT_WORKFLOW
+        text = target.read_text()
+        begin = text.index("  updater-delivery-validation:\n")
+        end = text.index("\n  finance-metadata-validation:", begin)
+        block = text[begin:end]
+        before, after = workflow_mutations[mutation]
+        assert block.count(before) == 1
+        target.write_text(text[:begin] + block.replace(before, after) + text[end:])
+    if mutation.startswith("check_script_public_"):
+        target = path / UPDATER_CHECK_SCRIPT
+        text = target.read_text()
+        begin = text.index('if [[ "$1" == macos ]]; then\n')
+        end = text.index("\nfi\n", begin) + len("\nfi\n")
+        public = text[begin:end]
+        assert public.count("test_supported_public_runtime_preflight_") == 1
+        if mutation == "check_script_public_duplicate":
+            text = text[:end] + public + text[end:]
+        else:
+            text = text[:begin] + text[end:]
+            after = 'validate_reports "$RUNNER_TEMP/updater-delivery.xml"\n'
+            assert text.count(after) == 1
+            text = text.replace(after, after + public)
+        target.write_text(text)
+    _git(path, "add", "--all")
+    _git(path, "commit", "-m", "Bounded runtime preflight candidate")
+    head = _git(path, "rev-parse", "HEAD")
+    result = select_scope(path, _event(base, head), checkout_sha=head)
+    if mutation == "workflow_only":
+        # Policy-only edits retain the pre-existing helper lane. The new updater
+        # contract is still incomplete and must not supply updater admission.
+        assert result["scope"] == "bridge-helper"
+        assert result["updater_dependency_sha256"] == ""
+    else:
+        assert result["scope"] == (
+            "updater-delivery" if mutation == "none" else "system-wide"
+        )

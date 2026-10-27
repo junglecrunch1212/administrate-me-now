@@ -232,7 +232,7 @@ try {
   await checkPermissionPins(permissionEnvironment, evidence.permission_pins);
   // Transpile the actual release source without rewriting its SDK imports.
   // Gateway loads it as a real plugin through its normal public SDK resolver.
-  for (const name of ["cos-approval-relay", "approval", "contract", "cos-permission-preflight", "cos-permission-database"]) {
+  for (const name of ["cos-approval-relay", "approval", "contract", "finance-release", "cos-permission-preflight", "cos-permission-database"]) {
     const input = await readFile(path.join(repository, `openclaw/administrateme/src/${name}.ts`), "utf8");
     if (name === "cos-approval-relay") {
       evidence.relay_sha256 = createHash("sha256").update(input).digest("hex");

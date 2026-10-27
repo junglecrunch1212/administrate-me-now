@@ -13,6 +13,7 @@ import hashlib
 import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -74,28 +75,54 @@ def _manifest_paths(repository_root: Path) -> Iterable[Path]:
         yield from sorted(bridge_root.rglob("pack.yaml"))
 
 
+# Cache only immutable reviewed declarations, never authority or audit outcomes.
+# Read and enumerate current files on every load: timestamps cannot prove content.
+_SOURCE_MANIFEST_CACHE_SIZE = 32
+_SOURCE_MANIFEST_CACHE_MAX_CHARACTERS = 16_384
+
+
+def _parse_source_manifest(text: str) -> tuple[SourceObligation, ...] | None:
+    raw = yaml.safe_load(text)
+    if not isinstance(raw, dict):
+        return None
+    obligations: dict[tuple[Any, ...], SourceObligation] = {}
+    for value in raw.get("source_assurance") or []:
+        rule = SourceAssuranceRule.model_validate(value)
+        for event_type in rule.source_events:
+            obligation = SourceObligation(
+                event_type=event_type,
+                mode=rule.mode,
+                terminal_events=tuple(rule.terminal_events),
+                projections=tuple(rule.projections),
+                assessor=rule.assessor,
+            )
+            obligations[obligation.key] = obligation
+    return tuple(obligations.values())
+
+
+@lru_cache(maxsize=_SOURCE_MANIFEST_CACHE_SIZE)
+def _cached_source_manifest(text: str) -> tuple[SourceObligation, ...] | None:
+    return _parse_source_manifest(text)
+
+
 def load_source_obligations(repository_root: Path) -> tuple[SourceObligation, ...]:
-    """Load and de-duplicate the reviewed source contracts in pack manifests."""
+    """Read current contracts, reusing bounded immutable parses of identical text."""
 
     obligations: dict[tuple[Any, ...], SourceObligation] = {}
     for path in _manifest_paths(repository_root):
         try:
-            raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+            text = path.read_text(encoding="utf-8")
+            parsed = (
+                _cached_source_manifest(text)
+                if len(text) <= _SOURCE_MANIFEST_CACHE_MAX_CHARACTERS
+                else _parse_source_manifest(text)
+            )
         except (OSError, yaml.YAMLError) as exc:
             raise RuntimeError(f"cannot load source-assurance manifest {path}") from exc
-        if not isinstance(raw, dict):
+        if parsed is None:
             raise RuntimeError(f"source-assurance manifest is not a mapping: {path}")
-        for value in raw.get("source_assurance") or []:
-            rule = SourceAssuranceRule.model_validate(value)
-            for event_type in rule.source_events:
-                obligation = SourceObligation(
-                    event_type=event_type,
-                    mode=rule.mode,
-                    terminal_events=tuple(rule.terminal_events),
-                    projections=tuple(rule.projections),
-                    assessor=rule.assessor,
-                )
-                obligations[obligation.key] = obligation
+        for obligation in parsed:
+            obligations[obligation.key] = obligation
 
     # Platform-owned sources do not belong to one provider adapter manifest.
     platform = (
