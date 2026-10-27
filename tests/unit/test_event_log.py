@@ -1400,6 +1400,93 @@ async def test_cancelled_metadata_query_and_close_drain_native_work(
     assert worker not in {thread.ident for thread in threading.enumerate()}
 
 
+@pytest.mark.parametrize("cancel_close", [False, True])
+async def test_close_preserves_committed_tail_in_encrypted_database_copy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cancel_close: bool
+) -> None:
+    db = tmp_path / "shutdown-tail.db"
+    log = EventLog(db, TEST_KEY)
+    reader = log._metadata_reader  # noqa: SLF001 - native shutdown boundary
+    assert reader is not None
+    metadata_closing = threading.Event()
+    metadata_closed = threading.Event()
+    release_metadata = threading.Event()
+    writer_closed_before_metadata: list[bool] = []
+    metadata_connection = reader._conn  # noqa: SLF001
+    writer_connection = log._conn  # noqa: SLF001
+
+    class HeldMetadataConnection:
+        def close(self):
+            metadata_closing.set()
+            try:
+                if not release_metadata.wait(10):
+                    raise RuntimeError("test did not release metadata close")
+            finally:
+                metadata_connection.close()
+                metadata_closed.set()
+
+    class TrackedWriterConnection:
+        def close(self):
+            writer_closed_before_metadata.append(not metadata_closed.is_set())
+            writer_connection.close()
+
+    closing = None
+    timer = threading.Timer(0.1, release_metadata.set)
+    try:
+        await log.append(_event(1))
+        # Establish a valid database file, then commit a tail below SQLite's
+        # automatic checkpoint threshold while the metadata reader stays open.
+        await log._run_locked(  # noqa: SLF001 - deterministic WAL boundary
+            lambda: writer_connection.execute(
+                "PRAGMA wal_checkpoint(TRUNCATE)"
+            ).fetchone()
+        )
+        tail = await log.append(_event(2))
+        assert await log.latest_event_id() == tail
+        assert await log.count_since(None) == 2
+        monkeypatch.setattr(reader, "_conn", HeldMetadataConnection())
+        monkeypatch.setattr(log, "_conn", TrackedWriterConnection())
+        closing = asyncio.create_task(log.close())
+        assert await asyncio.to_thread(metadata_closing.wait, 2)
+        # Cancellation joins native workers synchronously. Release from an
+        # independent thread so the cancellation path cannot deadlock the test.
+        timer.start()
+        if cancel_close:
+            closing.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await closing
+        else:
+            await closing
+    finally:
+        release_metadata.set()
+        if timer.ident is not None:
+            timer.join(2)
+        if closing is not None and not closing.done():
+            await closing
+        await log.close()
+
+    # This is the same closed-database-only boundary used by the retired-history
+    # exporter fixture: no WAL sidecar is copied to make missing history pass.
+    copied = tmp_path / "exported-events.db"
+    copied.write_bytes(db.read_bytes())
+    exported = EventLog(copied, TEST_KEY, read_only=True)
+    try:
+        record = await exported.get(tail)
+        observed = {
+            "tail_payload": record["payload"] if record is not None else None,
+            "count": await exported.count(),
+            "watermark": await exported.latest_event_id(),
+        }
+        expected = {"tail_payload": {"i": 2}, "count": 2, "watermark": tail}
+        assert observed == expected, (
+            "committed tail was stranded outside events.db: "
+            f"observed={observed!r}; expected={expected!r}"
+        )
+    finally:
+        await exported.close()
+    assert writer_closed_before_metadata == [False]
+
+
 def test_metadata_initialization_failure_closes_both_workers(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -367,7 +367,19 @@ class EventLog:
                     # executor shutdown.
                     if self._metadata_reader is not None:
                         metadata_close = self._metadata_reader.submit_close()
-                    close_call = self._executor.submit(self._conn.close)
+
+                    def close_writer() -> None:
+                        # The writable connection must close after our reader
+                        # so SQLite can checkpoint the committed WAL tail. Queue
+                        # both closes before yielding so caller cancellation
+                        # cannot strand either connection.
+                        try:
+                            if metadata_close is not None:
+                                metadata_close.result()
+                        finally:
+                            self._conn.close()
+
+                    close_call = self._executor.submit(close_writer)
                     await asyncio.shield(asyncio.wrap_future(close_call))
                     if metadata_close is not None:
                         await asyncio.shield(asyncio.wrap_future(metadata_close))
