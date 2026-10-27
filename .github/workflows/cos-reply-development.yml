@@ -114,13 +114,15 @@ jobs:
           python -m pip install 'poetry==2.4.1'
           poetry sync --with dev --no-interaction
           npm ci --prefix openclaw/administrateme --ignore-scripts
-      - name: Verify real Gateway normal startup and independent approvals
-        run: bash scripts/acceptance/openclaw-source-install.sh
+      - name: Verify real Gateway workstation reads and independent approvals
+        run: bash scripts/acceptance/openclaw-source-install.sh --service-work-and-approval
       - name: Retain isolated Gateway diagnostics
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: cos-approval-gateway-focused
-          path: ${{ runner.temp }}/adminme-approval-gateway-evidence
+          path: |
+            ${{ runner.temp }}/adminme-approval-gateway-evidence
+            ${{ runner.temp }}/adminme-browser-gateway-evidence
           if-no-files-found: error
           retention-days: 7
