@@ -41,3 +41,32 @@ fresh full Doctor or compensates an interrupted restoration into observation
 with polling paused. Missing diagnostics are never health evidence. A failed
 restoration does not establish normal operation, and this recovery does not
 restore an old native configuration that discards current preferences.
+
+## Cancel a completed pause before release selection
+
+If an update fails before selecting its target and leaves no active updater
+journal, restore the unchanged predecessor with the original unexpired plan:
+
+```sh
+python -m bootstrap.cos_channel_activation --instance-root INSTANCE \
+  --cancel-maintenance --request ORIGINAL_MAINTENANCE_PLAN
+```
+
+This explicit path accepts either the original protected target controller or
+its protected successor. It is limited to the source-verified retained releases
+above, with the current qualified Doctor decision and all the original authority,
+configuration, sender evidence and zero-contact observation boundaries intact.
+It does not select a release, migrate credentials, modify Keychain aliases or
+retarget the plan. The original committed pause is retained byte-for-byte; a
+separate cancellation journal binds its hash and original plan. Normal activation
+closes that same observation window at the new activation timestamp and preserves
+all prior windows. Successful cancellation consumes the prior activation receipt,
+so replay cannot create a second normal transition.
+
+If cancellation is interrupted, run the existing `--recover` from the exact
+controller recorded in its journal. Recovery validates the original pause hash
+and selection, then compensates into observation with polling paused; this is
+not a claim of normal restoration. An active update, changed selection, expired
+plan, changed authority/configuration or another Doctor failure remains blocked.
+The Node-only updater credential guard is a separate repair; do not retry the
+unchanged failing updater merely because cancellation restored normal operation.

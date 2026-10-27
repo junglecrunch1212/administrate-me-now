@@ -2110,3 +2110,290 @@ def test_interrupted_tooling_restoration_uses_original_link_and_compensation(
     assert result["status"] == "recovered" and result["all_polling_paused"] is True
     assert not controller.journal_path.exists()
     assert controller.services.runtime_diagnostics()["observation_active"] is True
+
+
+def _completed_maintenance_controller(
+    tmp_path, monkeypatch, *, messages=True, same_controller=False
+):
+    """Complete the real pause; fixture only OS, source and retained Doctor."""
+    controller, request = _maintenance_controller(
+        tmp_path, monkeypatch, messages=messages
+    )
+    plan = _prepare_maintenance(controller, request)
+    controller.pause_maintenance(plan)
+    history = controller.directory / "history" / f"{plan.plan_id}.json"
+    assert json.loads(history.read_text())["phase"] == "committed"
+    controller_commit = plan.target_commit if same_controller else "c" * 40
+    monkeypatch.setattr(
+        controller,
+        "_observation_selection",
+        lambda: (plan.predecessor_commit, ROOT, controller_commit),
+    )
+    monkeypatch.setattr("bootstrap.doctor_tooling.RETAINED_DOCTORS", {"a" * 40})
+    monkeypatch.setattr(
+        "bootstrap.cos_channel_activation.load_git_tree", lambda *_args, **_kwargs: {}
+    )
+    from bootstrap.doctor_tooling import COMPATIBILITY_KEY
+    from tests.unit.bootstrap.test_doctor_tooling import report
+
+    qualified = {
+        "status": "healthy",
+        COMPATIBILITY_KEY: {
+            "decision": "compatible",
+            "release_commit": plan.predecessor_commit,
+            "controller_commit": controller_commit,
+            "original_report": report(),
+        },
+    }
+    monkeypatch.setattr(
+        controller, "_require_tooling_doctor", lambda _release: copy.deepcopy(qualified)
+    )
+    return controller, plan, history, qualified
+
+
+@pytest.mark.parametrize("same_controller", [False, True])
+@pytest.mark.parametrize("messages", [False, True])
+def test_completed_maintenance_cancellation_restores_unchanged_predecessor(
+    tmp_path, monkeypatch, messages, same_controller
+):
+    controller, plan, history, qualified = _completed_maintenance_controller(
+        tmp_path, monkeypatch, messages=messages, same_controller=same_controller
+    )
+    original_plan = plan.model_dump(mode="json")
+    original_pause = history.read_bytes()
+    policy, events = asyncio.run(_audit(controller))
+    # Non-secret alias metadata is deliberately present and must stay untouched.
+    alias = controller.config_dir / "keychain-runtime-aliases.json"
+    _write(alias, {"fixture": "retained alias metadata"})
+    fixed = [
+        controller.config_dir / "adapters.json",
+        controller.config_dir / "member-mapping.json",
+        alias,
+    ]
+    if messages:
+        fixed += [
+            controller.config_dir / "cos-imsg-guard.json",
+            controller.paths.instance_dir / "openclaw/runtime/openclaw.json",
+        ]
+    before = {path: path.read_bytes() for path in fixed}
+    readiness_path = controller.config_dir / "deployment-readiness.json"
+    readiness = json.loads(readiness_path.read_text())
+    result = controller.cancel_maintenance(plan)
+    assert result["status"] == "activated" and result["observation_active"] is False
+    assert result["provider_test_messages_sent"] == 0
+    assert not controller.journal_path.exists()
+    assert controller.services.runtime_diagnostics()["observation_active"] is False
+    assert plan.model_dump(mode="json") == original_plan
+    assert history.read_bytes() == original_pause
+    assert {path: path.read_bytes() for path in fixed} == before
+    receipt = json.loads(
+        (controller.config_dir / "cos-channel-operation.json").read_text()
+    )["activation"]
+    assert receipt["release_commit"] == plan.predecessor_commit
+    assert receipt["self_reply_bindings"] == plan.self_reply_bindings
+    cancelled = json.loads(
+        (
+            controller.directory / "history" / f"{result['activation_id']}.json"
+        ).read_text()
+    )
+    assert cancelled["phase"] == "committed"
+    assert cancelled["maintenance_cancellation"] == {
+        "contract": "cos-maintenance-cancellation-v1",
+        "controller_commit": plan.target_commit if same_controller else "c" * 40,
+        "original_plan": original_plan,
+        "original_plan_sha256": plan.digest(),
+        "original_pause_sha256": hashlib.sha256(original_pause).hexdigest(),
+    }
+    assert cancelled["retained_doctor_admission"] == qualified
+    after = json.loads(readiness_path.read_text())
+    assert (
+        after["prior_provider_effect_windows"]
+        == readiness["prior_provider_effect_windows"]
+    )
+    assert after["provider_effect_window"] == {
+        **readiness["provider_effect_window"],
+        "ended_at": receipt["enabled_at"],
+    }
+    assert asyncio.run(_audit(controller))[0] == policy
+    assert asyncio.run(_audit(controller))[1][: len(events)] == events
+    assert controller.services.effects == 0
+    stops = controller.services.stops
+    with pytest.raises(CoSActivationError):
+        controller.cancel_maintenance(plan)
+    assert controller.services.stops == stops
+    assert history.read_bytes() == original_pause
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "expired",
+        "plan_hash",
+        "pause_controller",
+        "incomplete_pause",
+        "tooling_pause",
+        "grant",
+        "config",
+        "window",
+        "effect",
+        "selected",
+        "unknown_source",
+        "active_updater",
+        "doctor",
+    ],
+)
+def test_maintenance_cancellation_refuses_drift_before_stop(
+    tmp_path, monkeypatch, mutation
+):
+    controller, plan, history, _qualified = _completed_maintenance_controller(
+        tmp_path, monkeypatch, same_controller=True
+    )
+    if mutation == "expired":
+        plan = plan.model_copy(
+            update={
+                "expires_at": (
+                    datetime.now(timezone.utc) - timedelta(seconds=1)
+                ).isoformat()
+            }
+        )
+    elif mutation in {
+        "plan_hash",
+        "pause_controller",
+        "incomplete_pause",
+        "tooling_pause",
+    }:
+        value = json.loads(history.read_text())
+        if mutation == "plan_hash":
+            value["maintenance_plan_sha256"] = "f" * 64
+        elif mutation == "pause_controller":
+            value["controller_commit"] = "f" * 40
+        elif mutation == "incomplete_pause":
+            value["phase"] = "verifying"
+        else:
+            value["tooling_recovery_controller"] = {"contract": "different recovery"}
+        _write(history, value)
+    elif mutation == "grant":
+        plan = plan.model_copy(update={"self_reminder_bindings": []})
+    elif mutation == "config":
+        path = controller.paths.instance_dir / "openclaw/runtime/openclaw.json"
+        value = json.loads(path.read_text())
+        value["models"]["retained"] = "unrelated"
+        _write(path, value)
+    elif mutation == "window":
+        path = controller.config_dir / "deployment-readiness.json"
+        value = json.loads(path.read_text())
+        value["provider_effect_window"]["started_at"] = datetime.now(
+            timezone.utc
+        ).isoformat()
+        _write(path, value)
+    elif mutation == "effect":
+        controller.services.effects = 1
+    elif mutation in {"selected", "unknown_source"}:
+        selected = plan.target_commit if mutation == "selected" else "f" * 40
+        monkeypatch.setattr(
+            controller,
+            "_observation_selection",
+            lambda: (selected, ROOT, plan.target_commit),
+        )
+    elif mutation == "active_updater":
+        _write(controller.paths.app_dir / "activation/active.json", {"state": "active"})
+    else:
+        monkeypatch.setattr(
+            controller,
+            "_require_tooling_doctor",
+            lambda _release: (_ for _ in ()).throw(
+                CoSActivationError("additional Doctor failure")
+            ),
+        )
+    stops = controller.services.stops
+    history_bytes = history.read_bytes()
+    events = asyncio.run(_audit(controller))[1]
+    with pytest.raises(CoSActivationError):
+        controller.cancel_maintenance(plan)
+    assert controller.services.stops == stops
+    assert not controller.journal_path.exists()
+    assert history.read_bytes() == history_bytes
+    assert asyncio.run(_audit(controller))[1] == events
+
+
+@pytest.mark.parametrize("same_controller", [False, True])
+def test_interrupted_cancellation_retains_original_pause_and_compensates(
+    tmp_path, monkeypatch, same_controller
+):
+    controller, plan, history, _qualified = _completed_maintenance_controller(
+        tmp_path, monkeypatch, same_controller=same_controller
+    )
+    original_pause = history.read_bytes()
+    gateway_path = controller.paths.instance_dir / "openclaw/runtime/openclaw.json"
+    gateway = gateway_path.read_bytes()
+    compensate, settle = controller._recover_locked, controller._settle
+    monkeypatch.setattr(
+        controller,
+        "_settle",
+        lambda _release: (_ for _ in ()).throw(CoSActivationError("genuine new fault")),
+    )
+    monkeypatch.setattr(
+        controller,
+        "_recover_locked",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(KeyboardInterrupt()),
+    )
+    with pytest.raises(KeyboardInterrupt):
+        controller.cancel_maintenance(plan)
+    assert history.read_bytes() == original_pause
+    journal = json.loads(controller.journal_path.read_text())
+    assert journal["maintenance_cancellation"]["original_plan_sha256"] == plan.digest()
+    monkeypatch.setattr(controller, "_recover_locked", compensate)
+    monkeypatch.setattr(controller, "_settle", settle)
+    selection = controller._observation_selection
+    monkeypatch.setattr(
+        controller, "_observation_selection", lambda: ("a" * 40, ROOT, "d" * 40)
+    )
+    stops = controller.services.stops
+    with pytest.raises(CoSActivationError, match="binding changed"):
+        controller.recover()
+    assert controller.services.stops == stops
+    monkeypatch.setattr(controller, "_observation_selection", selection)
+    # Even a semantically identical rewrite of original history breaks its exact link.
+    history.write_bytes(original_pause + b"\n")
+    with pytest.raises(CoSActivationError, match="binding changed"):
+        controller.recover()
+    assert controller.services.stops == stops
+    history.write_bytes(original_pause)
+    result = controller.recover()
+    assert result["status"] == "recovered" and result["all_polling_paused"] is True
+    assert not controller.journal_path.exists()
+    assert controller.services.runtime_diagnostics()["observation_active"] is True
+    assert history.read_bytes() == original_pause
+    assert gateway_path.read_bytes() == gateway
+    assert controller.services.effects == 0
+
+
+def test_cancellation_cli_consumes_original_plan(tmp_path, monkeypatch, capsys):
+    from bootstrap.cos_channel_activation import main
+
+    controller, plan, history, _qualified = _completed_maintenance_controller(
+        tmp_path, monkeypatch, messages=False, same_controller=True
+    )
+    original_pause = history.read_bytes()
+    artifact = tmp_path / "original-maintenance-plan.json"
+    _write(artifact, plan.model_dump(mode="json"))
+    original_artifact = artifact.read_bytes()
+    monkeypatch.setattr(
+        "bootstrap.cos_channel_activation.CoSChannelActivator",
+        lambda *_args, **_kwargs: controller,
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "cos_channel_activation",
+            "--instance-root",
+            str(controller.paths.root),
+            "--cancel-maintenance",
+            "--request",
+            str(artifact),
+        ],
+    )
+    main()
+    assert json.loads(capsys.readouterr().out)["status"] == "activated"
+    assert artifact.read_bytes() == original_artifact
+    assert history.read_bytes() == original_pause
