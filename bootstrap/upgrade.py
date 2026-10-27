@@ -3152,6 +3152,7 @@ class UpgradeManager:
                 # hold at the first selector mutation. This does not reset the
                 # already established candidate settlement deadline.
                 self._require_activation_capacity()
+                native_generation: dict[str, Any] | None = None
                 if compatibility["native_state_migration"]:
                     journal = self.activation_journal.transition(
                         journal, "native_state_capturing"
@@ -3172,6 +3173,8 @@ class UpgradeManager:
                     "openclaw_selected",
                 )
                 if compatibility["native_state_migration"]:
+                    if native_generation is None:
+                        raise UpgradeError("native generation capture is missing")
                     journal = self.activation_journal.transition(
                         journal, "native_state_migrating"
                     )

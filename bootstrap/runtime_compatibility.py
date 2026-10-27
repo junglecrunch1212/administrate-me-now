@@ -80,11 +80,11 @@ def retained_node_pin(
     seen: set[str] = set()
     selected: dict[str, str] | None = None
     for declaration in declarations:
-        if not isinstance(declaration, dict) or set(declaration) != {
-            "commit",
-            "declared_preferred",
-            "runtime_preferred",
-        }:
+        required = {"commit", "declared_preferred", "runtime_preferred"}
+        if not isinstance(declaration, dict) or set(declaration) not in (
+            required,
+            required | {"declared_compatible"},
+        ):
             raise RetainedRuntimeError("retained Node declaration is invalid")
         target, before, after = (
             declaration[key]
@@ -111,13 +111,42 @@ def retained_node_pin(
             raise RetainedRuntimeError(
                 "retained Node declaration is not an exact forward same-major maintenance update"
             )
+        # The new native release may raise its own Node floor. An explicit
+        # reviewed declaration binds the archived range without selecting any
+        # runtime other than the exact forward pin above.
+        if "declared_compatible" in declaration:
+            declared_range = declaration["declared_compatible"]
+            bounds = (
+                re.fullmatch(
+                    r">=([0-9]+)\.([0-9]+)(?:\.([0-9]+))?,<([0-9]+)", declared_range
+                )
+                if isinstance(declared_range, str)
+                else None
+            )
+            if bounds is None:
+                raise RetainedRuntimeError(
+                    "retained Node compatibility declaration is invalid"
+                )
+            lower = tuple(int(value or 0) for value in bounds.groups()[:3])
+            upper_major = int(bounds[4])
+            if (
+                lower[0] != new[0]
+                or upper_major != new[0] + 1
+                or not lower <= old < new
+            ):
+                raise RetainedRuntimeError(
+                    "retained Node compatibility excludes the reviewed pins"
+                )
         seen.add(target)
         if target == commit:
             selected = declaration
     if selected is None:
         return str(retained["node"]["preferred"])
-    if retained["node"]["preferred"] != selected["declared_preferred"] or any(
-        retained["node"][key] != node[key] for key in ("formula", "compatible")
+    if (
+        retained["node"]["preferred"] != selected["declared_preferred"]
+        or retained["node"]["formula"] != node["formula"]
+        or retained["node"]["compatible"]
+        != selected.get("declared_compatible", node["compatible"])
     ):
         raise RetainedRuntimeError("retained Node declaration contradicts the release")
     return selected["runtime_preferred"]
