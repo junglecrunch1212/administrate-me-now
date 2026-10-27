@@ -103,12 +103,51 @@ it.each(["request_authorization_unavailable", "request_clarification_required"].
   expect(fetcher).toHaveBeenCalledOnce();
 });
 
+it("exposes only the fixed source provenance limit on the exact private-work endpoint", async () => {
+  fixture();
+  const fetcher = vi.fn(async () => new Response(JSON.stringify({
+    detail: { code: "source_provenance_limit_exceeded", reason: "PRIVATE source ids and token" },
+  }), { status: 409 }));
+  const transport = new AdministrateMeTransport(readPluginConfig({}), fetcher as typeof fetch);
+  const failure = await transport.request("/api/openclaw/v1/tools/service-private-work", {}).catch((error) => error);
+  if (!(failure instanceof TransportError)) throw new Error("Expected transport rejection");
+  expect(failure.message).toContain("source_provenance_limit_exceeded");
+  expect(failure.message).toContain("fresh, narrowly scoped run");
+  expect(failure.message).toContain("No work was created");
+  expect(failure.message).toContain("do not retry");
+  expect(failure.message).not.toContain("PRIVATE");
+  expect(failure.state).toBe("degraded");
+  expect(failure.status).toBe(409);
+});
+
 it.each([
   { path: "/api/openclaw/v1/tools/confirm-apple-reminder", value: { detail: { code: "unknown_private_code", reason: "PRIVATE" } } },
   { path: "/api/openclaw/v1/tools/apple-reminder-status", value: { detail: { code: "request_authorization_unavailable", reason: "PRIVATE" } } },
   { path: "/api/openclaw/v1/tools/confirm-apple-reminder", value: { detail: "PRIVATE" } },
+  { path: "/api/openclaw/v1/tools/service-private-work", value: { detail: { code: "unknown_private_code", reason: "PRIVATE" } } },
+  { path: "/api/openclaw/v1/tools/service-private-state", value: { detail: { code: "source_provenance_limit_exceeded", reason: "PRIVATE" } } },
+  { path: "/api/openclaw/v1/tools/service-private-work", value: { detail: "PRIVATE" } },
 ])("keeps unrelated error bodies opaque ($path)", async ({ path, value }) => {
   fixture();
   const transport = new AdministrateMeTransport(readPluginConfig({}), vi.fn(async () => new Response(JSON.stringify(value), { status: 409 })) as typeof fetch);
-  await expect(transport.request(path, {})).rejects.toThrow("AdministrateMe transport rejected request (409)");
+  const failure = await transport.request(path, {}).catch((error) => error);
+  if (!(failure instanceof TransportError)) throw new Error("Expected transport rejection");
+  expect(failure.message).toBe("AdministrateMe transport rejected request (409)");
+  expect(failure.message).not.toContain("PRIVATE");
+  expect(failure.state).toBe("incompatible");
+});
+
+
+it.each([
+  { status: 409, body: "PRIVATE malformed JSON" },
+  { status: 403, body: JSON.stringify({ detail: { code: "source_provenance_limit_exceeded", reason: "PRIVATE" } }) },
+  { status: 500, body: JSON.stringify({ detail: { code: "source_provenance_limit_exceeded", reason: "PRIVATE" } }) },
+])("keeps malformed and non-conflict capacity responses opaque ($status)", async ({ status, body }) => {
+  fixture();
+  const transport = new AdministrateMeTransport(readPluginConfig({}), vi.fn(async () => new Response(body, { status })) as typeof fetch);
+  const failure = await transport.request("/api/openclaw/v1/tools/service-private-work", {}).catch((error) => error);
+  if (!(failure instanceof TransportError)) throw new Error("Expected transport rejection");
+  expect(failure.message).toBe(`AdministrateMe transport rejected request (${status})`);
+  expect(failure.message).not.toContain("PRIVATE");
+  expect(failure.state).toBe(status === 409 ? "incompatible" : "degraded");
 });

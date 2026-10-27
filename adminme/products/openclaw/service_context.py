@@ -302,6 +302,7 @@ def _context_for(
 
 
 READ_RANK = {"metadata_only": 0, "typed_facts": 1, "typed_facts_safe_snippet": 2}
+MAX_RETAINED_SOURCE_AUTHORITIES = 256
 SELF_MAIL_METADATA = frozenset(
     {
         "provider",
@@ -728,8 +729,14 @@ async def retained_sources(
         runtime.projections.connection("tasks")
         .execute(
             "SELECT authority_json FROM cos_source_read_receipts WHERE tenant_id=? "
-            "AND service_principal_id=? AND session_digest=? LIMIT 21",
-            (session.tenant_id, session.principal.principal_id, session_digest),
+            "AND service_principal_id=? AND session_digest=? "
+            "ORDER BY source_event_id LIMIT ?",
+            (
+                session.tenant_id,
+                session.principal.principal_id,
+                session_digest,
+                MAX_RETAINED_SOURCE_AUTHORITIES + 1,
+            ),
         )
         .fetchall()
     )
@@ -745,10 +752,12 @@ async def retained_sources(
                 key=READ_RANK.__getitem__,
             )
         sources[source["source_event_id"]] = source
-    if len(sources) > 20:
+    if len(sources) > MAX_RETAINED_SOURCE_AUTHORITIES:
         raise HTTPException(
             409,
-            "private note exceeds 20 consumed sources; start a fresh narrowly scoped run",
+            detail={
+                "code": "source_provenance_limit_exceeded",
+            },
         )
     result = list(sources.values())
     if not await work_authorized(runtime, session, {"source_authorities": result}):
