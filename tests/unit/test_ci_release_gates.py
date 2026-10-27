@@ -48,6 +48,9 @@ from scripts.release_scope import (
     UPDATER_TOOLING_PATHS,
     UPDATER_PYTHON_BOUNDARY_SOURCE,
     UPDATER_PYTHON_BOUNDARY_TEST,
+    UPDATER_RUNTIME_PREFLIGHT_SHARED,
+    UPDATER_RUNTIME_PREFLIGHT_WORKFLOW,
+    UPDATER_RUNTIME_PREFLIGHT_TEST,
     UPDATER_TEST_PATHS,
     UPDATER_REQUIRED_PATHS,
     UPDATER_CHECK_SCRIPT,
@@ -3890,12 +3893,17 @@ def _effect_context_shared_sources() -> dict[str, tuple[str, str]]:
     sources = {UPDATER_SOURCE_ASSURANCE: _email_audit_sources()}
     for path, replacements in UPDATER_EFFECT_CONTEXT_SHARED_REPLACEMENTS.items():
         after = (ROOT / path).read_text()
-        if path == "bootstrap/update.sh":
+        if path in {"bootstrap/update.sh", "bootstrap/cli.py"}:
+            historical = (
+                "80e8bd76f077f8b8f752a8251a158d46f259e6eb"
+                if path == "bootstrap/update.sh"
+                else "6de9f9bd2a4e0d56f1d81e948ff39b60baa4dce3"
+            )
             after = (
                 _git(
                     ROOT,
                     "show",
-                    "80e8bd76f077f8b8f752a8251a158d46f259e6eb:bootstrap/update.sh",
+                    f"{historical}:{path}",
                 )
                 + "\n"
             )
@@ -4394,10 +4402,24 @@ def test_node_only_credential_scope_is_closed_and_has_existing_process_proof(
         _commit(
             path,
             UPDATER_PYTHON_BOUNDARY_SOURCE,
-            (ROOT / UPDATER_PYTHON_BOUNDARY_SOURCE).read_text(),
+            _git(
+                ROOT,
+                "show",
+                f"6de9f9bd2a4e0d56f1d81e948ff39b60baa4dce3:{UPDATER_PYTHON_BOUNDARY_SOURCE}",
+            )
+            + "\n",
         )
     if mutation != "source_only":
-        _commit(path, "bootstrap/update.sh", (ROOT / "bootstrap/update.sh").read_text())
+        _commit(
+            path,
+            "bootstrap/update.sh",
+            _git(
+                ROOT,
+                "show",
+                "6de9f9bd2a4e0d56f1d81e948ff39b60baa4dce3:bootstrap/update.sh",
+            )
+            + "\n",
+        )
     _commit(path, UPDATER_PYTHON_BOUNDARY_TEST, "# Changed phase5 process coverage\n")
     if mutation in {"source_neighbor", "launcher_neighbor"}:
         name = (
@@ -4429,3 +4451,77 @@ def test_node_only_credential_scope_is_closed_and_has_existing_process_proof(
     )
     script = (ROOT / UPDATER_CHECK_SCRIPT).read_text()
     assert UPDATER_PYTHON_BOUNDARY_TEST in script
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "none",
+        "launcher_only",
+        "cli_only",
+        "boundary_only",
+        "missing_process_test",
+        "missing_unit_test",
+        "check_script_neighbor",
+        "workflow_neighbor",
+        "launcher_neighbor",
+        "cli_neighbor",
+        "workflow_mode",
+        "workflow_only",
+    ],
+)
+def test_full_runtime_preflight_scope_requires_closed_production_composition(
+    repository, mutation
+):
+    path, _ = repository
+    _effect_context_candidate(path)
+    names = {
+        *UPDATER_RUNTIME_PREFLIGHT_SHARED,
+        UPDATER_PYTHON_BOUNDARY_SOURCE,
+        UPDATER_PYTHON_BOUNDARY_TEST,
+        UPDATER_RUNTIME_PREFLIGHT_TEST,
+        UPDATER_CHECK_SCRIPT,
+        UPDATER_RUNTIME_PREFLIGHT_WORKFLOW,
+    }
+    historical = "6de9f9bd2a4e0d56f1d81e948ff39b60baa4dce3"
+    for name in sorted(names):
+        target = path / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(_git(ROOT, "show", f"{historical}:{name}") + "\n")
+        target.chmod(int(_updater_mode(name)[-3:], 8))
+    _git(path, "add", "--all")
+    _git(path, "commit", "-m", "Exact prior updater composition")
+    base = _git(path, "rev-parse", "HEAD")
+    only = {
+        "launcher_only": "bootstrap/update.sh",
+        "cli_only": "bootstrap/cli.py",
+        "boundary_only": UPDATER_PYTHON_BOUNDARY_SOURCE,
+        "workflow_only": UPDATER_RUNTIME_PREFLIGHT_WORKFLOW,
+    }.get(mutation)
+    for name in sorted(names):
+        if only is None or name == only:
+            (path / name).write_text((ROOT / name).read_text())
+    missing = {
+        "missing_process_test": UPDATER_RUNTIME_PREFLIGHT_TEST,
+        "missing_unit_test": UPDATER_PYTHON_BOUNDARY_TEST,
+    }.get(mutation)
+    if missing:
+        (path / missing).unlink()
+    neighbor = {
+        "check_script_neighbor": UPDATER_CHECK_SCRIPT,
+        "workflow_neighbor": UPDATER_RUNTIME_PREFLIGHT_WORKFLOW,
+        "launcher_neighbor": "bootstrap/update.sh",
+        "cli_neighbor": "bootstrap/cli.py",
+    }.get(mutation)
+    if neighbor:
+        target = path / neighbor
+        target.write_text(target.read_text() + "\n# unrelated neighboring edit\n")
+    if mutation == "workflow_mode":
+        (path / UPDATER_RUNTIME_PREFLIGHT_WORKFLOW).chmod(0o755)
+    _git(path, "add", "--all")
+    _git(path, "commit", "-m", "Bounded runtime preflight candidate")
+    head = _git(path, "rev-parse", "HEAD")
+    result = select_scope(path, _event(base, head), checkout_sha=head)
+    assert result["scope"] == (
+        "updater-delivery" if mutation == "none" else "system-wide"
+    )

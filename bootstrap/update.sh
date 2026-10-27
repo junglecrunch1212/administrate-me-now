@@ -48,9 +48,18 @@ if [[ "${ADMINME_UPDATE_SUPERVISED:-}" != "1" ]]; then
   test_reset_manifest=""
   submission_repair_manifest=""
   effect_context_repair_plan=""
+  runtime_preflight=""
+  mutation_option=""
   for argument in "${requested_args[@]}"; do
     case "$argument" in
-      --approve-runtime-migration | --approve-declared-source-assessment-repair | --approve-provider-binding-migration) ;;
+      --runtime-preflight)
+        [[ -z "$runtime_preflight" ]] || die "runtime preflight was repeated"
+        runtime_preflight="$argument"
+        ;;
+      --approve-runtime-migration) ;;
+      --approve-declared-source-assessment-repair | --approve-provider-binding-migration)
+        mutation_option="$argument"
+        ;;
       --pending-attestation-id=*)
         [[ -z "$pending_attestation" ]] \
           || die "pending-attestation identifier was repeated"
@@ -83,8 +92,13 @@ if [[ "${ADMINME_UPDATE_SUPERVISED:-}" != "1" ]]; then
         ;;
     esac
   done
-  [[ -n "$pending_attestation" || -n "$test_reset_manifest" ]] \
-    || die "production upgrade requires --pending-attestation-id=<32 lowercase hex>"
+  if [[ -n "$runtime_preflight" ]]; then
+    [[ -z "$pending_attestation$test_reset_manifest$submission_repair_manifest$effect_context_repair_plan$mutation_option" ]] \
+      || die "runtime preflight cannot include activation or repair options"
+  else
+    [[ -n "$pending_attestation" || -n "$test_reset_manifest" ]] \
+      || die "production upgrade requires --pending-attestation-id=<32 lowercase hex>"
+  fi
   [[ -n "$candidate" && "$candidate" == /* && -d "$candidate" ]] \
     || die "usage: update.sh --pending-attestation-id=<id> [options] /absolute/path/to/reviewed-candidate"
   candidate="$(cd "$candidate" && pwd -P)"
@@ -143,8 +157,13 @@ pending_flag=""
 test_reset_flag=""
 submission_repair_flag=""
 effect_context_repair_flag=""
+runtime_preflight_flag=""
 while [[ "${1:-}" == --* ]]; do
   case "$1" in
+    --runtime-preflight)
+      [[ -z "$runtime_preflight_flag" ]] || fail "runtime preflight was repeated"
+      runtime_preflight_flag="$1"
+      ;;
     --approve-runtime-migration)
       [[ -z "$approve_flag" ]] || fail "runtime-migration approval was repeated"
       approve_flag="$1"
@@ -184,7 +203,10 @@ while [[ "${1:-}" == --* ]]; do
   shift
 done
 
-if [[ "${ADMINME_TEST_MODE:-}" != "1" && -z "$pending_flag" && -z "$test_reset_flag" ]]; then
+if [[ -n "$runtime_preflight_flag" ]]; then
+  [[ -z "$source_repair_flag$provider_binding_flag$pending_flag$test_reset_flag$submission_repair_flag$effect_context_repair_flag" ]] \
+    || fail "runtime preflight cannot include activation or repair options"
+elif [[ "${ADMINME_TEST_MODE:-}" != "1" && -z "$pending_flag" && -z "$test_reset_flag" ]]; then
   fail "production upgrade requires --pending-attestation-id=<32 lowercase hex>"
 fi
 
@@ -355,7 +377,7 @@ PY
 [[ "$controller_source" == "$fixed_controller_root/bootstrap/upgrade.py" ]] \
   || fail "candidate upgrade-controller provenance attestation failed"
 
-if [[ -n "$approve_flag" ]]; then
+if [[ -n "$approve_flag" && -z "$runtime_preflight_flag" ]]; then
   runtime_tag="py${python_minor//./}"
   "$active_python" "$fixed_controller_root/bootstrap/keychain_runtime_migration.py" \
     --instance-root "$ADMINME_INSTANCE_ROOT" \
@@ -367,6 +389,9 @@ if [[ -n "$approve_flag" ]]; then
 fi
 
 upgrade_args=(upgrade "$candidate")
+if [[ -n "$runtime_preflight_flag" ]]; then
+  upgrade_args=(runtime-preflight "$candidate")
+fi
 if [[ -n "$effect_context_repair_flag" ]]; then
   upgrade_args+=("$effect_context_repair_flag")
 fi

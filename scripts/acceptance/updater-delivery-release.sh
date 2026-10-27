@@ -21,6 +21,7 @@ tests=(
   tests/acceptance/test_recovery_readiness_baseline.py
   tests/acceptance/test_cos_live_maintenance.py
   tests/acceptance/test_macos_bootstrap_operations.py::test_credential_free_bootstrap_doctor_backup_restore_round_trip
+  tests/acceptance/test_macos_bootstrap_operations.py::test_runtime_preflight_production_cli_retains_application_state
   tests/unit/test_ci_release_gates.py
   tests/acceptance/test_cos_email_audit_context.py
   tests/unit/test_historical_attribution.py
@@ -29,6 +30,9 @@ tests=(
   tests/unit/bootstrap/test_effect_context_repair.py
   tests/acceptance/test_effect_context_repair_operations.py
 )
+if [[ "$1" == macos ]]; then
+  tests+=(tests/acceptance/test_macos_bootstrap_operations.py::test_supported_public_runtime_preflight_prepares_production_controller)
+fi
 # A module introduced by a later small PR must bring its corresponding proof.
 # An absent optional module is not a skipped test or evidence for that feature.
 for module in prepared_runtime workspace_instructions storage_headroom doctor_tooling; do

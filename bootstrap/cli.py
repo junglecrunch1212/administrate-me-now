@@ -170,6 +170,7 @@ def build_parser() -> argparse.ArgumentParser:
         "rehearse-restore",
         "restore",
         "upgrade",
+        "runtime-preflight",
         "rollback",
         "activate-openclaw",
         "bridge-export",
@@ -195,6 +196,9 @@ def build_parser() -> argparse.ArgumentParser:
             child.add_argument("--receipt", type=Path)
         elif name == "restore":
             child.add_argument("backup", type=Path)
+        elif name == "runtime-preflight":
+            child.add_argument("candidate", type=Path)
+            child.add_argument("--approve-runtime-migration", action="store_true")
         elif name == "upgrade":
             child.add_argument("candidate", type=Path)
             child.add_argument("--test-reset-manifest", type=Path)
@@ -590,7 +594,7 @@ def main(argv: list[str] | None = None) -> int:
             test_mode=test_mode,
             approve_runtime_migration=(
                 bool(args.approve_runtime_migration)
-                if args.command == "upgrade"
+                if args.command in {"upgrade", "runtime-preflight"}
                 else False
             ),
             approve_source_assessment_repair=(
@@ -624,6 +628,8 @@ def main(argv: list[str] | None = None) -> int:
             from bootstrap.disposable_test_reset import discover_messages
 
             _print(discover_messages(upgrades, args.output))
+        elif args.command == "runtime-preflight":
+            _print(upgrades.runtime_preflight(args.candidate))
         elif args.command == "upgrade":
             _print(upgrades.activate(args.candidate))
         else:

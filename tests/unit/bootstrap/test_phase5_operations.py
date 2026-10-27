@@ -1686,8 +1686,12 @@ def test_runtime_migration_keychain_prompt_fails_before_release_preparation(
     def blocked(*_args, **_kwargs):
         raise subprocess.TimeoutExpired(["python"], 8)
 
+    monkeypatch.setattr(
+        "bootstrap.upgrade.python_runtime_boundary",
+        lambda **_kwargs: {"credential_migration_required": True},
+    )
     monkeypatch.setattr("bootstrap.upgrade.subprocess.run", blocked)
-    with pytest.raises(UpgradeError, match="Do not reset the login Keychain"):
+    with pytest.raises(UpgradeError, match="credential_probe_timeout"):
         manager._preflight_keychain_access(REPO_ROOT)
     assert not (test_paths.app_dir / "current-release.json").exists()
 
@@ -3045,13 +3049,16 @@ def test_node_only_updater_branch_never_reads_or_writes_credentials(tmp_path):
     (controller / "bin").mkdir(parents=True)
     (controller / "bin/python").symlink_to(sys.executable)
     source = (REPO_ROOT / "bootstrap/update.sh").read_text()
-    start = source.index('if [[ -n "$approve_flag" ]]; then\n  runtime_tag=')
+    start = source.index(
+        'if [[ -n "$approve_flag" && -z "$runtime_preflight_flag" ]]; then\n  runtime_tag='
+    )
     block = source[start : source.index("\nfi", start) + len("\nfi")]
     # Execute the actual public updater credential branch. A mistaken migration
     # fails on the invalid alias map, including in the isolated macOS run.
     script = (
         """set -euo pipefail
 approve_flag=--approve-runtime-migration
+runtime_preflight_flag=""
 active_python="$1"
 fixed_controller_root="$2"
 ADMINME_INSTANCE_ROOT="$3"
@@ -3181,3 +3188,210 @@ def test_runtime_boundary_refuses_unknown_selection_before_credentials(
             candidate_manifest=candidate,
             candidate_python=Path(sys.executable),
         )
+
+
+@pytest.mark.parametrize("approved", [False, True])
+def test_manager_production_unchanged_python_does_not_discover_credentials(
+    tmp_path, monkeypatch, approved
+):
+    root, _release, manifest = _python_boundary_fixture(tmp_path)
+    candidate = tmp_path / "candidate"
+    (candidate / "bootstrap").mkdir(parents=True)
+    (candidate / "bootstrap/versions.json").write_bytes(manifest.read_bytes())
+    alias = root / "state/config" / ALIAS_FILENAME
+    before = alias.read_bytes()
+    manager = UpgradeManager(
+        DeploymentPaths.from_root(root),
+        root=candidate,
+        test_mode=False,
+        approve_runtime_migration=approved,
+    )
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("credential discovery or mutation was attempted")
+
+    monkeypatch.setattr("bootstrap.upgrade.configured_keychain_references", forbidden)
+    monkeypatch.setattr(
+        "bootstrap.keychain_runtime_migration.keyring.get_password", forbidden
+    )
+    monkeypatch.setattr("bootstrap.keychain_runtime_migration._atomic_write", forbidden)
+    result = manager._preflight_keychain_access(candidate, verify_identity=True)
+    assert result["branch"] == "unchanged-python-no-credential-access"
+    assert result["active_python"] == result["candidate_python"]
+    assert result["candidate_python"]["path"] == str(
+        Path(sys._base_executable).resolve()
+    )
+    assert result["credentials_accessed"] is False
+    assert result["credential_reference_count"] is None  # deliberately not enumerated
+    assert result["credential_probe_count"] == 0
+    assert result["keychain_writes"] is False
+    assert alias.read_bytes() == before
+
+
+@pytest.mark.parametrize("failure", ["unknown", "binary", "malformed"])
+def test_manager_production_unknown_python_refuses_before_credentials(
+    tmp_path, monkeypatch, failure
+):
+    import bootstrap.keychain_runtime_migration as migration
+
+    root, release, manifest = _python_boundary_fixture(tmp_path)
+    candidate = tmp_path / "candidate"
+    (candidate / "bootstrap").mkdir(parents=True)
+    (candidate / "bootstrap/versions.json").write_bytes(manifest.read_bytes())
+    original_identity = migration._python_identity
+
+    def identity(executable):
+        if failure == "unknown":
+            raise KeychainRuntimeMigrationError("unavailable")
+        value = original_identity(executable)
+        if failure == "binary" and executable != release / ".venv/bin/python":
+            value["sha256"] = "f" * 64
+        return value
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("unknown identity reached credentials")
+
+    if failure == "malformed":
+        (candidate / "bootstrap/versions.json").write_text("{}")
+    monkeypatch.setattr(migration, "_python_identity", identity)
+    monkeypatch.setattr("bootstrap.upgrade.configured_keychain_references", forbidden)
+    manager = UpgradeManager(
+        DeploymentPaths.from_root(root),
+        root=candidate,
+        test_mode=False,
+        approve_runtime_migration=True,
+    )
+    with pytest.raises(UpgradeError, match="python_identity_unverified"):
+        manager._preflight_keychain_access(candidate)
+
+
+@pytest.mark.parametrize("outcome", ["success", "failed", "timeout", "unavailable"])
+def test_manager_production_changed_python_retains_bounded_private_probe(
+    tmp_path, monkeypatch, outcome
+):
+    root, _release, _manifest = _python_boundary_fixture(tmp_path)
+    paths = DeploymentPaths.from_root(root)
+    manager = UpgradeManager(
+        paths, root=REPO_ROOT, test_mode=False, approve_runtime_migration=True
+    )
+    calls = []
+    reference = "keychain://synthetic-instance/not-for-diagnostics"
+    monkeypatch.setenv("HOME", str(tmp_path / "private-controller-home"))
+    monkeypatch.setenv("PYTHONPATH", "hostile")
+    monkeypatch.setenv("VIRTUAL_ENV", "hostile")
+    monkeypatch.setattr(
+        "bootstrap.upgrade.python_runtime_boundary",
+        lambda **_kwargs: {"credential_migration_required": True},
+    )
+    monkeypatch.setattr(
+        "bootstrap.upgrade.configured_keychain_references", lambda _paths: (reference,)
+    )
+
+    def probe(command, **kwargs):
+        calls.append((command, kwargs))
+        if outcome == "timeout":
+            raise subprocess.TimeoutExpired(command, 8, stderr="private backend text")
+        if outcome == "unavailable":
+            raise OSError("private backend text")
+        return subprocess.CompletedProcess(
+            command,
+            0 if outcome == "success" else 1,
+            stdout="",
+            stderr="private backend text",
+        )
+
+    monkeypatch.setattr("bootstrap.upgrade.subprocess.run", probe)
+    if outcome == "success":
+        result = manager._preflight_keychain_access(REPO_ROOT)
+        assert result["branch"] == "changed-python-credential-probe"
+        assert (
+            result["credential_reference_count"]
+            == result["credential_probe_count"]
+            == 1
+        )
+        assert result["credentials_accessed"] is True
+        assert result["keychain_writes"] is False
+    else:
+        with pytest.raises(UpgradeError) as failure:
+            manager._preflight_keychain_access(REPO_ROOT)
+        assert str(failure.value) == "runtime prerequisite: credential_probe_" + outcome
+        assert reference not in str(failure.value) and "private backend" not in str(
+            failure.value
+        )
+    assert len(calls) == 1
+    command, options = calls[0]
+    assert command == [
+        sys.executable,
+        "-m",
+        "bootstrap.keychain_probe",
+        "--instance-root",
+        str(root),
+        reference,
+    ]
+    assert options["timeout"] == 8 and options["cwd"] == REPO_ROOT
+    assert options["env"]["HOME"] == str(tmp_path / "private-controller-home")
+    assert "PYTHONPATH" not in options["env"] and "VIRTUAL_ENV" not in options["env"]
+    assert not manager.activation_journal.path.exists()
+
+
+def test_readonly_runtime_preflight_never_reports_test_mode_as_production(tmp_path):
+    manager = UpgradeManager(
+        DeploymentPaths.from_root(tmp_path),
+        root=REPO_ROOT,
+        test_mode=True,
+        approve_runtime_migration=True,
+    )
+    with pytest.raises(UpgradeError, match="production controller"):
+        manager.runtime_preflight(REPO_ROOT)
+
+
+def test_ordinary_upgrade_without_runtime_approval_preserves_existing_skip(
+    tmp_path, monkeypatch
+):
+    def forbidden(**_kwargs):
+        raise AssertionError("ordinary update unexpectedly inspected credentials")
+
+    monkeypatch.setattr("bootstrap.upgrade.python_runtime_boundary", forbidden)
+    manager = UpgradeManager(
+        DeploymentPaths.from_root(tmp_path),
+        root=REPO_ROOT,
+        test_mode=False,
+        approve_runtime_migration=False,
+    )
+    assert manager._preflight_keychain_access(REPO_ROOT) == {
+        "status": "runtime-prerequisite-not-required",
+        "branch": "runtime-migration-not-requested",
+        "credentials_accessed": False,
+    }
+
+
+@pytest.mark.parametrize(
+    "option",
+    [
+        "--pending-attestation-id=" + "0" * 32,
+        "--approve-provider-binding-migration",
+        "--approve-declared-source-assessment-repair",
+        "--runtime-preflight",
+    ],
+)
+def test_public_runtime_preflight_refuses_mixed_activation_options(tmp_path, option):
+    environment = os.environ.copy()
+    environment.pop("ADMINME_UPDATE_SUPERVISED", None)
+    environment["ADMINME_INSTANCE_ROOT"] = str(tmp_path / "untouched-instance")
+    result = subprocess.run(
+        [
+            "bash",
+            str(REPO_ROOT / "bootstrap/update.sh"),
+            "--runtime-preflight",
+            option,
+            str(REPO_ROOT),
+        ],
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=15,
+    )
+    assert result.returncode != 0
+    assert "cannot include" in result.stderr or "repeated" in result.stderr
+    assert not (tmp_path / "untouched-instance").exists()
