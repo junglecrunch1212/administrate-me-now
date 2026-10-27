@@ -4522,6 +4522,12 @@ def test_full_runtime_preflight_scope_requires_closed_production_composition(
     _git(path, "commit", "-m", "Bounded runtime preflight candidate")
     head = _git(path, "rev-parse", "HEAD")
     result = select_scope(path, _event(base, head), checkout_sha=head)
-    assert result["scope"] == (
-        "updater-delivery" if mutation == "none" else "system-wide"
-    )
+    if mutation == "workflow_only":
+        # Policy-only edits retain the pre-existing helper lane. The new updater
+        # contract is still incomplete and must not supply updater admission.
+        assert result["scope"] == "bridge-helper"
+        assert result["updater_dependency_sha256"] == ""
+    else:
+        assert result["scope"] == (
+            "updater-delivery" if mutation == "none" else "system-wide"
+        )
