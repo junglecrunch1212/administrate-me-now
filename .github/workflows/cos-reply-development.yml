@@ -109,6 +109,8 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: '24.22.1'
+      - name: Verify diagnostic preload setup before native preparation
+        run: node tests/fixtures/check_openclaw_browser_dns_trace.mjs
       - name: Install locked Gateway probe environment
         run: |
           python -m pip install 'poetry==2.4.1'
