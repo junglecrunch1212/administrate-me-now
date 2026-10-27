@@ -4382,7 +4382,9 @@ def test_node_only_credential_scope_is_closed_and_has_existing_process_proof(
     _effect_context_candidate(path)
     old = "80e8bd76f077f8b8f752a8251a158d46f259e6eb"
     for name in (UPDATER_PYTHON_BOUNDARY_SOURCE, "bootstrap/update.sh"):
-        _commit(path, name, _git(ROOT, "show", f"{old}:{name}") + "\n")
+        # The existing fixture already authors one of these exact files. Stage
+        # the whole predecessor below instead of requiring an empty commit.
+        (path / name).write_text(_git(ROOT, "show", f"{old}:{name}") + "\n")
     (path / "bootstrap/update.sh").chmod(0o755)
     _commit(path, UPDATER_PYTHON_BOUNDARY_TEST, "# Existing phase5 coverage\n")
     _git(path, "add", "--all")
