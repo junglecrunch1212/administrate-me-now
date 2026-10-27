@@ -125,7 +125,24 @@ else:
     assert.deepEqual(current.meta, original.meta, "no metadata refresh may enter the approved delta");
     assert.equal(current.plugins.entries.codex.config.codexPlugins.enabled, false);
     if (disable) assert.deepEqual(current, original, "native null inverse must restore all original parsed fields");
-    else assert.deepEqual(after.payload.config.plugins.entries.codex.config.computerUse, current.plugins.entries.codex.config.computerUse);
+    else {
+      // config.get resolves plugin schema defaults; raw authoring stays exact
+      // through the separate _computer_use_delta/roster/metadata checks above.
+      const resolvedDefaults = {
+        marketplaceDiscoveryTimeoutMs: 60_000, liveTestTimeoutMs: 60_000,
+        toolCallTimeoutMs: 60_000, healthCheckIntervalMinutes: 60,
+        pluginCacheMode: "independent", strictReadiness: false,
+      };
+      const manifest = JSON.parse(await readFile(path.join(source, "extensions/codex/openclaw.plugin.json"), "utf8"));
+      const properties = manifest.configSchema.properties.computerUse.properties;
+      for (const [key, value] of Object.entries(resolvedDefaults)) {
+        assert.deepEqual(properties[key].default, value, `pinned Computer Use default changed: ${key}`);
+        assert.equal(Object.hasOwn(current.plugins.entries.codex.config.computerUse, key), false, "resolved defaults must not be authored");
+      }
+      assert.deepEqual(after.payload.config.plugins.entries.codex.config.computerUse, {
+        ...current.plugins.entries.codex.config.computerUse, ...resolvedDefaults,
+      });
+    }
   }
   console.log(`PINNED COMPUTER USE CONFIG ${roster}: actual prepare -> config.patch -> config.get/raw readback -> null inverse; CAS/schema refusal, defaults/metadata/account policy retained: PASS`);
 }
