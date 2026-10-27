@@ -112,7 +112,16 @@ plugin_checks() {
   npm run build --prefix openclaw/administrateme || status=$?
   npm test --prefix openclaw/administrateme || status=$?
   if [[ "$1" == macos ]]; then
-    bash scripts/acceptance/openclaw-source-install.sh --service-work || status=$?
+    # Recompute from immutable event/base/head/checkout; no caller-supplied skip.
+    local native_selector
+    native_selector="$(poetry run python -m scripts.release_scope native-selector \
+      --event "$GITHUB_EVENT_PATH" --checkout-sha "$GITHUB_SHA")" || return 1
+    case "$native_selector" in
+      --native-account-policy|--service-work) ;;
+      *) echo "Unsupported service-work native selector" >&2; return 1 ;;
+    esac
+    echo "Selected native proof: $native_selector"
+    bash scripts/acceptance/openclaw-source-install.sh "$native_selector" || status=$?
   fi
   return "$status"
 }
