@@ -63,6 +63,10 @@ from bootstrap.deployment_budget import (
     deployment_clock,
 )
 from bootstrap.keychain_probe import configured_keychain_references
+from bootstrap.keychain_runtime_migration import (
+    KeychainRuntimeMigrationError,
+    python_runtime_boundary,
+)
 from bootstrap.openclaw_tools import (
     configure_required_llm_tool,
     reconcile_administrateme_plugin,
@@ -1780,16 +1784,53 @@ class UpgradeManager:
             required_contracts=required & {APPLE_SERVICE_WRITE_CONTRACT},
         )
 
-    def _preflight_keychain_access(self, candidate: Path) -> None:
-        """Fail before preparation or service mutation when macOS ACLs would prompt."""
+    def _preflight_keychain_access(
+        self, candidate: Path, *, verify_identity: bool = False
+    ) -> dict[str, Any]:
+        """Check the actual Python boundary before discovering any credentials."""
 
-        if self.test_mode or not self.approve_runtime_migration:
-            return
-        references = configured_keychain_references(self.paths)
-        if not references:
-            raise UpgradeError(
-                "candidate runtime migration found no configured macOS Keychain references"
+        if self.test_mode:
+            return {"status": "test-mode", "credentials_accessed": False}
+        if not self.approve_runtime_migration and not verify_identity:
+            return {
+                "status": "runtime-prerequisite-not-required",
+                "branch": "runtime-migration-not-requested",
+                "credentials_accessed": False,
+            }
+        # Production CLI roots this manager in the attested fixed controller.
+        # Do not load credential probe code from the mutable review checkout.
+        candidate = self.root
+        try:
+            boundary = python_runtime_boundary(
+                instance_root=self.paths.root,
+                candidate_manifest=candidate / "bootstrap/versions.json",
+                candidate_python=Path(sys.executable),
+                include_identity=True,
             )
+        except KeychainRuntimeMigrationError as exc:
+            raise UpgradeError(
+                "runtime prerequisite: python_identity_unverified"
+            ) from exc
+        report = {
+            **boundary,
+            "status": "runtime-prerequisite-verified",
+            "credential_reference_count": None,
+            "credential_probe_count": 0,
+            "credential_migration_performed": False,
+            "keychain_writes": False,
+        }
+        if not boundary["credential_migration_required"]:
+            return {**report, "branch": "unchanged-python-no-credential-access"}
+        if not self.approve_runtime_migration:
+            raise UpgradeError("runtime prerequisite: python_migration_not_authorized")
+        try:
+            references = configured_keychain_references(self.paths)
+        except (OSError, ValueError, RuntimeError) as exc:
+            raise UpgradeError(
+                "runtime prerequisite: credential_selection_invalid"
+            ) from exc
+        if not references:
+            raise UpgradeError("runtime prerequisite: credential_selection_empty")
         environment = os.environ.copy()
         environment.pop("PYTHONPATH", None)
         environment.pop("VIRTUAL_ENV", None)
@@ -1813,21 +1854,60 @@ class UpgradeManager:
                     timeout=8,
                 )
             except subprocess.TimeoutExpired as exc:
-                item_names = ", ".join(
-                    sorted(value.rsplit("/", 1)[-1] for value in references)
-                )
                 raise UpgradeError(
-                    "candidate Python is waiting on its runtime-bound macOS "
-                    f"Keychain copies before cutover: {item_names}. Do not reset "
-                    "the login Keychain or select 'Allow all applications'. The "
-                    "active release and its original items were not changed."
+                    "runtime prerequisite: credential_probe_timeout"
+                ) from exc
+            except OSError as exc:
+                raise UpgradeError(
+                    "runtime prerequisite: credential_probe_unavailable"
                 ) from exc
             if completed.returncode:
+                raise UpgradeError("runtime prerequisite: credential_probe_failed")
+        return {
+            **report,
+            "branch": "changed-python-credential-probe",
+            "credentials_accessed": True,
+            "credential_reference_count": len(references),
+            "credential_probe_count": len(references),
+        }
+
+    def runtime_preflight(self, candidate: Path) -> dict[str, Any]:
+        """Run the upgrade's complete credential prerequisite without activation."""
+        if self.test_mode:
+            raise UpgradeError("runtime preflight requires the production controller")
+        candidate = candidate.resolve()
+        with self._operation_lock():
+            commit = self._candidate_commit(candidate)
+            self._attest_controller_provenance(candidate, commit)
+            active_journal = self.activation_journal.directory / "active.json"
+            if active_journal.exists() or active_journal.is_symlink():
                 raise UpgradeError(
-                    "candidate Python cannot resolve every configured logical and "
-                    "runtime-bound macOS Keychain reference. The active release and "
-                    "its original items were not changed."
+                    "runtime preflight refuses an active activation journal"
                 )
+            before = self._release_pointer_snapshot()
+            report = self._preflight_keychain_access(candidate, verify_identity=True)
+            if self._candidate_commit(candidate) != commit:
+                raise UpgradeError("runtime preflight candidate changed")
+            if self._release_pointer_snapshot() != before:
+                raise UpgradeError("runtime preflight selection changed")
+            return {
+                **report,
+                "status": "runtime-preflight-verified",
+                "controller_commit": commit,
+                "controller_source": str(Path(__file__).resolve()),
+                "controller_source_sha256": hashlib.sha256(
+                    Path(__file__).read_bytes()
+                ).hexdigest(),
+                "controller_executable": sys.executable,
+                "controller_executable_sha256": hashlib.sha256(
+                    Path(sys.executable).read_bytes()
+                ).hexdigest(),
+                "environment_contract": "inherited-controller-environment",
+                "controller_home": os.environ.get("HOME"),
+                "source_selection_changed": False,
+                "release_published": False,
+                "services_changed": False,
+            }
 
     def _prepare_workspace_instructions(
         self,

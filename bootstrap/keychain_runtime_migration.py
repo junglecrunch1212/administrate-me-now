@@ -226,7 +226,11 @@ def _python_identity(executable: Path) -> dict[str, Any]:
 
 
 def python_runtime_boundary(
-    *, instance_root: Path, candidate_manifest: Path, candidate_python: Path
+    *,
+    instance_root: Path,
+    candidate_manifest: Path,
+    candidate_python: Path,
+    include_identity: bool = False,
 ) -> dict[str, Any]:
     """Classify a runtime change without reading or modifying any credentials.
 
@@ -270,25 +274,36 @@ def python_runtime_boundary(
             "cannot establish the declared Python migration boundary"
         ) from exc
     required = any(before[key] != after[key] for key in keys)
-    if not required:
+    identities: dict[str, Any] = {}
+    if not required or include_identity:
         active_identity = _python_identity(release / ".venv/bin/python")
         candidate_identity = _python_identity(candidate_python)
-        expected_version = [int(part) for part in after["preferred"].split(".")]
         if any(
-            identity["version"] != expected_version
-            for identity in (active_identity, candidate_identity)
+            identity["version"]
+            != [int(part) for part in manifest["preferred"].split(".")]
+            for identity, manifest in (
+                (active_identity, before),
+                (candidate_identity, after),
+            )
         ):
             raise KeychainRuntimeMigrationError(
-                "actual Python does not match the unchanged declared runtime"
+                "actual Python does not match its declared runtime"
             )
-        if active_identity != candidate_identity:
+        if not required and active_identity != candidate_identity:
             raise KeychainRuntimeMigrationError(
                 "unchanged Python manifest resolves to a different interpreter"
             )
+        if include_identity:
+            identities = {
+                "active_python": active_identity,
+                "candidate_python": candidate_identity,
+                "active_commit": commit,
+            }
     return {
         "status": "python-runtime-boundary-verified",
         "credential_migration_required": required,
         "credentials_accessed": False,
+        **identities,
     }
 
 
