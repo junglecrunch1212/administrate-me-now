@@ -427,7 +427,7 @@ def test_saved_true_consent_cannot_release_any_advisor_surface(tmp_path, monkeyp
         assert advisor["implementation_present"] is False
         assert set(advisor["verbs"].values()) == {"unsupported"}
         assert "unavailable" in advisor["unavailable_reason"]
-        assert len(catalog["openclaw_plugin"]["tools"]) == 45
+        assert len(catalog["openclaw_plugin"]["tools"]) == 46
         _grant_cos(client, "owner-release-existing-private-grant")
         client.portal.call(saved_consent, runtime, manifest["binding"])
         stored = client.get(CONTROL, headers=DEMO_HEADERS).json()

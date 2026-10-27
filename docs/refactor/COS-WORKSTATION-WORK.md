@@ -14,16 +14,24 @@ An exact excerpt identifies the requested draft but cannot discard other text.
 
 OpenClaw owns the subagent run and its transcript. The plugin starts a fresh signed
 service session on the supported subagent lane with delivery disabled. The caller
-waits at most 45 seconds; a timeout is pending/unknown, never success. A later
+waits at most 45 seconds; a timeout is pending/unknown, never success or failure.
+An actual typed native error produces a signed parent result bound to the exact
+member, source, admission nonce, worker session and run. The backend retains an
+existing member-private tool audit and returns `failed/native_worker_failed` if
+there is no verified read-back. It never derives this result from model text or a
+worker capture field. A verified read-back wins over a later worker error. A later
 current status request can read the same artifact in a new worker session, through
 any supported conversation belonging to that same member. It does not create a
 second note or require recreating the request in a form.
 
 Existing encrypted work/source-read/audit events provide durable binding. Before
 execution, the host seeds the source-read ledger with the original instruction.
-The native tool hook checks current authority for every call and permits only the
-exact note creation and exact note read. Provider tools, other notes, arbitrary
-sources and execution are unavailable through this handoff. The worker remains
+The unfiltered native tool hook checks current authority for every call and
+permits only the exact note creation and exact note read. Configured tools may
+remain visible: the pinned Codex match-all PreToolUse relay enforces execution,
+while unsupported `before_prompt_build.toolsAllow` is not requested. Calls to
+provider tools, other notes, arbitrary sources and execution are blocked through
+this handoff. The worker remains
 CoS; its service session never impersonates the requesting member.
 
 Only a successful native read-tool result produces a read-back proof. The backend

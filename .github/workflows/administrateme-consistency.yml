@@ -71,7 +71,7 @@ jobs:
           python-version: '3.14.7'
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: '24.19.0'
+          node-version: '24.22.1'
       - name: Install locked reminder check environment
         run: |
           python -m pip install 'poetry==2.4.1'
@@ -109,7 +109,7 @@ jobs:
           python-version: '3.14.7'
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: '24.19.0'
+          node-version: '24.22.1'
       - name: Install locked updater check environment
         run: |
           python -m pip install 'poetry==2.4.1'
@@ -153,7 +153,7 @@ jobs:
           python-version: '3.14.7'
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: '24.19.0'
+          node-version: '24.22.1'
       - name: Install locked metadata check environment
         run: |
           python -m pip install 'poetry==2.4.1'
@@ -197,7 +197,7 @@ jobs:
           python-version: '3.14.7'
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: '24.19.0'
+          node-version: '24.22.1'
       - name: Install locked service-work check environment
         run: |
           python -m pip install 'poetry==2.4.1'
@@ -343,7 +343,7 @@ jobs:
           python-version: "3.14.7"
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: "24.19.0"
+          node-version: "24.22.1"
       - name: Install locked recovery test environment
         run: |
           python -m pip install 'poetry==2.4.1'
@@ -438,7 +438,7 @@ jobs:
           python-version: '3.14.7'
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: '24.19.0'
+          node-version: '24.22.1'
       - name: Install locked Google release environment
         run: |
           python -m pip install 'poetry==2.4.1'
@@ -554,7 +554,7 @@ jobs:
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: "24.19.0"
+          node-version: "24.22.1"
 
       - name: Install locked development environment
         run: |
@@ -709,7 +709,7 @@ jobs:
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: "24.19.0"
+          node-version: "24.22.1"
           cache: npm
           cache-dependency-path: openclaw/administrateme/package-lock.json
 
@@ -801,6 +801,7 @@ jobs:
           tests/acceptance/test_disposable_dataset_continuity.py::test_full_pointer_chain_allows_transactional_rollback_then_fresh_forward
           tests/unit/bootstrap/test_runtime_compatibility.py
           tests/acceptance/test_source_currentness_revision.py::test_reviewed_retained_patch_proves_source_runtime_and_production_replay
+          tests/acceptance/test_source_currentness_revision.py::test_reviewed_retained_node_launches_after_interrupted_activation
 
       - name: Validate member-forwarded intake and delivery
         run: >-

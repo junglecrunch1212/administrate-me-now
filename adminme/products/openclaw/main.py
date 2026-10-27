@@ -14,7 +14,7 @@ import hmac
 import json
 import re
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Literal, cast
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -150,6 +150,25 @@ class ContextRequest(BaseModel):
 
 class CapabilityToolRequest(ContextRequest):
     capability_id: str | None = Field(default=None, min_length=1, max_length=240)
+
+
+CalendarView = Literal["day", "week", "agenda", "month"]
+
+
+class CalendarReadRequest(ContextRequest):
+    anchor_date: date | None = None
+    view: CalendarView = "week"
+    context_scope: Literal["member_private", "household_shared"] = "member_private"
+    calendar_external_ids: list[str] = Field(default_factory=list, max_length=20)
+    limit: int = Field(default=100, ge=1, le=200)
+
+    @model_validator(mode="after")
+    def bounded_calendar_ids(self) -> CalendarReadRequest:
+        if any(not value or len(value) > 300 for value in self.calendar_external_ids):
+            raise ValueError("calendar identifiers must be nonempty and bounded")
+        if len(set(self.calendar_external_ids)) != len(self.calendar_external_ids):
+            raise ValueError("calendar identifiers must be unique")
+        return self
 
 
 class CapabilityChangeRequest(ContextRequest):
@@ -1144,6 +1163,161 @@ async def inspect_capabilities(
         }
     await _record_tool_call(
         request, session, body.provenance, operation="tools.capabilities"
+    )
+    return result
+
+
+_CALENDAR_READ_EVENT_FIELDS = frozenset(
+    {
+        "calendar_event_id",
+        "calendar_source",
+        "provider_account_id",
+        "calendar_external_id",
+        "calendar_name",
+        "external_uid",
+        "provider_revision",
+        "summary",
+        "title",
+        "kind",
+        "start_at",
+        "end_at",
+        "all_day",
+        "start_time_zone",
+        "end_time_zone",
+        "status",
+        "availability",
+        "provider_updated_at",
+        "owner_scope",
+        "visibility_scope",
+        "sensitivity",
+        "last_event_id",
+        "owner_hint",
+    }
+)
+_CALENDAR_READ_SOURCE_FIELDS = frozenset(
+    {
+        "provider",
+        "provider_account_id",
+        "calendar_external_id",
+        "calendar_name",
+        "member_id",
+        "access_role",
+        "read_details",
+        "read_free_busy",
+        "observed_at",
+    }
+)
+
+
+async def _read_calendar(
+    runtime: Any,
+    session: Session,
+    *,
+    anchor_date: date | None,
+    view: CalendarView,
+    calendar_external_ids: list[str],
+    limit: int,
+) -> dict[str, Any]:
+    # Reuse the dashboard's date/DST handling, member matching and privacy
+    # filters. A calendar imported into this account retains its actual source
+    # identity; its title never changes the authenticated member.
+    surface = build_surface(
+        runtime, session, "calendar", calendar_anchor=anchor_date, calendar_view=view
+    )
+    cockpit = surface["cockpit"]
+    rows = surface["events"]
+    sources = cockpit["sources"]
+    if calendar_external_ids:
+        selected = set(calendar_external_ids)
+        rows = [row for row in rows if row.get("calendar_external_id") in selected]
+        sources = [
+            row for row in sources if row.get("calendar_external_id") in selected
+        ]
+    events = []
+    for row in rows[:limit]:
+        item = {
+            key: value
+            for key, value in row.items()
+            if key in _CALENDAR_READ_EVENT_FIELDS
+        }
+        # Provider descriptions, attachments, links and arbitrary source payloads
+        # are not part of this calendar read contract.
+        for key in ("summary", "title", "calendar_name"):
+            if isinstance(item.get(key), str):
+                value = item[key]
+                item[key] = value[:500]
+                if len(value) > 500:
+                    item["text_truncated"] = True
+        original = await runtime.event_log.get(row["last_event_id"])
+        item["source_event_id"] = row["last_event_id"]
+        item["retained_change_at"] = original["recorded_at"] if original else None
+        events.append(item)
+    status = (await runtime.projections.status(include_row_counts=False))["calendars"]
+    observed = [
+        item["retained_change_at"] for item in events if item["retained_change_at"]
+    ]
+    return {
+        "contract": "administrateme-member-calendar-read-v1",
+        "member_id": session.auth_member_id,
+        "context_scope": session.service_context.context_scope
+        if session.service_context
+        else None,
+        "timezone": cockpit["timezone"],
+        "range": cockpit["range"],
+        "view": view,
+        "calendar_external_ids": calendar_external_ids,
+        "events": events,
+        "sources": [
+            {
+                key: value
+                for key, value in row.items()
+                if key in _CALENDAR_READ_SOURCE_FIELDS
+            }
+            for row in sources
+        ],
+        "matching_event_count": len(rows),
+        "truncated": len(rows) > limit,
+        "coverage": {
+            "basis": "current_scope_filtered_calendar_projection",
+            "provider_live_read": False,
+            "provider_range_completeness": "not_verified",
+            "provider_last_successful_poll_at": None,
+            "latest_returned_retained_change_at": max(observed, default=None),
+            "source_observed_at_means": "source_metadata_change_not_last_poll",
+            "projection_checkpoint_event_id": status["checkpoint"],
+            "projection_lag_count": status["lag_count"],
+            "projection_state": "degraded"
+            if status["degraded"]
+            else "processing"
+            if status["lag_count"]
+            else "caught_up",
+            "empty_result_means": "no_matching_retained_events_not_proven_free_time",
+        },
+        "queried_at": datetime.now(timezone.utc).isoformat(),
+        "provider_effect_count": 0,
+    }
+
+
+@router.post("/tools/calendar")
+async def inspect_calendar(
+    body: CalendarReadRequest, request: Request
+) -> dict[str, Any]:
+    session = _session(request, body.provenance, context_scope=body.context_scope)
+    _require_adult(session)
+    result = await _read_calendar(
+        _runtime(request),
+        session,
+        anchor_date=body.anchor_date,
+        view=body.view,
+        calendar_external_ids=body.calendar_external_ids,
+        limit=body.limit,
+    )
+    await _record_tool_call(
+        request,
+        session,
+        body.provenance,
+        operation="tools.calendar",
+        result_event_ids=[item["source_event_id"] for item in result["events"]],
     )
     return result
 

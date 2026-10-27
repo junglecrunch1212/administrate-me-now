@@ -18,6 +18,7 @@ const expectedTools = [
   "administrateme_finance_calculate",
   "administrateme_finance_job",
   "administrateme_state",
+  "administrateme_calendar",
   "administrateme_what_now",
   "administrateme_capabilities",
   "administrateme_settings_context",

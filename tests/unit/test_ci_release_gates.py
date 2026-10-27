@@ -4317,3 +4317,39 @@ def test_finance_metadata_worker_requires_native_owner_and_history_proof(
     ]:
         assert required in script
     assert "finance_watchdog.py" not in script
+
+
+def test_system_native_proof_composes_browser_and_approval_with_one_install() -> None:
+    job = _workflow("macos-bootstrap.yml")["jobs"]["system-rehearsal"]
+    native_step = next(
+        step
+        for step in job["steps"]
+        if step.get("name") == "Build and verify the exact reviewed OpenClaw source"
+    )
+    assert native_step["run"] == (
+        "bash scripts/acceptance/openclaw-source-install.sh --service-work-and-approval"
+    )
+    native = (ROOT / "scripts/acceptance/openclaw-source-install.sh").read_text()
+    assert native.count('"$REPOSITORY_ROOT/bootstrap/install-openclaw-source.sh"') == 1
+    assert '""|--service-work|--self-reminder|--service-work-and-approval) ;;' in native
+    assert '*) echo "Unsupported native proof selector" >&2; exit 2 ;;' in native
+    service_guard = 'if [[ "${1:-}" == --service-work || "${1:-}" == --service-work-and-approval ]]; then'
+    approval_guard = 'if [[ "${1:-}" != --service-work ]]; then'
+    service_group, approval_group = native.split(service_guard, 1)[1].split(
+        approval_guard, 1
+    )
+    for required in (
+        "check-workstation-codex-policy.mjs",
+        "check-cos-native-account-policy.mjs",
+        "check-service-work-gateway.mjs",
+        "check-workstation-work-gateway.mjs",
+        " --browser\n",
+        " --browser-gmail\n",
+    ):
+        assert required in service_group
+    assert 'if [[ "${1:-}" != --service-work-and-approval ]]; then' in approval_group
+    assert "check-cos-imessage-text.mjs" in service_group
+    assert "check-cos-imessage-text.mjs" in approval_group
+    assert "check-cos-approval-gateway.mjs" in approval_group
+    assert 'if [[ "${1:-}" == --self-reminder ]]; then' in approval_group
+    assert "check-self-reminder-gateway.mjs" in approval_group
