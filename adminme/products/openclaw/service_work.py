@@ -39,6 +39,12 @@ from adminme.products.openclaw.service_context import (
     validate_context_cursor,
     work_view,
 )
+from adminme.products.openclaw.service_mail_context import (
+    MemberGmailThreadSelector,
+    ResolvedMailThread,
+    revalidate_member_gmail_thread,
+    resolve_member_gmail_thread,
+)
 from adminme.projections.tasks.queries import get_task, service_work_for_principal
 from adminme.service_identities import (
     COS_AUTOMATION_OPERATOR_ID,
@@ -122,13 +128,23 @@ class ReadPrivateWorkRequest(ServiceOnlyRequest):
 
 class ReadServiceContextRequest(SourceFactsRequest):
     source_kind: ContextSourceKind | None = None
+    mail_thread: MemberGmailThreadSelector | None = None
     after_event_id: str | None = Field(default=None, min_length=1, max_length=240)
     limit: int = Field(default=20, ge=1, le=50)
 
     @model_validator(mode="after")
     def select_discovery_or_exact_sources(self) -> ReadServiceContextRequest:
-        if self.source_kind is not None and self.source_event_ids:
-            raise ValueError("choose source_kind discovery or exact source_event_ids")
+        selected = sum(
+            (
+                self.source_kind is not None,
+                bool(self.source_event_ids),
+                self.mail_thread is not None,
+            )
+        )
+        if selected > 1:
+            raise ValueError(
+                "choose source_kind discovery, exact source_event_ids, or one mail_thread"
+            )
         return self
 
 
@@ -871,12 +887,27 @@ async def read_context(
     session = _session(request, body.provenance)
     runtime = seam._runtime(request)
     contexts = active_contexts(runtime, session)
-    facts = await source_facts(runtime, session, body.source_event_ids)
-    if body.after_event_id:
-        await validate_context_cursor(runtime, session, contexts, body.after_event_id)
+    facts: list[dict[str, Any]] = []
     next_cursor: str | None = None
     scan_truncated = False
-    if not body.source_event_ids:
+    resolved: ResolvedMailThread | None = None
+    if body.mail_thread is not None:
+        resolved = await resolve_member_gmail_thread(
+            runtime,
+            session,
+            body.mail_thread,
+            after_event_id=body.after_event_id,
+            limit=body.limit,
+        )
+        facts = resolved.facts
+        next_cursor = resolved.next_cursor
+        scan_truncated = resolved.scan_truncated
+        contexts = [resolved.context]
+    else:
+        facts = await source_facts(runtime, session, body.source_event_ids)
+    if body.mail_thread is None and body.after_event_id:
+        await validate_context_cursor(runtime, session, contexts, body.after_event_id)
+    if body.mail_thread is None and not body.source_event_ids:
         scopes = sorted(
             {session.private_scope}
             | {scope for context in contexts for scope in context.allowed_scopes}
@@ -924,9 +955,16 @@ async def read_context(
         [fact["event_id"] for fact in facts],
         [fact["authority"] for fact in facts],
     )
+    if resolved is not None:
+        revalidate_member_gmail_thread(runtime, session, resolved)
     return {
         "principal_id": session.principal.principal_id,
         **({"source_kind": body.source_kind} if body.source_kind is not None else {}),
+        **(
+            {"mail_thread": body.mail_thread.model_dump(mode="json")}
+            if body.mail_thread
+            else {}
+        ),
         "facts": facts,
         "next_cursor": next_cursor,
         "standing_contexts": [context.audit_payload() for context in contexts],

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +14,7 @@ from adminme.runtime.application import create_application
 from adminme.source_policy import policy_for_preset
 from tests.acceptance.test_cos_identity_delegation_kernel import (
     A,
+    A_HEADERS,
     B,
     B_HEADERS,
     OPENCLAW_HEADERS,
@@ -1109,6 +1111,557 @@ def test_own_mail_currentness_is_exact_and_historical_note_keeps_original_source
             == 200
         )
         assert runtime.fixture_adapter.delivered == []
+
+
+def _gmail_thread(
+    member: str,
+    account: str,
+    thread: str,
+    native: str,
+    **changes: Any,
+) -> dict[str, Any]:
+    return _message(
+        member,
+        **{
+            "provider": "gmail",
+            "provider_account_id": account,
+            "source_channel": "gmail",
+            "workspace": "personal",
+            "thread_id": thread,
+            "native_message_id": native,
+            **changes,
+        },
+    )
+
+
+def _mail_thread_selector(
+    member: str, account: str, thread: str, **extra: Any
+) -> dict[str, Any]:
+    return {
+        "member_id": member,
+        "provider_account_id": account,
+        "workspace": "personal",
+        "thread_id": thread,
+        **extra,
+    }
+
+
+def test_exact_member_gmail_thread_maps_native_coordinates_and_audits_canonical_sources(
+    tmp_path: Path,
+) -> None:
+    instance = tmp_path / "member-gmail-thread"
+    instance.mkdir()
+    with TestClient(create_application(_settings(instance))) as client:
+        runtime = client.app.state.runtime
+        account = "gmail-account-fixture-a"
+        thread = "gmail-thread-fixture-shared"
+        first = _observed_source(
+            client,
+            A,
+            "messaging.received",
+            _gmail_thread(A, account, thread, "gmail-message-fixture-1"),
+            version=4,
+        )
+        second = _observed_source(
+            client,
+            A,
+            "messaging.received",
+            _gmail_thread(A, account, thread, "gmail-message-fixture-2"),
+            version=4,
+        )
+        # The exact projection locator is not itself authority.
+        selector = _mail_thread_selector(A, account, thread)
+        assert (
+            _context(client, "thread-without-grant", mail_thread=selector).status_code
+            == 404
+        )
+        for cursor in (first, second):
+            _assert_mail_denied(
+                client,
+                _context(
+                    client,
+                    f"ungranted-{cursor}",
+                    mail_thread=selector,
+                    after_event_id=cursor,
+                ),
+            )
+        grant = _grant_private(client, A, "exact-gmail-thread-grant")
+        page = _context(client, "thread-page-one", mail_thread=selector, limit=1)
+        assert page.status_code == 200, page.text
+        body = page.json()
+        assert [fact["event_id"] for fact in body["facts"]] == [first]
+        assert body["next_cursor"] == first and body["scan_truncated"] is True
+        metadata = body["facts"][0]["mail_read_metadata"]
+        assert metadata["canonical"] == {
+            "source_event_id": first,
+            "member_id": A,
+            "provider": "gmail",
+            "provider_account_id": account,
+            "workspace": "personal",
+            "thread_id": thread,
+            "native_message_id": "gmail-message-fixture-1",
+        }
+        assert metadata["latest_retained_revision"]["source_event_id"] == first
+        assert metadata["provider_freshness"]["state"] == "unknown"
+        assert metadata["effective_policy"]["context_mode"] == "typed_facts"
+        assert metadata["effective_policy"]["acquisition_state"] == "active"
+        assert metadata["effective_policy"]["origin"] == "recommended_default"
+        assert isinstance(metadata["effective_policy"]["revision"], int)
+        assert metadata["implementation"] == {
+            "provider_body_included": False,
+            "body_reason": "member_body_not_implemented_by_this_reader",
+        }
+        assert body["facts"][0]["provider_body_included"] is False
+        assert "PROVIDER_MAIL_BODY" not in page.text
+        later = _context(
+            client,
+            "thread-page-two",
+            mail_thread=selector,
+            limit=1,
+            after_event_id=body["next_cursor"],
+        )
+        assert later.status_code == 200, later.text
+        assert [fact["event_id"] for fact in later.json()["facts"]] == [second]
+        assert later.json()["next_cursor"] is None
+        terminal = _context(
+            client, "thread-terminal", mail_thread=selector, after_event_id=second
+        )
+        assert terminal.status_code == 200, terminal.text
+        assert terminal.json()["facts"] == []
+        assert terminal.json()["next_cursor"] is None
+        assert terminal.json()["scan_truncated"] is False
+        assert terminal.json()["provider_effect_count"] == 0
+        assert runtime.fixture_adapter.delivered == []
+        receipts = (
+            runtime.projections.connection("tasks")
+            .execute(
+                "SELECT source_event_id, authority_json FROM cos_source_read_receipts "
+                "WHERE source_event_id IN (?, ?) ORDER BY source_event_id",
+                (first, second),
+            )
+            .fetchall()
+        )
+        assert [row["source_event_id"] for row in receipts] == [first, second]
+        assert all(
+            json.loads(row["authority_json"])["authority_grant_id"] == grant
+            for row in receipts
+        )
+
+
+def test_exact_member_gmail_thread_rejects_scope_collisions_stale_rows_and_bad_cursor(
+    tmp_path: Path,
+) -> None:
+    instance = tmp_path / "member-gmail-thread-isolation"
+    instance.mkdir()
+    with TestClient(create_application(_settings(instance))) as client:
+        runtime = client.app.state.runtime
+        account = "gmail-account-fixture-a"
+        other_account = "gmail-account-fixture-b"
+        thread = "gmail-thread-collision-fixture"
+        _grant_private(client, A, "gmail-thread-isolation-a")
+        _grant_private(client, B, "gmail-thread-isolation-b")
+        original = _observed_source(
+            client,
+            A,
+            "messaging.received",
+            _gmail_thread(
+                A, account, thread, "gmail-message-revised", subject="Old header"
+            ),
+            version=4,
+        )
+        current = _observed_source(
+            client,
+            A,
+            "messaging.received",
+            _gmail_thread(
+                A, account, thread, "gmail-message-revised", subject="Current header"
+            ),
+            version=4,
+        )
+        other_member = _observed_source(
+            client,
+            B,
+            "messaging.received",
+            _gmail_thread(B, other_account, thread, "gmail-message-other-member"),
+            version=4,
+        )
+        exact = _context(
+            client,
+            "gmail-current-exact",
+            mail_thread=_mail_thread_selector(
+                A, account, thread, native_message_id="gmail-message-revised"
+            ),
+        )
+        assert exact.status_code == 200, exact.text
+        assert [fact["event_id"] for fact in exact.json()["facts"]] == [current]
+        assert (
+            _context(
+                client,
+                "gmail-wrong-account",
+                mail_thread=_mail_thread_selector(A, other_account, thread),
+            ).status_code
+            == 404
+        )
+        assert (
+            _context(
+                client,
+                "gmail-wrong-member",
+                mail_thread=_mail_thread_selector(B, account, thread),
+            ).status_code
+            == 404
+        )
+        assert (
+            _context(
+                client,
+                "gmail-stale-cursor",
+                mail_thread=_mail_thread_selector(A, account, thread),
+                after_event_id=original,
+            ).status_code
+            == 404
+        )
+        assert (
+            _context(
+                client,
+                "gmail-other-thread-cursor",
+                mail_thread=_mail_thread_selector(A, account, thread),
+                after_event_id=other_member,
+            ).status_code
+            == 404
+        )
+        # Simulate projection lag without acquiring or querying the provider.
+        runtime.projections.connection("interactions").execute(
+            "DELETE FROM interactions WHERE tenant_id=? AND provider_account_id=? "
+            "AND native_message_id=?",
+            (runtime.settings.instance.tenant_id, account, "gmail-message-revised"),
+        )
+        assert (
+            _context(
+                client,
+                "gmail-projection-lag",
+                mail_thread=_mail_thread_selector(A, account, thread),
+            ).status_code
+            == 404
+        )
+
+
+@pytest.mark.parametrize("acquisition", ["active", "paused"])
+@pytest.mark.parametrize("mode", ["typed_facts", "typed_facts_safe_snippet"])
+def test_member_gmail_thread_reports_effective_mode_but_never_body(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mode: str,
+    acquisition: str,
+) -> None:
+    from adminme.source_policy import source_coordinate_for_event
+
+    instance = tmp_path / f"member-gmail-mode-{mode}"
+    instance.mkdir()
+    with TestClient(create_application(_settings(instance))) as client:
+        runtime = client.app.state.runtime
+        account = "gmail-mode-account-fixture"
+        thread = "gmail-mode-thread-fixture"
+        source = _observed_source(
+            client,
+            A,
+            "messaging.received",
+            _gmail_thread(A, account, thread, "gmail-mode-message-fixture"),
+            version=4,
+        )
+        _grant_private(client, A, f"gmail-mode-grant-{mode}")
+        event = client.portal.call(runtime.event_log.get, source)
+        coordinate = source_coordinate_for_event(
+            event, provider_bindings=runtime.settings.provider_bindings
+        )
+        state = runtime.settings_control.read()
+        policy = {
+            **policy_for_preset("balanced").model_dump(mode="json"),
+            "context_mode": mode,
+            "acquisition_state": acquisition,
+        }
+        state["source_policies_v2"].setdefault(A, {})[coordinate.key] = {
+            "policy": policy
+        }
+        state["source_policy_v2_revisions"][A] = 7
+        monkeypatch.setattr(runtime.settings_control, "read", lambda: state)
+        response = _context(
+            client,
+            f"gmail-mode-{mode}",
+            mail_thread=_mail_thread_selector(A, account, thread),
+        )
+        assert response.status_code == 200, response.text
+        fact = response.json()["facts"][0]
+        assert fact["mail_read_metadata"]["effective_policy"]["context_mode"] == mode
+        effective = fact["mail_read_metadata"]["effective_policy"]
+        assert effective["origin"] == "exact_override"
+        assert effective["acquisition_state"] == acquisition
+        assert effective["revision"] == 7
+        assert effective["policy_key"] == coordinate.key
+        assert effective["exact_coordinate"] is coordinate.exact
+        assert effective["inherited_from_policy_key"] is None
+        assert (
+            fact["mail_read_metadata"]["timestamps"]["received_at"]
+            == event["payload"]["received_at"]
+        )
+        assert (
+            fact["mail_read_metadata"]["timestamps"]["recorded_at"]
+            == event["recorded_at"]
+        )
+        assert fact["mail_read_metadata"]["provider_freshness"]["state"] == "unknown"
+        assert fact["provider_body_included"] is False
+        assert (
+            fact["mail_read_metadata"]["implementation"]["body_reason"]
+            == "member_body_not_implemented_by_this_reader"
+        )
+        assert "body_snippet" not in fact["fact"]
+        assert "PROVIDER_MAIL_BODY" not in response.text
+
+
+def _mail_page_fixture(client: TestClient) -> tuple[dict[str, Any], list[str], str]:
+    selector = _mail_thread_selector(A, "gmail-page-account", "gmail-page-thread")
+    grant = _grant_private(client, A, "gmail-page-grant")
+    ids = [
+        _observed_source(
+            client,
+            A,
+            "messaging.received",
+            _gmail_thread(
+                A,
+                selector["provider_account_id"],
+                selector["thread_id"],
+                f"gmail-page-{index}",
+            ),
+            version=4,
+        )
+        for index in range(2)
+    ]
+    return selector, ids, grant
+
+
+def _assert_mail_denied(client: TestClient, response: Any) -> None:
+    assert response.status_code == 404, response.text
+    assert response.json() == {"detail": "authorized member mail thread not found"}
+    assert "PROVIDER_MAIL_BODY" not in response.text
+    assert client.app.state.runtime.fixture_adapter.delivered == []
+
+
+@pytest.mark.parametrize("terminal", [False, True])
+@pytest.mark.parametrize(
+    "change",
+    [
+        "revoked",
+        "none",
+        "metadata_only",
+        "content_on_explicit_authorized_demand",
+        "stale",
+        "deleted",
+        "retracted",
+        "account",
+        "thread",
+        "tenant",
+    ],
+)
+def test_member_mail_pages_reauthorize_cursor_even_when_empty(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    terminal: bool,
+    change: str,
+) -> None:
+    instance = tmp_path / "mail-page-authority"
+    instance.mkdir()
+    with TestClient(create_application(_settings(instance))) as client:
+        runtime = client.app.state.runtime
+        selector, ids, grant = _mail_page_fixture(client)
+        cursor = ids[-1] if terminal else ids[0]
+        before = _context(
+            client, "page-before", mail_thread=selector, after_event_id=cursor
+        )
+        assert before.status_code == 200, before.text
+        assert len(before.json()["facts"]) == (0 if terminal else 1)
+        if change == "revoked":
+            revoked = client.request(
+                "DELETE",
+                f"/api/member/v1/cos/delegations/{grant}",
+                headers=A_HEADERS,
+                json={"request_id": "page-revoke", "reason": "fixture"},
+            )
+            assert revoked.status_code == 200, revoked.text
+        elif change in {
+            "none",
+            "metadata_only",
+            "content_on_explicit_authorized_demand",
+        }:
+            _mail_policy(client, cursor, monkeypatch, change)
+        elif change == "stale":
+            event = client.portal.call(runtime.event_log.get, cursor)
+            _observed_source(
+                client,
+                A,
+                "messaging.received",
+                {
+                    **event["payload"],
+                    "subject": "New canonical revision",
+                },
+                version=4,
+            )
+        elif change in {"deleted", "retracted", "tenant"}:
+            # Projection corruption/lag must not make retained history admissible.
+            conn = runtime.projections.connection("interactions")
+            predicate = "json_extract(raw_event_ids, '$[#-1]')=?"
+            if change == "deleted":
+                conn.execute(f"DELETE FROM interactions WHERE {predicate}", (cursor,))
+            elif change == "retracted":
+                conn.execute(
+                    f"UPDATE interactions SET message_state='retracted' WHERE {predicate}",
+                    (cursor,),
+                )
+            else:
+                conn.execute(
+                    f"UPDATE interactions SET tenant_id='foreign-fixture-tenant' WHERE {predicate}",
+                    (cursor,),
+                )
+        else:
+            selector["provider_account_id" if change == "account" else "thread_id"] = (
+                "different-fixture-coordinate"
+            )
+        _assert_mail_denied(
+            client,
+            _context(client, "page-after", mail_thread=selector, after_event_id=cursor),
+        )
+
+
+@pytest.mark.parametrize("terminal", [False, True])
+@pytest.mark.parametrize("stage", ["source_fetch", "audit_publication"])
+@pytest.mark.parametrize("change", ["revoked", "policy", "revision"])
+def test_member_mail_rechecks_current_authority_after_awaits(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    terminal: bool,
+    stage: str,
+    change: str,
+) -> None:
+    import httpx
+
+    from adminme.products.openclaw import service_work
+
+    instance = tmp_path / "mail-await-authority"
+    instance.mkdir()
+    with TestClient(create_application(_settings(instance))) as client:
+        runtime = client.app.state.runtime
+        selector, ids, grant = _mail_page_fixture(client)
+        cursor = ids[-1] if terminal else ids[0]
+        policy = _mail_policy(client, cursor, monkeypatch, "typed_facts")
+        changed = False
+        original_get = runtime.event_log.get
+        original_audit = service_work._audit
+
+        async def change_authority() -> None:
+            nonlocal changed
+            if changed:
+                return
+            changed = True
+            if change == "revoked":
+                # Publish a real authenticated revocation while the original read awaits.
+                async with httpx.AsyncClient(
+                    transport=httpx.ASGITransport(app=client.app),
+                    base_url="http://fixture",
+                ) as http:
+                    revoked = await http.request(
+                        "DELETE",
+                        f"/api/member/v1/cos/delegations/{grant}",
+                        headers=A_HEADERS,
+                        json={"request_id": "await-revoke", "reason": "fixture"},
+                    )
+                    assert revoked.status_code == 200, revoked.text
+            elif change == "policy":
+                policy["context_mode"] = "metadata_only"
+            else:
+                old = await original_get(cursor)
+                revised = EventEnvelope(
+                    event_at_ms=1,
+                    tenant_id=runtime.settings.instance.tenant_id,
+                    type="messaging.received",
+                    schema_version=4,
+                    occurred_at=EventEnvelope.now_utc_iso(),
+                    source_adapter=old["source_adapter"],
+                    source_account_id=old["source_account_id"],
+                    owner_scope=old["owner_scope"],
+                    visibility_scope=old["visibility_scope"],
+                    sensitivity=old["sensitivity"],
+                    payload={**old["payload"], "subject": "Changed during read"},
+                )
+                new_id = await runtime.events.write(revised)
+                await runtime.wait_for_projection("interactions", new_id)
+
+        async def read_then_change(event_id: str) -> Any:
+            event = await original_get(event_id)
+            if event_id == cursor:
+                await change_authority()
+            return event
+
+        async def audit_then_change(*args: Any, **kwargs: Any) -> None:
+            await original_audit(*args, **kwargs)
+            await change_authority()
+
+        if stage == "source_fetch":
+            monkeypatch.setattr(runtime.event_log, "get", read_then_change)
+        else:
+            monkeypatch.setattr(service_work, "_audit", audit_then_change)
+        _assert_mail_denied(
+            client,
+            _context(client, "await-read", mail_thread=selector, after_event_id=cursor),
+        )
+        assert changed is True
+
+
+@pytest.mark.parametrize(
+    "invalid",
+    [
+        {"member_id": ""},
+        {"provider_account_id": " account"},
+        {"thread_id": "x\n"},
+        {"workspace": "default"},
+        {"native_message_id": ""},
+        {"provider": "gmail"},
+    ],
+)
+def test_member_mail_rejects_malformed_selector(
+    tmp_path: Path, invalid: dict[str, Any]
+) -> None:
+    instance = tmp_path / "mail-malformed"
+    instance.mkdir()
+    with TestClient(create_application(_settings(instance))) as client:
+        selector, _, _ = _mail_page_fixture(client)
+        response = _context(
+            client, "malformed-selector", mail_thread={**selector, **invalid}
+        )
+        assert response.status_code == 422, response.text
+        assert client.app.state.runtime.fixture_adapter.delivered == []
+
+
+def test_member_mail_rejects_mixed_selection_and_unknown_cursor(tmp_path: Path) -> None:
+    instance = tmp_path / "mail-mixed"
+    instance.mkdir()
+    with TestClient(create_application(_settings(instance))) as client:
+        selector, ids, _ = _mail_page_fixture(client)
+        for other in (
+            {"source_kind": "calendar"},
+            {"source_event_ids": ids},
+            {"after_event_id": ""},
+        ):
+            response = _context(
+                client, "mixed-selection", mail_thread=selector, **other
+            )
+            assert response.status_code == 422, response.text
+        _assert_mail_denied(
+            client,
+            _context(
+                client,
+                "unknown-cursor",
+                mail_thread=selector,
+                after_event_id="not-an-event",
+            ),
+        )
+        assert client.app.state.runtime.fixture_adapter.delivered == []
 
 
 def test_member_calendar_tool_reads_current_imported_calendar_without_internal_session(

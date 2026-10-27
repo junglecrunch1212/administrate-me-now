@@ -2134,6 +2134,7 @@ def test_service_work_scope_rejects_missing_or_broader_runtime_edits(
     [
         "adminme/events/schemas/openclaw.py",
         "adminme/products/openclaw/service_context.py",
+        "adminme/products/openclaw/service_mail_context.py",
         "adminme/projections/tasks/handlers.py",
         "adminme/projections/tasks/schema.sql",
         "adminme/projections/calendars/handlers.py",
@@ -2192,6 +2193,7 @@ def test_service_work_runtime_normalization_is_limited_to_direct_router_statemen
         "adminme/lib/session.py",
         "adminme/runtime/unreviewed.py",
         "adminme/products/openclaw/routers.py",
+        "adminme/products/openclaw/service_mail_context_other.py",
         "bootstrap/upgrade.py",
         "bootstrap/backup_restore.py",
         "bootstrap/versions.json",

@@ -313,9 +313,17 @@ describe("native OpenClaw contract fixture", () => {
     const context = { agentId: serviceAgentId(), sessionKey: serviceSessionKey(process.env.ADMINME_OPENCLAW_SHARED_SECRET!) };
     const runtime = fakeApi();
     const tool = runtime.tools.get("administrateme_service_context")!(context) as AnyAgentTool;
-    const schema = tool.parameters as { additionalProperties?: boolean; properties: Record<string, { anyOf?: Array<{ const: string }> }> };
+    const schema = tool.parameters as { additionalProperties?: boolean; properties: Record<string, { anyOf?: Array<{ const: string }>; additionalProperties?: boolean; properties?: Record<string, { anyOf?: Array<{ const: string }> }> }> };
     expect(schema.additionalProperties).toBe(false);
     expect(schema.properties.source_kind?.anyOf?.map((entry) => entry.const)).toEqual(["calendar", "google_tasks", "apple_reminders"]);
+    expect(Object.keys(schema.properties.mail_thread?.properties ?? {})).toEqual([
+      "member_id", "provider_account_id", "workspace", "thread_id", "native_message_id",
+    ]);
+    expect(schema.properties.mail_thread?.additionalProperties).toBe(false);
+    expect(schema.properties.mail_thread?.properties?.workspace?.anyOf?.map((entry) => entry.const)).toEqual(["personal", "work"]);
+    expect(tool.description).toContain("authorized member and CoS calendars");
+    expect(tool.description).toContain("CoS-owned items only");
+    expect(tool.description).toContain("does not diagnose missing content permission");
     for (const source_kind of ["calendar", "google_tasks", "apple_reminders"]) {
       fetchMock.mockClear();
       await tool.execute(`selected-${source_kind}`, { source_kind, limit: 3, after_event_id: "fixture-context-cursor" });
@@ -324,6 +332,15 @@ describe("native OpenClaw contract fixture", () => {
       } });
       expect(String(fetchMock.mock.calls[0]?.[0])).toMatch(/\/api\/openclaw\/v1\/tools\/service-context$/);
     }
+    fetchMock.mockClear();
+    const mail_thread = {
+      member_id: "member-fixture-a", provider_account_id: "gmail-account-fixture-a",
+      workspace: "personal", thread_id: "gmail-thread-fixture-a",
+    };
+    await tool.execute("selected-mail-thread", { mail_thread, limit: 2 });
+    expect(requestBody(fetchMock)).toMatchObject({ mail_thread, limit: 2, provenance: {
+      actor_id: COS_SERVICE_PRINCIPAL_ID, agent_id: context.agentId, session_key: context.sessionKey,
+    } });
   });
 
   it("cancels ordinary CoS replies and blocks generic delivery tool bypasses", async () => {

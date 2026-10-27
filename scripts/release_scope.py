@@ -751,6 +751,7 @@ COS_SERVICE_WORK_COMPONENT_PATHS = frozenset(
         "adminme/projections/lists/schema.sql",
         "adminme/products/openclaw/service_work.py",
         "adminme/products/openclaw/service_context.py",
+        "adminme/products/openclaw/service_mail_context.py",
         "adminme/operating_agreements.py",
         "adminme/capability_catalog.py",
         "adminme/openclaw_topology.py",
