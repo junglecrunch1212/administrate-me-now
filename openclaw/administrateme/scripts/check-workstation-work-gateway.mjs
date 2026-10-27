@@ -45,6 +45,7 @@ const member = "member-conversation-fixture";
 const memberAgent = `adminme-${createHash("sha256").update(member).digest("hex").slice(0, 16)}`;
 let failureBackend, fixtures;
 let gateway, socket, logs = "";
+const nativeWorkers = [], browserHooks = [];
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 async function until(check, label, timeout = 150_000) {
   const deadline = Date.now() + timeout;
@@ -75,7 +76,18 @@ Object.assign(env, { OPENCLAW_STATE_DIR: state, OPENCLAW_CONFIG_PATH: configPath
 if (browserProbe) delete env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER;
 async function start() {
   gateway = spawn(process.execPath, [path.join(source, "openclaw.mjs"), "gateway", "run"], { cwd: directory, env, stdio: ["ignore", "pipe", "pipe"] });
-  for (const stream of [gateway.stdout, gateway.stderr]) stream.on("data", (chunk) => { logs = (logs + chunk).slice(-50_000); });
+  for (const stream of [gateway.stdout, gateway.stderr]) {
+    let buffered = "";
+    stream.on("data", (chunk) => {
+      logs = (logs + chunk).slice(-50_000); buffered += chunk;
+      const lines = buffered.split("\n"); buffered = lines.pop().slice(-50_000);
+      for (const line of lines) for (const [marker, target] of [["SYNTHETIC_WORKER_STATE ", nativeWorkers], ["SYNTHETIC_BROWSER_BOUNDARY ", browserHooks]]) {
+        const offset = line.indexOf(marker); if (offset < 0) continue;
+        try { target.push(JSON.parse(line.slice(offset + marker.length))); if (target.length > 200) target.shift(); }
+        catch { /* Incomplete metadata cannot establish a native run or capture. */ }
+      }
+    });
+  }
   await until(async () => {
     try { return (await fetch(`http://127.0.0.1:${port}/readyz`, { signal: AbortSignal.timeout(1_000) })).ok; } catch { return false; }
   }, "normal Gateway readiness");
@@ -121,23 +133,55 @@ try {
         on(name, callback, options) {
           api.on(name, name === "before_tool_call" ? async (event, context) => {
             const result = await callback(event, context);
-            if (event.toolName === "browser") console.error("SYNTHETIC_BROWSER_ADMISSION", JSON.stringify({ toolCallId: event.toolCallId, contextCallId: context.toolCallId, admitted: !!result?.params, blocked: result?.block === true }));
+            if (event.toolName === "browser") console.error("SYNTHETIC_BROWSER_BOUNDARY", JSON.stringify({ phase: "before_tool_call", at_ms: Date.now(), session_digest: typeof context.sessionKey === "string" ? fixtureHash("sha256").update(context.sessionKey).digest("hex") : undefined, toolCallId: event.toolCallId, contextCallId: context.toolCallId, admitted: !!result?.params, blocked: result?.block === true }));
             return result;
           } : callback, options);
         },
         registerAgentToolResultMiddleware(callback, options) {
           api.registerAgentToolResultMiddleware(async (event, context) => {
-            console.error("SYNTHETIC_BROWSER_NATIVE_RESULT", JSON.stringify({ toolCallId: event.toolCallId, isError: event.isError, result: event.result }).slice(0, 10000));
+            console.error("SYNTHETIC_BROWSER_BOUNDARY", JSON.stringify({ phase: "native_result", at_ms: Date.now(), session_digest: typeof context.sessionKey === "string" ? fixtureHash("sha256").update(context.sessionKey).digest("hex") : undefined, toolCallId: event.toolCallId, isError: event.isError }));
             return callback(event, context);
           }, options);
         }
       }, runtime);`);
+      // Observe the actual native API response without replacing the run, wait,
+      // signing code, arguments, return value or exception. This gives the
+      // fixture its real worker run ID when the parent's bounded wait expires.
+      input = `import { createHash as fixtureHash } from "node:crypto";\n${input}`;
+      const workRegistration = "registerWorkstationWorkTool(api, runtime);";
+      assert.equal(input.split(workRegistration).length, 2);
+      input = input.replace(workRegistration, `registerWorkstationWorkTool({ ...api, runtime: { ...api.runtime, subagent: {
+        ...api.runtime.subagent,
+        async run(params) {
+          const session_digest = fixtureHash("sha256").update(params.sessionKey).digest("hex");
+          console.error("SYNTHETIC_WORKER_STATE", JSON.stringify({ phase: "requested", session_digest, at_ms: Date.now() }));
+          try {
+            const result = await api.runtime.subagent.run(params);
+            console.error("SYNTHETIC_WORKER_STATE", JSON.stringify({ phase: "admitted", session_digest, run_id: result.runId, at_ms: Date.now() }));
+            return result;
+          } catch (error) {
+            console.error("SYNTHETIC_WORKER_STATE", JSON.stringify({ phase: "run_threw", session_digest, at_ms: Date.now() }));
+            throw error;
+          }
+        },
+        async waitForRun(params) {
+          console.error("SYNTHETIC_WORKER_STATE", JSON.stringify({ phase: "wait_started", run_id: params.runId, at_ms: Date.now() }));
+          try {
+            const result = await api.runtime.subagent.waitForRun(params);
+            console.error("SYNTHETIC_WORKER_STATE", JSON.stringify({ phase: "wait_returned", run_id: params.runId, status: result.status, at_ms: Date.now() }));
+            return result;
+          } catch (error) {
+            console.error("SYNTHETIC_WORKER_STATE", JSON.stringify({ phase: "wait_threw", run_id: params.runId, at_ms: Date.now() }));
+            throw error;
+          }
+        }
+      } } }, runtime);`);
     }
     if (failureBackend && name === "index.ts") {
       // This test-only hook selects a deliberately unusable synthetic model.
       // The pinned runner must reject its context window before model/browser
       // contact. Native subagent.run, waitForRun and failure signing stay exact.
-      const registration = "registerWorkstationWorkTool(api, runtime);";
+      const registration = "registerWorkstationWorkHooks(api, runtime);";
       assert.equal(input.split(registration).length, 2);
       input = input.replace(registration, `${registration}
         api.on("before_model_resolve", (event, context) => {
@@ -200,7 +244,7 @@ try {
     };
     const fields = ["source_event_id", "session_key", "agent_id", "actor_id", "channel_id", "account_id", "message_id", "thread_id", "text_sha256", "nonce"];
     const signed = { ...ticket, signature: createHmac("sha256", secret).update(["cos-conversation-input-v1", ...fields.map((key) => ticket[key]), String(ticket.expires_at_ms)].join("|")).digest("hex") };
-    conversations.set(ticket.source_event_id, ticket);
+    conversations.set(ticket.source_event_id, { ...ticket, member_id: member });
     await assert.rejects(request("administrateme.conversation.prepare", { ...signed, signature: "0".repeat(64) }), /input unavailable/);
     assert.equal((await request("administrateme.conversation.prepare", signed)).accepted, true);
     await assert.rejects(request("administrateme.conversation.prepare", signed), /input unavailable/);
@@ -211,8 +255,48 @@ try {
       if (result.status === "error") throw new Error(`Native ${channel} input failed`);
       return result.status === "ok";
     }, `native ${channel} conversation`);
-    await until(() => fixtures.conversationReceipts.some((row) => row.source === ticket.source_event_id), `${channel} source-bound tool receipt`);
+    await until(() => fixtures.parentResults.some((row) => row.source === ticket.source_event_id), `${channel} truthful initial tool result`);
     if (channel === "gmail") await until(() => fixtures.conversationReplies.some((row) => row.source === ticket.source_event_id), "signed native Gmail final reply");
+    if (browser) {
+      // A parent wait timeout is not failure or success. Keep the real worker
+      // alive, require its actual native terminal and capture, then use the
+      // existing fresh-member status path rather than invoking browser again.
+      const worker = fixtures.workerState(ticket.source_event_id); assert(worker);
+      const run = await until(() => nativeWorkers.find((entry) => entry.phase === "admitted" && entry.session_digest === worker.session_digest), `${channel} actual native worker run ID`);
+      assert.equal(nativeWorkers.filter((entry) => entry.phase === "admitted" && entry.session_digest === worker.session_digest).length, 1);
+      await until(async () => {
+        if (fixtures.errors.length) throw new Error(fixtures.errors.join("; "));
+        const result = await request("agent.wait", { runId: run.run_id, timeoutMs: 1000 });
+        if (["ok", "error"].includes(result.status)) nativeWorkers.push({ phase: "observed_terminal", run_id: run.run_id, status: result.status, at_ms: Date.now() });
+        assert.notEqual(result.status, "error", `${channel} browser worker actually failed`);
+        return result.status === "ok";
+      }, `${channel} native browser terminal (pending is not a pass)`);
+      assert.equal(fixtures.workerState(ticket.source_event_id)?.verified, true, "native completion must include verified capture");
+      const initial = fixtures.parentResults.find((entry) => entry.source === ticket.source_event_id);
+      assert(["verified", "pending_or_unknown"].includes(initial.status));
+      assert.equal(initial.browser_request_event_id, `browser:${ticket.source_event_id}`);
+      const beforeWorkers = fixtures.workerCount, beforeRuns = nativeWorkers.filter((entry) => entry.phase === "admitted").length;
+      const beforeReads = await browser.privateBodyReadCount();
+      const statusText = `${channel === "gmail" ? "PROBE_WORKSTATION_GMAIL" : "PROBE_WORKSTATION_PORTAL"} PROBE_RETAINED_BROWSER_STATUS: Check the retained result for ${initial.browser_request_event_id}.`;
+      const statusTicket = { ...ticket, source_event_id: `fixture-${channel}-status-instruction`, message_id: `fixture-${channel}-status-message`,
+        text_sha256: createHash("sha256").update(statusText).digest("hex"), nonce: randomBytes(16).toString("hex"), expires_at_ms: Date.now() + 9000 };
+      const signedStatus = { ...statusTicket, signature: createHmac("sha256", secret).update(["cos-conversation-input-v1", ...fields.map((key) => statusTicket[key]), String(statusTicket.expires_at_ms)].join("|")).digest("hex") };
+      conversations.set(statusTicket.source_event_id, { ...statusTicket, member_id: member, original_source: ticket.source_event_id });
+      assert.equal((await request("administrateme.conversation.prepare", signedStatus)).accepted, true);
+      const statusRun = await request("chat.send", { sessionKey: session, message: statusText, deliver: false, idempotencyKey: `native-${channel}-status` });
+      await until(async () => {
+        if (fixtures.errors.length) throw new Error(fixtures.errors.join("; "));
+        const result = await request("agent.wait", { runId: statusRun.runId, timeoutMs: 1000 });
+        assert.notEqual(result.status, "error", "fresh authenticated status failed"); return result.status === "ok";
+      }, `${channel} retained browser status`);
+      assert.equal(fixtures.statusReads.filter((entry) => entry.input_source === statusTicket.source_event_id).length, 1);
+      if (channel === "gmail") await until(() => fixtures.conversationReplies.some((row) => row.source === statusTicket.source_event_id), "signed native Gmail retained-status reply");
+      assert.equal(fixtures.workerCount, beforeWorkers, "status must not admit another worker");
+      assert.equal(nativeWorkers.filter((entry) => entry.phase === "admitted").length, beforeRuns, "status must not start another native run");
+      assert.equal(await browser.privateBodyReadCount(), beforeReads, "status must not read the browser again");
+      console.log(`Native ${channel} initial=${initial.status}; actual worker terminal/capture and same-member retained status: PASS`);
+    }
+    await until(() => fixtures.conversationReceipts.some((row) => row.source === ticket.source_event_id), `${channel} verified source-bound receipt`);
   }
   if (failureBackend) {
     // Obtain the real encrypted source's short-lived signed input only after
@@ -221,7 +305,7 @@ try {
     failureBackend.sourceId = prepared.source_event_id;
     sessions.add(prepared.ticket.session_key);
     assert.equal((await request("administrateme.conversation.prepare", prepared.ticket)).accepted, true);
-    const beforeReads = browser.bodyReads.length;
+    const beforeReads = await browser.privateBodyReadCount();
     const admitted = await request("chat.send", { sessionKey: prepared.ticket.session_key, message: prepared.text, deliver: false, idempotencyKey: "native-worker-terminal-error" });
     await until(async () => {
       if (fixtures.errors.length) throw new Error(fixtures.errors.join("; "));
@@ -241,11 +325,12 @@ try {
     assert.equal(retained.failure_receipt_event_id, terminal.failure_receipt_event_id);
     assert.equal(retained.provider_effect_count, 0);
     assert.equal(fixtures.failureModelCalls, 0);
-    assert.equal(browser.bodyReads.length, beforeReads, "Failed worker must not read a browser body");
+    assert.equal(await browser.privateBodyReadCount(), beforeReads, "Failed worker must not read a browser body");
     console.log("Actual native pre-provider error -> production wait/sign -> encrypted failure -> same-admission replay/status: PASS");
   }
   assert.deepEqual(fixtures.conversationReceipts.map((row) => row.channel), ["administrateme-portal", "gmail"]);
-  assert.deepEqual(fixtures.conversationReplies.map((row) => row.channel), ["gmail"]);
+  assert.deepEqual(fixtures.conversationReplies.map((row) => row.channel), browser ? ["gmail", "gmail"] : ["gmail"]);
+  if (browser) assert.deepEqual(fixtures.statusReads.map((row) => row.channel), ["administrateme-portal", "gmail"]);
   assert.deepEqual(fixtures.errors, []);
   if (browser) {
     assert.deepEqual(browser.errors, []);
@@ -270,6 +355,20 @@ try {
   let redacted = logs.replaceAll(token, "[redacted]").replaceAll(secret, "[redacted]");
   for (const session of sessions) redacted = redacted.replaceAll(session, "[service-session]");
   console.error(redacted);
-  if (browser) console.error("SYNTHETIC_BROWSER_TRANSPORT", JSON.stringify({ errors: browser.errors, bodyReadCount: browser.bodyReads.length }));
+  if (browser) {
+    const stages = ["administrateme-portal", "gmail"].map((channel) => {
+      const worker = fixtures?.workerState(`fixture-${channel}-instruction`);
+      const run = nativeWorkers.find((entry) => entry.phase === "admitted" && entry.session_digest === worker?.session_digest);
+      const terminal = run && nativeWorkers.findLast((entry) => entry.run_id === run.run_id && ["ok", "error"].includes(entry.status));
+      const boundary = browserHooks.filter((entry) => worker && entry.session_digest === worker.session_digest);
+      return { channel, stage: worker?.verified ? "terminal_capture" : terminal?.status === "error" ? "terminal_error"
+        : terminal?.status === "ok" ? "terminal_without_capture" : !run ? "never_started"
+        : boundary.some((entry) => entry.phase === "native_result") ? "native_tool_returned_without_capture"
+        : boundary.some((entry) => entry.phase === "before_tool_call" && entry.admitted) ? "native_tool_still_running" : "native_worker_running" };
+    });
+    // Bound diagnostic CDP read; inability to read is unknown, never zero.
+    const bodyReadCount = await Promise.race([browser.privateBodyReadCount().catch(() => "unknown"), pause(1000).then(() => "unknown")]);
+    console.error("SYNTHETIC_BROWSER_TRANSPORT", JSON.stringify({ stages, nativeWorkers, browserHooks, errors: browser.errors, commands: browser.commands, bodyReadCount }));
+  }
   throw error;
 } finally { await stop(); await fixtures?.close(); await failureBackend?.close(); await browser?.close(); await rm(directory, { recursive: true, force: true }); }

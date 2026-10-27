@@ -63,7 +63,7 @@ export async function startNativeFailureBackend({ repository, directory, secret 
 
 export async function startWorkstationWorkFixtures({ secret, agent, sessions, validSession, conversations, browser, failureBackend }) {
   assert.equal(process.env.GITHUB_ACTIONS, "true");
-  const errors = [], conversationReceipts = [], conversationReplies = [], nativeFailures = [], workers = new Map();
+  const errors = [], conversationReceipts = [], conversationReplies = [], parentResults = [], statusReads = [], nativeFailures = [], workers = new Map();
   let failureModelCalls = 0;
   const sha = (text) => createHash("sha256").update(text).digest("hex");
   const serviceSession = (nonce) => {
@@ -76,13 +76,17 @@ export async function startWorkstationWorkFixtures({ secret, agent, sessions, va
       const body = JSON.parse(Buffer.concat(chunks).toString() || "{}");
       if (req.url === "/v1/responses") {
         const input = Array.isArray(body.input) ? body.input : [];
-        const encoded = JSON.stringify(input);
+        // A fresh status turn shares the authentic conversation's history. Do
+        // not count the original turn's calls as this turn's tool results.
+        const turn = input.slice(Math.max(0, input.findLastIndex((entry) => entry.role === "user")));
+        const encoded = JSON.stringify(turn);
         const channel = encoded.includes("PROBE_WORKSTATION_GMAIL") ? "gmail" : "administrateme-portal";
         const source = `fixture-${channel}-instruction`;
         const names = body.tools.map((tool) => tool.name ?? tool.function?.name);
         const worker = !names.includes("administrateme_workstation_work");
-        const outputs = input.filter((entry) => entry.type === "function_call_output").length;
+        const outputs = turn.filter((entry) => entry.type === "function_call_output").length;
         const nativeFailure = encoded.includes("PROBE_WORKSTATION_NATIVE_FAILURE");
+        const browserStatus = encoded.includes("PROBE_RETAINED_BROWSER_STATUS");
         if (worker && nativeFailure) { failureModelCalls++; throw new Error("Pre-provider worker failure reached the model endpoint"); }
         let step;
         if (worker) {
@@ -95,10 +99,15 @@ export async function startWorkstationWorkFixtures({ secret, agent, sessions, va
           ];
           step = plan[outputs];
           if (outputs > 0) {
-            const denied = input.filter((entry) => entry.type === "function_call_output" && entry.call_id === `call_worker_${channel}_0`);
+            const denied = turn.filter((entry) => entry.type === "function_call_output" && entry.call_id === `call_worker_${channel}_0`);
             assert.equal(denied.length, 1, "first service-context call must have exactly one result");
             assert.equal(typeof denied[0].output, "string");
             assert(denied[0].output.includes("A current authenticated browser request, verified CoS tab and source policy are required."), "unrelated dynamic call did not receive the public browser denial");
+            if (outputs === 1) {
+              const bound = [...workers.values()].find((entry) => entry.source === source);
+              assert(bound);
+              assert.equal(await browser.privateBodyReadCount(), bound.beforeReads, "denied dynamic call must not read the page body");
+            }
           }
           if (outputs > 1) assert(encoded.includes("Review the garage plan on Friday."), "browser model did not receive the retained native observation");
         } else if (worker) {
@@ -111,9 +120,13 @@ export async function startWorkstationWorkFixtures({ secret, agent, sessions, va
           if (outputs > 0) assert(encoded.includes("This worker run may only create and read back its exact private scratchpad."), "unrelated dynamic call was not denied");
         } else {
           const text = nativeFailure ? "PROBE_WORKSTATION_NATIVE_FAILURE: Read the authorized CoS planning page." : channel === "gmail" ? "PROBE_WORKSTATION_GMAIL: draft a private garage plan." : "PROBE_WORKSTATION_PORTAL: draft a private garage plan.";
-          step = outputs === 0 ? ["administrateme_workstation_work", { action: browser ? "browser_read" : "create", instruction: text }] : undefined;
+          step = outputs === 0 ? ["administrateme_workstation_work", browserStatus
+            ? { action: "browser_status", browser_request_event_id: `browser:${source}` }
+            : { action: browser ? "browser_read" : "create", instruction: text }] : undefined;
           if (outputs > 0) {
-            const status = nativeFailure ? "failed" : "verified";
+            const status = nativeFailure ? "failed" : browser && !browserStatus
+              ? parentResults.findLast((entry) => entry.source === source)?.status : "verified";
+            assert(["verified", "pending_or_unknown", "failed"].includes(status));
             assert(encoded.includes(`\\"status\\":\\"${status}\\"`) || encoded.includes(`"status":"${status}"`), "parent resumed without the actual worker terminal result");
             if (nativeFailure) assert(encoded.includes("native_worker_failed"));
           }
@@ -121,14 +134,17 @@ export async function startWorkstationWorkFixtures({ secret, agent, sessions, va
         const events = [];
         if (step) {
           const [name, args] = step;
-          const item = { type: "function_call", id: `fc_${worker ? "worker" : "member"}_${channel}_${outputs}`, call_id: `call_${worker ? "worker" : "member"}_${channel}_${outputs}`, name, arguments: "" };
+          const item = { type: "function_call", id: `fc_${worker ? "worker" : browserStatus ? "status" : "member"}_${channel}_${outputs}`, call_id: `call_${worker ? "worker" : browserStatus ? "status" : "member"}_${channel}_${outputs}`, name, arguments: "" };
           events.push({ type: "response.output_item.added", item });
           events.push({ type: "response.function_call_arguments.delta", delta: JSON.stringify(args) });
           events.push({ type: "response.output_item.done", item: { ...item, arguments: JSON.stringify(args) } });
         } else {
           const item = { type: "message", id: `msg_${worker ? "worker" : "member"}_${channel}`, role: "assistant", content: [], status: "in_progress" };
           events.push({ type: "response.output_item.added", item });
-          const text = nativeFailure ? "The native worker failed; no browser read was completed." : "Your private scratchpad was created and read back.";
+          const pending = !worker && browser && !browserStatus && parentResults.findLast((entry) => entry.source === source)?.status === "pending_or_unknown";
+          const text = nativeFailure ? "The native worker failed; no browser read was completed." : pending
+            ? "The browser read is still pending; its retained request can be checked without another read."
+            : browser ? "The authorized browser observation was retained and verified." : "Your private scratchpad was created and read back.";
           events.push({ type: "response.output_text.delta", delta: text });
           events.push({ type: "response.output_item.done", item: { ...item, status: "completed", content: [{ type: "output_text", text, annotations: [] }] } });
         }
@@ -153,20 +169,43 @@ export async function startWorkstationWorkFixtures({ secret, agent, sessions, va
         assert(input); assert.equal(p.actor_id, input.actor_id); assert.equal(p.channel_id, input.channel_id);
         assert.equal(p.session_key, input.session_key); assert.equal(p.message_id, input.message_id);
         assert.equal(sha(body.instruction), input.text_sha256);
+        assert(![...workers.values()].some((entry) => entry.source === input.source_event_id), "one request must not admit a second worker");
         const session = serviceSession(body.run_nonce); sessions.add(session);
-        workers.set(session, { source: input.source_event_id, channel: input.channel_id, input, created: false, read: false, verified: false });
+        workers.set(session, { source: input.source_event_id, channel: input.channel_id, input, created: false, read: false, verified: false,
+          ...(browser ? { beforeReads: await browser.privateBodyReadCount() } : {}) });
         result = { status: "ready", mode: "create", worker_request_id: body.run_nonce, follow_up_source_id: input.source_event_id,
           artifact_request_id: `note:${input.source_event_id}`, artifact_task_id: `task:${input.source_event_id}`, instruction: body.instruction, ...(browser ? { browser_request_event_id: `browser:${input.source_event_id}`, resource_id: browser.resource.resource_id, resource: browser.resource } : {}) };
       } else if (req.url === `${base}/result`) {
-        const worker = workers.get(serviceSession(body.run_nonce)); assert(worker?.verified);
+        const worker = workers.get(serviceSession(body.run_nonce)); assert(worker);
         assert.equal(body.follow_up_source_id, worker.source); assert.equal(body.provenance.actor_id, worker.input.actor_id);
-        conversationReceipts.push({ source: worker.source, channel: worker.channel });
-        result = { status: "verified", content: browser ? worker.excerpt : "Sort, label, store.", provider_effect_count: 0 };
+        assert.equal(body.source_message_event_id, worker.source);
+        assert.equal(body.provenance.session_key, worker.input.session_key);
+        assert.equal(body.provenance.message_id, worker.input.message_id);
+        if (!browser) assert(worker.verified);
+        if (worker.verified) conversationReceipts.push({ source: worker.source, channel: worker.channel });
+        result = { status: worker.verified ? "verified" : "pending_or_unknown", ...(worker.verified
+          ? { content: browser ? worker.excerpt : "Sort, label, store." } : { reason: "no_terminal_read_receipt" }),
+          ...(browser ? { browser_request_event_id: `browser:${worker.source}` } : {}), provider_effect_count: 0 };
+        parentResults.push({ source: worker.source, ...result });
+      } else if (browser && req.url === `${base}/retained`) {
+        const input = conversations.get(body.source_message_event_id), p = body.provenance;
+        assert(input?.original_source, "status requires a fresh authenticated instruction");
+        assert.equal(p.actor_id, input.actor_id); assert.equal(p.channel_id, input.channel_id);
+        assert.equal(p.session_key, input.session_key); assert.equal(p.message_id, input.message_id);
+        assert.equal(body.browser_request_event_id, `browser:${input.original_source}`);
+        const worker = [...workers.values()].find((entry) => entry.source === input.original_source);
+        assert(worker?.verified, "status must not turn pending into verified");
+        assert.equal(input.member_id, worker.input.member_id);
+        assert.notEqual(input.source_event_id, worker.source);
+        statusReads.push({ source: worker.source, channel: worker.channel, input_source: input.source_event_id });
+        if (!conversationReceipts.some((entry) => entry.source === worker.source)) conversationReceipts.push({ source: worker.source, channel: worker.channel });
+        result = { status: "verified", browser_request_event_id: body.browser_request_event_id, excerpt: worker.excerpt, provider_effect_count: 0 };
       } else if (req.url === "/api/openclaw/v1/conversations/reply") {
         const input = conversations.get(body.source_message_event_id); assert(input?.channel_id === "gmail");
         assert.equal(body.provenance.thread_id, input.thread_id);
         assert.equal(body.host_decision.body_sha256, sha(body.body));
-        assert(conversationReceipts.some((row) => row.source === input.source_event_id));
+        assert(input.original_source ? statusReads.some((row) => row.input_source === input.source_event_id)
+          : parentResults.some((row) => row.source === input.source_event_id));
         conversationReplies.push({ source: input.source_event_id, channel: "gmail" }); result = { status: "sent" };
       } else if (req.url.startsWith(base) || req.url.includes("/service-private-")) {
         const p = body.provenance; assert.equal(p.actor_id, "service-principal:chief-of-staff");
@@ -179,6 +218,8 @@ export async function startWorkstationWorkFixtures({ secret, agent, sessions, va
           assert.equal(body.native_target_id, browser.targetId); assert.equal(body.url, browser.url);
           assert.deepEqual(body.actual_identity, browser.resource.expected_identity);
           assert(body.excerpt.includes("Review the garage plan on Friday.")); assert.equal(body.truncated, false);
+          assert(!worker.verified, "native capture must happen once");
+          assert(await browser.privateBodyReadCount() > worker.beforeReads, "verified capture must follow a real page body read");
           worker.verified = true; worker.excerpt = body.excerpt;
           result = { status: "verified", observation_event_id: `observed:${worker.source}`, excerpt: body.excerpt, provider_effect_count: 0 };
         } else if (browser && req.url === `${base}/failure`) throw new Error("Actual native browser result failed its installed guard");
@@ -198,7 +239,13 @@ export async function startWorkstationWorkFixtures({ secret, agent, sessions, va
     } catch (error) { errors.push(error.message); res.writeHead(500); res.end("Synthetic workstation assertion failed"); }
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  return { baseUrl: `http://127.0.0.1:${server.address().port}`, errors, conversationReceipts, conversationReplies, nativeFailures,
+  return { baseUrl: `http://127.0.0.1:${server.address().port}`, errors, conversationReceipts, conversationReplies, parentResults, statusReads, nativeFailures,
+    workerState(source) {
+      const rows = [...workers].filter(([, value]) => value.source === source);
+      assert(rows.length <= 1);
+      return rows.length ? { source, session_digest: sha(rows[0][0]), verified: rows[0][1].verified } : undefined;
+    },
+    get workerCount() { return workers.size; },
     get failureModelCalls() { return failureModelCalls; },
     close: () => new Promise((resolve) => server.close(resolve)) };
 }
