@@ -2048,6 +2048,8 @@ def test_runtime_coordinate_change_requires_explicit_approval(
 def test_same_version_openclaw_repair_requires_declared_successor(
     tmp_path: Path,
 ) -> None:
+    # This exercises the original same-version repair, not the later schema upgrade.
+    retained_source = "36d09a3e32bdef565c434800886cca4e036d4635"
     active = tmp_path / "active"
     candidate = tmp_path / "candidate"
     (active / "bootstrap").mkdir(parents=True)
@@ -2059,9 +2061,14 @@ def test_same_version_openclaw_repair_requires_declared_successor(
     ):
         destination = candidate / source.relative_to(REPO_ROOT)
         destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.write_bytes(source.read_bytes())
+        destination.write_bytes(
+            subprocess.check_output(
+                ["git", "show", f"{retained_source}:{source.relative_to(REPO_ROOT)}"],
+                cwd=REPO_ROOT,
+            )
+        )
     active_versions = json.loads(
-        (REPO_ROOT / "bootstrap" / "versions.json").read_text("utf-8")
+        (candidate / "bootstrap" / "versions.json").read_text("utf-8")
     )
     old_commit = active_versions["openclaw"].pop("supersedes_commit")
     active_versions["openclaw"]["commit"] = old_commit
@@ -2071,6 +2078,8 @@ def test_same_version_openclaw_repair_requires_declared_successor(
 
     result = validate_candidate(candidate, active_root=active)
 
+    assert result["native_state_migration"] is False
+    assert result["native_state_recovery_required"] is False
     assert result["openclaw_migration"] == {
         "from": old_commit,
         "to": "ce67ffb70e83e5ebb56ea02e814e577153f84f61",
@@ -2852,7 +2861,14 @@ def test_failed_explicit_rollback_reports_unhealthy_current_release_restart(
     pointer.write_text(json.dumps(current), encoding="utf-8")
     pointer.chmod(0o600)
 
-    monkeypatch.setattr("bootstrap.upgrade.validate_candidate", lambda *_a, **_k: {})
+    monkeypatch.setattr(
+        "bootstrap.upgrade.validate_candidate",
+        lambda *_a, **_k: {
+            "compatible": True,
+            "native_state_migration": False,
+            "native_state_recovery_required": False,
+        },
+    )
     monkeypatch.setattr(
         "bootstrap.upgrade.reconcile_administrateme_plugin",
         lambda *_a, **_k: {"ok": True},
@@ -2933,7 +2949,14 @@ def test_legacy_rollback_requires_quiescence_and_current_capacity_before_selecti
     pointer.write_text(json.dumps(current), encoding="utf-8")
     pointer.chmod(0o600)
     original_pointer = pointer.read_bytes()
-    monkeypatch.setattr("bootstrap.upgrade.validate_candidate", lambda *_a, **_k: {})
+    monkeypatch.setattr(
+        "bootstrap.upgrade.validate_candidate",
+        lambda *_a, **_k: {
+            "compatible": True,
+            "native_state_migration": False,
+            "native_state_recovery_required": False,
+        },
+    )
     pins = []
     plugins = []
     agents = []

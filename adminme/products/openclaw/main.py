@@ -116,8 +116,8 @@ class Provenance(BaseModel):
     thread_id: str | None = Field(default=None, max_length=300)
     correlation_id: str = Field(min_length=1, max_length=300)
     call_kind: Literal["tool", "dashboard", "slash_command", "standing_order", "bridge"]
-    openclaw_version: Literal["2026.7.2"]
-    openclaw_commit: Literal["ce67ffb70e83e5ebb56ea02e814e577153f84f61"]
+    openclaw_version: Literal["2026.10.8"]
+    openclaw_commit: Literal["dc2523e5a5c7a309517fd7fa834add938231d526"]
 
     def audit_payload(self, *, member_id: str) -> dict[str, Any]:
         portal = self.channel_id == "administrateme-portal"
@@ -222,8 +222,8 @@ class ApprovalResolutionRequest(BaseModel):
     issued_at_ms: int = Field(ge=0)
     expires_at_ms: int = Field(ge=0)
     decision: Literal["allow-once"]
-    openclaw_version: Literal["2026.7.2"]
-    openclaw_commit: Literal["ce67ffb70e83e5ebb56ea02e814e577153f84f61"]
+    openclaw_version: Literal["2026.10.8"]
+    openclaw_commit: Literal["dc2523e5a5c7a309517fd7fa834add938231d526"]
     signature: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 

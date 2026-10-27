@@ -4753,15 +4753,9 @@ class UpgradeManager:
                 cwd=cwd,
                 env=environment,
                 start_new_session=True,
-                **(
-                    {
-                        "stdin": subprocess.DEVNULL,
-                        "stdout": subprocess.DEVNULL,
-                        "stderr": subprocess.DEVNULL,
-                    }
-                    if private_output
-                    else {}
-                ),
+                stdin=subprocess.DEVNULL if private_output else None,
+                stdout=subprocess.DEVNULL if private_output else None,
+                stderr=subprocess.DEVNULL if private_output else None,
                 pass_fds=(
                     activity_descriptor,
                     ready_write,

@@ -18,9 +18,10 @@ from collections.abc import AsyncIterator
 from dataclasses import asdict, dataclass
 from typing import Any, Protocol
 
+from adminme.openclaw_contract import OPENCLAW_VERSION
+
 
 OPENCLAW_PROTOCOL_VERSION = 4
-OPENCLAW_VERSION = "2026.7.2"
 
 _DIRECTIVE_RE = re.compile(r"\[\[(?:reply_to_[^\]]+|audio_as_voice)\]\]", re.I)
 _TOOL_XML_RE = re.compile(

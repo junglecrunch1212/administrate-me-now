@@ -397,7 +397,11 @@ def test_explicit_rollback_reports_preserved_readiness_gaps(tmp_path, monkeypatc
     )
     monkeypatch.setattr(
         "bootstrap.upgrade.validate_candidate",
-        lambda *_args, **_kwargs: {"compatible": True},
+        lambda *_args, **_kwargs: {
+            "compatible": True,
+            "native_state_migration": False,
+            "native_state_recovery_required": False,
+        },
     )
     monkeypatch.setattr(manager, "_install_reviewed_openclaw", lambda _release: None)
     for name in (

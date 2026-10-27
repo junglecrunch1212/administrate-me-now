@@ -1037,7 +1037,11 @@ def test_rollback_refuses_ambiguous_committed_history_before_selector_work(
     selector_events: list[str] = []
     monkeypatch.setattr(
         "bootstrap.upgrade.validate_candidate",
-        lambda *_args, **_kwargs: {"compatible": True},
+        lambda *_args, **_kwargs: {
+            "compatible": True,
+            "native_state_migration": False,
+            "native_state_recovery_required": False,
+        },
     )
     monkeypatch.setattr(manager, "_validate_runtime", lambda _release, **_kwargs: None)
     monkeypatch.setattr(
@@ -1100,7 +1104,11 @@ def test_explicit_rollback_restores_predecessor_settings_control_bytes(
     )
     monkeypatch.setattr(
         "bootstrap.upgrade.validate_candidate",
-        lambda *_args, **_kwargs: {"compatible": True},
+        lambda *_args, **_kwargs: {
+            "compatible": True,
+            "native_state_migration": False,
+            "native_state_recovery_required": False,
+        },
     )
     monkeypatch.setattr(manager, "_validate_runtime", lambda _release, **_kwargs: None)
     monkeypatch.setattr(manager, "_install_reviewed_openclaw", lambda _release: None)
@@ -1228,7 +1236,11 @@ def test_transactional_activation_orders_fresh_rehearsal_before_selectors(
     )
     monkeypatch.setattr(
         "bootstrap.upgrade.validate_candidate",
-        lambda *_args, **_kwargs: {"compatible": True},
+        lambda *_args, **_kwargs: {
+            "compatible": True,
+            "native_state_migration": False,
+            "native_state_recovery_required": False,
+        },
     )
     monkeypatch.setattr(manager, "_preflight_keychain_access", lambda _candidate: None)
     monkeypatch.setattr(

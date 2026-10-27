@@ -59,7 +59,9 @@ def _fixture(tmp_path, monkeypatch):
     release = paths.app_dir / "releases" / OLD
     atomic_write(
         release / "bootstrap/versions.json",
-        (ROOT / "bootstrap/versions.json").read_bytes(),
+        subprocess.check_output(
+            ["git", "show", f"{OLD}:bootstrap/versions.json"], cwd=ROOT
+        ),
     )
     monkeypatch.setattr(
         tooling, "verify_retained_tooling_source", lambda *_args: CURRENT

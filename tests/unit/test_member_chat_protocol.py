@@ -239,3 +239,63 @@ async def test_unconfirmed_subscription_never_starts_or_aborts_a_member_run(
         ]
     assert [row["method"] for row in socket.sent] == ["sessions.messages.subscribe"]
     assert socket.closed
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("server_version", ["2026.10.8", "2026.7.2", "9999.1.1"])
+async def test_gateway_handshake_accepts_only_the_exact_current_native_version(
+    monkeypatch: pytest.MonkeyPatch, server_version: str
+) -> None:
+    from websockets.asyncio import client
+
+    class HandshakeSocket(_PinnedGatewaySocket):
+        async def recv(self) -> str:
+            if not self.sent:
+                return json.dumps(
+                    {
+                        "type": "event",
+                        "event": "connect.challenge",
+                        "payload": {"nonce": "fixture-challenge"},
+                    }
+                )
+            return json.dumps(
+                {
+                    "type": "res",
+                    "id": self.sent[-1]["id"],
+                    "ok": True,
+                    "payload": {
+                        "server": {"version": server_version},
+                        "features": {
+                            "methods": [
+                                "chat.send",
+                                "chat.abort",
+                                "chat.history",
+                                "sessions.messages.subscribe",
+                            ]
+                        },
+                    },
+                }
+            )
+
+    socket = HandshakeSocket("member-session")
+
+    async def connect(*_args: Any, **_kwargs: Any) -> HandshakeSocket:
+        return socket
+
+    monkeypatch.setattr(client, "connect", connect)
+    transport = OpenClawGatewayChatTransport(
+        url="ws://127.0.0.1:18789", token="fixture-token"
+    )
+    if server_version == "2026.10.8":
+        assert await transport._connect() is socket
+        assert not socket.closed
+        await socket.close()
+    else:
+        with pytest.raises(MemberChatError, match="version is incompatible") as failure:
+            await transport._connect()
+        assert failure.value.code == "incompatible"
+        assert socket.closed
+    assert [request["method"] for request in socket.sent] == ["connect"]
+    params = socket.sent[0]["params"]
+    assert params["minProtocol"] == params["maxProtocol"] == 4
+    assert params["scopes"] == ["operator.read", "operator.write"]

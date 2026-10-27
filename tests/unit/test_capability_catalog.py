@@ -16,9 +16,9 @@ def test_catalog_is_manifest_derived_versioned_and_non_speculative() -> None:
     catalog = load_catalog(REPO_ROOT)
     assert catalog["catalog_version"] == CATALOG_VERSION
     assert catalog["tenant_neutral"] is True
-    assert catalog["openclaw_plugin"]["host_version"] == "2026.7.2"
+    assert catalog["openclaw_plugin"]["host_version"] == "2026.10.8"
     assert catalog["openclaw_plugin"]["host_commit"] == (
-        "ce67ffb70e83e5ebb56ea02e814e577153f84f61"
+        "dc2523e5a5c7a309517fd7fa834add938231d526"
     )
     assert catalog["openclaw_plugin"]["newer_documentation_is_proof"] is False
     assert "llm-task" in catalog["openclaw_plugin"]["verified_surfaces"]
