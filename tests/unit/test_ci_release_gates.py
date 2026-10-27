@@ -4331,3 +4331,19 @@ def test_retained_tooling_scope_keeps_complete_proof_and_closed_diagnostic_input
     )
     script = (ROOT / UPDATER_CHECK_SCRIPT).read_text()
     assert "doctor_tooling" in script and "test_restore_settlement.py" in script
+
+
+@pytest.mark.parametrize("changed", [False, True])
+def test_updater_retains_protected_calendar_history_without_exempting_edits(
+    repository, changed
+):
+    path, _ = repository
+    historical = (ROOT / UPDATER_EMAIL_ATTRIBUTION).read_text()
+    _commit(path, UPDATER_EMAIL_ATTRIBUTION, historical)
+    base, head = _updater_candidate(path)
+    if changed:
+        head = _commit(
+            path, UPDATER_EMAIL_ATTRIBUTION, historical + "\nUNRELATED = True\n"
+        )
+    proof = select_scope(path, _event(base, head), checkout_sha=head)
+    assert proof["scope"] == ("system-wide" if changed else "updater-delivery")

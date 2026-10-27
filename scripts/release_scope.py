@@ -335,6 +335,10 @@ COS_REMINDER_REQUIRED_PATHS = frozenset(
 )
 UPDATER_SOURCE_ASSURANCE = "adminme/source_assurance.py"
 UPDATER_EMAIL_ATTRIBUTION = "adminme/historical_attribution.py"
+# Protected 62174 history includes Calendar; freeze those unchanged bytes.
+UPDATER_RETAINED_HISTORY_SHA256 = (
+    "e754dca9d45c0e6f09d2b62d65b6088f5ad94515086a9468e0b39e24cdcd5afd"
+)
 UPDATER_EFFECT_CONTEXT_COMPONENT_PATHS = frozenset(
     {"bootstrap/effect_context_repair.py"}
 )
@@ -1449,11 +1453,15 @@ def _updater_dependency_fingerprint(
     if historical is not None:
         if historical.mode != "100644":
             return None
-        normalized_history = _updater_email_attribution(
-            _git(repository, "show", f"{revision}:{historical.path}")
-        )
+        history_source = _git(repository, "show", f"{revision}:{historical.path}")
+        normalized_history = _updater_email_attribution(history_source)
         if normalized_history is None:
-            return None
+            raw_digest = hashlib.sha256(history_source.encode()).hexdigest()
+            if raw_digest != UPDATER_RETAINED_HISTORY_SHA256:
+                return None
+            # This is an unchanged dependency, not new permission to edit the
+            # Calendar/history authority that the updater worker does not own.
+            normalized_history = raw_digest
         shared_identities.append((historical.path, historical.mode, normalized_history))
     allowed = (
         {UPDATER_EMAIL_ATTRIBUTION}
