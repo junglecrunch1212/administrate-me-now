@@ -46,6 +46,8 @@ from scripts.release_scope import (
     UPDATER_COMPONENT_PATHS,
     UPDATER_TOOLING_SHARED,
     UPDATER_TOOLING_PATHS,
+    UPDATER_PYTHON_BOUNDARY_SOURCE,
+    UPDATER_PYTHON_BOUNDARY_TEST,
     UPDATER_TEST_PATHS,
     UPDATER_REQUIRED_PATHS,
     UPDATER_CHECK_SCRIPT,
@@ -3888,6 +3890,15 @@ def _effect_context_shared_sources() -> dict[str, tuple[str, str]]:
     sources = {UPDATER_SOURCE_ASSURANCE: _email_audit_sources()}
     for path, replacements in UPDATER_EFFECT_CONTEXT_SHARED_REPLACEMENTS.items():
         after = (ROOT / path).read_text()
+        if path == "bootstrap/update.sh":
+            after = (
+                _git(
+                    ROOT,
+                    "show",
+                    "80e8bd76f077f8b8f752a8251a158d46f259e6eb:bootstrap/update.sh",
+                )
+                + "\n"
+            )
         before = after
         for old, new in replacements:
             assert before.count(new) == 1
@@ -4347,3 +4358,72 @@ def test_updater_retains_protected_calendar_history_without_exempting_edits(
         )
     proof = select_scope(path, _event(base, head), checkout_sha=head)
     assert proof["scope"] == ("system-wide" if changed else "updater-delivery")
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "none",
+        "source_neighbor",
+        "launcher_neighbor",
+        "source_only",
+        "launcher_only",
+        "missing_test",
+        "source_mode",
+        "test_mode",
+        "runtime",
+        "uncommitted",
+    ],
+)
+def test_node_only_credential_scope_is_closed_and_has_existing_process_proof(
+    repository, mutation
+):
+    path, _ = repository
+    _effect_context_candidate(path)
+    old = "80e8bd76f077f8b8f752a8251a158d46f259e6eb"
+    for name in (UPDATER_PYTHON_BOUNDARY_SOURCE, "bootstrap/update.sh"):
+        _commit(path, name, _git(ROOT, "show", f"{old}:{name}") + "\n")
+    (path / "bootstrap/update.sh").chmod(0o755)
+    _commit(path, UPDATER_PYTHON_BOUNDARY_TEST, "# Existing phase5 coverage\n")
+    _git(path, "add", "--all")
+    _git(path, "commit", "--allow-empty", "-m", "Exact Node-only predecessor")
+    base = _git(path, "rev-parse", "HEAD")
+    if mutation != "launcher_only":
+        _commit(
+            path,
+            UPDATER_PYTHON_BOUNDARY_SOURCE,
+            (ROOT / UPDATER_PYTHON_BOUNDARY_SOURCE).read_text(),
+        )
+    if mutation != "source_only":
+        _commit(path, "bootstrap/update.sh", (ROOT / "bootstrap/update.sh").read_text())
+    _commit(path, UPDATER_PYTHON_BOUNDARY_TEST, "# Changed phase5 process coverage\n")
+    if mutation in {"source_neighbor", "launcher_neighbor"}:
+        name = (
+            UPDATER_PYTHON_BOUNDARY_SOURCE
+            if mutation == "source_neighbor"
+            else "bootstrap/update.sh"
+        )
+        _commit(path, name, (path / name).read_text() + "\nUNRELATED_CHANGE = True\n")
+    elif mutation == "missing_test":
+        _git(path, "rm", UPDATER_PYTHON_BOUNDARY_TEST)
+        _git(path, "commit", "-m", "Missing required process coverage")
+    elif mutation in {"source_mode", "test_mode"}:
+        name = (
+            UPDATER_PYTHON_BOUNDARY_SOURCE
+            if mutation == "source_mode"
+            else UPDATER_PYTHON_BOUNDARY_TEST
+        )
+        (path / name).chmod(0o755)
+        _git(path, "add", name)
+        _git(path, "commit", "-m", "Unexpected executable mode")
+    elif mutation == "runtime":
+        _commit(path, "bootstrap/versions.json", "{}\n")
+    head = _git(path, "rev-parse", "HEAD")
+    if mutation == "uncommitted":
+        (path / UPDATER_PYTHON_BOUNDARY_SOURCE).write_text("UNCOMMITTED = True\n")
+    proof = select_scope(path, _event(base, head), checkout_sha=head)
+    assert proof["scope"] == (
+        "updater-delivery" if mutation in {"none", "uncommitted"} else "system-wide"
+    )
+    script = (ROOT / UPDATER_CHECK_SCRIPT).read_text()
+    assert UPDATER_PYTHON_BOUNDARY_TEST in script
