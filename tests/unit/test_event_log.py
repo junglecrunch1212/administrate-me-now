@@ -1068,13 +1068,8 @@ async def test_cancelled_queued_close_runs_after_cancelled_operation(
 
     def tracked_submit(func, *args, **kwargs):
         submitted = original_submit(func, *args, **kwargs)
-        if getattr(func, "__self__", None) is log._conn and (
-            getattr(func, "__name__", None) == "close"
-        ):
-            close_submitted.set()
+        close_submitted.set()
         return submitted
-
-    monkeypatch.setattr(log._executor, "submit", tracked_submit)  # noqa: SLF001
 
     def held_operation() -> None:
         operation_started.set()
@@ -1089,6 +1084,10 @@ async def test_cancelled_queued_close_runs_after_cancelled_operation(
     with pytest.raises(asyncio.CancelledError):
         await operation
 
+    # The held operation has already been submitted and its caller cancelled.
+    # Observe the next writer submission itself, whether close is queued as a
+    # bound native method or a closure that first drains the metadata reader.
+    monkeypatch.setattr(log._executor, "submit", tracked_submit)  # noqa: SLF001
     closing = asyncio.create_task(log.close())
     await asyncio.wait_for(close_submitted.wait(), timeout=2)
     timer = threading.Timer(0.05, release_operation.set)
