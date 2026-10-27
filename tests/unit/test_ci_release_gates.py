@@ -4560,6 +4560,7 @@ def test_node_only_credential_scope_is_closed_and_has_existing_process_proof(
         "workflow_only",
         "workflow_runner",
         "workflow_bottle",
+        "workflow_python_installed_guard",
         "workflow_version_guard",
         "workflow_public_artifact",
         "workflow_timeout",
@@ -4616,6 +4617,10 @@ def test_full_runtime_preflight_scope_requires_closed_production_composition(
     if mutation == "workflow_mode":
         (path / UPDATER_RUNTIME_PREFLIGHT_WORKFLOW).chmod(0o755)
     workflow_mutations = {
+        "workflow_python_installed_guard": (
+            'and ([.installed[] | select(.version == "3.14.7")] | length == 1)',
+            'and .versions.stable == "3.14.7"',
+        ),
         "workflow_runner": ("    runs-on: macos-15\n", "    runs-on: macos-14\n"),
         "workflow_bottle": (
             "be87643df531ff6128e5a0f6aaf51a4a164406729ebed8a7cc56c8cb9cf0210f",

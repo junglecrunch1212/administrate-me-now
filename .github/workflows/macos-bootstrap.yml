@@ -120,7 +120,7 @@ jobs:
           test "$(/opt/homebrew/opt/python@3.14/bin/python3.14 --version)" = 'Python 3.14.7'
           # Preserve the image's reviewed Python; refreshing Node must not upgrade it.
           HOMEBREW_NO_AUTO_UPDATE=1 brew info --json=v2 python@3.14 > "$RUNNER_TEMP/updater-python-formula.json"
-          jq -e '.formulae | length == 1 and (.[0] | .name == "python@3.14" and .versions.stable == "3.14.7" and .bottle.stable.files.arm64_sequoia.sha256 != null)' "$RUNNER_TEMP/updater-python-formula.json"
+          jq -e '.formulae | length == 1 and (.[0] | .name == "python@3.14" and ([.installed[] | select(.version == "3.14.7")] | length == 1))' "$RUNNER_TEMP/updater-python-formula.json"
           HOMEBREW_NO_AUTO_UPDATE=1 brew pin python@3.14
           brew update
           HOMEBREW_NO_AUTO_UPDATE=1 brew info --json=v2 node@24 > "$RUNNER_TEMP/updater-node-formula.json"
