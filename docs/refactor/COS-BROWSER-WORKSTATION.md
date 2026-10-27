@@ -244,3 +244,57 @@ or deletes private overlays. A release-local layout marker keeps legacy compilat
 and exact byte recovery compatible. Dynamic-tool policy describes neither Codex's
 native shell/files nor ambient MCP/apps connectors; those require separate runtime
 and operation evidence and actual account verification before private operations.
+
+### Closed Computer Use configuration transition
+
+`bootstrap.workstation_browser` also supports `--component computer-use` on
+`prepare-native-patch` and `reconcile-readiness`. This is an independently
+qualified configuration transition, not a browser permission or an enabled
+Computer Use claim. It adds only the reviewed `plugins.entries.codex.config.computerUse`
+object for the official ChatGPT-bundled `computer-use` plugin; the exact object
+and marketplace path are in `COMPUTER_USE_CONFIG`. The Codex plugin must already
+be enabled with `codexPlugins.enabled=false`. Sandbox, ambient apps, identities,
+routes, provider/reply/reminder grants and every other parsed field stay exact.
+An existing different Computer Use object is refused rather than overwritten.
+The raw config must already have the pinned `meta.lastTouchedVersion` and
+`meta.migrations.modelPolicyAllowlist=true`; otherwise preparation refuses before
+writing a patch, because the native writer would also migrate unrelated fields.
+The hosted native proof calls the actual pinned `config.patch` writer and reads
+back both legacy-list and keyed-agent fixtures through `config.get` and raw bytes,
+including the null inverse. It does not start an agent, install a plugin or use UI.
+
+After protected qualification and the actual owner approval, the sole operator:
+
+1. Uses a fresh private native `config.get` snapshot and the selected Python with
+   the clean protected controller to run `prepare-native-patch --component
+   computer-use --instance-root <root> --snapshot <snapshot> --output <patch>
+   --previous-config-output <prior-raw>`. Preparation writes only those two new
+   private artifacts. It requires the current complete readiness binding.
+2. Applies that exact artifact through authenticated native `config.patch` and
+   captures a fresh `config.get`. Unrelated raw-to-resolved normalization is not
+   accepted; inspect and resolve any such mismatch through its own supported
+   transition before proceeding.
+3. Runs `reconcile-readiness --component computer-use` with the same arguments
+   documented above for browser reconciliation: exact prior raw bytes, approved
+   patch and hash, actual authorization reference and current native snapshot.
+   Reviews the returned plan, then repeats with `--plan-sha256 <digest> --apply`.
+   This preserves all original readiness evidence, timestamps and effect cutoffs.
+4. Uses the official `/codex computer-use install` / `status` route in the
+   intended authenticated agent context. Installation and any actual macOS
+   consent are separate effects. Verify the selected desktop runtime version,
+   the actual CoS identity and effective tool operation before claiming usable
+   access. This transition does not establish locked-screen usability.
+
+For reversal, prepare a fresh patch with `--component computer-use --disable`
+and follow the same apply/reconcile sequence. Disable removes only that exact
+reviewed object using native merge-patch `null`; it does not erase installed
+plugin files, OS consent or task history. Never substitute an arbitrary object,
+change readiness digests manually, or replay physical attestations.
+
+Both components share the existing `browser-readiness-transition.json` pending
+coordinate and deployment lock. Computer Use has a separate
+`computer-use-readiness-reconciliation-v1` hash domain and receipt name. After
+an interruption, repeat only the exact original component, inputs, authorization
+reference and plan hash. A wrong component or changed evidence is rejected;
+normal deployment snapshot checks remain blocked until exact recovery completes.
+The browser default and existing browser receipts retain their prior contract.

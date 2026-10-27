@@ -29,6 +29,9 @@ from scripts.release_scope import (
     COS_SERVICE_WORK_HISTORY,
     COS_SERVICE_WORK_COMPONENT_PATHS,
     COS_SERVICE_WORK_REQUIRED_PATHS,
+    COMPUTER_USE_CONTROLLER,
+    COMPUTER_USE_CONTROLLER_SHA256,
+    COMPUTER_USE_NATIVE_PATHS,
     _service_work_application,
     _service_work_member,
     _service_work_ingest,
@@ -2333,7 +2336,8 @@ def test_service_work_worker_requires_affected_identity_replay_and_recovery_chec
         "poetry run pyright",
         "scripts/verify_invariants.sh",
         "scripts/generate_event_lifecycle_catalog.py --check",
-        "openclaw-source-install.sh --service-work",
+        "scripts.release_scope native-selector",
+        'openclaw-source-install.sh "$native_selector"',
     ):
         assert required in script
     for unrelated in (
@@ -4398,10 +4402,13 @@ def test_system_native_proof_composes_browser_and_approval_with_one_install() ->
     )
     native = (ROOT / "scripts/acceptance/openclaw-source-install.sh").read_text()
     assert native.count('"$REPOSITORY_ROOT/bootstrap/install-openclaw-source.sh"') == 1
-    assert '""|--service-work|--self-reminder|--service-work-and-approval) ;;' in native
+    assert (
+        '""|--service-work|--self-reminder|--service-work-and-approval|--native-account-policy) ;;'
+        in native
+    )
     assert '*) echo "Unsupported native proof selector" >&2; exit 2 ;;' in native
     service_guard = 'if [[ "${1:-}" == --service-work || "${1:-}" == --service-work-and-approval ]]; then'
-    approval_guard = 'if [[ "${1:-}" != --service-work ]]; then'
+    approval_guard = 'if [[ "${1:-}" != --service-work && "${1:-}" != --native-account-policy ]]; then'
     service_group, approval_group = native.split(service_guard, 1)[1].split(
         approval_guard, 1
     )
@@ -4420,6 +4427,220 @@ def test_system_native_proof_composes_browser_and_approval_with_one_install() ->
     assert "check-cos-approval-gateway.mjs" in approval_group
     assert 'if [[ "${1:-}" == --self-reminder ]]; then' in approval_group
     assert "check-self-reminder-gateway.mjs" in approval_group
+
+
+def _computer_use_candidate(path: Path) -> tuple[str, str]:
+    _service_work_candidate(path)
+    # Immutable protected predecessor; never reconstruct it by reversing a
+    # mutable candidate or by dropping unrelated controller statements.
+    before = (
+        _git(
+            ROOT,
+            "show",
+            "e78acbc98324db1dd88ca4e002d05eb017ecbc14:" + COMPUTER_USE_CONTROLLER,
+        )
+        + "\n"
+    )
+    after = (ROOT / COMPUTER_USE_CONTROLLER).read_text()
+    assert tuple(hashlib.sha256(s.encode()).hexdigest() for s in (before, after)) == (
+        COMPUTER_USE_CONTROLLER_SHA256
+    )
+    base = _commit(path, COMPUTER_USE_CONTROLLER, before)
+    _commit(path, COMPUTER_USE_CONTROLLER, after)
+    for relative in sorted(COMPUTER_USE_NATIVE_PATHS - {COMPUTER_USE_CONTROLLER}):
+        _commit(path, relative, "# Reviewed account-policy proof and carrier\n")
+    return base, _git(path, "rev-parse", "HEAD")
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "none",
+        "uncommitted",
+        "controller-neighbor",
+        "browser-proof",
+        "provider",
+        "pin",
+        "workflow",
+        "mode",
+        "deleted",
+    ],
+)
+def test_computer_use_native_selector_is_bound_to_exact_immutable_change(
+    repository: tuple[Path, str], mutation: str
+) -> None:
+    path, _ = repository
+    base, head = _computer_use_candidate(path)
+    target = path / COMPUTER_USE_CONTROLLER
+    if mutation == "uncommitted":
+        target.write_text("UNCOMMITTED = True\n")
+    elif mutation == "controller-neighbor":
+        head = _commit(
+            path, COMPUTER_USE_CONTROLLER, target.read_text() + "OTHER = 1\n"
+        )
+    elif mutation in {"browser-proof", "provider", "pin", "workflow"}:
+        relative = {
+            "browser-proof": "openclaw/administrateme/scripts/check-workstation-work-gateway.mjs",
+            "provider": "adminme/products/openclaw/requested_email.py",
+            "pin": "bootstrap/versions.json",
+            "workflow": ".github/workflows/macos-bootstrap.yml",
+        }[mutation]
+        head = _commit(path, relative, "CHANGED = True\n")
+    elif mutation in {"mode", "deleted"}:
+        if mutation == "mode":
+            target.chmod(0o755)
+        else:
+            target.unlink()
+        _git(path, "add", "-A")
+        _git(path, "commit", "-m", "Invalid controller identity")
+        head = _git(path, "rev-parse", "HEAD")
+    event = _event(base, head)
+    event["service_work_native_selector"] = "--native-account-policy"
+    proof = select_scope(path, event, checkout_sha=head)
+    assert proof["service_work_native_selector"] == (
+        "--native-account-policy"
+        if mutation in {"none", "uncommitted"}
+        else "--service-work"
+    )
+    if mutation == "none":
+        assert proof["scope"] == "cos-service-work"
+        assert required_workers(proof["scope"], "macos") == (
+            "release-scope",
+            "cos-service-work-validation",
+        )
+
+
+@pytest.mark.parametrize("drift", [False, True])
+def test_computer_use_native_selector_checks_regenerated_merge_bytes(
+    repository: tuple[Path, str], drift: bool
+) -> None:
+    path, _ = repository
+    base, head = _computer_use_candidate(path)
+    _git(path, "checkout", "--detach", base)
+    advanced = _commit(path, PROSE, "# Independent protected documentation\n")
+    _git(path, "checkout", "--detach", head)
+    _git(path, "merge", "--no-edit", advanced)
+    head = _git(path, "rev-parse", "HEAD")
+    if drift:
+        with (path / COMPUTER_USE_CONTROLLER).open("a") as stream:
+            stream.write("UNREVIEWED = True\n")
+        _git(path, "add", "-A")
+    merge = _git(
+        path,
+        "commit-tree",
+        _git(path, "write-tree"),
+        "-p",
+        advanced,
+        "-p",
+        head,
+        "-m",
+        "Regenerated exact-parent merge",
+    )
+    _git(path, "checkout", "--detach", merge)
+    if drift:
+        with pytest.raises(ValueError, match="exact event base and head"):
+            select_scope(path, _event(base, head), checkout_sha=merge)
+    else:
+        assert (
+            select_scope(path, _event(base, head), checkout_sha=merge)[
+                "service_work_native_selector"
+            ]
+            == "--native-account-policy"
+        )
+
+
+@pytest.mark.parametrize(
+    ("selector", "expected"),
+    [
+        ("--native-account-policy", ["check-cos-native-account-policy.mjs"]),
+        (
+            "--service-work",
+            [
+                "check-workstation-codex-policy.mjs",
+                "check-cos-native-account-policy.mjs",
+                "check-cos-imessage-text.mjs",
+                "check-service-work-gateway.mjs",
+                "check-workstation-work-gateway.mjs",
+            ],
+        ),
+        ("", ["check-cos-imessage-text.mjs", "check-cos-approval-gateway.mjs"]),
+        (
+            "--self-reminder",
+            [
+                "check-cos-imessage-text.mjs",
+                "check-cos-approval-gateway.mjs",
+                "check-self-reminder-gateway.mjs",
+            ],
+        ),
+        (
+            "--service-work-and-approval",
+            [
+                "check-workstation-codex-policy.mjs",
+                "check-cos-native-account-policy.mjs",
+                "check-cos-imessage-text.mjs",
+                "check-service-work-gateway.mjs",
+                "check-workstation-work-gateway.mjs",
+                "check-cos-approval-gateway.mjs",
+            ],
+        ),
+    ],
+)
+def test_native_selector_dispatch_keeps_exact_proof_groups(
+    tmp_path: Path, selector: str, expected: list[str]
+) -> None:
+    native = (ROOT / COS_SERVICE_WORK_NATIVE_INSTALL).read_text()
+    dispatch = native.split('if [[ "${1:-}" == --native-account-policy ]]; then', 1)[1]
+    dispatch = 'if [[ "${1:-}" == --native-account-policy ]]; then' + dispatch
+    dispatch = dispatch.split('\nPYTHONPATH="$REPOSITORY_ROOT" "$python_bin"', 1)[0]
+    script = tmp_path / "dispatch.sh"
+    script.write_text(
+        "set -euo pipefail\nREPOSITORY_ROOT=/synthetic\nTEST_ROOT=/synthetic\nopenclaw_commit=pin\n"
+        'node() { printf "%s\\n" "$*"; }\n'
+        'poetry() { if [[ "$1" == env ]]; then printf /synthetic/poetry-python; else shift; "$@"; fi; }\n'
+        + dispatch
+    )
+    result = subprocess.run(
+        ["bash", str(script), selector],
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=True,
+    )
+    calls = result.stdout.splitlines()
+    assert [Path(call.split()[0]).name for call in calls] == [
+        name
+        for name in expected
+        for _ in range(3 if name == "check-workstation-work-gateway.mjs" else 1)
+    ]
+    for call in calls:
+        if Path(call.split()[0]).name == "check-cos-native-account-policy.mjs":
+            assert call.endswith(" /synthetic/poetry-python")
+    assert sum(" --browser" in call for call in calls) == (
+        2 if selector in {"--service-work", "--service-work-and-approval"} else 0
+    )
+
+
+@pytest.mark.parametrize(
+    "arguments", [["--unknown"], ["--native-account-policy", "extra"]]
+)
+def test_native_selector_rejects_unknown_or_extra_arguments(
+    tmp_path: Path, arguments: list[str]
+) -> None:
+    script = tmp_path / "selector.sh"
+    script.write_text(
+        (ROOT / COS_SERVICE_WORK_NATIVE_INSTALL)
+        .read_text()
+        .split('[[ "$(uname -s)"', 1)[0]
+    )
+    result = subprocess.run(
+        ["bash", str(script), *arguments],
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+    assert result.returncode == 2
+    assert not result.stdout
 
 
 @pytest.mark.parametrize(
