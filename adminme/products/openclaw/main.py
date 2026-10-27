@@ -12,6 +12,7 @@ import asyncio
 import hashlib
 import hmac
 import json
+import re
 import time
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Literal, cast
@@ -1120,7 +1121,7 @@ async def inspect_state(body: ContextRequest, request: Request) -> dict[str, Any
     result = {
         "what_now": core._what_now(runtime, session),
         "triage": await core.triage(request, session),
-        "commitments": await core.active_commitments(request, session),
+        "commitments": core._active_commitments(runtime, session),
         "cos_work": service_work_for_context(
             runtime.projections.connection("tasks"),
             session,
@@ -4231,7 +4232,13 @@ async def dashboard_today(body: ContextRequest, request: Request) -> dict[str, A
     events: list[dict[str, Any]] = []
     async for event in runtime.event_log.read_since(limit=250):
         events.append(event)
-    visible = filter_rows(session, events)[-20:]
+    from adminme.finance import release
+
+    visible = [
+        event
+        for event in filter_rows(session, events)
+        if release.ADVISOR_AVAILABLE or not release.owner_books_activity(event["type"])
+    ][-20:]
     result = {
         # Preserve the pinned dashboard's established What Now key while
         # publishing the same complete deterministic Day Brief as the portal.
@@ -4337,3 +4344,1005 @@ async def dashboard_surface(
 
 
 __all__ = ["router"]
+
+
+class FinanceStatusRequest(ContextRequest):
+    include_bindings: bool = False
+    capability_id: str | None = Field(
+        default=None, pattern=r"^F(0[1-9]|[12][0-9]|3[01])$"
+    )
+    book_id: str | None = Field(default=None, min_length=1, max_length=120)
+    include_bundle: bool = False
+    compound_id: str | None = Field(
+        default=None, min_length=1, max_length=80, pattern=r"^[a-z_]+$"
+    )
+
+    calculator_id: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9_]{0,79}$")
+    schema_path: str | None = Field(default=None, max_length=170)
+
+    @model_validator(mode="after")
+    def one_finance_question(self) -> "FinanceStatusRequest":
+        if self.include_bindings and (
+            self.capability_id
+            or self.compound_id
+            or self.calculator_id
+            or self.include_bundle
+            or self.schema_path
+        ):
+            raise ValueError("choose_one_finance_question")
+        if self.compound_id and (self.capability_id or self.include_bundle):
+            raise ValueError("choose_one_finance_question")
+        if self.calculator_id and (
+            self.compound_id
+            or self.capability_id
+            or self.include_bundle
+            or self.book_id
+        ):
+            raise ValueError("choose_one_finance_question")
+        if self.schema_path and not self.calculator_id:
+            raise ValueError("calculator_required_for_schema")
+        return self
+
+
+class FinanceQueryRequest(ContextRequest):
+    book_id: str = Field(min_length=1, max_length=120)
+    publication_id: str = Field(min_length=1, max_length=120)
+    report_id: Literal[
+        "actuals",
+        "cash",
+        "budget",
+        "observed_net",
+        "balance_sheet",
+        "scenarios",
+        "quality",
+        "cash_projection",
+        "cash_events",
+        "owner_choices",
+        "planning_contexts",
+        "planning_projection",
+        "planning_events",
+        "planning_gaps",
+        "planning_issues",
+        "planning_evidence",
+        "planning_sources",
+        "planning_engines",
+    ]
+    scenario_id: Literal["current", "expected", "chosen"] | None = None
+    horizon_days: Literal[7, 30, 90, 180, 365] | None = None
+    projection_id: str | None = Field(default=None, min_length=1, max_length=80)
+    context_id: str | None = Field(default=None, min_length=1, max_length=80)
+    measure: Literal["BANK_CASH_SUBSET", "CASH_EQUIVALENT_FUNDING_NOT_BANK"] | None = (
+        None
+    )
+    income_basis: (
+        Literal["OBSERVED_BASE_ONLY", "PLAN_MODELED_NET_FUNDING_NOT_PAYROLL"] | None
+    ) = None
+    opening_basis: (
+        Literal["verified_unrestricted", "observed_cash_hypothetical"] | None
+    ) = None
+    plan_case_id: str | None = Field(default=None, min_length=1, max_length=80)
+    currency: str | None = Field(default=None, pattern=r"^[A-Z]{3}$")
+    timezone: str | None = Field(default=None, min_length=1, max_length=64)
+    as_of_date: str | None = Field(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$")
+    reference_id: str | None = Field(default=None, min_length=1, max_length=80)
+    gap_group_id: str | None = Field(default=None, min_length=1, max_length=80)
+    projection_view: Literal["balances", "signals", "dates", "provenance", "clocks"] = (
+        "balances"
+    )
+    offset: int = Field(default=0, ge=0, le=10000)
+    limit: int = Field(default=1, ge=1, le=100)
+
+
+class FinanceBindingsRequest(ContextRequest):
+    book_id: str | None = Field(default=None, min_length=1, max_length=120)
+    household_party_id: str | None = Field(default=None, min_length=1, max_length=120)
+
+
+class FinanceCalculateRequest(ContextRequest):
+    calculator_id: str = Field(
+        min_length=1, max_length=80, pattern=r"^[a-z][a-z0-9_]*$"
+    )
+    version: str = Field(min_length=1, max_length=40)
+    inputs: dict[str, Any]
+    hypothetical: Literal[True]
+
+
+class FinanceJobRequest(ContextRequest):
+    operation: Literal["submit", "status", "cancel"]
+    job_id: str | None = Field(default=None, min_length=1, max_length=120)
+
+
+def _finance_admission_identity(
+    request: Request, provenance: Provenance
+) -> tuple[str, str]:
+    """Authenticate/map without projection work before the low-priority lane.
+
+    This only assigns a bounded waiting slot. Full current domain authority is
+    resolved inside the lane before reads and again before delivery.
+    """
+    _authenticate(request)
+    runtime = _runtime(request)
+    key = (
+        f"{provenance.channel_id}|{provenance.account_id or '-'}|{provenance.actor_id}"
+    )
+    member = runtime.settings.openclaw_actor_identities.get(key)
+    if (
+        member is None
+        and provenance.channel_id == "administrateme-portal"
+        and provenance.account_id == "member-portal"
+    ):
+        member = runtime.resolve_member_chat_actor(provenance.actor_id)
+    if not member:
+        raise HTTPException(403, "OpenClaw actor is not mapped to a household member")
+    return runtime.settings.instance.tenant_id, member
+
+
+async def _finance_session(request: Request, provenance: Provenance) -> Session:
+    """Authenticate the real reader; only the Finance book control grants reads.
+
+    This Session has no generic service delegation and is used only inside the
+    Finance route. Service/reader attribution is recorded separately in the
+    Finance audit, never by impersonating the canonical data owner.
+    """
+    tenant, member = _finance_admission_identity(request, provenance)
+    runtime = _runtime(request)
+    if runtime.settings.member_roles.get(member) != "principal":
+        raise HTTPException(403, "finance_principal_required")
+    session = Session(
+        tenant_id=tenant,
+        auth_member_id=member,
+        auth_role="principal",
+        view_member_id=member,
+        view_role="principal",
+        dm_scope="per_account_channel_peer",
+        source="openclaw_plugin",
+        correlation_id=provenance.correlation_id,
+    )
+    if not _finance_private_context(runtime, session, provenance):
+        raise HTTPException(403, "finance_private_context_required")
+    from adminme.finance.access_control import FinanceAccessError, read_scope
+
+    if not hasattr(request.state, "finance_read_scope"):
+        try:
+            request.state.finance_read_scope = read_scope(
+                runtime, session, advisor=True
+            )
+        except FinanceAccessError:
+            request.state.finance_read_scope = None
+    return session
+
+
+async def _finance_audit(
+    request: Request, session: Session, provenance: Provenance, operation: str
+) -> None:
+    from adminme.events.envelope import EventEnvelope
+    from adminme.service_identities import (
+        COS_SERVICE_PRINCIPAL_ID,
+        COS_AUTOMATION_OPERATOR_ID,
+    )
+
+    runtime = _runtime(request)
+    scope = getattr(request.state, "finance_read_scope", None)
+    policy = scope.policy if scope else None
+    now = EventEnvelope.now_utc_iso()
+    await runtime.events.write(
+        EventEnvelope(
+            tenant_id=session.tenant_id,
+            event_at_ms=int(time.time() * 1000),
+            type="finance.advisor_accessed",
+            schema_version=1,
+            occurred_at=now,
+            source_adapter="finance-advisor",
+            source_account_id=COS_SERVICE_PRINCIPAL_ID,
+            owner_scope=f"private:{session.auth_member_id}",
+            visibility_scope=f"private:{session.auth_member_id}",
+            sensitivity="privileged",
+            actor_identity=COS_SERVICE_PRINCIPAL_ID,
+            idempotency_key="finance-advisor:"
+            + hashlib.sha256(
+                json.dumps(
+                    [
+                        session.tenant_id,
+                        session.auth_member_id,
+                        operation,
+                        provenance.correlation_id,
+                    ]
+                ).encode()
+            ).hexdigest(),
+            payload={
+                "member_id": session.auth_member_id,
+                "operation": operation,
+                "data_owner_id": scope.data_owner_id if scope else None,
+                "control_event_id": policy.event_id if policy else None,
+                "control_revision": policy.revision if policy else 0,
+                "book_id": policy.binding.book_id
+                if policy and policy.binding
+                else None,
+                "authority_available": scope is not None,
+                "service_principal_id": COS_SERVICE_PRINCIPAL_ID,
+                "operator_principal_id": COS_AUTOMATION_OPERATOR_ID,
+                "channel_id": provenance.channel_id,
+                "provider_effect_count": 0,
+            },
+        )
+    )
+
+
+def _private_member_tool_context(
+    runtime: Any, session: Session, provenance: Provenance
+) -> bool:
+    """Bind a service read to its exact private member audience."""
+    if (
+        provenance.call_kind != "tool"
+        or provenance.thread_id is not None
+        or provenance.agent_id != member_agent_id(session.auth_member_id)
+    ):
+        return False
+    if provenance.channel_id == "administrateme-portal":
+        actor, session_key = runtime.member_chat_binding(session.auth_member_id)
+        return bool(
+            provenance.account_id == "member-portal"
+            and hmac.compare_digest(provenance.actor_id, actor)
+            and hmac.compare_digest(provenance.session_key or "", session_key)
+            and runtime.resolve_member_chat_actor(provenance.actor_id)
+            == session.auth_member_id
+        )
+    if (
+        provenance.channel_id == "imessage"
+        and re.fullmatch(r"\+[1-9][0-9]{7,14}", provenance.actor_id)
+        and re.fullmatch(r"[A-Za-z0-9_-]{1,80}", provenance.account_id or "")
+    ):
+        expected = f"agent:{member_agent_id(session.auth_member_id)}:imessage:{provenance.account_id}:direct:{provenance.actor_id}"
+        return bool(
+            hmac.compare_digest(provenance.session_key or "", expected)
+            and runtime.settings.openclaw_actor_identities.get(
+                f"imessage|{provenance.account_id}|{provenance.actor_id}"
+            )
+            == session.auth_member_id
+        )
+    return False
+
+
+def _finance_private_context(
+    runtime: Any, session: Session, provenance: Provenance
+) -> bool:
+    return (provenance.message_id or "").startswith("finance-run:") and (
+        _private_member_tool_context(runtime, session, provenance)
+    )
+
+
+def _metadata_permitted(runtime: Any, session: Session, provenance: Provenance) -> bool:
+    return bool(
+        session.auth_role == "principal"
+        and not session.is_view_as
+        and runtime.settings.member_roles.get(session.auth_member_id) == "principal"
+        and session.tenant_id == runtime.settings.instance.tenant_id
+        and f"private:{session.auth_member_id}" in session.allowed_scopes
+        and _finance_private_context(runtime, session, provenance)
+    )
+
+
+async def _owner_finance_release_boundary(
+    request: Request, provenance: Provenance
+) -> dict[str, Any] | None:
+    from adminme.finance import release
+
+    if release.ADVISOR_AVAILABLE:
+        return None
+    session = _session(request, provenance)
+    await _record_tool_call(
+        request, session, provenance, operation="finance.advisor.unavailable"
+    )
+    _session(request, provenance)
+    return release.advisor_unavailable()
+
+
+@router.post("/tools/finance-bindings")
+async def finance_bindings(
+    body: FinanceBindingsRequest, request: Request
+) -> dict[str, Any]:
+    """Independently gated operational metadata, with no financial model/ingress."""
+    unavailable = await _owner_finance_release_boundary(request, body.provenance)
+    if unavailable is not None:
+        return unavailable
+    from adminme.finance.metadata import inspect_metadata
+    from adminme.finance.metadata_control import control_lock, control_state
+
+    runtime = _runtime(request)
+    session = _session(request, body.provenance)
+    permitted = _metadata_permitted(runtime, session, body.provenance)
+
+    async def policy_if_permitted() -> dict[str, Any] | None:
+        if not permitted:
+            return None
+        try:
+            return await control_state(runtime, session)
+        except RuntimeError:
+            raise HTTPException(503, "finance_metadata_control_unavailable") from None
+
+    async with control_lock(runtime, session):
+        policy = await policy_if_permitted()
+        result: dict[str, Any] = {
+            "state": "access_unavailable",
+            "bindings": [],
+            "completeness": {"complete": False},
+        }
+        if permitted and policy and policy["cos_read_enabled"]:
+            result = await inspect_metadata(
+                runtime, session, body.book_id, body.household_party_id
+            )
+        watermark = result.get("completeness", {}).get("through_event_id")
+        await _record_tool_call(
+            request,
+            session,
+            body.provenance,
+            operation="finance.bindings.inspect",
+            result_event_ids=[watermark] if watermark else [],
+        )
+        current_policy = await policy_if_permitted()
+        # Final policy read and synchronous identity/grant check, with the control
+        # lock held: supported disable transitions cannot interleave disclosure.
+        latest = _session(request, body.provenance)
+        if permitted and (
+            latest != session
+            or current_policy != policy
+            or not _metadata_permitted(runtime, latest, body.provenance)
+        ):
+            raise HTTPException(403, "finance_metadata_authority_changed")
+        return {**result, "provider_effect_count": 0}
+
+
+def _finance_permitted(runtime: Any, session: Session, provenance: Provenance) -> bool:
+    from adminme.finance.access_control import analysis_enabled
+
+    return bool(
+        session.auth_role == "principal"
+        and session.auth_member_id == session.view_member_id
+        and analysis_enabled(runtime, session)
+        and f"private:{session.auth_member_id}" in session.allowed_scopes
+        and _finance_private_context(runtime, session, provenance)
+    )
+
+
+def _finance_admit(runtime: Any, session: Session, provenance: Provenance) -> Any:
+    from adminme.finance.budgets import TurnBudgetStore, TurnIdentity
+
+    if not hasattr(runtime, "_finance_turn_budgets"):
+        runtime._finance_turn_budgets = TurnBudgetStore()
+    identity = TurnIdentity(
+        tenant_id=session.tenant_id,
+        actor_id=session.auth_member_id,
+        audience_id=f"private:{session.auth_member_id}",
+        session_id=provenance.session_id or provenance.session_key or "",
+        turn_id=provenance.message_id or "",
+    )
+    # No authenticated round identifier is available in this pinned transport.
+    # Count each call as a round; do not accept a caller-invented round number.
+    return runtime._finance_turn_budgets.admit(identity)
+
+
+async def _finance_delivery(
+    request: Request,
+    body: ContextRequest,
+    session: Session,
+    result: dict[str, Any],
+    *,
+    operation: str,
+    receipt: Any = None,
+    private_result: bool = False,
+) -> dict[str, Any]:
+    from adminme.finance.budgets import FinanceBudgetError
+    from adminme.finance.disclosure import FinanceDisclosureError, record_disclosure
+
+    runtime = _runtime(request)
+    await _finance_audit(request, session, body.provenance, operation=operation)
+    # The audit append yields. Ordinary requests may have arrived meanwhile;
+    # give them priority before resolving the current effective grant again.
+    if not await runtime.finance_admission.yield_to_foreground():
+        from adminme.finance.admission import admission_busy_result
+
+        return admission_busy_result()
+    from adminme.finance.access_control import FinanceAccessError, refresh_read_scope
+
+    if private_result:
+        scope = getattr(request.state, "finance_read_scope", None)
+        if scope is None:
+            raise HTTPException(403, "finance_authority_changed")
+        try:
+            await refresh_read_scope(runtime, scope, advisor=True)
+        except FinanceAccessError:
+            raise HTTPException(403, "finance_authority_changed") from None
+    latest = await _finance_session(request, body.provenance)
+    # The actual transport/member identity must remain unchanged. The typed
+    # book authority was independently refreshed and compared above.
+    if private_result and (
+        latest != session or not _finance_permitted(runtime, latest, body.provenance)
+    ):
+        raise HTTPException(403, "finance_authority_changed")
+    from adminme.finance.access_control import books_enabled
+
+    if private_result and not books_enabled(runtime, latest):
+        raise HTTPException(403, "finance_processing_disabled")
+    result["provider_effect_count"] = 0
+    if receipt is not None and private_result:
+        from adminme.finance.answers import answer_reference
+
+        result["answer_ref"] = answer_reference(result)
+    if receipt is not None:
+        try:
+            result = runtime._finance_turn_budgets.charge(receipt, result)
+        except FinanceBudgetError as exc:
+            return {
+                "state": "temporarily_unavailable",
+                "reason": exc.code,
+                "next_step": "Request a smaller report or one capability.",
+                "provider_effect_count": 0,
+            }
+        if private_result:
+            try:
+                await record_disclosure(
+                    runtime,
+                    latest,
+                    body.provenance,
+                    result,
+                    slot=receipt.call_number,
+                )
+            except FinanceDisclosureError as exc:
+                raise HTTPException(403, str(exc)) from None
+            except FinanceBudgetError as exc:
+                return {
+                    "state": "temporarily_unavailable",
+                    "reason": exc.code,
+                    "provider_effect_count": 0,
+                }
+            # Receipt persistence yields. Recheck the transport and exact private
+            # audience binding as well as the domain grant checked by the writer.
+            _authenticate(request)
+            if not _finance_permitted(runtime, latest, body.provenance):
+                raise HTTPException(403, "finance_private_context_changed")
+        try:
+            runtime._finance_turn_budgets.check_delivery(receipt)
+        except FinanceBudgetError as exc:
+            return {
+                "state": "temporarily_unavailable",
+                "reason": exc.code,
+                "provider_effect_count": 0,
+            }
+    return result
+
+
+def _finance_blocked(
+    runtime: Any, session: Session, provenance: Provenance
+) -> dict[str, Any] | None:
+    if not _finance_permitted(runtime, session, provenance):
+        return {
+            "state": "permission_required",
+            "reason": "Current owner authority for private finance processing is required.",
+        }
+    from adminme.finance.access_control import books_enabled
+
+    if not books_enabled(runtime, session):
+        return {
+            "state": "temporarily_unavailable",
+            "reason": "Finance publication processing is disabled.",
+        }
+    return None
+
+
+@router.post("/tools/finance-status")
+async def finance_status(
+    body: FinanceStatusRequest, request: Request
+) -> dict[str, Any]:
+    unavailable = await _owner_finance_release_boundary(request, body.provenance)
+    if unavailable is not None:
+        return unavailable
+    from adminme.finance.budgets import FinanceBudgetError, enforce_context
+    from adminme.finance.capabilities import (
+        CAPABILITIES,
+        REGISTRY_VERSION,
+        capability,
+        readiness,
+        skill_bundle,
+    )
+    from adminme.finance.calculators import (
+        CalculatorError,
+        calculator_metadata,
+        describe_calculator,
+    )
+    from adminme.finance.queries import publication_status
+    from adminme.finance.readiness import publication_readiness_context
+    from adminme.finance.workflows import compound_readiness, preparation_workflow
+
+    runtime = _runtime(request)
+    from adminme.finance.admission import admission_busy_result
+
+    async with runtime.finance_admission.slot(
+        _finance_admission_identity(request, body.provenance)
+    ) as admitted:
+        # Scope resolution touches the projection executor: defer even this work
+        # until ordinary household requests have finished.
+        session = await _finance_session(request, body.provenance)
+        if not admitted:
+            return await _finance_delivery(
+                request,
+                body,
+                session,
+                admission_busy_result(),
+                operation="finance.status",
+            )
+        receipt = None
+        permitted = _finance_permitted(runtime, session, body.provenance)
+        from adminme.finance.access_control import books_enabled, bound_book
+
+        enabled = books_enabled(runtime, session)
+        result: dict[str, Any] = {
+            "registry_version": REGISTRY_VERSION,
+            "implementation_state": "implemented",
+            "numerical_models_require_individual_validation": True,
+        }
+        try:
+            receipt = _finance_admit(runtime, session, body.provenance)
+            blocked = _finance_blocked(runtime, session, body.provenance)
+            if blocked is None and not body.calculator_id:
+                body = body.model_copy(
+                    update={"book_id": bound_book(runtime, session, body.book_id)}
+                )
+            if body.include_bindings:
+                from adminme.finance.metadata import binding_metadata
+
+                scope = request.state.finance_read_scope
+                if blocked is None and scope.data_owner_id != session.auth_member_id:
+                    # This legacy status option reads owner history. A shared
+                    # book grant must not report the reader's empty history as
+                    # the canonical book's state or widen metadata authority.
+                    blocked = {"state": "canonical_owner_metadata_required"}
+                result = (
+                    {
+                        "state": "access_unavailable",
+                        "reason": blocked["state"],
+                        "completeness": {"complete": False},
+                        "bindings": [],
+                    }
+                    if blocked
+                    else await binding_metadata(runtime, session, body.book_id)
+                )
+                return await _finance_delivery(
+                    request,
+                    body,
+                    session,
+                    result,
+                    operation="finance.bindings",
+                    receipt=receipt,
+                    private_result=blocked is None and permitted and enabled,
+                )
+            if blocked:
+                result.update(blocked)
+            else:
+                publication = await runtime.projections.read(
+                    "money",
+                    lambda conn: publication_status(
+                        conn, request.state.finance_read_scope, book_id=body.book_id
+                    ),
+                )
+                result["state"] = publication["state"]
+                result["publication"] = {
+                    key: publication[key]
+                    for key in (
+                        "publication_id",
+                        "book_id",
+                        "as_of",
+                        "content_hash",
+                        "schema_version",
+                        "current_head_publication_id",
+                    )
+                    if key in publication
+                }
+                if publication.get("planning_projection_id"):
+                    result["planning"] = {
+                        "projection_id": publication["planning_projection_id"],
+                        "report_id": "planning_contexts",
+                        "qualification": "Source planning views remain historical and conditional; select an exact context before reading values.",
+                    }
+                result["reports"] = [
+                    {"id": row["report_id"], "state": row["release_state"]}
+                    for row in publication.get("reports", [])
+                ]
+                result["report_boundary"] = (
+                    "Read the selected report for its basis, period, quality and limitations before any financial conclusion."
+                )
+            if body.calculator_id:
+                result = blocked or describe_calculator(
+                    body.calculator_id, body.schema_path
+                )
+            elif body.compound_id:
+                preparation = compound_readiness(body.compound_id, {})
+                states = {
+                    row["capability_id"]: readiness(
+                        row["capability_id"],
+                        dependencies={},
+                        permitted=permitted,
+                        enabled=enabled,
+                    )["readiness"]
+                    for row in preparation["dependencies"]
+                }
+                result = compound_readiness(body.compound_id, states)
+                if blocked:
+                    result["readiness"] = blocked["state"]
+            elif body.capability_id:
+                capability_id = body.capability_id
+                # A publication/report is not evidence of all topic dependencies.
+                # Until typed domain dependencies are accepted, request them honestly.
+                if body.include_bundle:
+                    bundle = (
+                        preparation_workflow(body.capability_id)
+                        if body.capability_id
+                        in {"F18", "F19", "F20", "F25", "F27", "F29"}
+                        else skill_bundle(body.capability_id)
+                    )
+                    enforce_context(bundle, kind="bundle")
+                    runtime._finance_turn_budgets.charge_bundle(
+                        receipt.identity, bundle
+                    )
+                    result = {"state": "preparation_only", "bundle": bundle}
+                else:
+                    item = capability(body.capability_id)
+                    models = calculator_metadata()
+                    evidence = (
+                        await runtime.projections.read(
+                            "money",
+                            lambda conn: publication_readiness_context(
+                                conn,
+                                request.state.finance_read_scope,
+                                capability_id,
+                                book_id=body.book_id,
+                            ),
+                        )
+                        if not blocked
+                        else {"dependencies": {}, "report_availability": []}
+                    )
+                    checked = readiness(
+                        body.capability_id,
+                        dependencies=evidence["dependencies"],
+                        available_calculators=frozenset(models),
+                        permitted=permitted,
+                        enabled=enabled,
+                    )
+                    result = {
+                        "capability_id": item.capability_id,
+                        "label": item.label,
+                        "implementation_state": "implemented",
+                        "implementation_state_applies_to": "routing_and_preparation",
+                        "readiness": checked["readiness"],
+                        "reason": checked["reason"],
+                        "report_availability": evidence["report_availability"],
+                        "missing_evidence": checked.get("missing_evidence", []),
+                        "unavailable_models": checked.get("unavailable_models", []),
+                        "professional_review_required": item.professional_review,
+                        "next_step": checked.get(
+                            "next_step", checked["partial_answer"]
+                        ),
+                    }
+                    if evidence.get("publication_id"):
+                        result["publication"] = {
+                            "book_id": evidence["book_id"],
+                            "publication_id": evidence["publication_id"],
+                            "current_head_publication_id": evidence["publication_id"],
+                            "content_hash": evidence["content_hash"],
+                        }
+                    result["models"] = {
+                        name: {
+                            "version": models[name]["version"],
+                            "implementation_state": models[name][
+                                "implementation_state"
+                            ],
+                        }
+                        if name in models
+                        else {"implementation_state": "planned"}
+                        for name in item.calculator_ids
+                    }
+            elif body.include_bundle:
+                result["next_step"] = (
+                    "Choose one capability ID before requesting its bundle."
+                )
+            else:
+                if not permitted or not enabled:
+                    result["capability_index"] = {
+                        key: value.label for key, value in CAPABILITIES.items()
+                    }
+                result["next_step"] = (
+                    "Choose one capability (F01 through F31) or accepted report. Topic instructions are loaded only on request."
+                )
+        except FinanceBudgetError as exc:
+            result = {
+                "state": "temporarily_unavailable",
+                "reason": exc.code,
+                "next_step": "Start a new explicit question with a smaller scope.",
+            }
+        except CalculatorError as exc:
+            result = {
+                "state": "missing_evidence",
+                "reason": exc.code,
+                "next_step": "Choose a declared calculator and one of its named schema fields.",
+            }
+        except ValueError:
+            result = {
+                "state": "missing_evidence",
+                "reason": "Select one accepted book and a released report.",
+            }
+        return await _finance_delivery(
+            request,
+            body,
+            session,
+            result,
+            operation="finance.status",
+            receipt=receipt,
+            private_result=permitted and enabled,
+        )
+
+
+@router.post("/tools/finance-query")
+async def finance_query(body: FinanceQueryRequest, request: Request) -> dict[str, Any]:
+    unavailable = await _owner_finance_release_boundary(request, body.provenance)
+    if unavailable is not None:
+        return unavailable
+    from adminme.finance.budgets import FinanceBudgetError
+    from adminme.finance.queries import query_publication
+
+    runtime = _runtime(request)
+    from adminme.finance.admission import admission_busy_result
+
+    async with runtime.finance_admission.slot(
+        _finance_admission_identity(request, body.provenance)
+    ) as admitted:
+        # Scope resolution touches the projection executor: defer even this work
+        # until ordinary household requests have finished.
+        session = await _finance_session(request, body.provenance)
+        if not admitted:
+            return await _finance_delivery(
+                request,
+                body,
+                session,
+                admission_busy_result(),
+                operation="finance.query",
+            )
+        receipt = None
+        private_result = False
+        try:
+            receipt = _finance_admit(runtime, session, body.provenance)
+            result = _finance_blocked(runtime, session, body.provenance)
+            private_result = result is None
+            if result is None:
+                from adminme.finance.access_control import bound_book
+                from adminme.finance.choices import query_choices
+
+                bound_book(runtime, session, body.book_id)
+
+                if body.report_id.startswith("planning_"):
+                    from adminme.finance.planning_store import query_projection
+
+                    selector = {
+                        key: value
+                        for key in (
+                            "measure",
+                            "scenario_id",
+                            "income_basis",
+                            "opening_basis",
+                            "plan_case_id",
+                            "currency",
+                            "timezone",
+                            "as_of_date",
+                        )
+                        if (value := getattr(body, key)) is not None
+                    }
+                    result = await runtime.projections.read(
+                        "money",
+                        lambda conn: query_projection(
+                            conn,
+                            request.state.finance_read_scope,
+                            book_id=body.book_id,
+                            projection_id=body.projection_id,
+                            context_id=body.context_id,
+                            horizon_days=body.horizon_days or 30,
+                            report_id=body.report_id,
+                            offset=body.offset,
+                            limit=min(body.limit, 1),
+                            selector=selector,
+                            view=body.projection_view,
+                            reference_id=body.reference_id,
+                            gap_group_id=body.gap_group_id,
+                        ),
+                    )
+                    if (
+                        result.get("publication", {}).get("publication_id")
+                        != body.publication_id
+                    ):
+                        raise ValueError("projection_accounting_anchor_mismatch")
+                elif (
+                    body.projection_id is not None
+                    or body.context_id is not None
+                    or body.reference_id is not None
+                    or body.gap_group_id is not None
+                    or body.projection_view != "balances"
+                    or any(
+                        getattr(body, key) is not None
+                        for key in (
+                            "measure",
+                            "income_basis",
+                            "opening_basis",
+                            "plan_case_id",
+                            "currency",
+                            "timezone",
+                            "as_of_date",
+                        )
+                    )
+                ):
+                    raise ValueError("projection_filter_invalid")
+                elif body.report_id == "owner_choices":
+                    if body.scenario_id is not None or body.horizon_days is not None:
+                        raise ValueError("finance_choice_filter_invalid")
+                    result = await runtime.projections.read(
+                        "money",
+                        lambda conn: query_choices(
+                            conn,
+                            session,
+                            body.book_id,
+                            body.publication_id,
+                            offset=body.offset,
+                            limit=body.limit,
+                        ),
+                    )
+                else:
+                    result = await runtime.projections.read(
+                        "money",
+                        lambda conn: query_publication(
+                            conn,
+                            request.state.finance_read_scope,
+                            book_id=body.book_id,
+                            publication_id=body.publication_id,
+                            report_id=body.report_id,
+                            offset=body.offset,
+                            limit=body.limit,
+                            scenario_id=body.scenario_id,
+                            horizon_days=body.horizon_days,
+                        ),
+                    )
+        except FinanceBudgetError as exc:
+            result = {"state": "temporarily_unavailable", "reason": exc.code}
+        except ValueError:
+            result = {
+                "state": "missing_evidence",
+                "reason": "The selected accepted report is unavailable; check its publication and release state.",
+            }
+        return await _finance_delivery(
+            request,
+            body,
+            session,
+            result,
+            operation="finance.query",
+            receipt=receipt,
+            private_result=private_result,
+        )
+
+
+@router.post("/tools/finance-calculate")
+async def finance_calculate(
+    body: FinanceCalculateRequest, request: Request
+) -> dict[str, Any]:
+    unavailable = await _owner_finance_release_boundary(request, body.provenance)
+    if unavailable is not None:
+        return unavailable
+    from adminme.finance.budgets import FinanceBudgetError
+    from adminme.finance.calculators import (
+        CalculatorError,
+        calculate,
+        calculator_metadata,
+    )
+
+    runtime = _runtime(request)
+    from adminme.finance.admission import admission_busy_result
+
+    async with runtime.finance_admission.slot(
+        _finance_admission_identity(request, body.provenance)
+    ) as admitted:
+        # Scope resolution touches the projection executor: defer even this work
+        # until ordinary household requests have finished.
+        session = await _finance_session(request, body.provenance)
+        if not admitted:
+            return await _finance_delivery(
+                request,
+                body,
+                session,
+                admission_busy_result(),
+                operation="finance.calculate",
+            )
+        receipt = None
+        private_result = False
+        try:
+            receipt = _finance_admit(runtime, session, body.provenance)
+            result = _finance_blocked(runtime, session, body.provenance)
+            private_result = result is None
+            if result is None:
+                if (
+                    len(json.dumps(body.inputs, ensure_ascii=False).encode("utf-8"))
+                    > 6000
+                ):
+                    raise ValueError("finance_input_budget_exceeded")
+                model = calculator_metadata().get(body.calculator_id)
+                if model is None or model.get("performance_class") != "light":
+                    raise ValueError("finance_job_required")
+                result = calculate(body.calculator_id, body.version, body.inputs)
+                result["hypothetical"] = True
+                result["accepted_baseline_modified"] = False
+                result["input_authority"] = (
+                    "Caller-supplied hypothetical inputs; not accepted household truth."
+                )
+        except FinanceBudgetError as exc:
+            result = {"state": "temporarily_unavailable", "reason": exc.code}
+        except CalculatorError as exc:
+            result = {
+                "state": "missing_evidence"
+                if exc.missing_fields
+                else "model_unavailable",
+                "reason": exc.code,
+                "required_fields": exc.missing_fields,
+                "next_step": "Provide only the required hypothetical fields; accepted household truth is unchanged.",
+            }
+        except ValueError:
+            result = {
+                "state": "model_unavailable",
+                "reason": "The named model/version or its typed inputs are outside the supported contract.",
+                "next_step": "Check the model's required inputs, limits and exclusions; do not substitute model arithmetic.",
+            }
+        return await _finance_delivery(
+            request,
+            body,
+            session,
+            result,
+            operation="finance.calculate",
+            receipt=receipt,
+            private_result=private_result,
+        )
+
+
+@router.post("/tools/finance-job")
+async def finance_job(body: FinanceJobRequest, request: Request) -> dict[str, Any]:
+    unavailable = await _owner_finance_release_boundary(request, body.provenance)
+    if unavailable is not None:
+        return unavailable
+    from adminme.finance.budgets import FinanceBudgetError
+    from adminme.finance.jobs import finance_job_status
+
+    runtime = _runtime(request)
+    from adminme.finance.admission import admission_busy_result
+
+    async with runtime.finance_admission.slot(
+        _finance_admission_identity(request, body.provenance)
+    ) as admitted:
+        # Scope resolution touches the projection executor: defer even this work
+        # until ordinary household requests have finished.
+        session = await _finance_session(request, body.provenance)
+        if not admitted:
+            return await _finance_delivery(
+                request,
+                body,
+                session,
+                admission_busy_result(),
+                operation=f"finance.job.{body.operation}",
+            )
+        receipt = None
+        try:
+            receipt = _finance_admit(runtime, session, body.provenance)
+            result = (
+                _finance_blocked(runtime, session, body.provenance)
+                or finance_job_status()
+            )
+        except FinanceBudgetError as exc:
+            result = {"state": "temporarily_unavailable", "reason": exc.code}
+        return await _finance_delivery(
+            request,
+            body,
+            session,
+            result,
+            operation=f"finance.job.{body.operation}",
+            receipt=receipt,
+        )

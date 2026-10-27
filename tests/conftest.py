@@ -14,3 +14,13 @@ identity.py will exempt those lines).
 Stub for now. Prompt 03 will add the first real fixture (a tmp
 InstanceConfig).
 """
+
+import pytest
+
+
+@pytest.fixture
+def unreleased_finance_advisor():
+    """Compatibility fixture name; exercise shipping availability without override."""
+    from adminme.finance import release
+
+    assert release.ADVISOR_AVAILABLE is True

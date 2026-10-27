@@ -72,11 +72,11 @@ def test_settings_bounds_status_work_during_advancement_and_preserves_isolation(
             request_name: ContextVar[str | None] = ContextVar(
                 "bounded_settings_request", default=None
             )
-            subscriber: ContextVar[str | None] = ContextVar(
-                "bounded_settings_subscriber", default=None
+            subscriber: ContextVar[tuple[str, ...]] = ContextVar(
+                "bounded_settings_subscriber", default=()
             )
-            original_count = runtime.event_log.count_since
-            original_status = runtime.bus.subscriber_status
+            original_count = runtime.event_log.count_since_many
+            original_status = runtime.bus.subscriber_statuses
             original_refresh = runtime._refresh_capability_registry
             original_diagnostics = runtime.diagnostics
             original_row_counts = runtime.projections._collect_row_counts_for
@@ -87,48 +87,53 @@ def test_settings_bounds_status_work_during_advancement_and_preserves_isolation(
             reported: dict[str, dict[str, Any]] = {}
             row_count_calls: list[str] = []
 
-            async def observe_status(subscriber_id: str) -> dict[str, Any]:
-                token = subscriber.set(subscriber_id)
+            async def observe_status(subscriber_ids, *, ignore_missing=False):
+                token = subscriber.set(tuple(subscriber_ids))
                 try:
-                    result = await original_status(subscriber_id)
+                    result = await original_status(
+                        subscriber_ids, ignore_missing=ignore_missing
+                    )
                     name = request_name.get()
-                    if name is not None and subscriber_id == "projection:tasks":
-                        reported[name] = result
+                    if name is not None and "projection:tasks" in result:
+                        reported[name] = result["projection:tasks"]
                     return result
                 finally:
                     subscriber.reset(token)
 
-            async def advancing_count(
-                cursor: str | None, *, types: list[str] | None = None
-            ) -> int:
+            async def advancing_count(queries):
                 name = request_name.get()
-                subscriber_id = subscriber.get()
-                if name is None or subscriber_id is None:
-                    return await original_count(cursor, types=types)
-                counts[name][subscriber_id] += 1
-                # A stationary-checkpoint loop fails deterministically after
-                # repeated real progress, rather than hanging this regression.
-                assert counts[name][subscriber_id] <= 3
-                if subscriber_id == "projection:tasks":
-                    assert cursor is not None
-                    token = request_name.set(None)
-                    try:
-                        event_id = await runtime.events.write(
-                            _task(runtime, f"{name}:{counts[name][subscriber_id]}")
-                        )
-                        await runtime.wait_for_projection(
-                            "tasks", event_id, timeout_s=30
-                        )
-                    finally:
-                        request_name.reset(token)
-                    advanced = runtime.bus._subscribers[subscriber_id].checkpoint
-                    assert advanced is not None
-                    assert advanced > cursor
-                    lag = await original_count(cursor, types=types)
-                    assert lag > 0
-                    pairs[name] = (cursor, lag, advanced)
-                    return lag
-                return await original_count(cursor, types=types)
+                subscriber_ids = subscriber.get()
+                if name is None or not subscriber_ids:
+                    return await original_count(queries)
+                task_count = None
+                for index, (subscriber_id, (cursor, _types)) in enumerate(
+                    zip(subscriber_ids, queries, strict=True)
+                ):
+                    counts[name][subscriber_id] += 1
+                    assert counts[name][subscriber_id] == 1
+                    if subscriber_id == "projection:tasks":
+                        assert cursor is not None
+                        token = request_name.set(None)
+                        try:
+                            event_id = await runtime.events.write(
+                                _task(runtime, f"{name}:{counts[name][subscriber_id]}")
+                            )
+                            await runtime.wait_for_projection(
+                                "tasks", event_id, timeout_s=30
+                            )
+                        finally:
+                            request_name.reset(token)
+                        advanced = runtime.bus._subscribers[subscriber_id].checkpoint
+                        assert advanced is not None and advanced > cursor
+                        task_count = (index, cursor, advanced)
+                # Execute the real native batch after advancing a captured
+                # checkpoint, rather than substituting independent counts.
+                lags = await original_count(queries)
+                if task_count is not None:
+                    index, cursor, advanced = task_count
+                    assert lags[index] > 0
+                    pairs[name] = (cursor, lags[index], advanced)
+                return lags
 
             async def observe_refresh() -> None:
                 name = request_name.get()
@@ -150,8 +155,8 @@ def test_settings_bounds_status_work_during_advancement_and_preserves_isolation(
                 row_count_calls.append(projection_name)
                 return original_row_counts(projection_name)
 
-            monkeypatch.setattr(runtime.event_log, "count_since", advancing_count)
-            monkeypatch.setattr(runtime.bus, "subscriber_status", observe_status)
+            monkeypatch.setattr(runtime.event_log, "count_since_many", advancing_count)
+            monkeypatch.setattr(runtime.bus, "subscriber_statuses", observe_status)
             monkeypatch.setattr(
                 runtime, "_refresh_capability_registry", observe_refresh
             )
@@ -267,13 +272,13 @@ def test_settings_reports_actual_callback_poison_during_its_status_count(
             assert state.poison_event_id is None
             projection = runtime.projections._projections["tasks"]
             original_apply = projection.apply
-            original_count = runtime.event_log.count_since
-            original_status = runtime.bus.subscriber_status
+            original_count = runtime.event_log.count_since_many
+            original_status = runtime.bus.subscriber_statuses
             request_name: ContextVar[str | None] = ContextVar(
                 "failed_settings_request", default=None
             )
-            subscriber: ContextVar[str | None] = ContextVar(
-                "failed_settings_subscriber", default=None
+            subscriber: ContextVar[tuple[str, ...]] = ContextVar(
+                "failed_settings_subscriber", default=()
             )
             attempts: list[str] = []
             counts: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
@@ -290,23 +295,28 @@ def test_settings_reports_actual_callback_poison_during_its_status_count(
                     attempts.append(envelope["event_id"])
                     raise RuntimeError(failure_detail)
 
-            async def observe_status(subscriber_id: str) -> dict[str, Any]:
-                token = subscriber.set(subscriber_id)
+            async def observe_status(subscriber_ids, *, ignore_missing=False):
+                token = subscriber.set(tuple(subscriber_ids))
                 try:
-                    return await original_status(subscriber_id)
+                    return await original_status(
+                        subscriber_ids, ignore_missing=ignore_missing
+                    )
                 finally:
                     subscriber.reset(token)
 
-            async def count_after_real_failure(
-                cursor: str | None, *, types: list[str] | None = None
-            ) -> int:
+            async def count_after_real_failure(queries):
                 name = request_name.get()
-                subscriber_id = subscriber.get()
-                if name is None or subscriber_id is None:
-                    return await original_count(cursor, types=types)
-                counts[name][subscriber_id] += 1
-                assert counts[name][subscriber_id] == 1
-                if subscriber_id == "projection:tasks":
+                subscriber_ids = subscriber.get()
+                if name is None or not subscriber_ids:
+                    return await original_count(queries)
+                task_count = None
+                for index, (subscriber_id, (cursor, _types)) in enumerate(
+                    zip(subscriber_ids, queries, strict=True)
+                ):
+                    counts[name][subscriber_id] += 1
+                    assert counts[name][subscriber_id] == 1
+                    if subscriber_id != "projection:tasks":
+                        continue
                     assert cursor is not None
                     if name == "settings":
                         token = request_name.set(None)
@@ -317,14 +327,16 @@ def test_settings_reports_actual_callback_poison_during_its_status_count(
                             await runtime.wait_for_projection(
                                 "tasks", advanced_id, timeout_s=30
                             )
-                            assert state.checkpoint is not None
-                            assert state.checkpoint > cursor
+                            assert (
+                                state.checkpoint is not None
+                                and state.checkpoint > cursor
+                            )
                             poison_id = await runtime.events.write(
                                 _task(runtime, "failure-poison")
                             )
                             poison_ids.append(poison_id)
 
-                            async def wait_for_poison() -> None:
+                            async def wait_for_poison():
                                 while not (
                                     state.degraded
                                     and state.poison_event_id == poison_id
@@ -334,16 +346,18 @@ def test_settings_reports_actual_callback_poison_during_its_status_count(
                             await asyncio.wait_for(wait_for_poison(), timeout=30)
                         finally:
                             request_name.reset(token)
-                    lag = await original_count(cursor, types=types)
-                    assert lag > 0
-                    pairs[name] = (cursor, lag)
-                    return lag
-                return await original_count(cursor, types=types)
+                    task_count = (index, cursor)
+                lags = await original_count(queries)
+                if task_count is not None:
+                    index, cursor = task_count
+                    assert lags[index] > 0
+                    pairs[name] = (cursor, lags[index])
+                return lags
 
             monkeypatch.setattr(projection, "apply", fail_selected_callback)
-            monkeypatch.setattr(runtime.bus, "subscriber_status", observe_status)
+            monkeypatch.setattr(runtime.bus, "subscriber_statuses", observe_status)
             monkeypatch.setattr(
-                runtime.event_log, "count_since", count_after_real_failure
+                runtime.event_log, "count_since_many", count_after_real_failure
             )
             transport = httpx.ASGITransport(app=app)
             async with httpx.AsyncClient(

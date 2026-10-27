@@ -2398,7 +2398,23 @@ def select_scope(
     head = _commit(repository, pull.get("head", {}).get("sha"))
     parents = _git(repository, "rev-list", "--parents", "-n", "1", checkout).split()[1:]
     if checkout != head and parents != [base, head]:
-        raise ValueError("test merge does not bind the exact event base and head")
+        # GitHub may regenerate a merge after main advances while retaining the
+        # event's original base. Admit it only if head already integrates that
+        # first parent and the merge adds no bytes or modes beyond exact head.
+        try:
+            regenerated = (
+                len(parents) == 2
+                and parents[1] == head
+                and _git(repository, "merge-base", base, parents[0]).strip() == base
+                and _git(repository, "merge-base", parents[0], head).strip()
+                == parents[0]
+                and _git(repository, "rev-parse", f"{checkout}^{{tree}}").strip()
+                == _git(repository, "rev-parse", f"{head}^{{tree}}").strip()
+            )
+        except subprocess.CalledProcessError:
+            regenerated = False
+        if not regenerated:
+            raise ValueError("test merge does not bind the exact event base and head")
     raw = _git(repository, "diff", "--no-renames", "--name-status", "-z", base, head)
     fields = raw.rstrip("\0").split("\0") if raw else []
     if len(fields) % 2:

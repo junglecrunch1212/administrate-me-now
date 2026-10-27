@@ -47,7 +47,7 @@ class SelectedSnapshot:
 
 class NativeRemindersReader:
     def __init__(self) -> None:
-        from EventKit import EKEventStore
+        from EventKit import EKEventStore  # type: ignore[import-not-found,import-untyped]
 
         self._event_store_class = EKEventStore
         self._require_permission()
@@ -55,7 +55,7 @@ class NativeRemindersReader:
         self._record = _shim().PyObjCEventStore._record
 
     def _require_permission(self) -> None:
-        from EventKit import EKAuthorizationStatusFullAccess, EKEntityTypeReminder
+        from EventKit import EKAuthorizationStatusFullAccess, EKEntityTypeReminder  # type: ignore[import-not-found,import-untyped]
 
         if (
             self._event_store_class.authorizationStatusForEntityType_(
@@ -72,7 +72,7 @@ class NativeRemindersReader:
         only one exact match may leave this method; runtime read() never uses it.
         A CalDAV match still needs private account/source ownership review.
         """
-        from EventKit import EKEntityTypeReminder, EKSourceTypeCalDAV, EKSourceTypeLocal
+        from EventKit import EKEntityTypeReminder, EKSourceTypeCalDAV, EKSourceTypeLocal  # type: ignore[import-not-found,import-untyped]
 
         self._require_permission()
         expected = (
@@ -124,7 +124,7 @@ class NativeRemindersReader:
         return selected
 
     def _source(self, selection: CoSRemindersSelection) -> Any:
-        from EventKit import EKSourceTypeCalDAV, EKSourceTypeLocal
+        from EventKit import EKSourceTypeCalDAV, EKSourceTypeLocal  # type: ignore[import-not-found,import-untyped]
 
         self._require_permission()
         source = self._store.sourceWithIdentifier_(selection.source_id)
@@ -199,6 +199,6 @@ class NativeRemindersReader:
 
 def request_reminders_permission() -> None:
     """Explicit setup-only consent; polling never calls this function."""
-    from EventKit import EKEventStore
+    from EventKit import EKEventStore  # type: ignore[import-not-found,import-untyped]
 
     _shim()._ensure_access(EKEventStore.alloc().init())

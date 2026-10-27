@@ -195,6 +195,7 @@ export function registerSelfReplies(api: OpenClawPluginApi, runtime: PluginRunti
           "/api/openclaw/v1/cos-responses/self-reply", {
             provenance: input.provenance, source_message_event_id: sourceId,
             host_binding: input.binding, body: parts[index], reply_index: index,
+            finance_run_id: runId,
           });
         const dispatch = result.transport_dispatch as Record<string, unknown> | undefined;
         if (!dispatch) {
@@ -202,13 +203,14 @@ export function registerSelfReplies(api: OpenClawPluginApi, runtime: PluginRunti
           return;
         }
         if (dispatch.channel !== "imessage" || dispatch.account_id !== input.provenance.account_id ||
-            dispatch.recipient !== input.provenance.actor_id || dispatch.body !== parts[index] ||
+            dispatch.recipient !== input.provenance.actor_id || typeof dispatch.body !== "string" ||
+            (dispatch.body !== parts[index] && result.finance_verified_input_sha256 !== createHash("sha256").update(parts[index]!).digest("hex")) ||
             typeof dispatch.approval_event_id !== "string") throw new Error("self reply dispatch mismatch");
         const adapter = await api.runtime.channel.outbound.loadAdapter("imessage");
         if (!adapter?.sendText) throw new Error("self reply transport unavailable");
         try {
           await adapter.sendText({ cfg: api.config, to: input.provenance.actor_id,
-            text: escapeReplyText(parts[index]!), accountId });
+            text: escapeReplyText(dispatch.body), accountId });
         } catch { /* The guarded native terminal distinguishes non-contact from unknown. */ }
         const terminal = await runtime.transport.request<Record<string, unknown>>(
           "/api/openclaw/v1/cos-responses/result", {

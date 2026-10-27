@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { FINANCE_ADVISOR_AVAILABLE, FINANCE_ADVISOR_TOOL_NAMES } from "./finance-release.js";
 import { requestExecutionProvenance } from "./request-policy.js";
 import { Type } from "typebox";
 import type {
@@ -10,6 +11,7 @@ import { provenanceFromTool } from "./provenance.js";
 import { toolResult } from "./result.js";
 import { trackSession, type PluginRuntime } from "./runtime.js";
 import { waitForApprovalPublication } from "./approval.js";
+import { FINANCE_TOOLS, METADATA_TOOLS, takeFinanceTurn } from "./finance-turns.js";
 
 const ItemKind = Type.Union([Type.Literal("task"), Type.Literal("commitment")]);
 const LifecycleAction = Type.Union([
@@ -122,6 +124,9 @@ function makeTool(
         runtime.transport.config.sharedSecretEnv,
         runtime,
       );
+      if (FINANCE_TOOLS.has(definition.name) || METADATA_TOOLS.has(definition.name)) {
+        provenance.message_id = takeFinanceTurn(runtime, id, context);
+      }
       if (definition.name === "administrateme_calendar") {
         if (!id || !provenance.session_key || !provenance.agent_id) {
           throw new Error("Calendar read requires trusted native call and session identity");
@@ -198,6 +203,75 @@ function makeTool(
 
 export function registerTools(api: OpenClawPluginApi, runtime: PluginRuntime): void {
   const definitions = [
+    {
+      name: "administrateme_finance_bindings",
+      description: "Inspect only owner-private Books binding/history metadata and one supplied existing household Party ID. Separately enabled; requires current private read authority. No financial values, import, identity creation or advice. Empty accepted history does not prove absent publisher registrations.",
+      parameters: Type.Object({
+        book_id: Type.Optional(Type.String({ minLength: 1, maxLength: 120 })),
+        household_party_id: Type.Optional(Type.String({ minLength: 1, maxLength: 120 })),
+      }, { additionalProperties: false }),
+      path: "/api/openclaw/v1/tools/finance-bindings",
+    },
+    {
+      name: "administrateme_finance_status",
+      description: "Check one private finance capability or accepted-publication status; include_bindings requests only bounded app bindings and a fixed-watermark completeness receipt. Missing evidence is not zero; this grants no action authority.",
+      parameters: Type.Object({
+        capability_id: Type.Optional(Type.String({ minLength: 3, maxLength: 3 })),
+        book_id: Type.Optional(Type.String({ minLength: 1, maxLength: 120 })),
+        include_bundle: Type.Optional(Type.Boolean()),
+        include_bindings: Type.Optional(Type.Boolean()),
+        compound_id: Type.Optional(Type.String({ minLength: 1, maxLength: 80 })),
+        calculator_id: Type.Optional(Type.String({ minLength: 1, maxLength: 80 })),
+        schema_path: Type.Optional(Type.String({ maxLength: 170 })),
+      }, { additionalProperties: false }),
+      path: "/api/openclaw/v1/tools/finance-status",
+    },
+    {
+      name: "administrateme_finance_query",
+      description: "Read a private accepted report (one metric by default; follow next_offset with all qualifications intact), owner_choices (up to three/page), or planning_contexts, planning_projection and planning_events (one/page, next_offset), planning_gaps/evidence/sources (one reference_id/page), planning_issues (original required flags; optional gap_group_id), or planning_engines. Select planning by context_id OR typed measure/scenario_id/income_basis/opening_basis; optional case/currency/timezone/as_of_date disambiguate. Use projection_view balances/signals/dates/provenance/clocks, each a bounded section, and 7/30/90/180/365 days. Bank and funding views are non-additive. No raw transactions, SQL or source links.",
+      parameters: Type.Object({
+        book_id: Type.String({ minLength: 1, maxLength: 120 }),
+        publication_id: Type.String({ minLength: 1, maxLength: 120 }),
+        report_id: Type.String({ minLength: 1, maxLength: 40 }),
+        scenario_id: Type.Optional(Type.String({ maxLength: 16 })),
+        horizon_days: Type.Optional(Type.Integer({ minimum: 7, maximum: 365 })),
+        reference_id: Type.Optional(Type.String({ minLength: 1, maxLength: 80 })),
+        gap_group_id: Type.Optional(Type.String({ minLength: 1, maxLength: 80 })),
+        projection_id: Type.Optional(Type.String({ minLength: 1, maxLength: 80 })),
+        context_id: Type.Optional(Type.String({ minLength: 1, maxLength: 80 })),
+        measure: Type.Optional(Type.Union([Type.Literal("BANK_CASH_SUBSET"), Type.Literal("CASH_EQUIVALENT_FUNDING_NOT_BANK")])),
+        income_basis: Type.Optional(Type.Union([Type.Literal("OBSERVED_BASE_ONLY"), Type.Literal("PLAN_MODELED_NET_FUNDING_NOT_PAYROLL")])),
+        opening_basis: Type.Optional(Type.Union([Type.Literal("verified_unrestricted"), Type.Literal("observed_cash_hypothetical")])),
+        plan_case_id: Type.Optional(Type.String({ minLength: 1, maxLength: 80 })),
+        currency: Type.Optional(Type.String({ pattern: "^[A-Z]{3}$" })),
+        timezone: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
+        as_of_date: Type.Optional(Type.String({ maxLength: 10 })),
+        projection_view: Type.Optional(Type.Union([Type.Literal("balances"), Type.Literal("signals"), Type.Literal("dates"), Type.Literal("provenance"), Type.Literal("clocks")])),
+        offset: Type.Optional(Type.Integer({ minimum: 0, maximum: 10000 })),
+        limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100, default: 1 })),
+      }, { additionalProperties: false }),
+      path: "/api/openclaw/v1/tools/finance-query",
+    },
+    {
+      name: "administrateme_finance_calculate",
+      description: "Run a named, versioned, bounded deterministic finance model on explicitly hypothetical typed inputs. Discover its exact input contract using finance_status with calculator_id first. No code, formulas, writes or action grants.",
+      parameters: Type.Object({
+        calculator_id: Type.String({ minLength: 1, maxLength: 80 }),
+        version: Type.String({ minLength: 1, maxLength: 40 }),
+        inputs: Type.Record(Type.String(), Type.Unknown()),
+        hypothetical: Type.Literal(true),
+      }, { additionalProperties: false }),
+      path: "/api/openclaw/v1/tools/finance-calculate",
+    },
+    {
+      name: "administrateme_finance_job",
+      description: "Check finance job admission. Heavy processing stays unavailable until isolated resource limits and ordinary CoS capacity are verified.",
+      parameters: Type.Object({
+        operation: Type.Union([Type.Literal("submit"), Type.Literal("status"), Type.Literal("cancel")]),
+        job_id: Type.Optional(Type.String({ minLength: 1, maxLength: 120 })),
+      }, { additionalProperties: false }),
+      path: "/api/openclaw/v1/tools/finance-job",
+    },
     {
       name: "administrateme_state",
       description: "Read the authorized member's AdministrateMe state, Triage queue, and commitments.",
@@ -706,6 +780,7 @@ export function registerTools(api: OpenClawPluginApi, runtime: PluginRuntime): v
   ];
 
   for (const definition of definitions) {
+    if (!FINANCE_ADVISOR_AVAILABLE && FINANCE_ADVISOR_TOOL_NAMES.has(definition.name)) continue;
     api.registerTool((context) => makeTool(api, context, runtime, definition), {
       name: definition.name,
       optional: !["administrateme_state", "administrateme_what_now"].includes(definition.name),

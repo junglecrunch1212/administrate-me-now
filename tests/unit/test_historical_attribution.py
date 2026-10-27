@@ -83,7 +83,9 @@ async def test_forwarded_attribution_uses_actual_intake_receipts_and_refuses_mut
     tmp_path: Path, defect: str
 ) -> None:
     class NoopBus:
-        async def notify(self, event_id: str) -> None:
+        async def notify(
+            self, event_id: str, *, event_types: frozenset[str] | None = None
+        ) -> None:
             pass
 
     generated = EventLog(tmp_path / "generated.db", b"g" * 32)

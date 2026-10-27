@@ -56,6 +56,10 @@ class _SubscriberState:
     delivery_concurrency: int
     checkpoint: str | None
     degraded: bool
+    raw_payload_types: frozenset[str] = frozenset()
+    metadata_only_types: frozenset[str] = frozenset()
+    on_drain_end: Callable[[], Awaitable[None]] | None = None
+    draining: bool = False
     consecutive_failures: int = 0
     last_success_at_ms: int | None = None
     last_failure_at_ms: int | None = None
@@ -137,6 +141,9 @@ class EventBus:
         consumer_version: str | None = None,
         replay_on_version_change: bool = False,
         delivery_concurrency: int = 1,
+        raw_payload_types: frozenset[str] = frozenset(),
+        metadata_only_types: frozenset[str] = frozenset(),
+        on_drain_end: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         if self._running:
             raise RuntimeError("subscribe() must be called before start()")
@@ -229,6 +236,9 @@ class EventBus:
             callback=callback,
             consumer_version=consumer_version,
             delivery_concurrency=delivery_concurrency,
+            raw_payload_types=raw_payload_types,
+            metadata_only_types=metadata_only_types,
+            on_drain_end=on_drain_end,
             checkpoint=checkpoint,
             degraded=degraded,
             consecutive_failures=failures,
@@ -281,11 +291,25 @@ class EventBus:
             await asyncio.to_thread(self._ckpt_conn.close)
         self._closed = True
 
-    async def notify(self, event_id: str) -> None:
+    async def notify(
+        self, event_id: str, *, event_types: frozenset[str] | None = None
+    ) -> None:
+        """Wake matching consumers after commit, without advancing a checkpoint.
+
+        The writer knows the committed types. Legacy/untyped hints wake all
+        consumers; startup and reset still drain from durable checkpoints. A
+        skipped unrelated hint therefore neither loses an event nor acknowledges
+        delivery. Wildcard consumers always wake.
+        """
         if not self._running:
             return
         for state in self._subscribers.values():
-            if not state.degraded:
+            relevant = (
+                not event_types
+                or state.types == "*"
+                or bool(event_types.intersection(state.types))
+            )
+            if not state.degraded and relevant:
                 state.trigger.set()
 
     async def reset_subscriber(self, subscriber_id: str) -> None:
@@ -335,6 +359,39 @@ class EventBus:
         # an older progress observation cannot conceal a new delivery failure.
         checkpoint = state.checkpoint
         lag = await self._log.count_since(checkpoint, types=state.types_filter)
+        return self._status_with_count(state, checkpoint, lag)
+
+    async def subscriber_statuses(
+        self, subscriber_ids: list[str], *, ignore_missing: bool = False
+    ) -> dict[str, dict[str, Any]]:
+        captured = {}
+        for subscriber_id in subscriber_ids:
+            state = self._subscribers.get(subscriber_id)
+            if state is None:
+                if ignore_missing:
+                    continue
+                raise KeyError(subscriber_id)
+            captured[subscriber_id] = (state, state.checkpoint)
+        if not captured:
+            return {}
+        counts = await self._log.count_since_many(
+            [
+                (checkpoint, state.types_filter)
+                for state, checkpoint in captured.values()
+            ]
+        )
+        return {
+            subscriber_id: self._status_with_count(state, checkpoint, lag)
+            for (subscriber_id, (state, checkpoint)), lag in zip(
+                captured.items(), counts, strict=True
+            )
+        }
+
+    def _status_with_count(
+        self, state: _SubscriberState, checkpoint: str | None, lag: int
+    ) -> dict[str, Any]:
+        # Pair each count with its captured checkpoint, while reporting failure
+        # and poison state as it stands after the native reads settle.
         return {
             "checkpoint_event_id": checkpoint,
             "lag_count": lag,
@@ -342,6 +399,7 @@ class EventBus:
             "last_failure_at": state.last_failure_at_ms,
             "consecutive_failures": state.consecutive_failures,
             "degraded": state.degraded,
+            "draining": state.draining,
             "poison_event_id": state.poison_event_id,
             "consumer_version": state.consumer_version,
             "delivery_concurrency": state.delivery_concurrency,
@@ -369,12 +427,15 @@ class EventBus:
             return
 
     async def _drain_once(self, state: _SubscriberState) -> None:
+        state.draining = True
         try:
             batch: list[dict[str, Any]] = []
             async for event in self._log.read_since(
                 state.checkpoint,
                 types=state.types_filter,
                 limit=READ_BATCH_SIZE,
+                raw_payload_types=state.raw_payload_types,
+                metadata_only_types=state.metadata_only_types,
             ):
                 if self._stopping.is_set() or not self._running:
                     return
@@ -413,6 +474,24 @@ class EventBus:
             state.degraded = True
             state.poison_event_id = state.checkpoint
             await self._persist_state(state)
+
+        finally:
+            try:
+                if state.on_drain_end is not None:
+                    try:
+                        await state.on_drain_end()
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception:
+                        _log.exception(
+                            "subscriber %s failed resource settlement",
+                            state.subscriber_id,
+                        )
+                        state.degraded = True
+                        state.last_failure_at_ms = int(time.time() * 1000)
+                        await self._persist_state(state)
+            finally:
+                state.draining = False
 
     async def _deliver_batch(
         self,

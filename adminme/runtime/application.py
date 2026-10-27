@@ -172,6 +172,7 @@ from adminme.source_assessment_recovery import (
     recovery_batch_fingerprint,
 )
 from adminme.temporary_surfaces import TemporarySurfaceStore
+from adminme.finance.admission import FinanceAdmissionGate, FinancePriorityMiddleware
 
 _log = logging.getLogger(__name__)
 
@@ -198,6 +199,8 @@ class RuntimeSettings:
     adapter_config: dict[str, Any] = field(
         default_factory=lambda: {"adapter_supervisor_port": 0, "adapters": []}
     )
+    finance_publications_enabled: bool = False
+    finance_model_members: frozenset[str] = field(default_factory=frozenset)
     openclaw_enabled: bool = False
     openclaw_shared_secret: str | None = field(default=None, repr=False)
     openclaw_actor_identities: dict[str, str] = field(default_factory=dict)
@@ -238,6 +241,10 @@ class RuntimeSettings:
             raise ValueError(
                 "legacy obligation extraction is limited to credential-free fixtures"
             )
+        if (
+            self.finance_publications_enabled or self.finance_model_members
+        ) and not self._credential_free_fixture:
+            raise ValueError("production Finance access requires the owner control")
         if len(self.encryption_key) != 32:
             raise ValueError("runtime encryption_key must be exactly 32 bytes")
         root = self.repository_root.resolve()
@@ -830,8 +837,19 @@ class AdministrateMeRuntime:
         self.today_command_locks: dict[str, asyncio.Lock] = {}
         self.communication_command_locks: dict[str, asyncio.Lock] = {}
         self.settings_command_locks: dict[str, asyncio.Lock] = {}
+        from adminme.finance.access_control import FinanceAccessCache
+
+        self.finance_access = FinanceAccessCache(
+            settings.instance.tenant_id,
+            frozenset(
+                member
+                for member, role in settings.member_roles.items()
+                if role == "principal"
+            ),
+        )
         self.member_chat_locks: dict[str, asyncio.Lock] = {}
         self.member_chat_limiter = RateLimiter()
+        self.finance_admission = FinanceAdmissionGate()
         self.member_chat: MemberChatTransport = UnavailableMemberChatTransport()
         self.member_chat_last_failure: dict[str, Any] | None = None
         self.observation: ObservationManager | None = None
@@ -906,6 +924,19 @@ class AdministrateMeRuntime:
                 self.event_log, self.settings.instance.bus_checkpoint_path
             )
             self.events = EventWriter(self.event_log, self.bus)
+            from adminme.finance.access_control import (
+                FinanceAccessError,
+                refresh_control,
+            )
+
+            for member, role in self.settings.member_roles.items():
+                if role == "principal":
+                    try:
+                        await refresh_control(self, member)
+                    except FinanceAccessError:
+                        # A failed bounded control read disables this owner's
+                        # Finance only; unrelated household services can start.
+                        pass
             await recover_response_attempts(self)
             if not self.settings.legacy_personal_obligation_compatibility:
                 epoch = await read_policy_epoch(
@@ -1247,6 +1278,10 @@ class AdministrateMeRuntime:
                 self._xlsx_query_context(),
                 event_sink=self.events,
                 guarded_write=self.guarded_write,
+                # Production owner controls select a private Books namespace;
+                # they never disable another member's shared legacy workbook.
+                # Only historical credential-free fixtures use this global flag.
+                finance_reverse_enabled=not self.settings.finance_publications_enabled,
             )
             if policy_from_adapter_config(self.settings.adapter_config) is None:
                 await self.xlsx_reverse.start()
@@ -1600,20 +1635,21 @@ class AdministrateMeRuntime:
         existing = (
             self.projections.connection("parties")
             .execute(
-                "SELECT definition_digest FROM operating_agreements "
-                "WHERE tenant_id=? AND agreement_id=? AND revision=?",
-                (
-                    self.settings.instance.tenant_id,
-                    payload["agreement_id"],
-                    payload["revision"],
-                ),
+                "SELECT revision, definition_digest FROM operating_agreements "
+                "WHERE tenant_id=? AND agreement_id=? AND layer='constitutional' "
+                "ORDER BY revision DESC LIMIT 1",
+                (self.settings.instance.tenant_id, payload["agreement_id"]),
             )
             .fetchone()
         )
-        if existing is not None and str(existing["definition_digest"]) == str(
-            payload["definition_digest"]
-        ):
-            return
+        if existing is not None:
+            # An older release must not register a competing constitutional floor.
+            if int(existing["revision"]) > int(payload["revision"]):
+                return
+            if int(existing["revision"]) == int(payload["revision"]) and str(
+                existing["definition_digest"]
+            ) == str(payload["definition_digest"]):
+                return
         event_id = await self._require_events().write(
             EventEnvelope(
                 event_at_ms=int(time.time() * 1000),
@@ -4027,6 +4063,8 @@ def create_application(settings: RuntimeSettings) -> FastAPI:
         lifespan=lifespan,
     )
     app.state.runtime = runtime
+    # Owner activation after startup must retain foreground admission priority.
+    app.add_middleware(FinancePriorityMiddleware, gate=runtime.finance_admission)
     app.include_router(core_router)
     app.include_router(comms_router)
     app.include_router(capture_router)
@@ -4089,6 +4127,12 @@ def create_application(settings: RuntimeSettings) -> FastAPI:
     app.include_router(apple_notes_commands_router)
     app.include_router(system_router)
     app.include_router(finance_metadata_router)
+    from adminme.products.member.finance_access import router as finance_access_router
+
+    app.include_router(finance_access_router)
+    from adminme.products.member.finance_import import router as finance_import_router
+
+    app.include_router(finance_import_router)
     return app
 
 

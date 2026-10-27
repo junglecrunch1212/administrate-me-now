@@ -54,9 +54,16 @@ class MemberChatChunk:
     phase: str | None = None
     code: str | None = None
     retryable: bool = False
+    # Transport-attested run identity is private relay metadata, never browser
+    # content and never supplied by the model's text.
+    run_id: str | None = None
 
     def public(self) -> dict[str, Any]:
-        return {key: value for key, value in asdict(self).items() if value is not None}
+        return {
+            key: value
+            for key, value in asdict(self).items()
+            if value is not None and key != "run_id"
+        }
 
 
 class MemberChatTransport(Protocol):
@@ -361,7 +368,9 @@ class OpenClawGatewayChatTransport:
                             "Chat transport omitted its run identifier",
                         )
                     run_id = value
-                    yield MemberChatChunk(kind="status", phase="starting_model")
+                    yield MemberChatChunk(
+                        kind="status", phase="starting_model", run_id=run_id
+                    )
                     continue
                 if frame.get("type") != "event" or frame.get("event") != "chat":
                     continue
@@ -396,7 +405,7 @@ class OpenClawGatewayChatTransport:
                         if text:
                             yield MemberChatChunk(kind="delta", text=text)
                     terminal = True
-                    yield MemberChatChunk(kind="final")
+                    yield MemberChatChunk(kind="final", run_id=run_id)
                     return
                 elif state == "aborted":
                     terminal = True

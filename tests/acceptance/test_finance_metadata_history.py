@@ -20,10 +20,11 @@ from tests.acceptance.test_finance_metadata_owner import (
     retained_envelope,
     PRINCIPAL,
     OTHER,
+    DEMO_HEADERS,
 )
 
 
-def test_dependency_registry_and_lazy_namespace_closure(tmp_path):
+def test_dependency_registry_and_metadata_keeps_books_closed(tmp_path):
     from adminme.finance.publication_provenance import namespace_root
 
     for name in (
@@ -46,20 +47,31 @@ def test_dependency_registry_and_lazy_namespace_closure(tmp_path):
             "finance.metadata_inspected",
         ):
             assert registry.get(kind, 1) is not None
-        paths = {route.path for route in client.app.routes}
-        assert not paths.intersection(
-            {
-                "/api/member/v1/settings/finance",
-                "/api/member/v1/finance/import-approvals",
-                "/api/member/v1/finance/planning",
-            }
+        # The combined release exposes Finance routes, but metadata access must
+        # not create a Books grant or authorize a projection read.
+        finance_before = client.get(
+            "/api/member/v1/settings/finance", headers=DEMO_HEADERS
         )
-        assert not hasattr(client.app.state.runtime, "finance_access")
-        assert not hasattr(
-            client.app.state.runtime.settings, "finance_publications_enabled"
-        )
+        assert finance_before.status_code == 200, finance_before.text
+        policy = finance_before.json()
+        assert policy["revision"] == 0 and policy["binding"] is None
+        assert policy["books_enabled"] is False
+        assert policy["cos_analysis_enabled"] is False
+        assert client.app.state.runtime.settings.finance_publications_enabled is False
         assert control(client, owner=True).json()["cos_read_enabled"] is False
         assert owner_read(client).json()["provider_effect_count"] == 0
+        finance_after = client.get(
+            "/api/member/v1/settings/finance", headers=DEMO_HEADERS
+        )
+        assert finance_after.status_code == 200, finance_after.text
+        assert finance_after.json() == policy
+        planning = client.get(
+            "/api/member/v1/finance/planning",
+            headers=DEMO_HEADERS,
+            params={"book_id": pub["book_id"]},
+        )
+        assert planning.status_code == 403
+        assert planning.json()["detail"] == "finance_book_not_authorized"
 
         async def effects():
             return [

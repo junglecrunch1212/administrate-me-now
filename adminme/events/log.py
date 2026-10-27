@@ -25,11 +25,13 @@ schema development).
 
 Async model: ``sqlcipher3`` is a synchronous DB-API driver and there
 is no drop-in async SQLCipher for Python today (D14). We keep a single
-connection guarded by an ``asyncio.Lock`` and pin its creation, migration,
-reads, writes, and close to one dedicated worker thread. SQLCipher's native
+writer/payload connection guarded by an ``asyncio.Lock`` and pin its creation,
+migration, reads, writes, and close to one dedicated worker thread. SQLCipher's native
 connection must not migrate among the default executor's worker threads even
 when those calls are serialized. Reads and writes therefore remain off the
-event loop without allowing native cross-thread connection use.
+event loop without allowing native cross-thread connection use. Live committed
+ID/count metadata uses a separate read-only connection and owner thread so
+subscriber health reads do not wait behind large atomic commits.
 
 Signature: ``append(envelope, *, correlation_id=None, causation_id=None)``
 per D8 addition 2 — correlation_id and causation_id are explicit keyword
@@ -61,6 +63,7 @@ from adminme.events.invariants import (
     EnvelopeInvariantError,
     validate_envelope_invariants,
 )
+from adminme.events.metadata_reader import EventMetadataReader
 from adminme.events.registry import (
     EventValidationError,
     SchemaNotFound,
@@ -206,6 +209,7 @@ class EventLog:
             max_workers=1,
             thread_name_prefix="adminme-event-log",
         )
+        self._metadata_reader: EventMetadataReader | None = None
         try:
             self._conn = self._executor.submit(self._open_connection).result()
             self._lock = asyncio.Lock()
@@ -222,6 +226,10 @@ class EventLog:
                 self._metadata_index_hint_for_schema
             ).result()
             ensure_autoloaded()
+            if not self._read_only:
+                self._metadata_reader = EventMetadataReader(
+                    self._db_path, self._key_pragma
+                )
         except BaseException:
             connection = getattr(self, "_conn", None)
             if connection is not None:
@@ -273,6 +281,10 @@ class EventLog:
             if self._read_only:
                 conn.execute("PRAGMA query_only=ON")
             else:
+                # Bulk Finance payloads fill the default 8 MiB page cache.
+                # Reserve a 512 KiB target within the shared retention budget;
+                # transaction spill, authorization and durability stay intact.
+                conn.execute("PRAGMA cache_size=-512").close()
                 conn.execute("PRAGMA journal_mode=WAL")
                 conn.execute("PRAGMA synchronous=NORMAL")
             conn.execute("PRAGMA foreign_keys=ON")
@@ -335,23 +347,42 @@ class EventLog:
     async def close(self) -> None:
         # Closing a SQLCipher connection on another thread, or while an
         # in-flight call owns it, can crash in native code. The same lock and
-        # dedicated worker guard every operation, so close is queued behind
-        # in-flight work and repeated shutdown is harmless.
+        # dedicated workers guard their own connections, so each close is
+        # queued behind in-flight work and repeated shutdown is harmless.
         should_shutdown = False
         close_call: concurrent.futures.Future[Any] | None = None
+        metadata_close: concurrent.futures.Future[None] | None = None
         caller_cancelled = False
         try:
             async with self._lock:
                 if self._closed:
                     return
                 should_shutdown = True
+                # Stop metadata admission before either worker starts closing.
+                self._closed = True
                 try:
                     # Submit synchronously before the first cancellation point.
                     # A cancelled operation may still occupy this worker, so the
                     # close must remain queued rather than being cancelled during
                     # executor shutdown.
-                    close_call = self._executor.submit(self._conn.close)
+                    if self._metadata_reader is not None:
+                        metadata_close = self._metadata_reader.submit_close()
+
+                    def close_writer() -> None:
+                        # The writable connection must close after our reader
+                        # so SQLite can checkpoint the committed WAL tail. Queue
+                        # both closes before yielding so caller cancellation
+                        # cannot strand either connection.
+                        try:
+                            if metadata_close is not None:
+                                metadata_close.result()
+                        finally:
+                            self._conn.close()
+
+                    close_call = self._executor.submit(close_writer)
                     await asyncio.shield(asyncio.wrap_future(close_call))
+                    if metadata_close is not None:
+                        await asyncio.shield(asyncio.wrap_future(metadata_close))
                 except asyncio.CancelledError:
                     caller_cancelled = True
                     raise
@@ -360,6 +391,16 @@ class EventLog:
         finally:
             if should_shutdown:
                 self._executor.shutdown(wait=True, cancel_futures=False)
+                if self._metadata_reader is not None:
+                    self._metadata_reader.shutdown()
+                if metadata_close is not None:
+                    # Observe failures even if the writer close/caller failed.
+                    try:
+                        metadata_close.result()
+                    except Exception:
+                        _log.exception("native event metadata close failed")
+                        if not caller_cancelled:
+                            raise
                 if caller_cancelled and close_call is not None:
                     try:
                         close_call.result()
@@ -477,6 +518,13 @@ class EventLog:
                 f"payload is not JSON-serializable: {exc}"
             ) from exc
 
+        return self._row_with_payload(
+            envelope, payload_json, effective_correlation, effective_causation
+        )
+
+    def _row_with_payload(
+        self, envelope, payload_json, effective_correlation, effective_causation
+    ):
         event_at_ms = int(envelope.event_at_ms or time.time() * 1000)
         if envelope.event_id:
             event_id = envelope.event_id
@@ -514,7 +562,57 @@ class EventLog:
         )
         return row, event_id
 
-    def _insert_rows(self, rows: list[tuple[Any, ...]]) -> list[str]:
+    async def _append_finance_batch(
+        self, tenant_id, owner_id, book_id, events, *, commit_guard, correlation_id=None
+    ):
+        """Internal worker receipts only; ordinary append retains full validation.
+
+        The worker fully validates these exact immutable bytes. Envelope
+        identity is constructed here from the parent's current owner authority.
+        No HTTP field can opt out of the normal schema-validation seam.
+        """
+        from adminme.finance.worker import ValidatedFinanceEvent
+
+        rows = []
+        for event in events:
+            if not isinstance(event, ValidatedFinanceEvent):
+                raise AppendValidationError("finance worker receipt required")
+            event.verify()
+            if (event.tenant_id, event.owner_id, event.book_id) != (
+                tenant_id,
+                owner_id,
+                book_id,
+            ):
+                raise AppendValidationError("finance worker receipt identity mismatch")
+            envelope = EventEnvelope(
+                event_at_ms=int(time.time() * 1000),
+                tenant_id=tenant_id,
+                type=event.type,
+                schema_version=1,
+                occurred_at=EventEnvelope.now_utc_iso(),
+                source_adapter=event.source_adapter,
+                source_account_id=book_id,
+                owner_scope=f"private:{owner_id}",
+                visibility_scope=f"private:{owner_id}",
+                sensitivity="privileged",
+                actor_identity=owner_id,
+                idempotency_key=event.idempotency_key,
+                payload={},
+            )
+            validate_envelope_invariants(envelope)
+            row, _ = self._row_with_payload(
+                envelope, event.payload_json, correlation_id, None
+            )
+            rows.append(row)
+        async with self._lock:
+            self._ensure_open()
+            return await self._run_on_connection_thread(
+                self._insert_rows, rows, commit_guard
+            )
+
+    def _insert_rows(self, rows: list[tuple[Any, ...]], commit_guard=None) -> list[str]:
+        if commit_guard is not None:
+            commit_guard()
         cur = self._conn.cursor()
         cur.execute("BEGIN IMMEDIATE")
         resolved_ids: list[str] = []
@@ -572,10 +670,14 @@ class EventLog:
                             "idempotency key already belongs to a different event identity"
                         ) from exc
                     resolved_ids.append(str(existing["event_id"]))
+            if commit_guard is not None:
+                commit_guard()
             cur.execute("COMMIT")
         except Exception:
             cur.execute("ROLLBACK")
             raise
+        finally:
+            cur.close()
         return resolved_ids
 
     # ------------------------------------------------------------------
@@ -589,31 +691,55 @@ class EventLog:
         limit: int = 1000,
         owner_scope: str | None = None,
         types: list[str] | None = None,
+        raw_payload_types: frozenset[str] = frozenset(),
+        metadata_only_types: frozenset[str] = frozenset(),
     ) -> AsyncIterator[dict[str, Any]]:
         if limit <= 0:
             raise ValueError("limit must be positive")
-        if cursor is not None:
-            exists = await self._run_locked(self._event_exists, cursor)
-            if not exists:
-                raise CursorNotFound(cursor)
-
         batch_size = max(limit, 500)
         last = cursor
+        # Bus consumers usually read a short tail after an existing checkpoint.
+        # Validate that checkpoint and fetch the first page in one native-worker
+        # turn instead of waking the event loop between the two database reads.
+        read_page = self._read_checked_page
         while True:
-            rows = await self._run_locked(
-                self._read_page,
+            page_args = (
                 last,
                 through,
                 batch_size,
                 owner_scope,
                 tuple(types) if types else None,
             )
+            # Omit unused bodies in SQL, before the driver allocates Python
+            # strings. Other consumers retain the complete durable payload.
+            if metadata_only_types:
+                rows = await self._run_locked(
+                    read_page, *page_args, tuple(sorted(metadata_only_types))
+                )
+            else:
+                rows = await self._run_locked(read_page, *page_args)
+            # Later cursors came from this append-only log's previous page.
+            read_page = self._read_page
             if not rows:
                 return
-            for row in rows:
-                yield _row_to_event(row)
             last = rows[-1]["event_id"]
-            if len(rows) < batch_size:
+            exhausted = (
+                len(rows) < batch_size
+                and sum(len(row["payload"] or "") for row in rows) < 1024 * 1024
+            )
+            for row in rows:
+                if row["type"] in metadata_only_types:
+                    yield _row_to_event(row, metadata_only=True)
+                elif row["type"] in raw_payload_types:
+                    yield _row_to_event(row, raw_payload=True)
+                elif len(row["payload"]) >= 65536:
+                    yield await asyncio.to_thread(_row_to_event, row)
+                else:
+                    yield _row_to_event(row)
+            # Only a byte-capped short page needs another fetch. Preserve the
+            # ordinary finite-tail read contract when the SQL page was exhausted.
+            rows.clear()
+            if exhausted:
                 return
 
     async def read_metadata_since(
@@ -729,6 +855,25 @@ class EventLog:
         cur.execute("SELECT 1 FROM events WHERE event_id = ? LIMIT 1", (event_id,))
         return cur.fetchone() is not None
 
+    def _read_checked_page(
+        self,
+        after_id: str | None,
+        through: str | None,
+        limit: int,
+        owner_scope: str | None,
+        types: tuple[str, ...] | None,
+        metadata_only_types: tuple[str, ...] = (),
+    ) -> list[sqlcipher3.Row]:
+        # Existence is independent of the requested filters/watermark: an
+        # unknown checkpoint must still fail when the filtered page is empty.
+        if after_id is not None and not self._event_exists(after_id):
+            raise CursorNotFound(after_id)
+        if metadata_only_types:
+            return self._read_page(
+                after_id, through, limit, owner_scope, types, metadata_only_types
+            )
+        return self._read_page(after_id, through, limit, owner_scope, types)
+
     def _read_page(
         self,
         after_id: str | None,
@@ -736,6 +881,7 @@ class EventLog:
         limit: int,
         owner_scope: str | None,
         types: tuple[str, ...] | None,
+        metadata_only_types: tuple[str, ...] = (),
     ) -> list[sqlcipher3.Row]:
         where: list[str] = []
         params: list[Any] = []
@@ -752,13 +898,33 @@ class EventLog:
             placeholders = ",".join("?" for _ in types)
             where.append(f"type IN ({placeholders})")
             params.extend(types)
-        sql = _SELECT_COLUMNS + " FROM events"
+        columns = _SELECT_COLUMNS
+        if metadata_only_types:
+            placeholders = ",".join("?" for _ in metadata_only_types)
+            columns = columns.replace(
+                "source, payload,",
+                "source, CASE WHEN type IN ("
+                + placeholders
+                + ") THEN NULL ELSE payload END AS payload,",
+            )
+            params = [*metadata_only_types, *params]
+        sql = columns + " FROM events"
         if where:
             sql += " WHERE " + " AND ".join(where)
         sql += " ORDER BY event_id ASC LIMIT ?"
         params.append(limit)
         cur = self._conn.cursor()
-        return list(cur.execute(sql, params))
+        rows = []
+        byte_count = 0
+        try:
+            for row in cur.execute(sql, params):
+                rows.append(row)
+                byte_count += len(row["payload"] or "")
+                if byte_count >= 1024 * 1024:
+                    break
+            return rows
+        finally:
+            cur.close()
 
     def _read_metadata_page(
         self,
@@ -1165,6 +1331,80 @@ class EventLog:
             )
         )
 
+    async def read_finance_import_approval(
+        self, tenant_id: str, owner_id: str, event_id: str
+    ) -> dict[str, Any] | None:
+        if any(
+            not isinstance(value, str) or not 1 <= len(value) <= 160
+            for value in (tenant_id, owner_id, event_id)
+        ):
+            raise ValueError("exact bounded approval coordinates required")
+        return await self._run_locked(
+            self._read_finance_import_approval, tenant_id, owner_id, event_id
+        )
+
+    def _read_finance_import_approval(
+        self, tenant_id: str, owner_id: str, event_id: str
+    ) -> dict[str, Any] | None:
+        row = self._conn.execute(
+            "SELECT event_id,tenant_id,type,schema_version,actor_identity,source_adapter,"
+            "source_account_id,owner_scope,visibility_scope,"
+            "CASE WHEN length(CAST(payload AS BLOB))<=32768 THEN payload END AS payload "
+            "FROM events WHERE event_id=? AND tenant_id=? AND owner_scope=? "
+            "AND type='settings.finance_import_approved' LIMIT 1",
+            (event_id, tenant_id, f"private:{owner_id}"),
+        ).fetchone()
+        if row is None:
+            return None
+        try:
+            value = dict(row)
+            value["payload"] = json.loads(value["payload"])
+            return value
+        except (TypeError, ValueError):
+            raise RuntimeError("finance_import_approval_unavailable") from None
+
+    async def read_finance_access_control(
+        self, tenant_id: str, owner_id: str
+    ) -> dict[str, Any] | None:
+        """Bounded owner control read; the caller supplies current authority."""
+        if not 1 <= len(tenant_id) <= 160 or not 1 <= len(owner_id) <= 160:
+            raise ValueError("exact bounded tenant and owner are required")
+        return await self._run_locked(
+            self._read_finance_access_control, tenant_id, owner_id
+        )
+
+    def _read_finance_access_control(
+        self, tenant_id: str, owner_id: str
+    ) -> dict[str, Any] | None:
+        deadline = time.monotonic() + 0.1
+        steps = 0
+
+        def bounded() -> int:
+            nonlocal steps
+            steps += 1000
+            return int(steps > 100_000 or time.monotonic() > deadline)
+
+        self._conn.set_progress_handler(bounded, 1000)
+        try:
+            row = self._conn.execute(
+                "SELECT event_id,tenant_id,type,schema_version,actor_identity,"
+                "source_adapter,source_account_id,owner_scope,visibility_scope,"
+                "CASE WHEN length(CAST(payload AS BLOB))<=4096 THEN payload END AS payload "
+                "FROM events WHERE tenant_id=? AND owner_scope=? "
+                "AND type='settings.finance_access_changed' "
+                "ORDER BY event_id DESC LIMIT 1",
+                (tenant_id, f"private:{owner_id}"),
+            ).fetchone()
+            if row is None:
+                return None
+            value = dict(row)
+            value["payload"] = json.loads(value["payload"])
+            return value
+        except (sqlcipher3.DatabaseError, TypeError, ValueError):
+            raise RuntimeError("finance_control_unavailable") from None
+        finally:
+            self._conn.set_progress_handler(None, 0)
+
     async def get_by_idempotency(
         self, tenant_id: str, idempotency_key: str
     ) -> dict[str, Any] | None:
@@ -1255,6 +1495,11 @@ class EventLog:
         )
 
     async def latest_event_id(self, *, types: list[str] | None = None) -> str | None:
+        self._ensure_open()
+        if self._metadata_reader is not None:
+            return await self._metadata_reader.latest_event_id(
+                tuple(types) if types else None
+            )
         return await self._run_locked(
             self._latest_event_id, tuple(types) if types else None
         )
@@ -1284,10 +1529,29 @@ class EventLog:
         *,
         types: list[str] | None = None,
     ) -> int:
+        self._ensure_open()
+        if self._metadata_reader is not None:
+            return await self._metadata_reader.count_since(
+                cursor, tuple(types) if types else None
+            )
         return await self._run_locked(
             self._count_since,
             cursor,
             tuple(types) if types else None,
+        )
+
+    async def count_since_many(
+        self, queries: list[tuple[str | None, list[str] | None]]
+    ) -> list[int]:
+        self._ensure_open()
+        captured = tuple(
+            (cursor, tuple(types) if types else None) for cursor, types in queries
+        )
+        if self._metadata_reader is not None:
+            return await self._metadata_reader.count_since_many(captured)
+        # Read-only backup inspection retains its existing connection boundary.
+        return await self._run_locked(
+            lambda: [self._count_since(cursor, types) for cursor, types in captured]
         )
 
     def _count_since(
@@ -1320,10 +1584,13 @@ _SELECT_COLUMNS = (
 )
 
 
-def _row_to_event(row: sqlcipher3.Row) -> dict[str, Any]:
+def _row_to_event(
+    row: sqlcipher3.Row, *, raw_payload: bool = False, metadata_only: bool = False
+) -> dict[str, Any]:
     """Return the full 15-column envelope shape (plus the legacy `version`
     and `source` MVP fields for backwards compatibility during the prompt-04
-    transition). Prompt 05+ callers should read `schema_version` directly."""
+    transition). Internal metadata consumers explicitly mark omitted bodies;
+    ordinary history reads retain full payloads and use `schema_version`."""
     return {
         "event_id": row["event_id"],
         "event_at_ms": row["event_at_ms"],
@@ -1341,7 +1608,13 @@ def _row_to_event(row: sqlcipher3.Row) -> dict[str, Any]:
         "correlation_id": row["correlation_id"],
         "causation_id": row["causation_id"],
         "source": json.loads(row["source"]) if row["source"] is not None else None,
-        "payload": json.loads(row["payload"]),
+        **(
+            {"_payload_omitted": True}
+            if metadata_only
+            else {"_payload_json": row["payload"]}
+            if raw_payload
+            else {"payload": json.loads(row["payload"])}
+        ),
         "raw_ref": row["raw_ref"],
         "actor_identity": row["actor_identity"],
         "idempotency_key": row["idempotency_key"],

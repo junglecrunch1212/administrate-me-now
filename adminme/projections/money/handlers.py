@@ -22,6 +22,11 @@ from typing import Any
 
 import sqlcipher3
 
+from adminme.finance.provenance_store import apply_provenance
+from adminme.finance.projection import apply_publication
+from adminme.finance.planning_store import apply_projection
+from adminme.finance.choices import apply_choice
+
 _log = logging.getLogger(__name__)
 
 
@@ -44,6 +49,11 @@ def apply_event(envelope: dict[str, Any], conn: sqlcipher3.Connection) -> None:
         "finance.goal_completed": apply_finance_goal_completed,
         "finance.goal_reopened": apply_finance_goal_reopened,
         "finance.workbook_published": apply_finance_workbook_published,
+        "finance.provenance_archived": apply_provenance,
+        "finance.publication_accepted": apply_publication,
+        "finance.projection_verified": apply_projection,
+        "finance.goal_recorded": apply_choice,
+        "finance.preference_recorded": apply_choice,
     }
     handler = dispatch.get(event_type)
     if handler is None:
@@ -612,8 +622,9 @@ def apply_finance_workbook_published(
         INSERT INTO finance_workbook_state (
             tenant_id, workbook_name, workbook_sha256, workbook_schema_version,
             published_at, published_by_party_id, validation_state,
-            validation_failures_json, last_event_id
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            validation_failures_json, owner_scope, visibility_scope,
+            sensitivity, last_event_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(tenant_id, workbook_name) DO UPDATE SET
             workbook_sha256=excluded.workbook_sha256,
             workbook_schema_version=excluded.workbook_schema_version,
@@ -621,6 +632,9 @@ def apply_finance_workbook_published(
             published_by_party_id=excluded.published_by_party_id,
             validation_state=excluded.validation_state,
             validation_failures_json=excluded.validation_failures_json,
+            owner_scope=excluded.owner_scope,
+            visibility_scope=excluded.visibility_scope,
+            sensitivity=excluded.sensitivity,
             last_event_id=excluded.last_event_id
         """,
         (
@@ -632,6 +646,9 @@ def apply_finance_workbook_published(
             p["published_by_party_id"],
             p["validation_state"],
             json.dumps(p.get("validation_failures") or [], sort_keys=True),
+            envelope["owner_scope"],
+            envelope["visibility_scope"],
+            envelope["sensitivity"],
             envelope["event_id"],
         ),
     )
