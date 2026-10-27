@@ -510,6 +510,26 @@ UPDATER_EFFECT_CONTEXT_PATHS = (
     | UPDATER_EFFECT_CONTEXT_TEST_PATHS
     | UPDATER_EFFECT_CONTEXT_SHARED_PATHS
 )
+# Only the reviewed tooling predicate and its selected-Doctor transport may
+# change in this focused lane. Neighboring diagnostics remain source-bound.
+UPDATER_TOOLING_SHARED = {
+    "bootstrap/doctor.py": (
+        "1047f1de676c8bdf1ef04c2aa573cd7b974a21b1742fce40fa23aa7a6279b53c",
+        "c2c35341b6ec9bf8612a1686b93dc997f03edc4532cc63e38f9cf5c13e39d32c",
+    ),
+    "bootstrap/service_settlement.py": (
+        "2812f77dea17bc195ca304bc504b0215e70c743b7bd1278d57f87b114fad60ac",
+        "6aa680807216ac0d3c6d3e56a6346a95a69e9a62266c06dbe737c5ac072174ab",
+    ),
+}
+UPDATER_TOOLING_PATHS = frozenset(
+    {
+        "bootstrap/doctor_tooling.py",
+        "tests/unit/bootstrap/test_doctor_tooling.py",
+        "tests/unit/bootstrap/test_restore_settlement.py",
+    }
+)
+
 UPDATER_COMPONENT_PATHS = frozenset(
     {
         "bootstrap/upgrade.py",
@@ -524,7 +544,9 @@ UPDATER_COMPONENT_PATHS = frozenset(
         "bootstrap/openclaw_tools.py",
     }
 )
-UPDATER_COMPONENT_PATHS |= UPDATER_EFFECT_CONTEXT_COMPONENT_PATHS
+UPDATER_COMPONENT_PATHS |= UPDATER_EFFECT_CONTEXT_COMPONENT_PATHS | {
+    "bootstrap/doctor_tooling.py"
+}
 UPDATER_TEST_PATHS = frozenset(
     {
         "tests/unit/bootstrap/test_source_identity.py",
@@ -546,7 +568,9 @@ UPDATER_TEST_PATHS = frozenset(
         "tests/acceptance/test_macos_bootstrap_operations.py",
     }
 )
-UPDATER_TEST_PATHS |= UPDATER_EFFECT_CONTEXT_TEST_PATHS
+UPDATER_TEST_PATHS |= UPDATER_EFFECT_CONTEXT_TEST_PATHS | (
+    UPDATER_TOOLING_PATHS - {"bootstrap/doctor_tooling.py"}
+)
 UPDATER_CHECK_SCRIPT = "scripts/acceptance/updater-delivery-release.sh"
 UPDATER_OPTIONAL_MODULE_TESTS = {
     "bootstrap/prepared_runtime.py": "tests/unit/bootstrap/test_prepared_runtime.py",
@@ -559,6 +583,7 @@ UPDATER_REQUIRED_PATHS = (
     UPDATER_OPTIONAL_MODULE_TESTS.keys()
     | UPDATER_OPTIONAL_MODULE_TESTS.values()
     | UPDATER_EFFECT_CONTEXT_PATHS
+    | UPDATER_TOOLING_PATHS
 )
 COS_SERVICE_WORK_APPLICATION = "adminme/runtime/application.py"
 COS_SERVICE_WORK_MEMBER = "adminme/products/member/main.py"
@@ -1004,6 +1029,7 @@ def choose_scope(
                 | UPDATER_TEST_PATHS
                 | UPDATER_EFFECT_CONTEXT_SHARED_PATHS
                 | {UPDATER_EMAIL_ATTRIBUTION}
+                | UPDATER_TOOLING_SHARED.keys()
                 | POLICY_PATHS
                 or path == UPDATER_CHECK_SCRIPT
                 or _prose(path)
@@ -1386,6 +1412,24 @@ def _updater_dependency_fingerprint(
         UPDATER_EFFECT_CONTEXT_COMPONENT_PATHS & {entry.path for entry in entries}
     )
     shared_identities: list[tuple[str, str, str]] = []
+    inventory = {entry.path: entry for entry in entries}
+    tooling_present = "bootstrap/doctor_tooling.py" in inventory
+    if tooling_present and not UPDATER_TOOLING_PATHS <= inventory.keys():
+        return None
+    for path, (old, new) in UPDATER_TOOLING_SHARED.items():
+        entry = inventory.get(path)
+        if entry is None:
+            if tooling_present:
+                return None
+            continue
+        if entry.mode != "100644":
+            return None
+        digest = hashlib.sha256(
+            _git(repository, "show", f"{revision}:{path}").encode()
+        ).hexdigest()
+        if digest not in {old, new} or ((digest == new) != tooling_present):
+            return None
+        shared_identities.append((path, entry.mode, "reviewed-doctor-tooling-v1"))
     wired_paths: set[str] = set()
     for path in sorted(UPDATER_EFFECT_CONTEXT_SHARED_PATHS):
         entry = next((entry for entry in entries if entry.path == path), None)
@@ -1416,6 +1460,7 @@ def _updater_dependency_fingerprint(
         | UPDATER_COMPONENT_PATHS
         | UPDATER_TEST_PATHS
         | UPDATER_EFFECT_CONTEXT_SHARED_PATHS
+        | UPDATER_TOOLING_SHARED.keys()
         | POLICY_PATHS
         | {UPDATER_CHECK_SCRIPT}
     )

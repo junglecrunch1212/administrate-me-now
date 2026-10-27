@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import json
+import hashlib
 import os
 import shlex
 import subprocess
@@ -43,6 +44,8 @@ from scripts.release_scope import (
     _updater_mode,
     _updater_source_assurance,
     UPDATER_COMPONENT_PATHS,
+    UPDATER_TOOLING_SHARED,
+    UPDATER_TOOLING_PATHS,
     UPDATER_TEST_PATHS,
     UPDATER_REQUIRED_PATHS,
     UPDATER_CHECK_SCRIPT,
@@ -1681,9 +1684,28 @@ def test_reminder_release_worker_requires_the_real_affected_checks(
     assert "check-cos-imessage-text.mjs" in native
 
 
+def _tooling_shared(path: Path, *, current: bool) -> None:
+    for name in UPDATER_TOOLING_SHARED:
+        source = (
+            (ROOT / name).read_text()
+            if current
+            else _git(ROOT, "show", f"62174cc3babee88698b2f2282cacfa336fa125dd:{name}")
+            + "\n"
+        )
+        assert (
+            hashlib.sha256(source.encode()).hexdigest()
+            == UPDATER_TOOLING_SHARED[name][int(current)]
+        )
+        _commit(path, name, source)
+
+
 def _updater_candidate(path: Path) -> tuple[str, str]:
-    for required in sorted(UPDATER_REQUIRED_PATHS - {UPDATER_CHECK_SCRIPT}):
+    _tooling_shared(path, current=False)
+    for required in sorted(
+        UPDATER_REQUIRED_PATHS - {UPDATER_CHECK_SCRIPT} - UPDATER_TOOLING_PATHS
+    ):
         _commit(path, required, "# Retained updater contract\n")
+    assert not any((path / name).exists() for name in UPDATER_TOOLING_PATHS)
     base = _git(path, "rev-parse", "HEAD")
     head = _commit(path, UPDATER_CHECK_SCRIPT, "# Reviewed updater checks\n")
     return base, head
@@ -1706,6 +1728,8 @@ def test_updater_scope_binds_closed_paths_and_optional_feature_proof(
         (UPDATER_COMPONENT_PATHS | UPDATER_TEST_PATHS) - UPDATER_EFFECT_CONTEXT_PATHS
     ):
         head = _commit(path, allowed, "# Reviewed updater behavior\n")
+    _tooling_shared(path, current=True)
+    head = _git(path, "rev-parse", "HEAD")
     (path / "adminme/runtime.py").write_text("UNCOMMITTED = True\n")
     proof = select_scope(path, _event(base, head), checkout_sha=head)
     assert proof["scope"] == "updater-delivery"
@@ -4263,3 +4287,47 @@ def test_system_native_proof_composes_browser_and_approval_with_one_install() ->
     assert "check-cos-approval-gateway.mjs" in approval_group
     assert 'if [[ "${1:-}" == --self-reminder ]]; then' in approval_group
     assert "check-self-reminder-gateway.mjs" in approval_group
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ["none", "missing_test", "missing_module", "neighbor", "mode", "partial"],
+)
+def test_retained_tooling_scope_keeps_complete_proof_and_closed_diagnostic_inputs(
+    repository, mutation
+):
+    path, _ = repository
+    base, _ = _updater_candidate(path)
+    for name in UPDATER_TOOLING_PATHS:
+        if (mutation == "missing_test" and name.endswith("test_doctor_tooling.py")) or (
+            mutation == "missing_module" and name == "bootstrap/doctor_tooling.py"
+        ):
+            continue
+        _commit(path, name, "# focused tooling proof\n")
+    _tooling_shared(path, current=True)
+    if mutation == "neighbor":
+        name = "bootstrap/doctor.py"
+        _commit(
+            path,
+            name,
+            (path / name).read_text() + "\nUNRELATED_DIAGNOSTIC_CHANGE = True\n",
+        )
+    elif mutation == "mode":
+        (path / "bootstrap/doctor.py").chmod(0o755)
+        _git(path, "add", "bootstrap/doctor.py")
+        _git(path, "commit", "-m", "unexpected executable mode")
+    elif mutation == "partial":
+        name = "bootstrap/service_settlement.py"
+        _commit(
+            path,
+            name,
+            _git(ROOT, "show", f"62174cc3babee88698b2f2282cacfa336fa125dd:{name}")
+            + "\n",
+        )
+    head = _git(path, "rev-parse", "HEAD")
+    proof = select_scope(path, _event(base, head), checkout_sha=head)
+    assert proof["scope"] == (
+        "updater-delivery" if mutation == "none" else "system-wide"
+    )
+    script = (ROOT / UPDATER_CHECK_SCRIPT).read_text()
+    assert "doctor_tooling" in script and "test_restore_settlement.py" in script
