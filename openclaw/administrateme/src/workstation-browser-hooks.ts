@@ -36,13 +36,9 @@ export function registerWorkstationBrowserHooks(api: OpenClawPluginApi, runtime:
       "administrateme-browser-read-v1", runtime.transport.config.baseUrl, context.sessionKey, call,
     ])).digest("hex");
   };
-  api.on("before_prompt_build", async (_event, context) => {
-    if (!service(context)) return;
-    try {
-      const current = await policy(context);
-      if (current.bound) return { toolsAllow: current.mode === "read" ? ["browser"] : [] };
-    } catch { return { toolsAllow: [] }; }
-  });
+  // Intentionally no matcher: pinned Codex maps this registration to match-all
+  // native PreToolUse. Preserve per-call policy and result withholding; do not
+  // request the unsupported before_prompt_build.toolsAllow capability.
   api.on("before_tool_call", async (event, context) => {
     if (event.toolName !== "browser" && !service(context)) return;
     try {
