@@ -2352,7 +2352,10 @@ def test_service_work_worker_requires_affected_identity_replay_and_recovery_chec
     assert "reviewed_source_status" in native
 
 
-@pytest.mark.parametrize("failure", ["none", "python", "plugin", "static", "dirty"])
+@pytest.mark.parametrize(
+    "failure",
+    ["none", "python", "plugin", "static", "dirty", "stream-error", "streaming"],
+)
 def test_service_work_waits_for_every_group_and_rejects_any_failure(
     tmp_path: Path, failure: str
 ) -> None:
@@ -2368,6 +2371,14 @@ def test_service_work_waits_for_every_group_and_rejects_any_failure(
     script.write_text(
         """set -euo pipefail
 record() {
+  if [[ "$FAILED_GROUP" == streaming && "$1" == python ]]; then
+    # Python cannot finish until plugin output has already crossed the stream.
+    for attempt in {1..500}; do
+      [[ ! -f "$RUNNER_TEMP/plugin-streamed" ]] || break
+      sleep 0.01
+    done
+    test -f "$RUNNER_TEMP/plugin-streamed" || return 23
+  fi
   printf '%s completed\\n' "$1"
   touch "$RUNNER_TEMP/$1.completed"
   [[ "$FAILED_GROUP" != "$1" ]] || return 17
@@ -2375,6 +2386,13 @@ record() {
 python_checks() { record python; }
 plugin_checks() { record plugin; }
 static_checks() { record static; }
+tee() {
+  command tee "$@"
+  if [[ "$1" == "$RUNNER_TEMP/cos-service-work-plugin.log" ]]; then
+    touch "$RUNNER_TEMP/plugin-streamed"
+  fi
+  [[ "$FAILED_GROUP" != stream-error ]] || return 17
+}
 git() {
   for name in python plugin static; do
     test -f "$RUNNER_TEMP/$name.completed" || return 79
@@ -2395,10 +2413,16 @@ git() {
         text=True,
         timeout=10,
     )
-    assert result.returncode == (0 if failure == "none" else 1), result.stderr
+    assert result.returncode == (0 if failure in {"none", "streaming"} else 1), (
+        result.stderr
+    )
+    if failure == "streaming":
+        assert result.stdout.index("plugin completed") < result.stdout.index(
+            "python completed"
+        )
     assert (tmp_path / "clean-checked").is_file()
     for group in ("python", "plugin", "static"):
-        status = 17 if group == failure else 0
+        status = 17 if group == failure or failure == "stream-error" else 0
         assert f"{group} checks (exit {status})" in result.stdout
         assert (tmp_path / f"cos-service-work-{group}.log").read_text() == (
             f"{group} completed\n"
