@@ -71,7 +71,7 @@ from bootstrap.provider_binding_transition import (
     ProviderBindingTransitionError,
     prepare_live_provider_binding_transition,
 )
-from bootstrap.runtime_compatibility import retained_python_pin
+from bootstrap.runtime_compatibility import retained_node_pin, retained_python_pin
 from bootstrap.release_history import retained_predecessor
 from bootstrap.recovery_readiness import (
     BASELINE_CONTROLS,
@@ -4291,21 +4291,32 @@ class UpgradeManager:
         if self.test_mode:
             return source
         try:
-            pin = retained_python_pin(
-                load_versions(self.root), load_versions(release), commit
+            controller_versions, retained_versions = (
+                load_versions(self.root),
+                load_versions(release),
             )
+            python_pin = retained_python_pin(
+                controller_versions, retained_versions, commit
+            )
+            node_pin = retained_node_pin(controller_versions, retained_versions, commit)
         except (KeyError, TypeError, ValueError) as exc:
             raise UpgradeError(
-                "retained predecessor Python compatibility is invalid"
+                "retained predecessor runtime compatibility is invalid"
             ) from exc
-        self._validate_runtime(release, retained_python=pin)
+        self._validate_runtime(
+            release, retained_python=python_pin, retained_node=node_pin
+        )
         return source
 
     def _validate_prepared_runtime(self, release: Path) -> None:
         self._validate_runtime(release)
 
     def _validate_runtime(
-        self, release: Path, *, retained_python: str | None = None
+        self,
+        release: Path,
+        *,
+        retained_python: str | None = None,
+        retained_node: str | None = None,
     ) -> None:
         if self.test_mode:
             return
@@ -4342,7 +4353,7 @@ class UpgradeManager:
             raise UpgradeError("candidate preparation requires the pinned Node formula")
         self._probe_runtime_version(
             node,
-            expected=f"v{versions['node']['preferred']}",
+            expected=f"v{retained_node or versions['node']['preferred']}",
             label="Node",
             environment=environment,
         )

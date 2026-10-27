@@ -23,6 +23,7 @@ from fastapi.testclient import TestClient
 import adminme.runtime.application as application
 from bootstrap.contracts import DeploymentPaths, load_versions
 from bootstrap.upgrade import UpgradeError, UpgradeManager
+from bootstrap.source_identity import verify_release_source_identity
 from adminme.events.log import EventLog
 from adminme.events.writer import EventWriter
 from adminme.source_assessment_revision import RevisionRefused
@@ -845,7 +846,7 @@ def test_currentness_preserves_closed_receipts_and_exact_predecessor(
 def test_reviewed_retained_patch_proves_source_runtime_and_production_replay(
     tmp_path, monkeypatch
 ):
-    """Hosted CI uses the actual pinned interpreter and archived rollback code."""
+    """Real archived Python replay; unlisted Node 24.19 stays ineligible."""
     monkeypatch.setattr(legacy, "PREDECESSOR", PREDECESSOR)
     predecessor = legacy._predecessor(tmp_path)
     versions = load_versions(predecessor)
@@ -877,8 +878,20 @@ def test_reviewed_retained_patch_proves_source_runtime_and_production_replay(
     head = subprocess.check_output(
         ["git", "-C", str(ROOT), "rev-parse", "HEAD"], text=True, timeout=30
     ).strip()
-    evidence = manager._validate_retained_runtime(
-        predecessor, repository=ROOT, commit=PREDECESSOR, retained_by_commit=head
+    # Python's existing exception remains real, but this older release has no
+    # reviewed Node exception. Node refusal must not erase the Python replay
+    # proof below or silently widen production rollback eligibility.
+    with pytest.raises(UpgradeError, match="wrong pinned Node"):
+        manager._validate_retained_runtime(
+            predecessor, repository=ROOT, commit=PREDECESSOR, retained_by_commit=head
+        )
+    evidence = verify_release_source_identity(
+        predecessor,
+        repository=ROOT,
+        commit=PREDECESSOR,
+        retained_by_commit=head,
+        allow_legacy_tree=True,
+        require_tracked_tree=True,
     )
     assert evidence["tracked_source_tree_matches"] is True
     with pytest.raises(UpgradeError, match="wrong pinned Python formula"):
@@ -913,4 +926,161 @@ def test_reviewed_retained_patch_proves_source_runtime_and_production_replay(
     with pytest.raises(UpgradeError, match="source is invalid"):
         manager._validate_retained_runtime(
             predecessor, repository=ROOT, commit=PREDECESSOR, retained_by_commit=head
+        )
+
+
+@pytest.mark.parametrize(
+    "predecessor_commit",
+    [
+        "471d20ec71d40d59490ff763be524d73a3c3cb7d",
+        "02c2957acc4e659a19720db5bfb296ebba710bbd",
+    ],
+)
+def test_reviewed_retained_node_launches_after_interrupted_activation(
+    tmp_path, monkeypatch, predecessor_commit
+):
+    """Real source/version/exec boundaries; launchd and the Gateway are fixtures.
+
+    Pinned native OpenClaw startup remains the separate existing native probe.
+    This test proves the production recovery path can launch each exact archived
+    service wrapper on real Node 24.22.1, without touching OS services or secrets.
+    """
+    from types import SimpleNamespace
+    from tests.unit.bootstrap import test_activation_transaction as activation
+    from tests.unit.bootstrap.intake_fixture import stub_uninitialized_intake
+
+    head = subprocess.check_output(
+        ["git", "-C", str(ROOT), "rev-parse", "HEAD"], text=True, timeout=30
+    ).strip()
+    monkeypatch.setattr(activation, "PREDECESSOR_COMMIT", predecessor_commit)
+    monkeypatch.setattr(activation, "CANDIDATE_COMMIT", head)
+    monkeypatch.setattr(legacy, "PREDECESSOR", predecessor_commit)
+    paths = activation._paths(tmp_path)
+    stub_uninitialized_intake(monkeypatch, paths)
+    value = activation._journal_value(paths)
+    predecessor = paths.app_dir / "releases" / predecessor_commit
+    shutil.rmtree(predecessor)
+    legacy._predecessor(tmp_path).rename(predecessor)
+    predecessor.chmod(0o700)
+    versions = load_versions(predecessor)
+    assert versions["node"]["preferred"] == "24.19.0"
+    assert load_versions(ROOT)["node"]["preferred"] == "24.22.1"
+    python = Path(sys.executable)
+    venv_bin = predecessor / ".venv" / "bin"
+    venv_bin.mkdir(mode=0o700, parents=True)
+    (venv_bin / "python").symlink_to(python)
+    for name in ("node_modules", "dist"):
+        (predecessor / "openclaw" / "administrateme" / name).mkdir(mode=0o700)
+    poetry_path, node_path = shutil.which("poetry"), shutil.which("node")
+    assert poetry_path and node_path
+    node_bin = Path(node_path).parent
+    manager = UpgradeManager(paths, root=ROOT, test_mode=False)
+    monkeypatch.setattr(
+        manager,
+        "_runtime_coordinates",
+        lambda release: (
+            load_versions(release),
+            python,
+            release / ".venv" / "bin" / "python",
+            Path(poetry_path),
+            node_bin,
+        ),
+    )
+    with pytest.raises(UpgradeError, match="wrong pinned Node"):
+        manager._validate_prepared_runtime(predecessor)
+    proof = manager._validate_retained_runtime(
+        predecessor, repository=ROOT, commit=predecessor_commit, retained_by_commit=head
+    )
+    assert proof["tracked_source_tree_matches"] is True
+
+    owner = manager.activation_journal
+    owner.transition(owner.create(value), "pointer_selecting")
+    pointer_path = paths.app_dir / "current-release.json"
+    readiness_path = paths.instance_dir / "config" / "deployment-readiness.json"
+    pointer_path.write_text('{"interrupted":true}')
+    readiness_path.write_text('{"interrupted":true}')
+    pointer_path.chmod(0o600)
+    readiness_path.chmod(0o600)
+    (paths.instance_dir / "config" / "secret-references.json").write_text(
+        '{"references":{"openclaw_shared":"fixture-only"}}'
+    )
+    gateway = tmp_path / "synthetic-gateway.mjs"
+    gateway.write_text(
+        "#!/usr/bin/env node\n"
+        "if (process.argv[2] === '--version') console.log('2026.7.2');\n"
+        "else { if (process.argv.slice(2).join(' ') !== 'gateway run') process.exit(2);"
+        " console.log(JSON.stringify({node:process.versions.node, launched:true})); }\n"
+    )
+    gateway.chmod(0o700)
+    launches = []
+    events = []
+
+    def start():
+        # Execute the immutable predecessor's real service wrapper. Only OS
+        # coordinates, Keychain and the external Gateway are fixture substitutes.
+        script = (
+            "from pathlib import Path\nfrom types import SimpleNamespace\n"
+            "import bootstrap.openclaw_service as service\n"
+            f"paths=SimpleNamespace(instance_dir=Path({str(paths.instance_dir)!r}))\n"
+            "service.DeploymentPaths=SimpleNamespace(from_root=lambda *a,**k:paths)\n"
+            f"service.resolve_reviewed_openclaw=lambda paths:{str(gateway)!r}\n"
+            "service.secret_store=lambda paths:SimpleNamespace(get=lambda ref:b'fixture-only')\n"
+            "service.service_environment=lambda:{}\n"
+            "service.main()\n"
+        )
+        environment = manager._runtime_probe_environment(node_bin)
+        environment.update(
+            {
+                "ADMINME_INSTANCE_ROOT": str(paths.root),
+                "ADMINME_REPOSITORY_ROOT": str(predecessor),
+                "PYTHONPATH": os.pathsep.join(
+                    (str(predecessor), str(predecessor / "bridge"))
+                ),
+            }
+        )
+        result = subprocess.run(
+            [str(python), "-c", script],
+            cwd=predecessor,
+            env=environment,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=True,
+        )
+        launches.append(json.loads(result.stdout))
+        events.append("start")
+        return SimpleNamespace(status="healthy", runtime="running", openclaw="running")
+
+    manager.services = SimpleNamespace(stop=lambda: events.append("stop"), start=start)
+    monkeypatch.setattr(
+        manager, "_install_reviewed_openclaw", lambda release: events.append("install")
+    )
+    monkeypatch.setattr(
+        "bootstrap.upgrade.reconcile_administrateme_plugin", lambda *a, **k: None
+    )
+    monkeypatch.setattr("bootstrap.upgrade.install_launch_agents", lambda *a, **k: None)
+    monkeypatch.setattr(
+        manager, "_write_refreshed_runtime_binding", lambda *a, **k: None
+    )
+    monkeypatch.setattr(
+        manager,
+        "_post_switch_doctor",
+        lambda release: {"status": "healthy", "checks": []},
+    )
+    result = manager._recover_interrupted_transaction(ROOT)
+    assert result["status"] == "recovered"
+    assert launches == [{"node": "24.22.1", "launched": True}]
+    assert events == ["stop", "install", "start"]
+    assert json.loads(pointer_path.read_text()) == value["initial_pointer"]
+    assert json.loads(readiness_path.read_text()) == value["initial_readiness"]
+    assert not owner.path.exists()
+    assert json.loads(Path(result["history"]).read_text())["phase"] == "recovered"
+    lock = predecessor / "poetry.lock"
+    lock.write_bytes(lock.read_bytes() + b"\n# unreviewed change\n")
+    with pytest.raises(UpgradeError, match="source is invalid"):
+        manager._validate_retained_runtime(
+            predecessor,
+            repository=ROOT,
+            commit=predecessor_commit,
+            retained_by_commit=head,
         )

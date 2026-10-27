@@ -231,10 +231,10 @@ def test_formula_node_resolution_ignores_ambient_node_and_checks_exact_version(
     fake_bin.mkdir()
     formula_bin.mkdir(parents=True)
     ambient_node = fake_bin / "node"
-    ambient_node.write_text("#!/bin/bash\nprintf 'v22.23.2\\n'\n", encoding="utf-8")
+    ambient_node.write_text("#!/bin/bash\nprintf 'v26.12.1\\n'\n", encoding="utf-8")
     ambient_node.chmod(0o755)
     formula_node = formula_bin / "node"
-    formula_node.write_text("#!/bin/bash\nprintf 'v24.19.0\\n'\n", encoding="utf-8")
+    formula_node.write_text("#!/bin/bash\nprintf 'v24.22.1\\n'\n", encoding="utf-8")
     formula_node.chmod(0o755)
     brew = fake_bin / "brew"
     brew.write_text(
@@ -250,7 +250,7 @@ def test_formula_node_resolution_ignores_ambient_node_and_checks_exact_version(
         [
             "/bin/bash",
             "-c",
-            'source "$1"; resolve_formula_node node@24 24.19.0',
+            'source "$1"; resolve_formula_node node@24 24.22.1',
             "bash",
             str(common),
         ],
@@ -1988,12 +1988,12 @@ def test_runtime_baseline_change_requires_explicit_pre_switch_approval(
         "node": {
             "from": {
                 "compatible": ">=22.22.3,<23",
-                "preferred": "24.19.0",
+                "preferred": "24.22.1",
                 "formula": "node@24",
             },
             "to": {
                 "compatible": ">=24.15,<25",
-                "preferred": "24.19.0",
+                "preferred": "24.22.1",
                 "formula": "node@24",
             },
         },
