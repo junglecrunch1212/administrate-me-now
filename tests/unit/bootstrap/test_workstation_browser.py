@@ -897,3 +897,283 @@ def test_browser_source_selection_requires_protected_controller_and_exact_instal
             "controller_commit": controller,
             "installed_source": {"tracked_source_tree_matches": True},
         }
+
+
+def _preference_fixture(tmp_path, monkeypatch):
+    fixture = _reconciliation_fixture(tmp_path, monkeypatch, agents="list")
+    fixture.previous["browser"] = {"enabled": True, "evaluateEnabled": True}
+    fixture.prior_raw = json.dumps(fixture.previous, indent=2).encode() + b"\n"
+    _private_write(fixture.gateway, fixture.prior_raw)
+    _private_write(fixture.arguments["previous_gateway_path"], fixture.prior_raw)
+    before = capture_deployment_snapshot(fixture.paths)
+    readiness = json.loads(fixture.readiness_bytes)
+    readiness["deployment_binding"] = browser._browser_binding(before)
+    readiness["provider_effects"] = {
+        "windows": [
+            {"started_at": "2026-08-25T09:00:00Z", "ended_at": "2026-08-25T09:05:00Z"},
+            {"started_at": "2026-08-26T09:00:00Z", "ended_at": "2026-08-26T09:05:00Z"},
+        ],
+        "checked_at": "2026-08-27T15:00:00Z",
+    }
+    fixture.readiness_bytes = json.dumps(readiness, indent=2).encode() + b"\n"
+    _private_write(fixture.readiness_path, fixture.readiness_bytes)
+    fixture.patch = {
+        "agents": {"defaults": {"thinkingDefault": "high"}},
+        "logging": {"audit": {"messages": "direct"}},
+        "skills": {"install": {"nodeManager": "npm"}},
+        "tools": {
+            "loopDetection": {"enabled": True},
+            "swarm": {"enabled": True},
+            "toolSearch": {"enabled": True, "mode": "directory"},
+        },
+    }
+    fixture.current = deepcopy(fixture.previous)
+    fixture.current["agents"]["defaults"]["thinkingDefault"] = "high"
+    for name in ("logging", "skills", "tools"):
+        fixture.current[name] = deepcopy(fixture.patch[name])
+    fixture.arguments["authorization_reference"] = (
+        "owner-request:retain-native-preferences"
+    )
+    _write_preference_inputs(fixture)
+    return fixture
+
+
+def _write_preference_inputs(fixture):
+    private_file(fixture.gateway, fixture.current)
+    private_file(
+        fixture.arguments["native_snapshot_path"],
+        {
+            "valid": True,
+            "hash": hashlib.sha256(fixture.gateway.read_bytes()).hexdigest(),
+        },
+    )
+    path = fixture.arguments["approved_patch_path"]
+    private_file(
+        path,
+        {
+            "baseHash": hashlib.sha256(fixture.prior_raw).hexdigest(),
+            "raw": json.dumps(fixture.patch),
+        },
+    )
+    fixture.arguments["approved_patch_sha256"] = hashlib.sha256(
+        path.read_bytes()
+    ).hexdigest()
+
+
+def _reconcile_preferences(fixture, **kwargs):
+    return browser.reconcile_native_preferences_readiness(
+        fixture.paths, **(fixture.arguments | kwargs)
+    )
+
+
+def test_native_preferences_repair_maintenance_binding_without_refresh_or_config_write(
+    tmp_path, monkeypatch
+):
+    from bootstrap.cos_channel_activation import CoSActivationError, CoSChannelActivator
+
+    fixture = _preference_fixture(tmp_path, monkeypatch)
+    activator = SimpleNamespace(
+        paths=fixture.paths, config_dir=fixture.readiness_path.parent
+    )
+    with pytest.raises(CoSActivationError, match="stale"):
+        CoSChannelActivator._bound_snapshot(activator, "a" * 40)
+    gateway = fixture.gateway.read_bytes()
+    untouched = {
+        p: p.read_bytes()
+        for p in fixture.readiness_path.parent.iterdir()
+        if p != fixture.readiness_path
+    }
+    preflight = _reconcile_preferences(fixture)
+    assert fixture.readiness_path.read_bytes() == fixture.readiness_bytes
+    result = _reconcile_preferences(
+        fixture, plan_sha256=preflight["plan_sha256"], apply=True
+    )
+    assert result["state"] == "native_preference_readiness_reconciled"
+    assert result["native_config_written"] is False
+    assert result["provider_effect_count"] == 0
+    assert result["acceptance_evidence_refreshed"] is False
+    assert fixture.gateway.read_bytes() == gateway
+    assert all(p.read_bytes() == payload for p, payload in untouched.items())
+    current = capture_deployment_snapshot(fixture.paths)
+    assert CoSChannelActivator._bound_snapshot(activator, "a" * 40) == current.public()
+    expected = json.loads(fixture.readiness_bytes)
+    expected["deployment_binding"]["configuration_fingerprint"] = (
+        current.configuration_fingerprint
+    )
+    assert json.loads(fixture.readiness_path.read_bytes()) == expected
+    receipt = (
+        fixture.paths.app_dir
+        / f"native-preference-readiness-{preflight['plan_sha256']}.json"
+    )
+    record = json.loads(receipt.read_bytes())
+    assert record["plan"]["contract"] == browser.PREFERENCE_TRANSITION
+    assert (
+        base64.b64decode(record["plan"]["previous_readiness_base64"])
+        == fixture.readiness_bytes
+    )
+    assert "synthetic-private-credential" not in receipt.read_text()
+    assert receipt.stat().st_mode & 0o777 == 0o600
+    monkeypatch.setattr(
+        browser, "_write_private_at", lambda *a, **k: pytest.fail("replay writes")
+    )
+    assert (
+        _reconcile_preferences(
+            fixture, plan_sha256=preflight["plan_sha256"], apply=True
+        )
+        == result
+    )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "grant",
+        "routing",
+        "credential",
+        "browser",
+        "extra",
+        "integer",
+        "replacement",
+        "deleted",
+    ],
+)
+def test_native_preferences_reject_every_other_native_delta(
+    tmp_path, monkeypatch, mutation
+):
+    fixture = _preference_fixture(tmp_path, monkeypatch)
+    if mutation == "grant":
+        fixture.current["agents"]["list"][1]["tools"]["allow"].append("browser")
+    elif mutation == "routing":
+        fixture.current["bindings"].append({"agentId": "unapproved"})
+    elif mutation == "credential":
+        fixture.current["gateway"]["auth"]["token"] = "changed-synthetic-only"
+    elif mutation == "browser":
+        fixture.current["browser"]["evaluateEnabled"] = False
+    elif mutation == "extra":
+        fixture.patch["tools"]["exec"] = {"security": "full"}
+        fixture.current["tools"]["exec"] = {"security": "full"}
+    elif mutation == "integer":
+        fixture.patch["tools"]["swarm"]["enabled"] = 1
+        fixture.current["tools"]["swarm"]["enabled"] = 1
+    elif mutation == "replacement":
+        fixture.previous["agents"]["defaults"]["thinkingDefault"] = "low"
+        fixture.prior_raw = json.dumps(fixture.previous).encode()
+        _private_write(fixture.arguments["previous_gateway_path"], fixture.prior_raw)
+    else:
+        del fixture.current["plugins"]
+    _write_preference_inputs(fixture)
+    with pytest.raises(ValueError):
+        _reconcile_preferences(fixture)
+    assert fixture.readiness_path.read_bytes() == fixture.readiness_bytes
+    assert not (fixture.paths.app_dir / browser.READINESS_JOURNAL).exists()
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ["prior", "current", "patch", "native-invalid", "authority", "provider-coordinate"],
+)
+def test_native_preferences_require_exact_authentic_complete_binding(
+    tmp_path, monkeypatch, mutation
+):
+    fixture = _preference_fixture(tmp_path, monkeypatch)
+    if mutation == "prior":
+        _private_write(
+            fixture.arguments["previous_gateway_path"], fixture.prior_raw + b" "
+        )
+    elif mutation == "current":
+        _private_write(fixture.gateway, fixture.gateway.read_bytes() + b" ")
+    elif mutation == "patch":
+        fixture.arguments["approved_patch_sha256"] = "0" * 64
+    elif mutation == "native-invalid":
+        snapshot = json.loads(fixture.arguments["native_snapshot_path"].read_bytes())
+        snapshot["valid"] = False
+        private_file(fixture.arguments["native_snapshot_path"], snapshot)
+    elif mutation == "authority":
+        fixture.arguments["authorization_reference"] = " "
+    else:
+        private_file(fixture.readiness_path.parent / "adapters.json", {"changed": True})
+    with pytest.raises(ValueError):
+        _reconcile_preferences(fixture)
+    assert fixture.readiness_path.read_bytes() == fixture.readiness_bytes
+
+
+@pytest.mark.parametrize("phase", ["journal", "readiness", "receipt", "cleanup"])
+def test_native_preferences_complete_exact_interrupted_publication(
+    tmp_path, monkeypatch, phase
+):
+    fixture = _preference_fixture(tmp_path, monkeypatch)
+    digest = _reconcile_preferences(fixture)["plan_sha256"]
+    target = {
+        "journal": browser.READINESS_JOURNAL,
+        "readiness": fixture.readiness_path.name,
+        "receipt": f"native-preference-readiness-{digest}.json",
+    }.get(phase)
+    write, unlink = browser._write_private_at, browser.os.unlink
+
+    def interrupted_write(descriptor, name, payload, *, replace):
+        write(descriptor, name, payload, replace=replace)
+        if name == target:
+            raise RuntimeError("synthetic interruption")
+
+    def interrupted_unlink(name, **kwargs):
+        if name == browser.READINESS_JOURNAL:
+            raise RuntimeError("synthetic interruption")
+        return unlink(name, **kwargs)
+
+    with monkeypatch.context() as context:
+        context.setattr(browser, "_write_private_at", interrupted_write)
+        if phase == "cleanup":
+            context.setattr(browser.os, "unlink", interrupted_unlink)
+        with pytest.raises(RuntimeError, match="interruption"):
+            _reconcile_preferences(fixture, plan_sha256=digest, apply=True)
+    with pytest.raises(CandidateReadinessError, match="transition recovery"):
+        capture_deployment_snapshot(fixture.paths)
+    with pytest.raises(ValueError, match="exact pending"):
+        _reconcile_preferences(fixture)
+    with pytest.raises(ValueError, match="authority or deployment changed"):
+        _reconcile_preferences(
+            fixture,
+            plan_sha256=digest,
+            apply=True,
+            authorization_reference="different-request",
+        )
+    with pytest.raises(ValueError, match="journal is invalid"):
+        _reconcile(fixture, plan_sha256=digest, apply=True)
+    assert (
+        _reconcile_preferences(fixture, plan_sha256=digest, apply=True)["state"]
+        == "native_preference_readiness_reconciled"
+    )
+    assert not (fixture.paths.app_dir / browser.READINESS_JOURNAL).exists()
+
+
+def test_native_preferences_cli_uses_separate_closed_operation(
+    tmp_path, monkeypatch, capsys
+):
+    fixture = _preference_fixture(tmp_path, monkeypatch)
+    args = fixture.arguments
+    monkeypatch.setattr(
+        browser.sys,
+        "argv",
+        [
+            "workstation_browser",
+            "reconcile-native-preferences",
+            "--instance-root",
+            str(fixture.paths.root),
+            "--previous-native-config",
+            str(args["previous_gateway_path"]),
+            "--approved-patch",
+            str(args["approved_patch_path"]),
+            "--approved-patch-sha256",
+            args["approved_patch_sha256"],
+            "--authorization-reference",
+            args["authorization_reference"],
+            "--current-snapshot",
+            str(args["native_snapshot_path"]),
+        ],
+    )
+    assert browser.main() == 0
+    assert (
+        json.loads(capsys.readouterr().out)["state"]
+        == "native_preference_readiness_preflight"
+    )
+    assert fixture.readiness_path.read_bytes() == fixture.readiness_bytes

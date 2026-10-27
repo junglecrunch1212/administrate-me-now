@@ -1,4 +1,4 @@
-"""Prepare a native browser route and provision its private verified tab policy.
+"""Prepare a browser route, private tab policy and closed readiness reconciliations.
 
 Only an operator uses this command after the guarded component is deployed.
 Preparation does not activate the Gateway, install/pair an extension, import a
@@ -63,6 +63,7 @@ from bootstrap.source_identity import (
 
 READINESS_TRANSITION = "browser-readiness-reconciliation-v1"
 READINESS_JOURNAL = "browser-readiness-transition.json"
+PREFERENCE_TRANSITION = "native-preference-readiness-reconciliation-v1"
 _HEX_64 = re.compile(r"[0-9a-f]{64}")
 _MAX_BROWSER_RECORD_BYTES = 4 * 1024 * 1024
 
@@ -166,7 +167,56 @@ def _merge_browser_patch(
     return result
 
 
-def _browser_reconciliation_plan(
+# These are already-present native preferences, not agent/tool/provider grants.
+# Only adding these exact typed values is supported by this reconciliation.
+_NATIVE_PREFERENCE_ADDITIONS: tuple[tuple[tuple[str, ...], Any], ...] = (
+    (("agents", "defaults", "thinkingDefault"), "high"),
+    (("logging", "audit", "messages"), "direct"),
+    (("skills", "install", "nodeManager"), "npm"),
+    (("tools", "loopDetection", "enabled"), True),
+    (("tools", "swarm", "enabled"), True),
+    (("tools", "toolSearch"), {"enabled": True, "mode": "directory"}),
+)
+
+
+def _require_preference_additions(
+    previous: dict[str, Any], current: dict[str, Any], patch: dict[str, Any]
+) -> None:
+    admitted: dict[str, Any] = {}
+    expected = copy.deepcopy(previous)
+    for coordinate, value in _NATIVE_PREFERENCE_ADDITIONS:
+        proposed: Any = patch
+        for name in coordinate:
+            if not isinstance(proposed, dict) or name not in proposed:
+                break
+            proposed = proposed[name]
+        else:
+            if _canonical(proposed) != _canonical(value):
+                raise ValueError("native preference value is not reviewed")
+            before = previous
+            for name in coordinate[:-1]:
+                if name not in before:
+                    before = {}
+                    break
+                if not isinstance(before[name], dict):
+                    raise ValueError("native preference parent is not an object")
+                before = before[name]
+            if coordinate[-1] in before:
+                raise ValueError("native preferences may only add absent values")
+            for document in (admitted, expected):
+                target = document
+                for name in coordinate[:-1]:
+                    target = target.setdefault(name, {})
+                target[coordinate[-1]] = copy.deepcopy(value)
+    if (
+        not admitted
+        or _canonical(admitted) != _canonical(patch)
+        or _canonical(expected) != _canonical(current)
+    ):
+        raise ValueError("native delta is not exact reviewed preference additions")
+
+
+def _native_reconciliation_plan(
     paths: DeploymentPaths,
     *,
     previous_gateway: bytes,
@@ -175,6 +225,7 @@ def _browser_reconciliation_plan(
     authorization_reference: str,
     native_snapshot: dict[str, Any],
     previous_readiness: bytes,
+    preferences: bool = False,
 ) -> tuple[dict[str, Any], bytes]:
     _browser_require_settled(paths)
     authorization_reference = _browser_authority(authorization_reference)
@@ -202,25 +253,32 @@ def _browser_reconciliation_plan(
     previous = _json_no_duplicates(previous_gateway, label="prior native config")
     current = _json_no_duplicates(current_gateway, label="current native config")
     patch = _json_no_duplicates(approved["raw"].encode(), label="native browser delta")
-    snapshot = {"valid": True, "hash": previous_hash, "config": previous}
-    candidates = []
-    for disable in (False, True):
-        try:
-            prepared = prepare_native_patch(snapshot, paths, release, disable=disable)
-        except (ValueError, KeyError, TypeError):
-            continue
-        candidate = _json_no_duplicates(
-            prepared["raw"].encode(), label="prepared delta"
-        )
-        candidates.append(candidate)
-        if "agents" in candidate:
-            # An earlier transport-only preparation remains valid after a route
-            # is provisioned; it cannot acquire the newly admissible tool grant.
-            candidates.append(
-                {key: value for key, value in candidate.items() if key != "agents"}
+    if preferences:
+        _require_preference_additions(previous, current, patch)
+    else:
+        snapshot = {"valid": True, "hash": previous_hash, "config": previous}
+        candidates = []
+        for disable in (False, True):
+            try:
+                prepared = prepare_native_patch(
+                    snapshot, paths, release, disable=disable
+                )
+            except (ValueError, KeyError, TypeError):
+                continue
+            candidate = _json_no_duplicates(
+                prepared["raw"].encode(), label="prepared delta"
             )
-    if patch not in candidates or _merge_browser_patch(previous, patch) != current:
-        raise ValueError("native delta is not the exact reviewed browser preparation")
+            candidates.append(candidate)
+            if "agents" in candidate:
+                # An earlier transport-only preparation remains valid after a route
+                # is provisioned; it cannot acquire the newly admissible tool grant.
+                candidates.append(
+                    {key: value for key, value in candidate.items() if key != "agents"}
+                )
+        if patch not in candidates or _merge_browser_patch(previous, patch) != current:
+            raise ValueError(
+                "native delta is not the exact reviewed browser preparation"
+            )
     before = capture_deployment_snapshot(
         paths, gateway_payload_override=previous_gateway
     )
@@ -246,7 +304,7 @@ def _browser_reconciliation_plan(
     )
     next_readiness = _canonical(updated) + b"\n"
     plan = {
-        "contract": READINESS_TRANSITION,
+        "contract": PREFERENCE_TRANSITION if preferences else READINESS_TRANSITION,
         "source": source,
         "previous_snapshot": before.public(),
         "next_snapshot": after.public(),
@@ -262,7 +320,7 @@ def _browser_reconciliation_plan(
     return plan, next_readiness
 
 
-def reconcile_browser_readiness(
+def _reconcile_readiness(
     paths: DeploymentPaths,
     *,
     previous_gateway_path: Path,
@@ -272,8 +330,9 @@ def reconcile_browser_readiness(
     native_snapshot_path: Path,
     plan_sha256: str | None = None,
     apply: bool = False,
+    preferences: bool = False,
 ) -> dict[str, Any]:
-    """Preflight or complete one approved browser-only readiness reconciliation.
+    """Publish either closed native transition under the same recovery fence.
 
     Native configuration is never written. Applying requires the exact preflight
     digest. Repeating the same command completes an interrupted publication or
@@ -285,6 +344,8 @@ def reconcile_browser_readiness(
         raise ValueError(
             "applying browser reconciliation requires its exact preflight hash"
         )
+    transition = PREFERENCE_TRANSITION if preferences else READINESS_TRANSITION
+    prefix = "native-preference-readiness" if preferences else "browser-readiness"
     with deployment_operation_lock(paths), ExitStack() as stack:
         for directory in (
             paths.root,
@@ -306,9 +367,7 @@ def reconcile_browser_readiness(
         current_readiness = _browser_private(readiness_path)
         active_path = paths.app_dir / READINESS_JOURNAL
         receipt_path = (
-            paths.app_dir / f"browser-readiness-{plan_sha256}.json"
-            if plan_sha256
-            else None
+            paths.app_dir / f"{prefix}-{plan_sha256}.json" if plan_sha256 else None
         )
         completed = receipt_path is not None and os.path.lexists(receipt_path)
         retained: dict[str, Any] | None = None
@@ -320,8 +379,7 @@ def reconcile_browser_readiness(
                 if (
                     set(value) != {"plan", "plan_sha256"}
                     or not isinstance(value["plan"], dict)
-                    or value["plan_sha256"]
-                    != _digest_domain(READINESS_TRANSITION, value["plan"])
+                    or value["plan_sha256"] != _digest_domain(transition, value["plan"])
                 ):
                     raise ValueError("browser reconciliation journal is invalid")
                 if retained is not None and retained != value:
@@ -338,7 +396,7 @@ def reconcile_browser_readiness(
                 raise ValueError("original readiness evidence is invalid") from exc
         else:
             previous_readiness = current_readiness
-        plan, next_readiness = _browser_reconciliation_plan(
+        plan, next_readiness = _native_reconciliation_plan(
             paths,
             previous_gateway=previous_gateway,
             approved_patch=approved_patch,
@@ -346,8 +404,9 @@ def reconcile_browser_readiness(
             native_snapshot=native_snapshot,
             authorization_reference=authorization_reference,
             previous_readiness=previous_readiness,
+            preferences=preferences,
         )
-        digest = _digest_domain(READINESS_TRANSITION, plan)
+        digest = _digest_domain(transition, plan)
         record = {"plan": plan, "plan_sha256": digest}
         encoded = _canonical(record) + b"\n"
         if len(encoded) > _MAX_BROWSER_RECORD_BYTES:
@@ -369,11 +428,11 @@ def reconcile_browser_readiness(
                 "completed reconciliation cannot replay an earlier readiness state"
             )
         if apply:
-            receipt_path = paths.app_dir / f"browser-readiness-{digest}.json"
+            receipt_path = paths.app_dir / f"{prefix}-{digest}.json"
             if not os.path.lexists(active_path) and not os.path.lexists(receipt_path):
                 _write_private_at(app, READINESS_JOURNAL, encoded, replace=False)
             # Recheck the entire binding immediately before the single data write.
-            check, _ = _browser_reconciliation_plan(
+            check, _ = _native_reconciliation_plan(
                 paths,
                 previous_gateway=previous_gateway,
                 approved_patch=approved_patch,
@@ -381,6 +440,7 @@ def reconcile_browser_readiness(
                 native_snapshot=native_snapshot,
                 authorization_reference=authorization_reference,
                 previous_readiness=previous_readiness,
+                preferences=preferences,
             )
             if check != plan or _browser_private(readiness_path) != current_readiness:
                 raise ValueError("browser reconciliation changed before publication")
@@ -390,7 +450,7 @@ def reconcile_browser_readiness(
                 _write_private_at(
                     config, readiness_path.name, next_readiness, replace=True
                 )
-            check, _ = _browser_reconciliation_plan(
+            check, _ = _native_reconciliation_plan(
                 paths,
                 previous_gateway=previous_gateway,
                 approved_patch=approved_patch,
@@ -398,6 +458,7 @@ def reconcile_browser_readiness(
                 native_snapshot=native_snapshot,
                 authorization_reference=authorization_reference,
                 previous_readiness=previous_readiness,
+                preferences=preferences,
             )
             if check != plan or _browser_private(readiness_path) != next_readiness:
                 raise ValueError(
@@ -409,9 +470,7 @@ def reconcile_browser_readiness(
                 os.unlink(READINESS_JOURNAL, dir_fd=app)
                 os.fsync(app)
         return {
-            "state": "browser_readiness_reconciled"
-            if apply
-            else "browser_readiness_preflight",
+            "state": f"{prefix.replace('-', '_')}_{'reconciled' if apply else 'preflight'}",
             "plan_sha256": digest,
             "installed_commit": plan["previous_snapshot"]["predecessor_commit"],
             "controller_commit": plan["source"]["controller_commit"],
@@ -422,6 +481,56 @@ def reconcile_browser_readiness(
             "native_config_written": False,
             "acceptance_evidence_refreshed": False,
         }
+
+
+def reconcile_browser_readiness(
+    paths: DeploymentPaths,
+    *,
+    previous_gateway_path: Path,
+    approved_patch_path: Path,
+    approved_patch_sha256: str,
+    authorization_reference: str,
+    native_snapshot_path: Path,
+    plan_sha256: str | None = None,
+    apply: bool = False,
+) -> dict[str, Any]:
+    """Reconcile only the exact approved native browser preparation."""
+    return _reconcile_readiness(
+        paths,
+        previous_gateway_path=previous_gateway_path,
+        approved_patch_path=approved_patch_path,
+        approved_patch_sha256=approved_patch_sha256,
+        authorization_reference=authorization_reference,
+        native_snapshot_path=native_snapshot_path,
+        plan_sha256=plan_sha256,
+        apply=apply,
+        preferences=False,
+    )
+
+
+def reconcile_native_preferences_readiness(
+    paths: DeploymentPaths,
+    *,
+    previous_gateway_path: Path,
+    approved_patch_path: Path,
+    approved_patch_sha256: str,
+    authorization_reference: str,
+    native_snapshot_path: Path,
+    plan_sha256: str | None = None,
+    apply: bool = False,
+) -> dict[str, Any]:
+    """Retain only the closed already-present native preference additions."""
+    return _reconcile_readiness(
+        paths,
+        previous_gateway_path=previous_gateway_path,
+        approved_patch_path=approved_patch_path,
+        approved_patch_sha256=approved_patch_sha256,
+        authorization_reference=authorization_reference,
+        native_snapshot_path=native_snapshot_path,
+        plan_sha256=plan_sha256,
+        apply=apply,
+        preferences=True,
+    )
 
 
 def prepare_config(previous: Path, output: Path) -> dict[str, Any]:
@@ -772,15 +881,16 @@ def main() -> int:
     patch.add_argument("--output", type=Path, required=True)
     patch.add_argument("--previous-config-output", type=Path, required=True)
     patch.add_argument("--disable", action="store_true")
-    reconcile = commands.add_parser("reconcile-readiness")
-    reconcile.add_argument("--instance-root", type=Path, required=True)
-    reconcile.add_argument("--previous-native-config", type=Path, required=True)
-    reconcile.add_argument("--approved-patch", type=Path, required=True)
-    reconcile.add_argument("--approved-patch-sha256", required=True)
-    reconcile.add_argument("--authorization-reference", required=True)
-    reconcile.add_argument("--current-snapshot", type=Path, required=True)
-    reconcile.add_argument("--plan-sha256")
-    reconcile.add_argument("--apply", action="store_true")
+    for command in ("reconcile-readiness", "reconcile-native-preferences"):
+        reconcile = commands.add_parser(command)
+        reconcile.add_argument("--instance-root", type=Path, required=True)
+        reconcile.add_argument("--previous-native-config", type=Path, required=True)
+        reconcile.add_argument("--approved-patch", type=Path, required=True)
+        reconcile.add_argument("--approved-patch-sha256", required=True)
+        reconcile.add_argument("--authorization-reference", required=True)
+        reconcile.add_argument("--current-snapshot", type=Path, required=True)
+        reconcile.add_argument("--plan-sha256")
+        reconcile.add_argument("--apply", action="store_true")
     stage = commands.add_parser("stage-source-policy")
     stage.add_argument("--instance-root", type=Path, required=True)
     stage.add_argument("--input", type=Path, required=True)
@@ -803,8 +913,13 @@ def main() -> int:
                 previous_config_output=args.previous_config_output,
                 disable=args.disable,
             )
-        elif args.command == "reconcile-readiness":
-            result = reconcile_browser_readiness(
+        elif args.command in ("reconcile-readiness", "reconcile-native-preferences"):
+            reconcile_operation = (
+                reconcile_native_preferences_readiness
+                if args.command == "reconcile-native-preferences"
+                else reconcile_browser_readiness
+            )
+            result = reconcile_operation(
                 DeploymentPaths.from_root(args.instance_root),
                 previous_gateway_path=args.previous_native_config,
                 approved_patch_path=args.approved_patch,
