@@ -26,7 +26,7 @@ export async function startBrowserTransport({ directory, state, relayPort, gmail
     throw new Error(`Synthetic browser timeout: ${label}`);
   }
   let socket, relay; const pending = new Map(); let nextId = 1, rootSession;
-  const errors = [], bodyReads = [], url = gmailSelf
+  const errors = [], commands = [], url = gmailSelf
     ? "https://mail.google.com/mail/u/0/#inbox" : "https://example.com/cos-workstation-fixture";
   const requestUrl = url.split("#")[0];
   const send = (method, params = {}, sessionId) => new Promise((resolve, reject) => {
@@ -61,8 +61,20 @@ export async function startBrowserTransport({ directory, state, relayPort, gmail
     await send("Page.enable", {}, rootSession);
     await send("Page.navigate", { url }, rootSession);
     await until(async () => (await send("Runtime.evaluate", { expression: "document.querySelector('#account')?.textContent", returnByValue: true }, rootSession)).result?.value === "cos@example.invalid", "synthetic signed-in page");
+    // Playwright passes evaluate source as an argument to a generic utility
+    // function. Count actual page access, not substrings in CDP declarations.
+    const counter = await send("Runtime.evaluate", { expression: `(() => {
+      const read = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "innerText").get;
+      globalThis.fixturePrivateBodyReads = 0;
+      Object.defineProperty(document.body, "innerText", { configurable: true, get() {
+        globalThis.fixturePrivateBodyReads += 1;
+        return read.call(this);
+      } });
+      return true;
+    })()`, returnByValue: true }, rootSession);
+    assert.equal(counter.result?.value, true);
     return {
-      targetId, url, errors, bodyReads,
+      targetId, url, errors, commands,
       resource: { resource_id: "fixture-browser-resource", inventory_binding_id: "fixture-browser", binding_revision: 1, policy_revision: 1, target_evidence_reference: "synthetic-native-target", native_target_id: targetId, profile: "chrome", url,
         expected_identity: { account: "cos@example.invalid", workspace: "Synthetic household", ...(gmailSelf ? { role: "account user" } : {}) },
         ...(gmailSelf ? { identity_verifier: "gmail_self_mailbox_v1" } : {}),
@@ -72,7 +84,7 @@ export async function startBrowserTransport({ directory, state, relayPort, gmail
         const result = await send("Runtime.evaluate", { expression: `(() => {
           document.querySelector("#account").setAttribute("aria-label", "Google Account: Other Staff (other@example.invalid)");
           globalThis.fixturePrivateBodyReads = 0;
-          Object.defineProperty(document.body, "innerText", { get() {
+          Object.defineProperty(document.body, "innerText", { configurable: true, get() {
             globalThis.fixturePrivateBodyReads += 1;
             throw new Error("Wrong-account mailbox text was accessed");
           } });
@@ -81,7 +93,16 @@ export async function startBrowserTransport({ directory, state, relayPort, gmail
         assert.equal(result.result?.value, true);
       },
       async privateBodyReadCount() {
-        return (await send("Runtime.evaluate", { expression: "globalThis.fixturePrivateBodyReads", returnByValue: true }, rootSession)).result?.value;
+        let timer;
+        try {
+          const result = await Promise.race([
+            send("Runtime.evaluate", { expression: "globalThis.fixturePrivateBodyReads", returnByValue: true }, rootSession),
+            new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("Synthetic body-access counter unavailable")), 3000); }),
+          ]);
+          const count = result.result?.value;
+          assert(Number.isSafeInteger(count) && count >= 0, "Missing body-access counter is not zero");
+          return count;
+        } finally { clearTimeout(timer); }
       },
       async connectRelay() {
         const token = await until(async () => { try { return (await readFile(path.join(state, "credentials/browser-extension-relay.secret"), "utf8")).trim(); } catch { return null; } }, "relay secret");
@@ -92,16 +113,18 @@ export async function startBrowserTransport({ directory, state, relayPort, gmail
         relay.addEventListener("message", async ({ data }) => {
           const command = JSON.parse(String(data));
           if (command.type === "ping") { relay.send(JSON.stringify({ type: "pong" })); return; }
+          const metadata = { seq: command.seq, type: command.type, method: command.method, started_at_ms: Date.now(), state: "running" };
+          commands.push(metadata); if (commands.length > 200) commands.shift();
           try {
             let result = {};
             if (command.type === "attach") { assert.equal(command.tabId, 1); result = { targetId }; }
             else if (command.type === "cdp") {
               assert.equal(command.tabId, 1); assert.equal(command.sessionId, undefined, "no extra browser target");
-              if (command.method === "Runtime.callFunctionOn" && String(command.params?.functionDeclaration).includes("innerText")) bodyReads.push(command.params.functionDeclaration);
               result = await send(command.method, command.params, rootSession);
             } else if (command.type !== "detach") throw new Error("Fixture forbids browser creation/navigation/close operations");
+            metadata.state = "settled"; metadata.settled_at_ms = Date.now();
             relay.send(JSON.stringify({ type: "result", seq: command.seq, result }));
-          } catch (error) { errors.push(error.message); relay.send(JSON.stringify({ type: "error", seq: command.seq, message: "Synthetic extension command failed" })); }
+          } catch (error) { metadata.state = "error"; metadata.settled_at_ms = Date.now(); errors.push(error.message); relay.send(JSON.stringify({ type: "error", seq: command.seq, message: "Synthetic extension command failed" })); }
         });
         relay.send(JSON.stringify({ type: "hello", userAgent: "Synthetic Chrome fixture", browserVersion: version.Browser,
           extensionVersion: "0.0.0-fixture", tabs: [{ tabId: 1, url, title: "Synthetic CoS workspace", active: true }] }));

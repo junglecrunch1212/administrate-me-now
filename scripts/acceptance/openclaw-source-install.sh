@@ -2,6 +2,17 @@
 set -Eeuo pipefail
 umask 077
 
+# Compose proofs against one installed pin; unsupported selectors must not
+# silently omit a requested proof group.
+if [[ $# -gt 1 ]]; then
+  echo "Expected at most one native proof selector" >&2
+  exit 2
+fi
+case "${1:-}" in
+  ""|--service-work|--self-reminder|--service-work-and-approval) ;;
+  *) echo "Unsupported native proof selector" >&2; exit 2 ;;
+esac
+
 [[ "$(uname -s)" == "Darwin" && "$(uname -m)" == "arm64" ]] || {
   echo "OpenClaw source install proof requires Apple-silicon macOS" >&2
   exit 2
@@ -75,7 +86,7 @@ node "$REPOSITORY_ROOT/openclaw/administrateme/scripts/check-cos-permission-pins
 openclaw_commit="$("$python_bin" -c \
   'import json,sys; print(json.load(open(sys.argv[1]))["openclaw"]["commit"])' \
   "$REPOSITORY_ROOT/bootstrap/versions.json")"
-if [[ "${1:-}" == --service-work ]]; then
+if [[ "${1:-}" == --service-work || "${1:-}" == --service-work-and-approval ]]; then
   node "$REPOSITORY_ROOT/openclaw/administrateme/scripts/check-workstation-codex-policy.mjs" \
     "$TEST_ROOT/app/openclaw/$openclaw_commit" "$(poetry env info --executable)"
   node "$REPOSITORY_ROOT/openclaw/administrateme/scripts/check-cos-native-account-policy.mjs" \
@@ -90,9 +101,13 @@ if [[ "${1:-}" == --service-work ]]; then
     "$TEST_ROOT/app/openclaw/$openclaw_commit" --browser
   node "$REPOSITORY_ROOT/openclaw/administrateme/scripts/check-workstation-work-gateway.mjs" \
     "$TEST_ROOT/app/openclaw/$openclaw_commit" --browser-gmail
-else
-  node "$REPOSITORY_ROOT/openclaw/administrateme/scripts/check-cos-imessage-text.mjs" \
-    "$TEST_ROOT/app/openclaw/$openclaw_commit"
+fi
+if [[ "${1:-}" != --service-work ]]; then
+  # The service-work group already proves this boundary through Poetry.
+  if [[ "${1:-}" != --service-work-and-approval ]]; then
+    node "$REPOSITORY_ROOT/openclaw/administrateme/scripts/check-cos-imessage-text.mjs" \
+      "$TEST_ROOT/app/openclaw/$openclaw_commit"
+  fi
   node "$REPOSITORY_ROOT/openclaw/administrateme/scripts/check-cos-approval-gateway.mjs" \
     "$TEST_ROOT/app/openclaw/$openclaw_commit" "$TEST_ROOT/permission-helper.json"
   if [[ "${1:-}" == --self-reminder ]]; then

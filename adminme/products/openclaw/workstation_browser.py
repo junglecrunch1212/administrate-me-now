@@ -392,6 +392,9 @@ async def result(body: handoff.MemberResultRequest, request: Request) -> dict[st
         != body.follow_up_source_id
     ):
         raise HTTPException(403, "browser run does not match the original request")
+    native_failure = await handoff.native_worker_failure(
+        request, body, p, kind="browser", admission=bound[0]
+    )
     observed = await _event(runtime, session, p, OBSERVED)
     proof = await handoff._receipt(runtime, session, p, CAPTURE)
     if observed is None or proof is None:
@@ -401,6 +404,7 @@ async def result(body: handoff.MemberResultRequest, request: Request) -> dict[st
             "reason": "native_browser_read_not_verified"
             if failed
             else "no_terminal_read_receipt",
+            **(handoff.failed_worker_result(native_failure) if native_failure else {}),
             "follow_up_source_id": body.follow_up_source_id,
             "browser_request_event_id": bound[0]["event_id"],
             "provider_effect_count": 0,

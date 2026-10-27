@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
+import json
 from pathlib import Path
 from typing import Any
 
@@ -11,7 +14,7 @@ import pytest
 from adminme.products.openclaw.workstation_work import _content_hash
 from adminme.runtime.application import create_application
 from tests.acceptance.test_cos_member_follow_up import _body, _grant, _service
-from tests.acceptance.test_cos_response_execution import AUTH, _settings
+from tests.acceptance.test_cos_response_execution import AUTH, SECRET, _settings
 
 BASE = "/api/openclaw/v1/tools/workstation-work"
 CREATE = "/api/openclaw/v1/tools/service-private-work"
@@ -26,6 +29,42 @@ def _post(
     response = client.post(path, headers=AUTH, json=body)
     assert response.status_code == status, response.text
     return response.json()
+
+
+def _native_failure(
+    body: dict[str, Any], kind: str, run_id: str = "native-worker-error"
+) -> dict[str, Any]:
+    """Synthetic host wait result; production signs this inside the native plugin."""
+    p = body["provenance"]
+    worker = _service(body, body["run_nonce"])
+    digest = hashlib.sha256(worker["session_key"].encode()).hexdigest()
+    material = [
+        "administrateme-native-worker-failure-v1",
+        kind,
+        body["follow_up_source_id"],
+        body["source_message_event_id"],
+        body["run_nonce"],
+        p["actor_id"],
+        p.get("agent_id") or "",
+        p.get("session_key") or "",
+        p["channel_id"],
+        p.get("account_id") or "",
+        p.get("message_id") or "",
+        p.get("thread_id") or "",
+        digest,
+        run_id,
+        "error",
+    ]
+    return {
+        "status": "error",
+        "run_id": run_id,
+        "worker_session_digest": digest,
+        "signature": hmac.new(
+            SECRET.encode(),
+            json.dumps(material, ensure_ascii=False, separators=(",", ":")).encode(),
+            hashlib.sha256,
+        ).hexdigest(),
+    }
 
 
 def _admit(
@@ -88,7 +127,11 @@ def test_authenticated_instruction_worker_note_verified_return_and_restart(
         }
         _post(client, BASE + "/read-back", {**proof, "content_sha256": "0" * 64}, 409)
         _post(client, BASE + "/read-back", proof)
-        completed = _post(client, BASE + "/result", result_body)
+        terminal_error = {
+            **result_body,
+            "native_failure": _native_failure(result_body, "scratchpad"),
+        }
+        completed = _post(client, BASE + "/result", terminal_error)
         assert completed["status"] == "verified"
         assert completed["content"] == note_body["description"]
         assert completed["provider_effect_count"] == 0
@@ -329,3 +372,57 @@ def test_real_gmail_and_dashboard_chat_private_draft_and_cross_channel_readback(
             },
         )
         assert denied.status_code == 403
+
+
+def test_native_terminal_error_is_parent_bound_and_is_not_readback(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path / "instance")
+    with TestClient(create_application(settings)) as client:
+        _grant(client)
+        source = _body(client, text=INSTRUCTION)
+        admitted = _admit(client, source)
+        result = {
+            **source,
+            "follow_up_source_id": admitted["follow_up_source_id"],
+            "run_nonce": NONCE,
+        }
+        failure = _native_failure(result, "scratchpad")
+        failed = _post(client, BASE + "/result", {**result, "native_failure": failure})
+        assert failed["status"] == "failed"
+        assert failed["reason"] == "native_worker_failed"
+        assert failed["native_run_id"] == failure["run_id"]
+        assert failed["provider_effect_count"] == 0
+        assert "content" not in failed and "read_back_event_id" not in failed
+        assert (
+            _post(client, BASE + "/result", {**result, "native_failure": failure})
+            == failed
+        )
+        _post(
+            client,
+            BASE + "/result",
+            {**result, "native_failure": {**failure, "status": "timeout"}},
+            422,
+        )
+        _post(
+            client,
+            BASE + "/result",
+            {**result, "native_failure": {**failure, "signature": "0" * 64}},
+            403,
+        )
+        _post(
+            client,
+            BASE + "/result",
+            {
+                **result,
+                "native_failure": _native_failure(result, "scratchpad", "another-run"),
+            },
+            409,
+        )
+        assert client.app.state.runtime.fixture_adapter.delivered == []
+    with TestClient(create_application(settings)) as client:
+        current = _body(
+            client, "fresh-worker-status", "What happened to my private draft?"
+        )
+        retained = _post(client, BASE + "/result", {**result, **current})
+        assert retained == failed

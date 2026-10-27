@@ -31,7 +31,11 @@ function fixture(options: {
     if (path.endsWith("/failure")) return { status: "blocked" };
     throw new Error("unexpected endpoint");
   });
-  const api = { on: (name: string, callback: any) => hooks.set(name, callback),
+  const api = { on: (name: string, callback: any, options: any) => {
+    expect(name).not.toBe("before_prompt_build");
+    if (name === "before_tool_call") expect(options).toEqual({ priority: 100 });
+    hooks.set(name, callback);
+  },
     registerAgentToolResultMiddleware: (callback: any, options: any) => { middleware = callback; expect(options).toEqual({ matcher: ["browser"], runtimes: ["openclaw", "codex"] }); },
     logger: { warn: vi.fn() }, runtime: { config: { current: () => config } },
   } as unknown as OpenClawPluginApi;
