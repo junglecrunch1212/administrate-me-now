@@ -862,6 +862,56 @@ COS_SERVICE_WORK_REQUIRED_PATHS = (
     | COS_SERVICE_WORK_TEST_PATHS
     | {COS_SERVICE_WORK_CHECK_SCRIPT}
 )
+# Only this reviewed Computer Use transition may replace the native browser
+# transport proofs with the real account-policy/configuration proof. Hash the
+# entire shared controller: a neighboring browser edit restores the full group.
+COMPUTER_USE_CONTROLLER = "bootstrap/workstation_browser.py"
+COMPUTER_USE_CONTROLLER_SHA256 = (
+    "619565c1f187e5423e4137dfd7a8bfd2eb532ac86538344179cbf291ab70871c",
+    "1b81dbbfa9f6f8481db064f05939467bee6aed872775bcedd8dc2b9a1f79f54e",
+)
+COMPUTER_USE_NATIVE_PATHS = frozenset(
+    {
+        COMPUTER_USE_CONTROLLER,
+        "openclaw/administrateme/scripts/check-cos-native-account-policy.mjs",
+        "tests/unit/bootstrap/test_workstation_browser.py",
+        COS_SERVICE_WORK_NATIVE_INSTALL,
+        COS_SERVICE_WORK_CHECK_SCRIPT,
+        "scripts/release_scope.py",
+        "tests/unit/test_ci_release_gates.py",
+    }
+)
+
+
+def _service_work_native_selector(
+    repository: Path,
+    revisions: tuple[str, str, str],
+    scope: str,
+    changes: list[tuple[str, str]],
+) -> str:
+    if (
+        scope != "cos-service-work"
+        or not changes
+        or not all(
+            status in {"A", "M"} and (path in COMPUTER_USE_NATIVE_PATHS or _prose(path))
+            for status, path in changes
+        )
+    ):
+        return "--service-work"
+    identities = [
+        hashlib.sha256(
+            _git(repository, "show", f"{revision}:{COMPUTER_USE_CONTROLLER}").encode()
+        ).hexdigest()
+        for revision in revisions
+    ]
+    if (
+        all(identity in COMPUTER_USE_CONTROLLER_SHA256 for identity in identities)
+        and identities[1:] == [COMPUTER_USE_CONTROLLER_SHA256[1]] * 2
+    ):
+        return "--native-account-policy"
+    return "--service-work"
+
+
 # Closed direct-owner metadata release. Full Finance imports, projections,
 # workers, CoS grants and bootstrap are deliberately outside this lane.
 FINANCE_METADATA_CHECK_SCRIPT = "scripts/acceptance/finance-metadata-release.sh"
@@ -2716,6 +2766,9 @@ def select_scope(
     return {
         "contract": CONTRACT,
         "scope": scope,
+        "service_work_native_selector": _service_work_native_selector(
+            repository, (base, head, checkout), scope, changes
+        ),
         "draft": pull["draft"],
         "base_sha": base,
         "head_sha": head,
@@ -2794,7 +2847,7 @@ def verify_gate(proof: dict[str, Any], needs: dict[str, Any], *, platform: str) 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("select", "gate"))
+    parser.add_argument("command", choices=("select", "gate", "native-selector"))
     parser.add_argument("--repository", type=Path, default=Path.cwd())
     parser.add_argument("--event", type=Path, required=True)
     parser.add_argument("--checkout-sha", required=True)
@@ -2807,6 +2860,9 @@ def main() -> None:
         json.loads(args.event.read_text("utf-8")),
         checkout_sha=args.checkout_sha,
     )
+    if args.command == "native-selector":
+        print(proof.get("service_work_native_selector", "--service-work"))
+        return
     if args.command == "gate":
         verify_gate(
             proof, json.loads(os.environ["RELEASE_NEEDS_JSON"]), platform=args.platform

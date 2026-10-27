@@ -9,7 +9,7 @@ if [[ $# -gt 1 ]]; then
   exit 2
 fi
 case "${1:-}" in
-  ""|--service-work|--self-reminder|--service-work-and-approval) ;;
+  ""|--service-work|--self-reminder|--service-work-and-approval|--native-account-policy) ;;
   *) echo "Unsupported native proof selector" >&2; exit 2 ;;
 esac
 
@@ -86,6 +86,10 @@ node "$REPOSITORY_ROOT/openclaw/administrateme/scripts/check-cos-permission-pins
 openclaw_commit="$("$python_bin" -c \
   'import json,sys; print(json.load(open(sys.argv[1]))["openclaw"]["commit"])' \
   "$REPOSITORY_ROOT/bootstrap/versions.json")"
+if [[ "${1:-}" == --native-account-policy ]]; then
+  node "$REPOSITORY_ROOT/openclaw/administrateme/scripts/check-cos-native-account-policy.mjs" \
+    "$TEST_ROOT/app/openclaw/$openclaw_commit" "$(poetry env info --executable)"
+fi
 if [[ "${1:-}" == --service-work || "${1:-}" == --service-work-and-approval ]]; then
   node "$REPOSITORY_ROOT/openclaw/administrateme/scripts/check-workstation-codex-policy.mjs" \
     "$TEST_ROOT/app/openclaw/$openclaw_commit" "$(poetry env info --executable)"
@@ -102,7 +106,7 @@ if [[ "${1:-}" == --service-work || "${1:-}" == --service-work-and-approval ]]; 
   node "$REPOSITORY_ROOT/openclaw/administrateme/scripts/check-workstation-work-gateway.mjs" \
     "$TEST_ROOT/app/openclaw/$openclaw_commit" --browser-gmail
 fi
-if [[ "${1:-}" != --service-work ]]; then
+if [[ "${1:-}" != --service-work && "${1:-}" != --native-account-policy ]]; then
   # The service-work group already proves this boundary through Poetry.
   if [[ "${1:-}" != --service-work-and-approval ]]; then
     node "$REPOSITORY_ROOT/openclaw/administrateme/scripts/check-cos-imessage-text.mjs" \
