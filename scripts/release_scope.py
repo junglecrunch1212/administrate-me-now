@@ -558,12 +558,22 @@ UPDATER_RUNTIME_PREFLIGHT_BOUNDARY_SHA256 = (
     "308a6476aa813dd561a37ce8337512ae379c92a5e1ad5ec63d3544af249e1553"
 )
 UPDATER_RUNTIME_PREFLIGHT_CHECK_SHA256 = (
-    "c601b1d76bd129c24bd0c2661e0e0ece0adacab225292cc603cea733aa7236eb"
+    "9a664ed034b65e0b24495f139a3cc41fd1a45e6420a740a9cd6b96762f590684"
 )
 UPDATER_RUNTIME_PREFLIGHT_WORKFLOW = ".github/workflows/macos-bootstrap.yml"
-UPDATER_RUNTIME_PREFLIGHT_WORKFLOW_PAIR = (
-    "      - name: Validate updater preparation, activation and recovery\n        run: bash scripts/acceptance/updater-delivery-release.sh macos\n",
-    "      - name: Provision declared tooling for the real public updater preflight\n        run: |\n          HOMEBREW_NO_AUTO_UPDATE=1 brew install python@3.14 node@24\n      - name: Validate updater preparation, activation and recovery\n        run: bash scripts/acceptance/updater-delivery-release.sh macos\n",
+UPDATER_RUNTIME_PREFLIGHT_WORKFLOW_PAIRS = (
+    (
+        "  updater-delivery-validation:\n    name: Updater delivery release (macos)\n    needs: [release-scope]\n    if: ${{ needs.release-scope.outputs.scope == 'updater-delivery' }}\n    runs-on: macos-14\n",
+        "  updater-delivery-validation:\n    name: Updater delivery release (macos)\n    needs: [release-scope]\n    if: ${{ needs.release-scope.outputs.scope == 'updater-delivery' }}\n    runs-on: macos-15\n",
+    ),
+    (
+        "      - name: Validate updater preparation, activation and recovery\n        run: bash scripts/acceptance/updater-delivery-release.sh macos\n",
+        '      - name: Provision declared tooling for the real public updater preflight\n        run: |\n          test "$(uname -m)" = arm64\n          test "$(sw_vers -productVersion | cut -d. -f1)" = 15\n          test "$(/opt/homebrew/opt/python@3.14/bin/python3.14 --version)" = \'Python 3.14.7\'\n          # Preserve the image\'s reviewed Python; refreshing Node must not upgrade it.\n          HOMEBREW_NO_AUTO_UPDATE=1 brew info --json=v2 python@3.14 > "$RUNNER_TEMP/updater-python-formula.json"\n          jq -e \'.formulae | length == 1 and (.[0] | .name == "python@3.14" and .versions.stable == "3.14.7" and .bottle.stable.files.arm64_sequoia.sha256 != null)\' "$RUNNER_TEMP/updater-python-formula.json"\n          HOMEBREW_NO_AUTO_UPDATE=1 brew pin python@3.14\n          brew update\n          HOMEBREW_NO_AUTO_UPDATE=1 brew info --json=v2 node@24 > "$RUNNER_TEMP/updater-node-formula.json"\n          jq -e \'.formulae | length == 1 and (.[0] | .name == "node@24" and .versions.stable == "24.22.1" and .ruby_source_checksum.sha256 == "bf391a780600dd8ad64b7a6d91cb041582828dc5cdf4faef09cffc40268f1fd6" and .bottle.stable.files.arm64_sequoia.sha256 == "be87643df531ff6128e5a0f6aaf51a4a164406729ebed8a7cc56c8cb9cf0210f")\' "$RUNNER_TEMP/updater-node-formula.json"\n          HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_CLEANUP=1 brew install --force-bottle node@24\n          test "$(/opt/homebrew/opt/python@3.14/bin/python3.14 --version)" = \'Python 3.14.7\'\n          test "$(/opt/homebrew/opt/node@24/bin/node --version)" = v24.22.1\n      - name: Validate updater preparation, activation and recovery\n        run: bash scripts/acceptance/updater-delivery-release.sh macos\n',
+    ),
+    (
+        "          name: updater-delivery-macos\n          path: ${{ runner.temp }}/updater-delivery.xml\n",
+        "          name: updater-delivery-macos\n          path: |\n            ${{ runner.temp }}/updater-public-preflight.xml\n            ${{ runner.temp }}/updater-delivery.xml\n",
+    ),
 )
 UPDATER_RUNTIME_PREFLIGHT_TEST = "tests/acceptance/test_macos_bootstrap_operations.py"
 
@@ -1509,15 +1519,15 @@ def _updater_dependency_fingerprint(
         if workflow.mode != "100644":
             return None
         workflow_source = _git(repository, "show", f"{revision}:{workflow.path}")
-        old, new = UPDATER_RUNTIME_PREFLIGHT_WORKFLOW_PAIR
-        count = workflow_source.count(new)
-        if count != int(preflight):
-            return None
+        for old, new in UPDATER_RUNTIME_PREFLIGHT_WORKFLOW_PAIRS:
+            if workflow_source.count(new) != int(preflight):
+                return None
+            workflow_source = workflow_source.replace(new, old)
         shared_identities.append(
             (
                 workflow.path,
                 workflow.mode,
-                hashlib.sha256(workflow_source.replace(new, old).encode()).hexdigest(),
+                hashlib.sha256(workflow_source.encode()).hexdigest(),
             )
         )
     elif preflight:

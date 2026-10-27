@@ -4468,6 +4468,13 @@ def test_node_only_credential_scope_is_closed_and_has_existing_process_proof(
         "cli_neighbor",
         "workflow_mode",
         "workflow_only",
+        "workflow_runner",
+        "workflow_bottle",
+        "workflow_version_guard",
+        "workflow_public_artifact",
+        "workflow_timeout",
+        "check_script_public_after_regression",
+        "check_script_public_duplicate",
     ],
 )
 def test_full_runtime_preflight_scope_requires_closed_production_composition(
@@ -4518,6 +4525,46 @@ def test_full_runtime_preflight_scope_requires_closed_production_composition(
         target.write_text(target.read_text() + "\n# unrelated neighboring edit\n")
     if mutation == "workflow_mode":
         (path / UPDATER_RUNTIME_PREFLIGHT_WORKFLOW).chmod(0o755)
+    workflow_mutations = {
+        "workflow_runner": ("    runs-on: macos-15\n", "    runs-on: macos-14\n"),
+        "workflow_bottle": (
+            "be87643df531ff6128e5a0f6aaf51a4a164406729ebed8a7cc56c8cb9cf0210f",
+            "0" * 64,
+        ),
+        "workflow_version_guard": (
+            '          test "$(/opt/homebrew/opt/node@24/bin/node --version)" = v24.22.1\n',
+            "",
+        ),
+        "workflow_public_artifact": (
+            "            ${{ runner.temp }}/updater-public-preflight.xml\n",
+            "",
+        ),
+        "workflow_timeout": ("    timeout-minutes: 40\n", "    timeout-minutes: 60\n"),
+    }
+    if mutation in workflow_mutations:
+        target = path / UPDATER_RUNTIME_PREFLIGHT_WORKFLOW
+        text = target.read_text()
+        begin = text.index("  updater-delivery-validation:\n")
+        end = text.index("\n  finance-metadata-validation:", begin)
+        block = text[begin:end]
+        before, after = workflow_mutations[mutation]
+        assert block.count(before) == 1
+        target.write_text(text[:begin] + block.replace(before, after) + text[end:])
+    if mutation.startswith("check_script_public_"):
+        target = path / UPDATER_CHECK_SCRIPT
+        text = target.read_text()
+        begin = text.index('if [[ "$1" == macos ]]; then\n')
+        end = text.index("\nfi\n", begin) + len("\nfi\n")
+        public = text[begin:end]
+        assert public.count("test_supported_public_runtime_preflight_") == 1
+        if mutation == "check_script_public_duplicate":
+            text = text[:end] + public + text[end:]
+        else:
+            text = text[:begin] + text[end:]
+            after = 'validate_reports "$RUNNER_TEMP/updater-delivery.xml"\n'
+            assert text.count(after) == 1
+            text = text.replace(after, after + public)
+        target.write_text(text)
     _git(path, "add", "--all")
     _git(path, "commit", "-m", "Bounded runtime preflight candidate")
     head = _git(path, "rev-parse", "HEAD")

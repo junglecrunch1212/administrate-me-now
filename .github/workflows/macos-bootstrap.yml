@@ -89,7 +89,7 @@ jobs:
     name: Updater delivery release (macos)
     needs: [release-scope]
     if: ${{ needs.release-scope.outputs.scope == 'updater-delivery' }}
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 40
     env:
       ADMINME_TEST_MODE: '1'
@@ -115,14 +115,28 @@ jobs:
           poetry sync --with dev --no-interaction
       - name: Provision declared tooling for the real public updater preflight
         run: |
-          HOMEBREW_NO_AUTO_UPDATE=1 brew install python@3.14 node@24
+          test "$(uname -m)" = arm64
+          test "$(sw_vers -productVersion | cut -d. -f1)" = 15
+          test "$(/opt/homebrew/opt/python@3.14/bin/python3.14 --version)" = 'Python 3.14.7'
+          # Preserve the image's reviewed Python; refreshing Node must not upgrade it.
+          HOMEBREW_NO_AUTO_UPDATE=1 brew info --json=v2 python@3.14 > "$RUNNER_TEMP/updater-python-formula.json"
+          jq -e '.formulae | length == 1 and (.[0] | .name == "python@3.14" and .versions.stable == "3.14.7" and .bottle.stable.files.arm64_sequoia.sha256 != null)' "$RUNNER_TEMP/updater-python-formula.json"
+          HOMEBREW_NO_AUTO_UPDATE=1 brew pin python@3.14
+          brew update
+          HOMEBREW_NO_AUTO_UPDATE=1 brew info --json=v2 node@24 > "$RUNNER_TEMP/updater-node-formula.json"
+          jq -e '.formulae | length == 1 and (.[0] | .name == "node@24" and .versions.stable == "24.22.1" and .ruby_source_checksum.sha256 == "bf391a780600dd8ad64b7a6d91cb041582828dc5cdf4faef09cffc40268f1fd6" and .bottle.stable.files.arm64_sequoia.sha256 == "be87643df531ff6128e5a0f6aaf51a4a164406729ebed8a7cc56c8cb9cf0210f")' "$RUNNER_TEMP/updater-node-formula.json"
+          HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_CLEANUP=1 brew install --force-bottle node@24
+          test "$(/opt/homebrew/opt/python@3.14/bin/python3.14 --version)" = 'Python 3.14.7'
+          test "$(/opt/homebrew/opt/node@24/bin/node --version)" = v24.22.1
       - name: Validate updater preparation, activation and recovery
         run: bash scripts/acceptance/updater-delivery-release.sh macos
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: ${{ !cancelled() }}
         with:
           name: updater-delivery-macos
-          path: ${{ runner.temp }}/updater-delivery.xml
+          path: |
+            ${{ runner.temp }}/updater-public-preflight.xml
+            ${{ runner.temp }}/updater-delivery.xml
           if-no-files-found: error
           retention-days: 7
       - name: Bind successful validation to this revision

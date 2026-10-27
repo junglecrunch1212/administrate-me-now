@@ -30,9 +30,6 @@ tests=(
   tests/unit/bootstrap/test_effect_context_repair.py
   tests/acceptance/test_effect_context_repair_operations.py
 )
-if [[ "$1" == macos ]]; then
-  tests+=(tests/acceptance/test_macos_bootstrap_operations.py::test_supported_public_runtime_preflight_prepares_production_controller)
-fi
 # A module introduced by a later small PR must bring its corresponding proof.
 # An absent optional module is not a skipped test or evidence for that feature.
 for module in prepared_runtime workspace_instructions storage_headroom doctor_tooling; do
@@ -48,22 +45,36 @@ poetry run ruff check bootstrap adminme/source_assurance.py adminme/historical_a
 poetry run ruff format --check bootstrap adminme/source_assurance.py adminme/historical_attribution.py scripts/release_scope.py "${tests[@]%%::*}"
 poetry run mypy bootstrap bridge/adminme_bridge adminme/source_assurance.py adminme/historical_attribution.py scripts/release_scope.py
 poetry run pyright bootstrap adminme/source_assurance.py adminme/historical_attribution.py scripts/release_scope.py
+validate_reports() {
+python - "$@" <<'PY_CHECK'
+import sys
+import xml.etree.ElementTree as ET
+for report in sys.argv[1:]:
+    root = ET.parse(report).getroot()
+    suites = list(root.iter("testsuite"))
+    assert suites
+    for suite in suites:
+        assert all(k in suite.attrib and suite.attrib[k].isdigit() for k in ("tests", "skipped", "failures", "errors"))
+        assert all(int(suite.attrib[k]) == 0 for k in ("skipped", "failures", "errors"))
+    tests = sum(int(suite.attrib["tests"]) for suite in suites)
+    assert tests > 0 and len(list(root.iter("testcase"))) == tests
+    assert not any(list(root.iter(k)) for k in ("skipped", "failure", "error"))
+PY_CHECK
+}
+
+# Exercise the observed public boundary before the regression suite. Do not
+# repeat it in tests[]; failed setup must not consume the whole regression run.
+if [[ "$1" == macos ]]; then
+  poetry run pytest -p no:cacheprovider --runxfail -q -ra \
+    --basetemp="$RUNNER_TEMP/updater-public-preflight" \
+    --junitxml="$RUNNER_TEMP/updater-public-preflight.xml" \
+    tests/acceptance/test_macos_bootstrap_operations.py::test_supported_public_runtime_preflight_prepares_production_controller
+  validate_reports "$RUNNER_TEMP/updater-public-preflight.xml"
+fi
 poetry run pytest -p no:cacheprovider --runxfail -q -ra \
   --basetemp="$RUNNER_TEMP/updater-delivery-tests" \
   --junitxml="$RUNNER_TEMP/updater-delivery.xml" "${tests[@]}"
-python - "$RUNNER_TEMP/updater-delivery.xml" <<'PY_CHECK'
-import sys
-import xml.etree.ElementTree as ET
-root = ET.parse(sys.argv[1]).getroot()
-suites = list(root.iter("testsuite"))
-assert suites
-for suite in suites:
-    assert all(k in suite.attrib and suite.attrib[k].isdigit() for k in ("tests", "skipped", "failures", "errors"))
-    assert all(int(suite.attrib[k]) == 0 for k in ("skipped", "failures", "errors"))
-tests = sum(int(suite.attrib["tests"]) for suite in suites)
-assert tests > 0 and len(list(root.iter("testcase"))) == tests
-assert not any(list(root.iter(k)) for k in ("skipped", "failure", "error"))
-PY_CHECK
+validate_reports "$RUNNER_TEMP/updater-delivery.xml"
 bash -n bootstrap/update.sh scripts/acceptance/updater-delivery-release.sh
 bash scripts/verify_invariants.sh
 poetry check --lock
