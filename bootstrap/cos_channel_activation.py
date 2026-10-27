@@ -2128,6 +2128,8 @@ class CoSChannelActivator:
                 request if isinstance(request, MaintenanceRestorationPlan) else None
             )
             tooling_selection = None
+            controls: dict[str, Any] | None = None
+            history: dict[str, Any] | None = None
             if _tooling_restore:
                 if maintenance_plan is None or not enable_live:
                     raise CoSActivationError(
@@ -2408,14 +2410,16 @@ class CoSChannelActivator:
                         raise CoSActivationError(
                             "Messages proof belongs to another account"
                         )
-            if _tooling_restore and (
-                prepared != original
-                or prepared_openclaw != controls["gateway"]
-                or request.cos_imsg_guard_config != controls["guard"]
-            ):
-                raise CoSActivationError(
-                    "tooling restoration cannot change native preferences, routes or grants"
-                )
+            if _tooling_restore:
+                assert controls is not None
+                if (
+                    prepared != original
+                    or prepared_openclaw != controls["gateway"]
+                    or request.cos_imsg_guard_config != controls["guard"]
+                ):
+                    raise CoSActivationError(
+                        "tooling restoration cannot change native preferences, routes or grants"
+                    )
             readiness = _json(self.config_dir / "deployment-readiness.json")
             activation_id = uuid.uuid4().hex
             initial_files = {}
@@ -2457,6 +2461,7 @@ class CoSChannelActivator:
             if maintenance_plan is not None:
                 journal["maintenance_plan_sha256"] = maintenance_plan.digest()
             if _tooling_restore:
+                assert history is not None
                 journal["tooling_restoration"] = copy.deepcopy(
                     history["tooling_recovery_controller"]
                 )
@@ -2576,6 +2581,7 @@ class CoSChannelActivator:
                         "recipient policy changed during activation"
                     )
                 if _tooling_restore:
+                    assert controls is not None
                     if (
                         _json(self.config_dir / "adapters.json") != controls["adapters"]
                         or (
