@@ -24,7 +24,10 @@ beforeEach(() => {
   mkdirSync(join(root, "bootstrap"));
   const helper = join(root, "bootstrap/cos_messages_database.py");
   writeFileSync(helper, "# synthetic helper; never executed\n", { mode: 0o600 });
-  for (const [name, value] of Object.entries({ DATABASE_HELPER: helper, PYTHON: realpathSync(process.execPath) })) {
+  // The child is mocked; its pin must not depend on ambient Node ownership/mode.
+  const python = join(root, "synthetic-python");
+  writeFileSync(python, "synthetic interpreter; never executed\n", { mode: 0o700 });
+  for (const [name, value] of Object.entries({ DATABASE_HELPER: helper, PYTHON: python })) {
     vi.stubEnv(`ADMINISTRATEME_PERMISSION_${name}`, value);
     vi.stubEnv(`ADMINISTRATEME_PERMISSION_${name}_SHA256`, createHash("sha256").update(readFileSync(value)).digest("hex"));
   }
@@ -43,7 +46,7 @@ it("checks only the fixed helper with no caller path and emits no diagnostic dat
   const pending = checkDatabase();
   expect(spawn).toHaveBeenCalledOnce();
   const [binary, args, options] = spawn.mock.calls[0]!;
-  expect(binary).toBe(realpathSync(process.execPath));
+  expect(binary).toBe(join(directories[0]!, "synthetic-python"));
   expect(args).toEqual(["-I", "-B", process.env.ADMINISTRATEME_PERMISSION_DATABASE_HELPER]);
   expect(options.shell).toBe(false);
   expect(options.stdio).toEqual(["ignore", "pipe", "ignore"]);

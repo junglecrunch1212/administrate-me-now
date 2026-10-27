@@ -87,7 +87,7 @@ if [[ "$1" == macos ]]; then
 fi
 python_checks() {
   local status=0
-  poetry run pytest -p no:cacheprovider --runxfail -q -ra \
+  PYTHONUNBUFFERED=1 poetry run pytest -p no:cacheprovider --runxfail -v -ra \
     --basetemp="$RUNNER_TEMP/cos-service-work-tests" \
     --junitxml="$RUNNER_TEMP/cos-service-work.xml" "${tests[@]}" || status=$?
   python - "$RUNNER_TEMP/cos-service-work.xml" <<'PY_CHECK' || status=$?
@@ -112,7 +112,16 @@ plugin_checks() {
   npm run build --prefix openclaw/administrateme || status=$?
   npm test --prefix openclaw/administrateme || status=$?
   if [[ "$1" == macos ]]; then
-    bash scripts/acceptance/openclaw-source-install.sh --service-work || status=$?
+    # Recompute from immutable event/base/head/checkout; no caller-supplied skip.
+    local native_selector
+    native_selector="$(poetry run python -m scripts.release_scope native-selector \
+      --event "$GITHUB_EVENT_PATH" --checkout-sha "$GITHUB_SHA")" || return 1
+    case "$native_selector" in
+      --native-account-policy|--service-work) ;;
+      *) echo "Unsupported service-work native selector" >&2; return 1 ;;
+    esac
+    echo "Selected native proof: $native_selector"
+    bash scripts/acceptance/openclaw-source-install.sh "$native_selector" || status=$?
   fi
   return "$status"
 }
@@ -131,15 +140,24 @@ static_checks() {
 }
 
 # Independent groups finish even when another fails; every result gates release.
+stream_checks() {
+  local log="$1"
+  shift
+  local status=0
+  # pipefail retains check failures and log-write failures. Stream immediately:
+  # a blocked Python test must not hide completed native proof until job timeout.
+  "$@" 2>&1 | tee "$log" || status=$?
+  return "$status"
+}
 names=(python plugin static)
 logs=("$RUNNER_TEMP/cos-service-work-python.log" "$RUNNER_TEMP/cos-service-work-plugin.log" "$RUNNER_TEMP/cos-service-work-static.log")
 pids=()
 echo "Starting Python, plugin/native, and static check groups concurrently"
-python_checks > "${logs[0]}" 2>&1 &
+stream_checks "${logs[0]}" python_checks &
 pids+=("$!")
-plugin_checks "$1" > "${logs[1]}" 2>&1 &
+stream_checks "${logs[1]}" plugin_checks "$1" &
 pids+=("$!")
-static_checks > "${logs[2]}" 2>&1 &
+stream_checks "${logs[2]}" static_checks &
 pids+=("$!")
 
 failed=0
@@ -147,7 +165,8 @@ for index in "${!pids[@]}"; do
   status=0
   wait "${pids[$index]}" || status=$?
   printf '::group::%s checks (exit %s)\n' "${names[$index]}" "$status"
-  cat "${logs[$index]}" || failed=1
+  # Each group's complete output is already retained in its file and CI log.
+  test -f "${logs[$index]}" || failed=1
   echo "::endgroup::"
   if [[ "$status" -ne 0 ]]; then
     failed=1

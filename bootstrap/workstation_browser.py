@@ -19,7 +19,7 @@ import sys
 from contextlib import ExitStack
 from pathlib import Path
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Literal
 
 from adminme.openclaw_topology import service_agent_id
 from adminme.service_identities import COS_SERVICE_PRINCIPAL_ID
@@ -36,7 +36,7 @@ from adminme.workstation_inventory import (
     read_private_document,
 )
 from adminme.workstation_source_policy import BrowserSourceProvision, PROVISION_FILE
-from bootstrap.contracts import DeploymentPaths, atomic_write
+from bootstrap.contracts import DeploymentPaths, atomic_write, load_versions
 from bootstrap.activation_transaction import (
     ActivationJournalError,
     _assert_directory_coordinate,
@@ -64,8 +64,125 @@ from bootstrap.source_identity import (
 READINESS_TRANSITION = "browser-readiness-reconciliation-v1"
 READINESS_JOURNAL = "browser-readiness-transition.json"
 PREFERENCE_TRANSITION = "native-preference-readiness-reconciliation-v1"
+NativeComponent = Literal["browser", "computer-use"]
+COMPUTER_USE_TRANSITION = "computer-use-readiness-reconciliation-v1"
+COMPUTER_USE_CONFIG: dict[str, Any] = {
+    "enabled": True,
+    "autoInstall": True,
+    "marketplacePath": (
+        "/Applications/ChatGPT.app/Contents/Resources/plugins/openai-bundled/"
+        ".agents/plugins/marketplace.json"
+    ),
+    "pluginName": "computer-use",
+    "mcpServerName": "computer-use",
+    "healthCheckEnabled": False,
+    "autoRepair": False,
+}
 _HEX_64 = re.compile(r"[0-9a-f]{64}")
 _MAX_BROWSER_RECORD_BYTES = 4 * 1024 * 1024
+
+
+def _transition_contract(
+    component: NativeComponent, *, preferences: bool = False
+) -> str:
+    if preferences:
+        if component != "browser":
+            raise ValueError("native preferences cannot combine a component transition")
+        return PREFERENCE_TRANSITION
+    if component == "browser":
+        return READINESS_TRANSITION
+    if component == "computer-use":
+        return COMPUTER_USE_TRANSITION
+    raise ValueError("only browser or computer-use configuration is supported")
+
+
+def _computer_use_config(gateway: dict[str, Any]) -> dict[str, Any]:
+    try:
+        entry = gateway["plugins"]["entries"]["codex"]
+        config = entry["config"]
+    except (KeyError, TypeError) as exc:
+        raise ValueError(
+            "an enabled Codex plugin with explicit account policy is required"
+        ) from exc
+    if (
+        not isinstance(entry, dict)
+        or entry.get("enabled") is not True
+        or not isinstance(config, dict)
+        or not isinstance(config.get("codexPlugins"), dict)
+        or config["codexPlugins"].get("enabled") is not False
+    ):
+        raise ValueError("Computer Use must preserve disabled ambient account plugins")
+    return config
+
+
+def prepare_computer_use_patch(
+    snapshot: dict[str, Any], *, disable: bool = False
+) -> dict[str, Any]:
+    """Add the one reviewed official plugin object, or remove that exact object.
+
+    This does not install a plugin, grant OS permission, or change app-server
+    sandbox/execution policy. A different existing object needs separate review.
+    Native config.patch uses JSON merge-patch null to remove the field.
+    """
+    if (
+        snapshot.get("valid") is not True
+        or not isinstance(snapshot.get("hash"), str)
+        or _HEX_64.fullmatch(snapshot["hash"]) is None
+        or not isinstance(snapshot.get("config"), dict)
+    ):
+        raise ValueError("a fresh valid native config.get snapshot is required")
+    original = snapshot["config"]
+    meta = original.get("meta", {})
+    # The exact pin stamps these fields on every config.patch write. Refuse
+    # before generating a patch if that would also migrate unrelated metadata
+    # or the legacy model allowlist; reconciliation never blesses normalization.
+    if (
+        not isinstance(meta, dict)
+        or meta.get("lastTouchedVersion") != load_versions()["openclaw"]["version"]
+        or not isinstance(meta.get("migrations"), dict)
+        or meta["migrations"].get("modelPolicyAllowlist") is not True
+    ):
+        raise ValueError("Computer Use requires already-current native write metadata")
+    config = _computer_use_config(original)
+    if disable:
+        if _canonical(config.get("computerUse")) != _canonical(COMPUTER_USE_CONFIG):
+            raise ValueError("disable requires the exact reviewed Computer Use object")
+        value = None
+    else:
+        if "computerUse" in config:
+            raise ValueError("Computer Use addition requires an absent field")
+        value = copy.deepcopy(COMPUTER_USE_CONFIG)
+    return {
+        "baseHash": snapshot["hash"],
+        "raw": json.dumps(
+            {"plugins": {"entries": {"codex": {"config": {"computerUse": value}}}}},
+            separators=(",", ":"),
+        ),
+    }
+
+
+def _computer_use_delta(
+    previous: dict[str, Any], patch: dict[str, Any]
+) -> dict[str, Any]:
+    """Validate one closed patch; do not normalize any unrelated gateway field."""
+    for disable in (False, True):
+        try:
+            prepared = prepare_computer_use_patch(
+                {"valid": True, "hash": "0" * 64, "config": previous},
+                disable=disable,
+            )
+        except ValueError:
+            continue
+        if _canonical(patch) != _canonical(json.loads(prepared["raw"])):
+            continue
+        result = copy.deepcopy(previous)
+        config = _computer_use_config(result)
+        if disable:
+            del config["computerUse"]
+        else:
+            config["computerUse"] = copy.deepcopy(COMPUTER_USE_CONFIG)
+        return result
+    raise ValueError("native delta is not the exact reviewed Computer Use preparation")
 
 
 def _browser_require_settled(paths: DeploymentPaths) -> None:
@@ -226,7 +343,9 @@ def _native_reconciliation_plan(
     native_snapshot: dict[str, Any],
     previous_readiness: bytes,
     preferences: bool = False,
+    component: NativeComponent = "browser",
 ) -> tuple[dict[str, Any], bytes]:
+    transition = _transition_contract(component, preferences=preferences)
     _browser_require_settled(paths)
     authorization_reference = _browser_authority(authorization_reference)
     release, source = _browser_source_selection(paths)
@@ -255,6 +374,12 @@ def _native_reconciliation_plan(
     patch = _json_no_duplicates(approved["raw"].encode(), label="native browser delta")
     if preferences:
         _require_preference_additions(previous, current, patch)
+    elif component == "computer-use":
+        expected = _computer_use_delta(previous, patch)
+        if _canonical(expected) != _canonical(current):
+            raise ValueError(
+                "native delta changes unrelated Computer Use configuration"
+            )
     else:
         snapshot = {"valid": True, "hash": previous_hash, "config": previous}
         candidates = []
@@ -304,7 +429,7 @@ def _native_reconciliation_plan(
     )
     next_readiness = _canonical(updated) + b"\n"
     plan = {
-        "contract": PREFERENCE_TRANSITION if preferences else READINESS_TRANSITION,
+        "contract": transition,
         "source": source,
         "previous_snapshot": before.public(),
         "next_snapshot": after.public(),
@@ -331,8 +456,9 @@ def _reconcile_readiness(
     plan_sha256: str | None = None,
     apply: bool = False,
     preferences: bool = False,
+    component: NativeComponent = "browser",
 ) -> dict[str, Any]:
-    """Publish either closed native transition under the same recovery fence.
+    """Publish a closed native transition under the same recovery fence.
 
     Native configuration is never written. Applying requires the exact preflight
     digest. Repeating the same command completes an interrupted publication or
@@ -344,8 +470,8 @@ def _reconcile_readiness(
         raise ValueError(
             "applying browser reconciliation requires its exact preflight hash"
         )
-    transition = PREFERENCE_TRANSITION if preferences else READINESS_TRANSITION
-    prefix = "native-preference-readiness" if preferences else "browser-readiness"
+    transition = _transition_contract(component, preferences=preferences)
+    prefix = "native-preference-readiness" if preferences else f"{component}-readiness"
     with deployment_operation_lock(paths), ExitStack() as stack:
         for directory in (
             paths.root,
@@ -379,6 +505,7 @@ def _reconcile_readiness(
                 if (
                     set(value) != {"plan", "plan_sha256"}
                     or not isinstance(value["plan"], dict)
+                    or value["plan"].get("contract") != transition
                     or value["plan_sha256"] != _digest_domain(transition, value["plan"])
                 ):
                     raise ValueError("browser reconciliation journal is invalid")
@@ -405,6 +532,7 @@ def _reconcile_readiness(
             authorization_reference=authorization_reference,
             previous_readiness=previous_readiness,
             preferences=preferences,
+            component=component,
         )
         digest = _digest_domain(transition, plan)
         record = {"plan": plan, "plan_sha256": digest}
@@ -441,6 +569,7 @@ def _reconcile_readiness(
                 authorization_reference=authorization_reference,
                 previous_readiness=previous_readiness,
                 preferences=preferences,
+                component=component,
             )
             if check != plan or _browser_private(readiness_path) != current_readiness:
                 raise ValueError("browser reconciliation changed before publication")
@@ -459,6 +588,7 @@ def _reconcile_readiness(
                 authorization_reference=authorization_reference,
                 previous_readiness=previous_readiness,
                 preferences=preferences,
+                component=component,
             )
             if check != plan or _browser_private(readiness_path) != next_readiness:
                 raise ValueError(
@@ -493,8 +623,9 @@ def reconcile_browser_readiness(
     native_snapshot_path: Path,
     plan_sha256: str | None = None,
     apply: bool = False,
+    component: NativeComponent = "browser",
 ) -> dict[str, Any]:
-    """Reconcile only the exact approved native browser preparation."""
+    """Reconcile only the exact approved browser or Computer Use preparation."""
     return _reconcile_readiness(
         paths,
         previous_gateway_path=previous_gateway_path,
@@ -505,6 +636,7 @@ def reconcile_browser_readiness(
         plan_sha256=plan_sha256,
         apply=apply,
         preferences=False,
+        component=component,
     )
 
 
@@ -769,6 +901,7 @@ def write_patch(
     *,
     previous_config_output: Path,
     disable: bool,
+    component: NativeComponent = "browser",
 ) -> dict[str, Any]:
     """Retain exact reconciliation inputs before supported native config.patch.
 
@@ -776,6 +909,7 @@ def write_patch(
     The operator supplies the existing approval and resulting fresh native hash
     to reconcile-readiness after the exact prepared patch is applied.
     """
+    _transition_contract(component)
     with deployment_operation_lock(paths), ExitStack() as stack:
         _browser_require_settled(paths)
         release, source = _browser_source_selection(paths)
@@ -795,15 +929,15 @@ def write_patch(
         prior_hash = hashlib.sha256(prior).hexdigest()
         if native.get("valid") is not True or native.get("hash") != prior_hash:
             raise ValueError("native snapshot does not bind current raw configuration")
-        document = prepare_native_patch(
-            {
-                "valid": True,
-                "hash": prior_hash,
-                "config": _json_no_duplicates(prior, label="native configuration"),
-            },
-            paths,
-            release,
-            disable=disable,
+        raw_snapshot = {
+            "valid": True,
+            "hash": prior_hash,
+            "config": _json_no_duplicates(prior, label="native configuration"),
+        }
+        document = (
+            prepare_computer_use_patch(raw_snapshot, disable=disable)
+            if component == "computer-use"
+            else prepare_native_patch(raw_snapshot, paths, release, disable=disable)
         )
         encoded = _canonical(document) + b"\n"
         destinations = []
@@ -881,6 +1015,9 @@ def main() -> int:
     patch.add_argument("--output", type=Path, required=True)
     patch.add_argument("--previous-config-output", type=Path, required=True)
     patch.add_argument("--disable", action="store_true")
+    patch.add_argument(
+        "--component", choices=("browser", "computer-use"), default="browser"
+    )
     for command in ("reconcile-readiness", "reconcile-native-preferences"):
         reconcile = commands.add_parser(command)
         reconcile.add_argument("--instance-root", type=Path, required=True)
@@ -891,6 +1028,10 @@ def main() -> int:
         reconcile.add_argument("--current-snapshot", type=Path, required=True)
         reconcile.add_argument("--plan-sha256")
         reconcile.add_argument("--apply", action="store_true")
+        if command == "reconcile-readiness":
+            reconcile.add_argument(
+                "--component", choices=("browser", "computer-use"), default="browser"
+            )
     stage = commands.add_parser("stage-source-policy")
     stage.add_argument("--instance-root", type=Path, required=True)
     stage.add_argument("--input", type=Path, required=True)
@@ -912,12 +1053,18 @@ def main() -> int:
                 args.output,
                 previous_config_output=args.previous_config_output,
                 disable=args.disable,
+                component=args.component,
             )
         elif args.command in ("reconcile-readiness", "reconcile-native-preferences"):
             reconcile_operation = (
                 reconcile_native_preferences_readiness
                 if args.command == "reconcile-native-preferences"
                 else reconcile_browser_readiness
+            )
+            component_options = (
+                {"component": args.component}
+                if args.command == "reconcile-readiness"
+                else {}
             )
             result = reconcile_operation(
                 DeploymentPaths.from_root(args.instance_root),
@@ -928,6 +1075,7 @@ def main() -> int:
                 native_snapshot_path=args.current_snapshot,
                 plan_sha256=args.plan_sha256,
                 apply=args.apply,
+                **component_options,
             )
         elif args.command == "stage-source-policy":
             result = stage_source_request(

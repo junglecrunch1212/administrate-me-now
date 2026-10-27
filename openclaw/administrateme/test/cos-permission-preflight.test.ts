@@ -50,7 +50,11 @@ beforeEach(() => {
   mkdirSync(join(root, "bootstrap"));
   const helper = join(root, "bootstrap/cos_apple_events.py");
   writeFileSync(helper, "# synthetic helper; never executed\n", { mode: 0o600 });
-  for (const [name, value] of Object.entries({ HELPER: helper, PYTHON: realpathSync(process.execPath) })) {
+  // Spawn is mocked: use an owned executable fixture, not the runner's Node
+  // installation whose owner/mode is outside this permission contract.
+  const python = join(root, "synthetic-python");
+  writeFileSync(python, "synthetic interpreter; never executed\n", { mode: 0o700 });
+  for (const [name, value] of Object.entries({ HELPER: helper, PYTHON: python })) {
     vi.stubEnv(`ADMINISTRATEME_PERMISSION_${name}`, value);
     vi.stubEnv(`ADMINISTRATEME_PERMISSION_${name}_SHA256`, createHash("sha256").update(readFileSync(value)).digest("hex"));
   }
@@ -101,7 +105,7 @@ it("pins child coordinates, sanitizes environment, signs exact result and consum
   const call = invoke(authorization);
   expect(spawn).toHaveBeenCalledOnce();
   const [binary, args, options] = spawn.mock.calls[0]!;
-  expect(binary).toBe(realpathSync(process.execPath));
+  expect(binary).toBe(join(directories[0]!, "synthetic-python"));
   expect(args).toEqual(["-I", "-B", process.env.ADMINISTRATEME_PERMISSION_HELPER, "--operation", "check"]);
   expect(options.shell).toBe(false);
   expect(options.env.PERMISSION_FIXTURE_SECRET).toBeUndefined();
