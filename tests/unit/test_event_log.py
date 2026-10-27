@@ -1410,6 +1410,7 @@ async def test_close_preserves_committed_tail_in_encrypted_database_copy(
     assert reader is not None
     metadata_closing = threading.Event()
     metadata_closed = threading.Event()
+    writer_closed = threading.Event()
     release_metadata = threading.Event()
     writer_closed_before_metadata: list[bool] = []
     metadata_connection = reader._conn  # noqa: SLF001
@@ -1428,10 +1429,20 @@ async def test_close_preserves_committed_tail_in_encrypted_database_copy(
     class TrackedWriterConnection:
         def close(self):
             writer_closed_before_metadata.append(not metadata_closed.is_set())
-            writer_connection.close()
+            try:
+                writer_connection.close()
+            finally:
+                writer_closed.set()
+
+    def release_after_writer_close():
+        # Old code can close the writer while our reader is held, so release
+        # on that observed event. Corrected code waits for the reader first;
+        # the bounded fallback lets that ordering finish without a deadlock.
+        writer_closed.wait(2)
+        release_metadata.set()
 
     closing = None
-    timer = threading.Timer(0.1, release_metadata.set)
+    release_thread = threading.Thread(target=release_after_writer_close)
     try:
         await log.append(_event(1))
         # Establish a valid database file, then commit a tail below SQLite's
@@ -1450,7 +1461,7 @@ async def test_close_preserves_committed_tail_in_encrypted_database_copy(
         assert await asyncio.to_thread(metadata_closing.wait, 2)
         # Cancellation joins native workers synchronously. Release from an
         # independent thread so the cancellation path cannot deadlock the test.
-        timer.start()
+        release_thread.start()
         if cancel_close:
             closing.cancel()
             with pytest.raises(asyncio.CancelledError):
@@ -1459,8 +1470,8 @@ async def test_close_preserves_committed_tail_in_encrypted_database_copy(
             await closing
     finally:
         release_metadata.set()
-        if timer.ident is not None:
-            timer.join(2)
+        if release_thread.ident is not None:
+            release_thread.join(3)
         if closing is not None and not closing.done():
             await closing
         await log.close()
@@ -1485,6 +1496,7 @@ async def test_close_preserves_committed_tail_in_encrypted_database_copy(
     finally:
         await exported.close()
     assert writer_closed_before_metadata == [False]
+    assert not release_thread.is_alive()
 
 
 def test_metadata_initialization_failure_closes_both_workers(
