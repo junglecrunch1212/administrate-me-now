@@ -8,6 +8,7 @@ import os
 import re
 import stat
 from pathlib import Path
+from typing import TypedDict
 
 
 _RUNTIME_ROOTS = (
@@ -17,6 +18,19 @@ _RUNTIME_ROOTS = (
 )
 _MAX_FILES = 200_000
 _MAX_BYTES = 8 * 1024 * 1024 * 1024
+_MAX_NATIVE_INVENTORY_BYTES = 128 * 1024 * 1024
+NATIVE_ARTIFACT_PROFILE = "native-full-tree-metadata-v1"
+
+
+class ArtifactInventory(TypedDict):
+    artifact_sha256: str
+    record_count: int
+    content_bytes: int
+    inventory_metadata_bytes: int
+
+
+class NativeArtifactInventory(ArtifactInventory):
+    profile: str
 
 
 class PreparedRuntimeError(RuntimeError):
@@ -40,6 +54,37 @@ def _coordinate(value: os.stat_result) -> tuple[int, ...]:
 def runtime_artifact_fingerprint(
     release: Path, *, _roots: tuple[str, ...] = _RUNTIME_ROOTS
 ) -> str:
+    """Preserve the existing generated-runtime identity and 200,000-record bound."""
+    return _artifact_inventory(
+        release, roots=_roots, max_records=_MAX_FILES, max_metadata_bytes=None
+    )["artifact_sha256"]
+
+
+def native_artifact_inventory(source: Path) -> NativeArtifactInventory:
+    """Bind the complete native tree under metadata and content byte budgets.
+
+    Native pnpm graphs include many directory/link records. Charge their full
+    path/coordinate metadata before retaining it instead of borrowing the small
+    application runtime's row-count ceiling. No source or dependency is omitted.
+    """
+    return {
+        **_artifact_inventory(
+            source,
+            roots=(".",),
+            max_records=None,
+            max_metadata_bytes=_MAX_NATIVE_INVENTORY_BYTES,
+        ),
+        "profile": NATIVE_ARTIFACT_PROFILE,
+    }
+
+
+def _artifact_inventory(
+    release: Path,
+    *,
+    roots: tuple[str, ...],
+    max_records: int | None,
+    max_metadata_bytes: int | None,
+) -> ArtifactInventory:
     """Hash bytes, modes and link targets without following generated links.
 
     The caller already verifies tracked source, release ownership and the pinned
@@ -50,13 +95,37 @@ def runtime_artifact_fingerprint(
     digest = hashlib.sha256(b"administrateme-prepared-runtime-v1\0")
     count = 0
     size = 0
+    metadata_bytes = 0
     inventory: dict[str, tuple[int, ...]] = {}
     interpreters: dict[Path, tuple[int, ...]] = {}
+
+    def remember(relative: str, value: os.stat_result) -> None:
+        nonlocal metadata_bytes
+        coordinate = _coordinate(value)
+        if relative in inventory:
+            if inventory[relative] != coordinate:
+                raise PreparedRuntimeError("prepared runtime changed during inventory")
+            return
+        if max_records is not None and len(inventory) >= max_records:
+            raise PreparedRuntimeError("prepared runtime exceeds file limit")
+        # One bounded path/coordinate row is encoded before allocating its
+        # retained dictionary entry or appending the directory entry name.
+        encoded_size = (
+            len(json.dumps([relative, coordinate], separators=(",", ":")).encode()) + 1
+        )
+        next_size = metadata_bytes + encoded_size
+        if max_metadata_bytes is not None and next_size > max_metadata_bytes:
+            raise PreparedRuntimeError(
+                "prepared runtime exceeds inventory metadata limit "
+                f"({next_size}>{max_metadata_bytes}; records={count}, content_bytes={size})"
+            )
+        metadata_bytes = next_size
+        inventory[relative] = coordinate
 
     def record(row: list[str | int]) -> None:
         nonlocal count
         count += 1
-        if count > _MAX_FILES:
+        if max_records is not None and count > max_records:
             raise PreparedRuntimeError("prepared runtime exceeds file limit")
         digest.update(json.dumps(row, separators=(",", ":")).encode())
         digest.update(b"\n")
@@ -70,12 +139,22 @@ def runtime_artifact_fingerprint(
             raise PreparedRuntimeError(
                 "prepared runtime directory is writable by others"
             )
-        inventory[relative] = _coordinate(initial)
+        remember(relative, initial)
         record([relative, "directory", stat.S_IMODE(initial.st_mode)])
-        for name in sorted(os.listdir(descriptor)):
+        names: list[str] = []
+        # Enumerate incrementally: a huge directory must hit the inventory
+        # budget before allocating an unbounded list of names.
+        with os.scandir(descriptor) as entries:
+            for entry in entries:
+                remember(
+                    relative + "/" + entry.name,
+                    os.stat(entry.name, dir_fd=descriptor, follow_symlinks=False),
+                )
+                names.append(entry.name)
+        for name in sorted(names):
             path = relative + "/" + name
             before = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
-            inventory[path] = _coordinate(before)
+            remember(path, before)
             if before.st_uid != os.getuid():
                 raise PreparedRuntimeError("prepared runtime ownership is unsafe")
             if stat.S_ISLNK(before.st_mode):
@@ -196,7 +275,7 @@ def runtime_artifact_fingerprint(
     try:
         root = os.open(release, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         try:
-            for relative in _roots:
+            for relative in roots:
                 descriptors: list[int] = []
                 parent = root
                 try:
@@ -237,4 +316,9 @@ def runtime_artifact_fingerprint(
             os.close(root)
     except OSError as exc:
         raise PreparedRuntimeError("prepared runtime inventory is unavailable") from exc
-    return digest.hexdigest()
+    return {
+        "artifact_sha256": digest.hexdigest(),
+        "record_count": count,
+        "content_bytes": size,
+        "inventory_metadata_bytes": metadata_bytes,
+    }

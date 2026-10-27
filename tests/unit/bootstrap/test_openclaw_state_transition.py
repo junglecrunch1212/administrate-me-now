@@ -17,9 +17,12 @@ from bootstrap.contracts import DeploymentPaths, load_versions
 from bootstrap.openclaw_state_transition import (
     NativeStateError,
     PREDECESSOR,
+    SUCCESSOR,
     capture_generation,
     declared_transition,
     inspect_coverage,
+    native_source_fingerprint,
+    native_source_inventory,
     restore_generation,
     validate_migrated_authority,
 )
@@ -398,3 +401,24 @@ def test_followup_controls_require_completed_native_migration(
         else:
             operation(journal)
     assert bool(transitions) is (phase == "native_state_migrated")
+
+
+def test_native_source_seal_inventory_is_exact_and_matches_preparation_fingerprint(
+    tmp_path,
+):
+    paths = DeploymentPaths.from_root(tmp_path / "instance")
+    source = paths.app_dir / "openclaw" / SUCCESSOR[1]
+    source.mkdir(parents=True, mode=0o700)
+    (source / "openclaw.mjs").write_bytes(b"synthetic entry")
+    manifest = load_versions()["openclaw"]
+    inventory = native_source_inventory(paths, manifest)
+    assert inventory["profile"] == "native-full-tree-metadata-v1"
+    assert inventory["record_count"] == 2
+    assert inventory["content_bytes"] == len(b"synthetic entry")
+    assert native_source_fingerprint(paths, manifest) == inventory["artifact_sha256"]
+    with pytest.raises(NativeStateError, match="outside the reviewed transition"):
+        native_source_inventory(paths, {**manifest, "commit": PREDECESSOR[1]})
+    source.rename(source.with_name("aliased"))
+    source.symlink_to(source.with_name("aliased"), target_is_directory=True)
+    with pytest.raises(NativeStateError):
+        native_source_inventory(paths, manifest)

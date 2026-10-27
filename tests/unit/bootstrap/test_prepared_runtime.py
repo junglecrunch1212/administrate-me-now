@@ -6,12 +6,15 @@ import shlex
 import shutil
 import subprocess
 import textwrap
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
 
+import bootstrap.prepared_runtime as prepared
 from bootstrap.prepared_runtime import (
     PreparedRuntimeError,
+    native_artifact_inventory,
     runtime_artifact_fingerprint,
 )
 from bootstrap.upgrade import UpgradeManager
@@ -239,3 +242,183 @@ def test_fingerprint_rejects_alias_to_a_different_interpreter(tmp_path: Path) ->
     (runtime / "python3").symlink_to(other)
     with pytest.raises(PreparedRuntimeError, match="dependency link"):
         runtime_artifact_fingerprint(release)
+
+
+def test_native_inventory_keeps_full_coverage_without_generic_row_cap(
+    tmp_path, monkeypatch
+):
+    runtime = tmp_path / ".venv"
+    runtime.mkdir(mode=0o700)
+    (runtime / "a").write_bytes(b"a")
+    (runtime / "b").write_bytes(b"bc")
+    monkeypatch.setattr(prepared, "_MAX_FILES", 2)
+    with pytest.raises(PreparedRuntimeError, match="file limit"):
+        runtime_artifact_fingerprint(tmp_path)
+    inventory = native_artifact_inventory(tmp_path)
+    assert inventory["profile"] == "native-full-tree-metadata-v1"
+    assert inventory["record_count"] == 4  # root, directory, both complete files
+    assert inventory["content_bytes"] == 3
+    assert inventory["inventory_metadata_bytes"] > 0
+    assert native_artifact_inventory(tmp_path) == inventory
+
+
+def test_native_inventory_metadata_and_content_budgets_are_exact(tmp_path, monkeypatch):
+    (tmp_path / "payload").write_bytes(b"payload")
+    inventory = native_artifact_inventory(tmp_path)
+    monkeypatch.setattr(
+        prepared, "_MAX_NATIVE_INVENTORY_BYTES", inventory["inventory_metadata_bytes"]
+    )
+    monkeypatch.setattr(prepared, "_MAX_BYTES", inventory["content_bytes"])
+    assert native_artifact_inventory(tmp_path) == inventory
+    monkeypatch.setattr(
+        prepared,
+        "_MAX_NATIVE_INVENTORY_BYTES",
+        inventory["inventory_metadata_bytes"] - 1,
+    )
+    with pytest.raises(PreparedRuntimeError, match="inventory metadata limit"):
+        native_artifact_inventory(tmp_path)
+    monkeypatch.setattr(
+        prepared, "_MAX_NATIVE_INVENTORY_BYTES", inventory["inventory_metadata_bytes"]
+    )
+    monkeypatch.setattr(prepared, "_MAX_BYTES", inventory["content_bytes"] - 1)
+    with pytest.raises(PreparedRuntimeError, match="size limit"):
+        native_artifact_inventory(tmp_path)
+
+
+def test_native_inventory_stops_directory_enumeration_before_excess_allocation(
+    tmp_path, monkeypatch
+):
+    for index in range(50):
+        (tmp_path / f"entry-{index}").write_bytes(
+            b"not read before enumeration completes"
+        )
+    enumerated = 0
+    real_scandir = os.scandir
+
+    @contextmanager
+    def bounded_scandir(descriptor):
+        nonlocal enumerated
+        with real_scandir(descriptor) as entries:
+
+            def observed():
+                nonlocal enumerated
+                for entry in entries:
+                    enumerated += 1
+                    yield entry
+
+            yield observed()
+
+    def forbidden_read(*_args):
+        pytest.fail(
+            "content was read after the directory metadata budget was exhausted"
+        )
+
+    monkeypatch.setattr(prepared, "_MAX_NATIVE_INVENTORY_BYTES", 512)
+    monkeypatch.setattr(prepared.os, "scandir", bounded_scandir)
+    monkeypatch.setattr(prepared.os, "read", forbidden_read)
+    with pytest.raises(PreparedRuntimeError, match="inventory metadata limit"):
+        native_artifact_inventory(tmp_path)
+    assert 0 < enumerated < 50
+
+
+@pytest.mark.parametrize(
+    "changed",
+    [
+        "src/native.ts",
+        "dist/entry.js",
+        "node_modules/.pnpm/dependency/index.js",
+        "extensions/browser/src/index.ts",
+    ],
+)
+def test_native_inventory_binds_every_source_build_and_dependency_byte(
+    tmp_path, changed
+):
+    files = [
+        "src/native.ts",
+        "dist/entry.js",
+        "node_modules/.pnpm/dependency/index.js",
+        "extensions/browser/src/index.ts",
+    ]
+    for name in files:
+        path = tmp_path / name
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        path.write_bytes(b"original")
+    before = native_artifact_inventory(tmp_path)
+    (tmp_path / changed).write_bytes(b"modified")
+    assert (
+        native_artifact_inventory(tmp_path)["artifact_sha256"]
+        != before["artifact_sha256"]
+    )
+
+
+def test_native_inventory_binds_internal_link_targets_and_rejects_external_targets(
+    tmp_path,
+):
+    source = tmp_path / "source"
+    source.mkdir(mode=0o700)
+    for name in ("one.js", "two.js"):
+        (source / name).write_bytes(b"same bytes")
+    link = source / "dependency.js"
+    link.symlink_to("one.js")
+    before = native_artifact_inventory(source)
+    link.unlink()
+    link.symlink_to("two.js")
+    assert (
+        native_artifact_inventory(source)["artifact_sha256"]
+        != before["artifact_sha256"]
+    )
+    external = tmp_path / "external.js"
+    external.write_bytes(b"unbound")
+    link.unlink()
+    link.symlink_to(external)
+    with pytest.raises(PreparedRuntimeError, match="dependency link"):
+        native_artifact_inventory(source)
+
+
+@pytest.mark.parametrize("unsafe", ["root-link", "fifo", "writable"])
+def test_native_inventory_keeps_existing_entry_safety(tmp_path, unsafe):
+    source = tmp_path / "source"
+    if unsafe == "root-link":
+        source.symlink_to(tmp_path, target_is_directory=True)
+    else:
+        source.mkdir(mode=0o700)
+        if unsafe == "fifo":
+            os.mkfifo(source / "pipe")
+        else:
+            item = source / "payload"
+            item.write_bytes(b"unsafe")
+            item.chmod(0o666)
+    with pytest.raises(PreparedRuntimeError):
+        native_artifact_inventory(source)
+
+
+def test_native_inventory_rechecks_files_after_later_dependency_read(
+    tmp_path, monkeypatch
+):
+    first = tmp_path / "a.js"
+    first.write_bytes(b"first")
+    (tmp_path / "b.js").write_bytes(b"second")
+    real_read = os.read
+    changed = False
+
+    def mutate_earlier_file(descriptor, size):
+        nonlocal changed
+        data = real_read(descriptor, size)
+        if data == b"second" and not changed:
+            changed = True
+            first.write_bytes(b"replaced")
+        return data
+
+    monkeypatch.setattr(prepared.os, "read", mutate_earlier_file)
+    with pytest.raises(PreparedRuntimeError, match="changed during inventory"):
+        native_artifact_inventory(tmp_path)
+    assert changed
+
+
+def test_generated_runtime_digest_keeps_its_existing_receipt_format(tmp_path):
+    (tmp_path / ".venv").mkdir(mode=0o700)
+    (tmp_path / ".venv").chmod(0o700)
+    assert (
+        runtime_artifact_fingerprint(tmp_path)
+        == "8bf53784ab62d4eef6095840dac71fa7d7e509e4b0adb7298f36e20bd0fed914"
+    )

@@ -161,15 +161,15 @@ import json
 import sys
 from pathlib import Path
 from bootstrap.contracts import DeploymentPaths, atomic_write, load_versions
-from bootstrap.openclaw_state_transition import native_source_fingerprint, _json
+from bootstrap.openclaw_state_transition import native_source_inventory, _json
 paths = DeploymentPaths.from_root(Path(sys.argv[1]))
 manifest = load_versions(Path(sys.argv[2]))["openclaw"]
 seal = paths.app_dir / "openclaw" / (manifest["commit"] + ".prepared.json")
 record = {
-    "contract": "administrateme-native-source-v1",
+    "contract": "administrateme-native-source-v2",
     "commit": manifest["commit"],
     "archive_sha256": manifest["source_archive_sha256"],
-    "artifact_sha256": native_source_fingerprint(paths, manifest),
+    **native_source_inventory(paths, manifest),
 }
 if seal.exists() or seal.is_symlink():
     if _json(seal) != record:
@@ -178,6 +178,11 @@ elif sys.argv[3] == "1":
     raise RuntimeError("prepared native source binding is missing")
 else:
     atomic_write(seal, json.dumps(record, sort_keys=True).encode(), mode=0o600)
+print("Prepared native inventory: " + json.dumps({
+    key: record[key] for key in (
+        "profile", "record_count", "content_bytes", "inventory_metadata_bytes"
+    )
+}, sort_keys=True))
 PYSEAL
 fi
 

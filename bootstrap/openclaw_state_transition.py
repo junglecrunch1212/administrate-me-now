@@ -17,6 +17,10 @@ from pathlib import Path
 from typing import Any
 
 from bootstrap.contracts import DeploymentPaths, atomic_write
+from bootstrap.prepared_runtime import (
+    NativeArtifactInventory,
+    native_artifact_inventory,
+)
 
 CONTRACT = "administrateme-openclaw-generation-v1"
 PREDECESSOR = ("2026.7.2", "ce67ffb70e83e5ebb56ea02e814e577153f84f61")
@@ -66,8 +70,13 @@ def declared_transition(active: dict[str, Any], incoming: dict[str, Any]) -> boo
 
 def native_source_fingerprint(paths: DeploymentPaths, manifest: dict[str, Any]) -> str:
     """Bind prepared native bytes; no CLI or provider access occurs here."""
-    from bootstrap.prepared_runtime import runtime_artifact_fingerprint
+    return native_source_inventory(paths, manifest)["artifact_sha256"]
 
+
+def native_source_inventory(
+    paths: DeploymentPaths, manifest: dict[str, Any]
+) -> NativeArtifactInventory:
+    """Inventory the exact native artifact, retaining its complete tree coverage."""
     commit = manifest.get("commit", "")
     if commit != SUCCESSOR[1]:
         raise NativeStateError("native artifact is outside the reviewed transition")
@@ -75,7 +84,7 @@ def native_source_fingerprint(paths: DeploymentPaths, manifest: dict[str, Any]) 
     _directory(source)
     if source.resolve() != source:
         raise NativeStateError("native source artifact is aliased")
-    return runtime_artifact_fingerprint(source, _roots=(".",))
+    return native_artifact_inventory(source)
 
 
 def _coordinate(info: os.stat_result) -> tuple[int, ...]:
