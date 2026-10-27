@@ -30,6 +30,7 @@ from adminme.demo import (
 from adminme.openclaw_approvals import sign_approval_receipt
 from adminme.products.openclaw.constants import OPENCLAW_COMMIT, OPENCLAW_VERSION
 from adminme.runtime.application import RuntimeSettings, create_application
+from bootstrap.doctor_tooling import tooling_versions_supported
 from bootstrap.contracts import (
     ADAPTER_CATEGORIES,
     OPENCLAW_LABEL,
@@ -483,21 +484,8 @@ class Doctor:
                 "homebrew": _command_output(["brew", "--version"]),
                 "openclaw": _command_output(["openclaw", "--version"]),
             }
-        python_version = _version_parts(str(observed_versions["python"]))
-        node_version = _version_parts(str(observed_versions["node"]))
-        npm_version = _version_parts(str(observed_versions["npm"]))
-        brew_text = str(observed_versions["homebrew"])
-        brew_version = _version_parts(
-            brew_text.splitlines()[0].replace("Homebrew", "").strip()
-        )
-        version_ok = (
-            python_version[:2] == (3, 14)
-            and node_version[0] == 24
-            and node_version >= (24, 15, 0)
-            and npm_version[0] == 11
-            and npm_version >= (11, 6, 0)
-            and 6 <= brew_version[0] < 7
-            and versions["openclaw"]["version"] in str(observed_versions["openclaw"])
+        version_ok = tooling_versions_supported(
+            observed_versions, versions["openclaw"]["version"]
         )
         checks.append(
             DoctorCheck(

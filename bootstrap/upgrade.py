@@ -1487,6 +1487,7 @@ class UpgradeManager:
             include_synthetic_proof=include_synthetic_proof,
             test_mode=self.test_mode,
             doctor_factory=Doctor,
+            controller_root=self.root,
             error_type=UpgradeError,
             timeout_seconds=timeout_seconds,
         )

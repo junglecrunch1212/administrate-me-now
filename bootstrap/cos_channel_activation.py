@@ -95,7 +95,11 @@ from bootstrap.storage_headroom import StorageHeadroomError, require_deployment_
 from bootstrap.contracts import DeploymentPaths, atomic_write, load_versions
 from bootstrap.deployment_budget import deployment_clock
 from bootstrap.secrets import secret_store
-from bootstrap.service_settlement import run_release_doctor, wait_for_settled_doctor
+from bootstrap.service_settlement import (
+    probe_release_tooling,
+    run_release_doctor,
+    wait_for_settled_doctor,
+)
 from bootstrap.services import ServiceManager
 from bootstrap.source_identity import (
     _run_git,
@@ -1032,6 +1036,8 @@ class CoSChannelActivator:
             commit, release, target = self._observation_selection()
             if commit == target:
                 raise CoSActivationError("maintenance target is already selected")
+            if not self.test_mode:
+                probe_release_tooling(self.paths, release, self.repository)
             snapshot = self._bound_snapshot(commit)
             before = self.services.runtime_diagnostics() or {}
             effect_proof = None
@@ -1487,6 +1493,8 @@ class CoSChannelActivator:
                 raise CoSActivationError(
                     "enter-observation requires a healthy live predecessor"
                 )
+            if not self.test_mode:
+                probe_release_tooling(self.paths, release, self.repository)
             live = asyncio.run(self._live_predecessor(release))
             members = {
                 row["member_id"]: row["role"]
@@ -1970,7 +1978,11 @@ class CoSChannelActivator:
     def _settle(self, release: Path) -> dict[str, Any]:
         result = wait_for_settled_doctor(
             run_doctor=lambda **kwargs: run_release_doctor(
-                self.paths, release, test_mode=self.test_mode, **kwargs
+                self.paths,
+                release,
+                test_mode=self.test_mode,
+                controller_root=self.repository,
+                **kwargs,
             ),
             services=self.services,
             test_mode=self.test_mode,
@@ -2102,6 +2114,7 @@ class CoSChannelActivator:
         request: ActivationRequest | MaintenanceRestorationPlan,
         *,
         enable_live: bool,
+        _tooling_restore: bool = False,
     ) -> dict[str, Any]:
         updater = UpgradeManager(
             self.paths, root=self.repository, test_mode=self.test_mode
@@ -2111,11 +2124,38 @@ class CoSChannelActivator:
                 raise CoSActivationError("recover the interrupted CoS operation first")
             if (self.paths.app_dir / "activation" / "active.json").exists():
                 raise CoSActivationError("release activation must complete first")
-            commit, release = self._selection()
             maintenance_plan = (
                 request if isinstance(request, MaintenanceRestorationPlan) else None
             )
-            if maintenance_plan is not None:
+            tooling_selection = None
+            controls: dict[str, Any] | None = None
+            history: dict[str, Any] | None = None
+            if _tooling_restore:
+                if maintenance_plan is None or not enable_live:
+                    raise CoSActivationError(
+                        "tooling restoration requires its original maintenance plan"
+                    )
+                history = _json(
+                    self.directory / "history" / f"{maintenance_plan.plan_id}.json"
+                )
+                commit, release, controller, controls = self._tooling_maintenance_state(
+                    maintenance_plan, history, committed=True
+                )
+                tooling_selection = (commit, release, controller)
+                self._require_tooling_doctor(release)
+                assert maintenance_plan.sender_proofs is not None
+                request = ActivationRequest(
+                    adapter_config=controls["adapters"],
+                    sender_proofs=maintenance_plan.sender_proofs,
+                    owner_authorization_sha256=maintenance_plan.owner_authorization_sha256,
+                    operator_principal_id=maintenance_plan.operator_principal_id,
+                    owner_member_id=maintenance_plan.owner_member_id,
+                    prepared_openclaw_config=controls["gateway"],
+                    cos_imsg_guard_config=controls["guard"],
+                )
+            else:
+                commit, release = self._selection()
+            if maintenance_plan is not None and not _tooling_restore:
                 if not enable_live:
                     raise CoSActivationError(
                         "maintenance restoration requires the live activation path"
@@ -2370,6 +2410,16 @@ class CoSChannelActivator:
                         raise CoSActivationError(
                             "Messages proof belongs to another account"
                         )
+            if _tooling_restore:
+                assert controls is not None
+                if (
+                    prepared != original
+                    or prepared_openclaw != controls["gateway"]
+                    or request.cos_imsg_guard_config != controls["guard"]
+                ):
+                    raise CoSActivationError(
+                        "tooling restoration cannot change native preferences, routes or grants"
+                    )
             readiness = _json(self.config_dir / "deployment-readiness.json")
             activation_id = uuid.uuid4().hex
             initial_files = {}
@@ -2410,6 +2460,11 @@ class CoSChannelActivator:
             }
             if maintenance_plan is not None:
                 journal["maintenance_plan_sha256"] = maintenance_plan.digest()
+            if _tooling_restore:
+                assert history is not None
+                journal["tooling_restoration"] = copy.deepcopy(
+                    history["tooling_recovery_controller"]
+                )
             if policy.imessage_channel_id is not None:
                 for relative in (
                     "openclaw/runtime/openclaw.json",
@@ -2449,8 +2504,18 @@ class CoSChannelActivator:
                     )
                     journal["seed_event_id"] = allowed["event_id"]
                     self._write_journal(journal, "allowlist_seeded")
-                atomic_write(self.config_dir / "adapters.json", _payload(prepared))
-                if policy.imessage_channel_id is not None:
+                if _tooling_restore:
+                    assert maintenance_plan is not None
+                    if (
+                        capture_deployment_snapshot(self.paths).public()
+                        != maintenance_plan.deployment_snapshot
+                    ):
+                        raise CoSActivationError(
+                            "tooling restoration configuration drifted during backup"
+                        )
+                else:
+                    atomic_write(self.config_dir / "adapters.json", _payload(prepared))
+                if policy.imessage_channel_id is not None and not _tooling_restore:
                     atomic_write(
                         self.paths.instance_dir / "openclaw/runtime/openclaw.json",
                         _payload(prepared_openclaw),
@@ -2515,7 +2580,33 @@ class CoSChannelActivator:
                     raise CoSActivationError(
                         "recipient policy changed during activation"
                     )
-                self._selection()
+                if _tooling_restore:
+                    assert controls is not None
+                    if (
+                        _json(self.config_dir / "adapters.json") != controls["adapters"]
+                        or (
+                            controls["gateway"] is not None
+                            and _json(
+                                self.paths.instance_dir
+                                / "openclaw/runtime/openclaw.json"
+                            )
+                            != controls["gateway"]
+                        )
+                        or (
+                            controls["guard"] is not None
+                            and _json(self.config_dir / "cos-imsg-guard.json")
+                            != controls["guard"]
+                        )
+                    ):
+                        raise CoSActivationError(
+                            "tooling restoration configuration changed"
+                        )
+                    if self._observation_selection() != tooling_selection:
+                        raise CoSActivationError(
+                            "tooling restoration source selection changed"
+                        )
+                else:
+                    self._selection()
                 self._finish(journal, "committed")
                 return {
                     "status": "activated",
@@ -2859,6 +2950,233 @@ class CoSChannelActivator:
                 journal, release=release, recovery_controller=successor
             )
 
+    def _tooling_maintenance_state(
+        self,
+        plan: MaintenanceRestorationPlan,
+        journal: dict[str, Any],
+        *,
+        committed: bool,
+    ) -> tuple[str, Path, str, dict[str, Any]]:
+        """Validate one unchanged predecessor and its exact original authority."""
+        from bootstrap.doctor_tooling import RETAINED_DOCTORS
+
+        commit, release, controller = self._observation_selection()
+        prepared, expires = aware_time(plan.prepared_at), aware_time(plan.expires_at)
+        if (
+            commit not in RETAINED_DOCTORS
+            or commit != plan.predecessor_commit
+            or controller == plan.target_commit
+            or plan.effect_context_repair is not None
+            or plan.effect_context_proof is not None
+            or journal.get("contract") != "cos-channel-operation-journal-v1"
+            or journal.get("operation") != "enter_observation"
+            or journal.get("phase") != ("committed" if committed else "verifying")
+            or journal.get("activation_id") != plan.plan_id
+            or journal.get("controller_commit") != plan.target_commit
+            or journal.get("release_commit") != commit
+            or journal.get("maintenance_plan_sha256") != plan.digest()
+            or journal.get("request")
+            != plan.observation_request().model_dump(mode="json")
+            or journal.get("prior_activation_id") != plan.prior_activation_id
+            or journal.get("operator_principal_id") != plan.operator_principal_id
+            or journal.get("owner_member_id") != plan.owner_member_id
+            or journal.get("owner_authorization_sha256")
+            != plan.owner_authorization_sha256
+            or journal.get("initial_snapshot") != plan.deployment_snapshot
+            or not journal.get("observation_started_at")
+            or "submission_repair_manifest" in journal
+            or "effect_context_proof" in journal
+            or prepared is None
+            or expires is None
+            or not prepared <= datetime.now(timezone.utc) < expires
+        ):
+            raise CoSActivationError(
+                "tooling recovery requires the exact unexpired paused maintenance"
+            )
+        load_git_tree(
+            self.repository, plan.target_commit, retained_by_commit=controller
+        )
+        controls = self._maintenance_controls()
+        if (
+            plan.sender_proofs is None
+            or self._maintenance_proof_expiry(
+                plan.sender_proofs, controls["activation"]
+            )
+            != expires
+            or controls["activation"].activation_id != plan.prior_activation_id
+            or any(
+                expected != _sha(_payload(value))
+                for expected, value in (
+                    (plan.adapter_sha256, controls["adapters"]),
+                    (plan.receipt_sha256, controls["receipt"]),
+                    (plan.member_mapping_sha256, controls["members"]),
+                    (plan.recipient_policy_sha256, controls["policy"]),
+                )
+            )
+            or controls["guard"] != plan.guard_config
+            or (
+                _sha(_payload(controls["gateway"]))
+                if controls["gateway"] is not None
+                else None
+            )
+            != plan.gateway_sha256
+            or controls["replies"] != plan.self_reply_bindings
+            or controls["reminders"] != plan.self_reminder_bindings
+            or capture_deployment_snapshot(self.paths).public()
+            != plan.deployment_snapshot
+            or controls["policy"]["event_id"] != journal["initial_policy"]["event_id"]
+        ):
+            raise CoSActivationError(
+                "tooling recovery authority or configuration changed"
+            )
+        observation = _json(self.config_dir / "observation.json")
+        window = _json(self.config_dir / "deployment-readiness.json").get(
+            "provider_effect_window"
+        )
+        diagnostics = self.services.runtime_diagnostics()
+        # A crash after durable admission may leave both services stopped. This
+        # is not health evidence: completion still stops/starts and proves a
+        # fresh full Doctor, while the retained admission is revalidated below.
+        admitted_restart = (
+            not committed
+            and "tooling_recovery_admission" in journal
+            and "tooling_recovery_controller" in journal
+            and diagnostics is None
+        )
+        if (
+            observation.get("active") is not True
+            or window
+            != {
+                "started_at": journal["observation_started_at"],
+                "reason": "cos_enter_observation",
+            }
+            or (
+                not admitted_restart
+                and (
+                    not diagnostics
+                    or diagnostics.get("ready") is not True
+                    or diagnostics.get("observation_active") is not True
+                    or self._provider_calls(diagnostics)
+                    != journal.get("prior_provider_calls")
+                )
+            )
+            or asyncio.run(self._effect_count()) != journal.get("prior_provider_calls")
+        ):
+            raise CoSActivationError(
+                "tooling recovery observation or provider boundary changed"
+            )
+        binding = {
+            "contract": "cos-tooling-maintenance-recovery-v1",
+            "controller_commit": controller,
+            "original_plan": plan.model_dump(mode="json"),
+            "original_plan_sha256": plan.digest(),
+        }
+        if journal.get("tooling_recovery_controller", binding) != binding or (
+            committed and "tooling_recovery_controller" not in journal
+        ):
+            raise CoSActivationError(
+                "tooling recovery controller or original plan changed"
+            )
+        return commit, release, controller, controls
+
+    def _require_tooling_doctor(self, release: Path) -> dict[str, Any]:
+        from bootstrap.doctor_tooling import COMPATIBILITY_KEY
+
+        result = run_release_doctor(
+            self.paths,
+            release,
+            test_mode=self.test_mode,
+            include_synthetic_proof=False,
+            controller_root=self.repository,
+        )
+        decision = result.get(COMPATIBILITY_KEY, {})
+        if (
+            result.get("status") != "healthy"
+            or decision.get("decision") != "compatible"
+            or decision.get("release_commit") != release.name
+            or decision.get("controller_commit")
+            != reviewed_candidate_commit(self.repository)
+        ):
+            raise CoSActivationError(
+                "tooling recovery has no current qualified retained Doctor report"
+            )
+        return result
+
+    def _recover_tooling_maintenance_locked(
+        self, plan: MaintenanceRestorationPlan
+    ) -> dict[str, Any]:
+        if (self.paths.app_dir / "activation/active.json").exists():
+            raise CoSActivationError("release activation must complete first")
+        history = self.directory / "history" / f"{plan.plan_id}.json"
+        committed = not self.journal_path.exists()
+        journal = _json(history if committed else self.journal_path)
+        _commit, release, controller, _controls = self._tooling_maintenance_state(
+            plan, journal, committed=committed
+        )
+        if self.services.runtime_diagnostics() is None and not committed:
+            from bootstrap.doctor_tooling import (
+                COMPATIBILITY_KEY,
+                retained_tooling_report,
+            )
+
+            report = journal.get("tooling_recovery_admission", {})
+            decision = report.get(COMPATIBILITY_KEY, {})
+            original = decision.get("original_report", {})
+            recomputed = retained_tooling_report(
+                self.paths,
+                release,
+                self.repository,
+                original,
+                include_synthetic_proof=False,
+            )
+            if (
+                recomputed != report
+                or recomputed.get("status") != "healthy"
+                or decision.get("decision") != "compatible"
+                or decision.get("controller_commit") != controller
+            ):
+                raise CoSActivationError("interrupted tooling admission is not valid")
+        else:
+            report = self._require_tooling_doctor(release)
+        if committed:
+            return {
+                "status": "observation_entered",
+                "observation_active": True,
+                "release_commit": plan.predecessor_commit,
+                "maintenance_plan_sha256": plan.digest(),
+                "replayed": True,
+            }
+        journal.setdefault(
+            "tooling_recovery_controller",
+            {
+                "contract": "cos-tooling-maintenance-recovery-v1",
+                "controller_commit": controller,
+                "original_plan": plan.model_dump(mode="json"),
+                "original_plan_sha256": plan.digest(),
+            },
+        )
+        journal.setdefault("tooling_recovery_admission", report)
+        self._write_journal(journal, "verifying")
+        return self._complete_enter_observation(
+            journal, release=release, recovery_controller=controller
+        )
+
+    def recover_tooling_maintenance(
+        self, plan: MaintenanceRestorationPlan
+    ) -> dict[str, Any]:
+        """Complete the original pause, retaining its target, evidence and history."""
+        updater = UpgradeManager(
+            self.paths, root=self.repository, test_mode=self.test_mode
+        )
+        with updater._operation_lock():
+            return self._recover_tooling_maintenance_locked(plan)
+
+    def restore_tooling_maintenance(
+        self, plan: MaintenanceRestorationPlan
+    ) -> dict[str, Any]:
+        """Restore the unchanged predecessor's exact prior normal authority."""
+        return self.activate(plan, enable_live=True, _tooling_restore=True)
+
     def recover(self) -> dict[str, Any]:
         updater = UpgradeManager(
             self.paths, root=self.repository, test_mode=self.test_mode
@@ -2868,6 +3186,14 @@ class CoSChannelActivator:
             if journal.get("operation") == "repair_recovery_history":
                 _commit, release, _controller_commit = self._observation_selection()
                 return self._complete_recovery_history_repair(journal, release=release)
+            if (
+                journal.get("operation") == "enter_observation"
+                and "tooling_recovery_controller" in journal
+            ):
+                plan = MaintenanceRestorationPlan.model_validate(
+                    journal["tooling_recovery_controller"]["original_plan"]
+                )
+                return self._recover_tooling_maintenance_locked(plan)
             if journal.get("operation") == "enter_observation":
                 commit, release, controller_commit = self._observation_selection()
                 if (
@@ -2878,7 +3204,28 @@ class CoSChannelActivator:
                         "interrupted observation operation belongs to another source"
                     )
                 return self._complete_enter_observation(journal, release=release)
-            commit, release = self._selection()
+            if "tooling_restoration" in journal:
+                binding = journal["tooling_restoration"]
+                plan = MaintenanceRestorationPlan.model_validate(
+                    binding["original_plan"]
+                )
+                commit, release, controller = self._observation_selection()
+                if (
+                    binding.get("contract") != "cos-tooling-maintenance-recovery-v1"
+                    or binding.get("controller_commit") != controller
+                    or binding.get("original_plan_sha256") != plan.digest()
+                    or journal.get("maintenance_plan_sha256") != plan.digest()
+                    or commit != plan.predecessor_commit
+                    or _json(self.directory / "history" / f"{plan.plan_id}.json").get(
+                        "tooling_recovery_controller"
+                    )
+                    != binding
+                ):
+                    raise CoSActivationError(
+                        "interrupted tooling restoration binding changed"
+                    )
+            else:
+                commit, release = self._selection()
             if journal.get("release_commit") != commit:
                 raise CoSActivationError(
                     "interrupted operation belongs to another release"
@@ -2898,6 +3245,8 @@ def main() -> None:
     mode.add_argument("--repair-recovery-history", action="store_true")
     mode.add_argument("--recover", action="store_true")
     mode.add_argument("--recover-effect-context-controller", action="store_true")
+    mode.add_argument("--recover-tooling-maintenance", action="store_true")
+    mode.add_argument("--restore-tooling-maintenance", action="store_true")
     mode.add_argument("--prepare-maintenance", action="store_true")
     mode.add_argument("--prepare-effect-context-successor", action="store_true")
     mode.add_argument("--pause-maintenance", action="store_true")
@@ -2910,6 +3259,8 @@ def main() -> None:
         or arguments.prepare_effect_context_successor
         or arguments.pause_maintenance
         or arguments.restore_maintenance
+        or arguments.recover_tooling_maintenance
+        or arguments.restore_tooling_maintenance
     )
     if maintenance and (
         arguments.enable_live or arguments.submission_repair_manifest is not None
@@ -2981,6 +3332,13 @@ def main() -> None:
         result = controller.activate(
             MaintenanceRestorationPlan.model_validate(_json(arguments.request)),
             enable_live=True,
+        )
+    elif arguments.recover_tooling_maintenance or arguments.restore_tooling_maintenance:
+        plan = MaintenanceRestorationPlan.model_validate(_json(arguments.request))
+        result = (
+            controller.recover_tooling_maintenance(plan)
+            if arguments.recover_tooling_maintenance
+            else controller.restore_tooling_maintenance(plan)
         )
     elif arguments.recover_effect_context_controller:
         result = controller.recover_effect_context_controller(

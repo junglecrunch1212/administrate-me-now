@@ -10,6 +10,7 @@ tests=(
   tests/acceptance/test_forwarded_submission_repair_operations.py
   tests/unit/bootstrap/test_cos_channel_activation.py
   tests/unit/bootstrap/test_backup_rehearsal.py
+  tests/unit/bootstrap/test_restore_settlement.py
   tests/unit/bootstrap/test_candidate_readiness.py
   tests/unit/bootstrap/test_recovery_readiness.py
   tests/unit/bootstrap/test_phase5_operations.py
@@ -30,7 +31,7 @@ tests=(
 )
 # A module introduced by a later small PR must bring its corresponding proof.
 # An absent optional module is not a skipped test or evidence for that feature.
-for module in prepared_runtime workspace_instructions storage_headroom; do
+for module in prepared_runtime workspace_instructions storage_headroom doctor_tooling; do
   if [[ -f "bootstrap/$module.py" ]]; then
     test -f "tests/unit/bootstrap/test_$module.py"
     tests+=("tests/unit/bootstrap/test_$module.py")
