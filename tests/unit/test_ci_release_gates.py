@@ -4401,7 +4401,22 @@ def test_system_native_proof_composes_browser_and_approval_with_one_install() ->
         "bash scripts/acceptance/openclaw-source-install.sh --native-upgrade"
     )
     native = (ROOT / "scripts/acceptance/openclaw-source-install.sh").read_text()
-    assert native.count('"$REPOSITORY_ROOT/bootstrap/install-openclaw-source.sh"') == 2
+    # Count executable statements, not the source operand of the predecessor
+    # controller's copy. Each generation builds once; recovery reselects the
+    # prepared successor without another build.
+    installer = "$REPOSITORY_ROOT/bootstrap/install-openclaw-source.sh"
+    predecessor = "$predecessor_controller/bootstrap/install-openclaw-source.sh"
+    installer_calls = [
+        shlex.split(line)
+        for line in native.replace("\\\n", " ").splitlines()
+        if line.lstrip().startswith((f'"{installer}"', f'"{predecessor}"'))
+    ]
+    common = ["--instance-root", "$TEST_ROOT", "--python", "$python_bin"]
+    assert installer_calls == [
+        [installer, *common],
+        [predecessor, *common, "--prepare-only"],
+        [installer, *common, "--select-prepared"],
+    ]
     assert "tests/fixtures/openclaw_native_upgrade.py" in native
     assert "scripts/check-native-sdk.mjs" in native
     assert "--select-prepared" in native
@@ -4450,7 +4465,16 @@ def _computer_use_candidate(path: Path) -> tuple[str, str]:
         )
         + "\n"
     )
-    after = (ROOT / COMPUTER_USE_CONTROLLER).read_text()
+    # This narrow exception is the protected 7.2-era transition. New native
+    # upgrade/controller behavior must not silently become its fixture bytes.
+    after = (
+        _git(
+            ROOT,
+            "show",
+            "36d09a3e32bdef565c434800886cca4e036d4635:" + COMPUTER_USE_CONTROLLER,
+        )
+        + "\n"
+    )
     assert tuple(hashlib.sha256(s.encode()).hexdigest() for s in (before, after)) == (
         COMPUTER_USE_CONTROLLER_SHA256
     )
@@ -4467,6 +4491,7 @@ def _computer_use_candidate(path: Path) -> tuple[str, str]:
         "none",
         "uncommitted",
         "controller-neighbor",
+        "native-upgrade",
         "browser-proof",
         "provider",
         "pin",
@@ -4487,6 +4512,13 @@ def test_computer_use_native_selector_is_bound_to_exact_immutable_change(
         head = _commit(
             path, COMPUTER_USE_CONTROLLER, target.read_text() + "OTHER = 1\n"
         )
+    elif mutation == "native-upgrade":
+        upgraded = (ROOT / COMPUTER_USE_CONTROLLER).read_text()
+        assert (
+            hashlib.sha256(upgraded.encode()).hexdigest()
+            not in COMPUTER_USE_CONTROLLER_SHA256
+        )
+        head = _commit(path, COMPUTER_USE_CONTROLLER, upgraded)
     elif mutation in {"browser-proof", "provider", "pin", "workflow"}:
         relative = {
             "browser-proof": "openclaw/administrateme/scripts/check-workstation-work-gateway.mjs",
@@ -4823,6 +4855,7 @@ def test_node_only_credential_scope_is_closed_and_has_existing_process_proof(
         "missing_unit_test",
         "check_script_neighbor",
         "workflow_neighbor",
+        "native_upgrade_workflow",
         "launcher_neighbor",
         "cli_neighbor",
         "workflow_mode",
@@ -4851,6 +4884,7 @@ def test_full_runtime_preflight_scope_requires_closed_production_composition(
         UPDATER_RUNTIME_PREFLIGHT_WORKFLOW,
     }
     historical = "6de9f9bd2a4e0d56f1d81e948ff39b60baa4dce3"
+    reviewed = "36d09a3e32bdef565c434800886cca4e036d4635"
     for name in sorted(names):
         target = path / name
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -4867,7 +4901,9 @@ def test_full_runtime_preflight_scope_requires_closed_production_composition(
     }.get(mutation)
     for name in sorted(names):
         if only is None or name == only:
-            (path / name).write_text((ROOT / name).read_text())
+            # Retain the complete protected composition, including neighboring
+            # workflow jobs; current native-upgrade wiring is a separate change.
+            (path / name).write_text(_git(ROOT, "show", f"{reviewed}:{name}") + "\n")
     missing = {
         "missing_process_test": UPDATER_RUNTIME_PREFLIGHT_TEST,
         "missing_unit_test": UPDATER_PYTHON_BOUNDARY_TEST,
@@ -4883,6 +4919,10 @@ def test_full_runtime_preflight_scope_requires_closed_production_composition(
     if neighbor:
         target = path / neighbor
         target.write_text(target.read_text() + "\n# unrelated neighboring edit\n")
+    if mutation == "native_upgrade_workflow":
+        upgraded = (ROOT / UPDATER_RUNTIME_PREFLIGHT_WORKFLOW).read_text()
+        assert "openclaw-source-install.sh --native-upgrade" in upgraded
+        (path / UPDATER_RUNTIME_PREFLIGHT_WORKFLOW).write_text(upgraded)
     if mutation == "workflow_mode":
         (path / UPDATER_RUNTIME_PREFLIGHT_WORKFLOW).chmod(0o755)
     workflow_mutations = {
