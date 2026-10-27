@@ -6,6 +6,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   AnyAgentTool,
+  GatewayHandlerOptions,
   OpenClawPluginToolContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { approvalRequestFingerprint } from "../src/approval.js";
