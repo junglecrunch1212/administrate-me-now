@@ -956,7 +956,7 @@ jobs:
           npm test --prefix openclaw/administrateme
 
       - name: Build and verify the exact reviewed OpenClaw source
-        run: bash scripts/acceptance/openclaw-source-install.sh --service-work-and-approval
+        run: bash scripts/acceptance/openclaw-source-install.sh --native-upgrade
 
       - name: Preserve isolated Gateway approval probe diagnostics
         if: ${{ always() && !github.event.pull_request.draft }}

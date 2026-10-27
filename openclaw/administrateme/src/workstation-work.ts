@@ -6,6 +6,7 @@ import type { PluginRuntime } from "./runtime.js";
 import { bindReminderTool, takeReminderInput } from "./self-replies.js";
 import { provenanceFromServiceTool, serviceAgentId, serviceSessionKey } from "./service-private.js";
 import { toolResult } from "./result.js";
+import { assertToolInput } from "./tool-input.js";
 
 const NAME = "administrateme_workstation_work";
 const CREATE = "administrateme_service_private_work";
@@ -49,6 +50,7 @@ export function registerWorkstationWorkTool(api: OpenClawPluginApi, runtime: Plu
       Type.Object({ action: Type.Literal("status"), follow_up_source_id: Type.String({ minLength: 1, maxLength: 240 }) }, { additionalProperties: false }),
     ]),
     async execute(id, params) {
+      assertToolInput(params);
       if (!runtime.transport.config.serviceWorkEnabled || !api.runtime.subagent) throw new Error("Native CoS work is unavailable");
       const input = await takeReminderInput(runtime, id, context);
       if (params.action === "browser_status") return toolResult(await runtime.transport.request("/api/openclaw/v1/tools/workstation-browser/retained", {

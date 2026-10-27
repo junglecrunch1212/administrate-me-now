@@ -4398,16 +4398,19 @@ def test_system_native_proof_composes_browser_and_approval_with_one_install() ->
         if step.get("name") == "Build and verify the exact reviewed OpenClaw source"
     )
     assert native_step["run"] == (
-        "bash scripts/acceptance/openclaw-source-install.sh --service-work-and-approval"
+        "bash scripts/acceptance/openclaw-source-install.sh --native-upgrade"
     )
     native = (ROOT / "scripts/acceptance/openclaw-source-install.sh").read_text()
-    assert native.count('"$REPOSITORY_ROOT/bootstrap/install-openclaw-source.sh"') == 1
+    assert native.count('"$REPOSITORY_ROOT/bootstrap/install-openclaw-source.sh"') == 2
+    assert "tests/fixtures/openclaw_native_upgrade.py" in native
+    assert "scripts/check-native-sdk.mjs" in native
+    assert "--select-prepared" in native
     assert (
-        '""|--service-work|--self-reminder|--service-work-and-approval|--native-account-policy) ;;'
+        '""|--service-work|--self-reminder|--service-work-and-approval|--native-account-policy|--native-upgrade) ;;'
         in native
     )
     assert '*) echo "Unsupported native proof selector" >&2; exit 2 ;;' in native
-    service_guard = 'if [[ "${1:-}" == --service-work || "${1:-}" == --service-work-and-approval ]]; then'
+    service_guard = 'if [[ "${1:-}" == --service-work || "${1:-}" == --service-work-and-approval || "${1:-}" == --native-upgrade ]]; then'
     approval_guard = 'if [[ "${1:-}" != --service-work && "${1:-}" != --native-account-policy ]]; then'
     service_group, approval_group = native.split(service_guard, 1)[1].split(
         approval_guard, 1
@@ -4421,11 +4424,17 @@ def test_system_native_proof_composes_browser_and_approval_with_one_install() ->
         " --browser-gmail\n",
     ):
         assert required in service_group
-    assert 'if [[ "${1:-}" != --service-work-and-approval ]]; then' in approval_group
+    assert (
+        'if [[ "${1:-}" != --service-work-and-approval && "${1:-}" != --native-upgrade ]]; then'
+        in approval_group
+    )
     assert "check-cos-imessage-text.mjs" in service_group
     assert "check-cos-imessage-text.mjs" in approval_group
     assert "check-cos-approval-gateway.mjs" in approval_group
-    assert 'if [[ "${1:-}" == --self-reminder ]]; then' in approval_group
+    assert (
+        'if [[ "${1:-}" == --self-reminder || "${1:-}" == --native-upgrade ]]; then'
+        in approval_group
+    )
     assert "check-self-reminder-gateway.mjs" in approval_group
 
 
@@ -4583,6 +4592,18 @@ def test_computer_use_native_selector_checks_regenerated_merge_bytes(
                 "check-cos-approval-gateway.mjs",
             ],
         ),
+        (
+            "--native-upgrade",
+            [
+                "check-workstation-codex-policy.mjs",
+                "check-cos-native-account-policy.mjs",
+                "check-cos-imessage-text.mjs",
+                "check-service-work-gateway.mjs",
+                "check-workstation-work-gateway.mjs",
+                "check-cos-approval-gateway.mjs",
+                "check-self-reminder-gateway.mjs",
+            ],
+        ),
     ],
 )
 def test_native_selector_dispatch_keeps_exact_proof_groups(
@@ -4616,7 +4637,10 @@ def test_native_selector_dispatch_keeps_exact_proof_groups(
         if Path(call.split()[0]).name == "check-cos-native-account-policy.mjs":
             assert call.endswith(" /synthetic/poetry-python")
     assert sum(" --browser" in call for call in calls) == (
-        2 if selector in {"--service-work", "--service-work-and-approval"} else 0
+        2
+        if selector
+        in {"--service-work", "--service-work-and-approval", "--native-upgrade"}
+        else 0
     )
 
 

@@ -9,6 +9,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 assert.equal(process.env.GITHUB_ACTIONS, "true", "Use isolated hosted CI");
+assert.equal(process.env.RUNNER_ENVIRONMENT, "github-hosted", "Use a disposable hosted runner");
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const source = path.resolve(process.argv[2]);
 const versions = JSON.parse(await readFile(path.join(repository, "bootstrap/versions.json"), "utf8"));
@@ -33,17 +34,36 @@ async function computerUseConfigProof(roster) {
   assert.equal(process.env.OPENCLAW_CONFIG_PATH, configPath);
   await mkdir(state, { mode: 0o700 });
   const agent = { workspace: path.join(directory, "workspace"), tools: { allow: ["browser"] } };
-  const original = {
-    meta: { lastTouchedVersion: versions.openclaw.version, migrations: { modelPolicyAllowlist: true } },
+  const authored = {
+    meta: { lastTouchedVersion: roster === "list" ? versions.openclaw.predecessor.version : versions.openclaw.version,
+      migrations: { modelPolicyAllowlist: true, ...(roster === "entries" ? { utilityModelSeparation: true } : {}) } },
     gateway: { mode: "local", bind: "loopback", auth: { mode: "token", token: "synthetic-config-proof-only" } },
     agents: {
       defaults: { workspace: path.join(directory, "default-workspace") },
       [roster]: roster === "list" ? [{ id: "fixture-agent", ...agent }] : { "fixture-agent": agent },
     },
+    channels: {}, bindings: [],
     plugins: { entries: { codex: { enabled: true, config: { codexPlugins: { enabled: false } } } } },
     browser: { enabled: true, evaluateEnabled: true, defaultProfile: "chrome", allowSystemProfileImport: false, profiles: { chrome: { driver: "extension" } } },
   };
-  await writeFile(configPath, JSON.stringify(original, null, 2) + "\n", { mode: 0o600 });
+  await writeFile(configPath, JSON.stringify(authored, null, 2) + "\n", { mode: 0o600 });
+  if (roster === "list") {
+    // Retired lists are invalid in 10.8. Exercise the actual pinned Doctor before
+    // testing exact config.patch; never silently author a canonical replacement.
+    execFileSync(process.execPath, [path.join(source, "openclaw.mjs"), "doctor", "--fix", "--non-interactive"], {
+      cwd: directory, env: process.env, encoding: "utf8", timeout: 90_000,
+    });
+  }
+  const original = JSON.parse(await readFile(configPath, "utf8"));
+  assert.deepEqual(original.agents.entries, { "fixture-agent": agent });
+  assert.equal(Object.hasOwn(original.agents, "list"), false);
+  assert.equal(original.agents.defaults.workspace, authored.agents.defaults.workspace);
+  for (const key of ["gateway", "channels", "bindings", "plugins", "browser"]) {
+    assert.deepEqual(original[key], authored[key], `Doctor must preserve the exact ${key} policy`);
+  }
+  assert.equal(original.meta.lastTouchedVersion, versions.openclaw.version);
+  assert.equal(original.meta.migrations.modelPolicyAllowlist, true);
+  assert.equal(original.meta.migrations.utilityModelSeparation, true);
   const { configHandlers } = await load("src/gateway/server-methods/config.ts");
   const { readConfigFileSnapshot } = await load("src/config/io.ts");
   const { stampConfigWriteMetadata } = await load("src/config/io.meta.ts");
@@ -86,12 +106,12 @@ else:
   assert.equal(observed.valid, true, "synthetic authored native configuration must validate");
   assert(observed.config.agents.entries["fixture-agent"], "read must exercise resolved native agent representation");
   assert.notDeepEqual(observed.config, original, "fixture must exercise authored-vs-runtime default projection");
-  assert.deepEqual(stampConfigWriteMetadata(original, "2000-01-01T00:00:00.000Z", VERSION, original), original);
-  for (const mutation of ["version", "marker"]) {
+  assert.deepEqual(stampConfigWriteMetadata(original, VERSION, original), original);
+  for (const mutation of ["version", "modelPolicyAllowlist", "utilityModelSeparation"]) {
     const unsafe = structuredClone(original);
     if (mutation === "version") unsafe.meta.lastTouchedVersion = "2020.1.1";
-    else delete unsafe.meta.migrations;
-    assert.notDeepEqual(stampConfigWriteMetadata(unsafe, "2000-01-01T00:00:00.000Z", VERSION, unsafe), unsafe);
+    else delete unsafe.meta.migrations[mutation];
+    assert.notDeepEqual(stampConfigWriteMetadata(unsafe, VERSION, unsafe), unsafe);
     const rawBefore = await readFile(configPath, "utf8");
     assert.deepEqual(python("refuse", { valid: true, hash: hash(rawBefore), config: unsafe }), { refused: true });
     assert.equal(await readFile(configPath, "utf8"), rawBefore, "refusal must happen before native write");
@@ -131,10 +151,15 @@ else:
       const resolvedDefaults = {
         marketplaceDiscoveryTimeoutMs: 60_000, liveTestTimeoutMs: 60_000,
         toolCallTimeoutMs: 60_000, healthCheckIntervalMinutes: 60,
-        pluginCacheMode: "independent", strictReadiness: false,
+        pluginCacheMode: "independent",
       };
       const manifest = JSON.parse(await readFile(path.join(source, "extensions/codex/openclaw.plugin.json"), "utf8"));
       const properties = manifest.configSchema.properties.computerUse.properties;
+      assert.equal(properties.strictReadiness.default, false);
+      assert.equal(current.plugins.entries.codex.config.computerUse.strictReadiness, true,
+        "managed unified Computer Use must retain strict readiness instead of the schema default");
+      assert.equal(Object.hasOwn(current.plugins.entries.codex.config.computerUse, "marketplacePath"), false,
+        "legacy marketplace override prevents native unified runtime discovery");
       for (const [key, value] of Object.entries(resolvedDefaults)) {
         assert.deepEqual(properties[key].default, value, `pinned Computer Use default changed: ${key}`);
         assert.equal(Object.hasOwn(current.plugins.entries.codex.config.computerUse, key), false, "resolved defaults must not be authored");
@@ -195,10 +220,11 @@ for (const roster of ["list", "entries"]) {
   const directory = await mkdtemp(path.join(tmpdir(), "adminme-computer-use-config-"));
   try {
     execFileSync(process.execPath, [fileURLToPath(import.meta.url), source, process.argv[3], "--computer-use-config", roster], {
-      cwd: repository, timeout: 120_000, stdio: "inherit",
+      cwd: repository, timeout: 180_000, stdio: "inherit",
       env: {
         PATH: process.env.PATH,
-        GITHUB_ACTIONS: "true",
+        GITHUB_ACTIONS: "true", RUNNER_ENVIRONMENT: "github-hosted",
+        OPENCLAW_SERVICE_REPAIR_POLICY: "external", OPENCLAW_NO_AUTO_UPDATE: "1", OPENCLAW_NO_RESPAWN: "1",
         HOME: directory, OPENCLAW_HOME: directory, CODEX_HOME: path.join(directory, "codex"),
         OPENCLAW_STATE_DIR: path.join(directory, "state"), OPENCLAW_CONFIG_PATH: path.join(directory, "state/openclaw.json"),
         ADMINME_COMPUTER_USE_FIXTURE: directory,

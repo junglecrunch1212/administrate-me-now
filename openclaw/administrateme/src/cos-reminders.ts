@@ -4,6 +4,7 @@ import type { PluginRuntime } from "./runtime.js";
 import { takeReminderInput } from "./self-replies.js";
 import { COS_REMINDER_RULE, rememberRequestAuthorization } from "./request-policy.js";
 import { toolResult } from "./result.js";
+import { assertToolInput } from "./tool-input.js";
 
 export const COS_REMINDER_INPUT_TOOLS = [
   "administrateme_confirm_cos_apple_reminder",
@@ -23,12 +24,13 @@ export function registerCoSReminderTools(api: OpenClawPluginApi, runtime: Plugin
       request_id: Type.String({ minLength: 8, maxLength: 120 }),
     }, { additionalProperties: false }),
     async execute(id, params) {
+      assertToolInput(params);
       const input = await takeReminderInput(runtime, id, context);
       const result = await runtime.transport.request("/api/openclaw/v1/tools/cos-apple-reminders/confirm", {
         ...params, provenance: input.provenance, source_message_event_id: input.source_message_event_id,
         request_authorization: true,
       });
-      rememberRequestAuthorization(runtime, result, input, params as Record<string, unknown>, COS_REMINDER_RULE);
+      rememberRequestAuthorization(runtime, result, input, params, COS_REMINDER_RULE);
       return toolResult(result);
     },
   }), { name: "administrateme_confirm_cos_apple_reminder", optional: true });
@@ -38,6 +40,7 @@ export function registerCoSReminderTools(api: OpenClawPluginApi, runtime: Plugin
     description: "Inspect the current requester's exact CoS-owned Apple Reminder receipt. This read never executes or retries a pending action. Succeeded proves one exact native save and read-back; pending, suppressed, failed or unknown does not. Preserve the domain_approval_event_id for later status. An unknown result requires inspection, never another create request.",
     parameters: Type.Object({ domain_approval_event_id: Type.String({ minLength: 1, maxLength: 240 }) }, { additionalProperties: false }),
     async execute(id, params) {
+      assertToolInput(params);
       const input = await takeReminderInput(runtime, id, context);
       return toolResult(await runtime.transport.request("/api/openclaw/v1/tools/cos-apple-reminders/status", {
         ...params, provenance: input.provenance, source_message_event_id: input.source_message_event_id,

@@ -7,6 +7,8 @@ services. This module never signs into Apple, changes TCC or sends a message.
 
 from __future__ import annotations
 
+from adminme.openclaw_topology import runtime_agent_rows, replace_runtime_agent_rows
+
 import argparse
 import copy
 import hashlib
@@ -99,9 +101,11 @@ def prepare_channel(
         {"channelId": "imessage", "accountId": account_id}
     ]
     result["plugins"]["entries"].setdefault("imessage", {})["enabled"] = True
-    for agent in result.get("agents", {}).get("list", []):
+    agent_rows = runtime_agent_rows(result)
+    for agent in agent_rows:
         if str(agent.get("id", "")).startswith("adminme-"):
             agent["tools"] = {"allow": list(MEMBER_TOOLS)}
+    replace_runtime_agent_rows(result, agent_rows)
     return result
 
 
@@ -220,7 +224,7 @@ def validate_prepared_channel(
         raise ValueError("CoS iMessage intake routing is not enabled")
     member_agents = [
         row
-        for row in openclaw_config.get("agents", {}).get("list", [])
+        for row in runtime_agent_rows(openclaw_config)
         if str(row.get("id", "")).startswith("adminme-")
     ]
     if not member_agents or any(

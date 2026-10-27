@@ -15,16 +15,16 @@
     "baseUrl": ".",
     "paths": {
       "openclaw/plugin-sdk/global-singleton": [
-        "test/fixtures/openclaw-2026.7.2/global-singleton.d.ts"
+        "test/fixtures/openclaw-2026.10.8/global-singleton.d.ts"
       ],
       "openclaw/plugin-sdk/agent-harness-runtime": [
-        "test/fixtures/openclaw-2026.7.2/agent-harness-runtime.d.ts"
+        "test/fixtures/openclaw-2026.10.8/agent-harness-runtime.d.ts"
       ],
       "openclaw/plugin-sdk/approval-runtime": [
-        "test/fixtures/openclaw-2026.7.2/approval-runtime.d.ts"
+        "test/fixtures/openclaw-2026.10.8/approval-runtime.d.ts"
       ],
       "openclaw/plugin-sdk/plugin-entry": [
-        "test/fixtures/openclaw-2026.7.2/plugin-entry.d.ts"
+        "test/fixtures/openclaw-2026.10.8/plugin-entry.d.ts"
       ]
     },
     "types": ["node", "vitest/globals"]

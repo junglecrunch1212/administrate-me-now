@@ -1187,7 +1187,7 @@ def _computer_use_fixture(tmp_path, monkeypatch, *, disable=False):
     previous = deepcopy(fixture.previous)
     previous["meta"] = {
         "lastTouchedVersion": browser.load_versions()["openclaw"]["version"],
-        "migrations": {"modelPolicyAllowlist": True},
+        "migrations": {"modelPolicyAllowlist": True, "utilityModelSeparation": True},
     }
     config = {
         "codexPlugins": {"enabled": False},
@@ -1534,7 +1534,15 @@ def test_computer_use_reconciliation_keeps_hash_evidence_and_grant_boundaries(
 
 
 @pytest.mark.parametrize(
-    "mutation", ["absent", "version", "migration", "numeric-marker"]
+    "mutation",
+    [
+        "absent",
+        "version",
+        "migration",
+        "numeric-marker",
+        "missing-utility",
+        "numeric-utility",
+    ],
 )
 def test_computer_use_refuses_native_metadata_migration_before_preparing_patch(
     tmp_path, monkeypatch, mutation
@@ -1547,6 +1555,10 @@ def test_computer_use_refuses_native_metadata_migration_before_preparing_patch(
         previous["meta"]["lastTouchedVersion"] = "2020.1.1"
     elif mutation == "migration":
         del previous["meta"]["migrations"]
+    elif mutation == "missing-utility":
+        del previous["meta"]["migrations"]["utilityModelSeparation"]
+    elif mutation == "numeric-utility":
+        previous["meta"]["migrations"]["utilityModelSeparation"] = 1
     else:
         previous["meta"]["migrations"]["modelPolicyAllowlist"] = 1
     prior = json.dumps(previous).encode()

@@ -214,7 +214,7 @@ def test_fixed_entrypoints_exist_and_delegate_without_secret_arguments() -> None
         in versions["openclaw"]["source_archive_url"]
     )
     assert versions["openclaw"]["package_manager"] == (
-        "pnpm@11.15.1+sha512.81350b07e53c9538a02f1f2303b4290fa2d7be04e56e2a970c4cc4b417dc761de196edabd49d55c7dc9580db81007c44143e4e3d7e462b3000d23c255122d065"
+        "pnpm@12.15.0+sha512.b3951d6d6ff4a9f13dc7cf56cd28d2b8eb37dbcc9c68e52e1e1191873ea9f82a017287ab50baadc5ccc494f036c67c0e47eb13608c2fa36f47711b61ea128e61"
     )
     assert (
         'OPENCLAW_STATE_DIR="$ADMINME_INSTANCE_ROOT/state/openclaw/runtime"' in common
@@ -308,7 +308,7 @@ def test_required_llm_tool_status_proves_config_and_runtime_registration(
                         "toolNames": ["llm-task"],
                         "origin": "bundled",
                         "packageName": "@openclaw/llm-task",
-                        "packageVersion": "2026.7.2",
+                        "packageVersion": "2026.10.8",
                     }
                 }
             ),
@@ -362,7 +362,7 @@ def test_required_llm_tool_configuration_preserves_existing_allow_entries(
                             "toolNames": ["llm-task"],
                             "origin": "bundled",
                             "packageName": "@openclaw/llm-task",
-                            "packageVersion": "2026.7.2",
+                            "packageVersion": "2026.10.8",
                         }
                     }
                 ),
@@ -1028,7 +1028,7 @@ def test_launchers_share_keychain_gateway_token_and_load_member_chat_policy(
     monkeypatch.setattr(
         openclaw_service.subprocess,
         "run",
-        lambda *_args, **_kwargs: SimpleNamespace(stdout="OpenClaw 2026.7.2"),
+        lambda *_args, **_kwargs: SimpleNamespace(stdout="OpenClaw 2026.10.8"),
     )
     exec_capture: dict[str, object] = {}
 
@@ -1064,7 +1064,7 @@ def test_openclaw_activation_probes_server_side_and_writes_metadata_only(
     def run(command, **kwargs):
         commands.append(command)
         environments.append(dict(kwargs.get("env", {})))
-        return SimpleNamespace(stdout="OpenClaw 2026.7.2")
+        return SimpleNamespace(stdout="OpenClaw 2026.10.8")
 
     monkeypatch.setattr(
         "bootstrap.openclaw_activation.resolve_reviewed_openclaw",

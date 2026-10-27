@@ -37,7 +37,9 @@ def _coordinate(value: os.stat_result) -> tuple[int, ...]:
     )
 
 
-def runtime_artifact_fingerprint(release: Path) -> str:
+def runtime_artifact_fingerprint(
+    release: Path, *, _roots: tuple[str, ...] = _RUNTIME_ROOTS
+) -> str:
     """Hash bytes, modes and link targets without following generated links.
 
     The caller already verifies tracked source, release ownership and the pinned
@@ -194,7 +196,7 @@ def runtime_artifact_fingerprint(release: Path) -> str:
     try:
         root = os.open(release, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         try:
-            for relative in _RUNTIME_ROOTS:
+            for relative in _roots:
                 descriptors: list[int] = []
                 parent = root
                 try:

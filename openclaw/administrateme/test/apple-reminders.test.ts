@@ -54,7 +54,7 @@ function fixture(options: { acknowledged?: boolean; status?: string; serviceWork
   }, { ...context, ...overrides });
   const start = async (metadata = {}) => {
     await hooks.get("message_received")!({ from: actor, senderId: actor, content: message, messageId: "fixture-native-message", metadata },
-      { channelId: "imessage", accountId: account, sessionKey: session, agentId: agent });
+      { channelId: "imessage", accountId: account, sessionKey: session });
     await hooks.get("before_agent_reply")!({ cleanedBody: message }, context);
     return bind();
   };
@@ -118,6 +118,49 @@ describe("native private Apple Reminder workflow", () => {
       expect(f.send).not.toHaveBeenCalled();
     },
   );
+
+  it("rejects malformed arguments without consuming the acknowledged current request", async () => {
+    const f = fixture(); await f.start();
+    for (const input of [null, [], "changed", 1, false]) {
+      await expect(f.confirm.execute("fixture-confirm", input)).rejects.toThrow("tool arguments must be an object");
+    }
+    expect(f.request).toHaveBeenCalledTimes(1);
+    await f.confirm.execute("fixture-confirm", command);
+    expect(f.request).toHaveBeenCalledTimes(2);
+    expect(f.request.mock.calls[0]?.[1].provenance).not.toHaveProperty("agent_id");
+    expect(f.request.mock.calls[1]?.[1].provenance.agent_id).toBe(agent);
+  });
+
+  it.each([
+    undefined,
+    `agent:adminme-fedcba9876543210:imessage:${account}:direct:${actor}`,
+    `agent:${agent}:imessage:${account}:group:fixture-group`,
+    `agent:${agent}:imessage:other-account:direct:${actor}`,
+    `agent:${agent}:imessage:${account}:direct:+12025550102`, // fixture:tenant_data:ok
+  ])("cannot bind a member action from unsupported native session %s", async (nativeSession) => {
+    const f = fixture();
+    await f.hooks.get("message_received")!({ from: actor, senderId: actor, content: message, messageId: "fixture-native-message" },
+      { channelId: "imessage", accountId: account, sessionKey: nativeSession });
+    await f.hooks.get("before_agent_reply")!({ cleanedBody: message }, f.context);
+    expect((await f.bind()).block).toBe(true);
+    await expect(f.confirm.execute("fixture-confirm", command)).rejects.toThrow("No current private");
+    expect(f.request).toHaveBeenCalledTimes(1); // Intake cannot grant a current action.
+    expect(f.send).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { sessionKey: "agent:other:imessage:fixture:direct:other" },
+    { senderId: "+12025550102" }, // fixture:tenant_data:ok
+    { messageId: "other-native-message" },
+  ])("rejects contradictory native provenance before forwarding %j", async (overrides) => {
+    const f = fixture();
+    await expect(f.hooks.get("message_received")!({ from: actor, senderId: actor, content: message,
+      messageId: "fixture-native-message", sessionKey: session },
+    { channelId: "imessage", accountId: account, sessionKey: session, senderId: actor,
+      messageId: "fixture-native-message", ...overrides })).rejects.toThrow("contradictory");
+    expect(f.request).not.toHaveBeenCalled();
+    expect((await f.bind()).block).toBe(true);
+  });
 
   it("retains independent allow-once execution, and denial or timeout grants nothing", async () => {
     const f = fixture(); await f.start();

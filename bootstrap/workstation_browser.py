@@ -69,12 +69,10 @@ COMPUTER_USE_TRANSITION = "computer-use-readiness-reconciliation-v1"
 COMPUTER_USE_CONFIG: dict[str, Any] = {
     "enabled": True,
     "autoInstall": True,
-    "marketplacePath": (
-        "/Applications/ChatGPT.app/Contents/Resources/plugins/openai-bundled/"
-        ".agents/plugins/marketplace.json"
-    ),
-    "pluginName": "computer-use",
-    "mcpServerName": "computer-use",
+    # The reviewed native harness discovers one desktop distribution and binds
+    # its executable, signed service and unified MCP runtime together. An
+    # explicit legacy marketplace path prevents that supported conversion.
+    "strictReadiness": True,
     "healthCheckEnabled": False,
     "autoRepair": False,
 }
@@ -141,6 +139,7 @@ def prepare_computer_use_patch(
         or meta.get("lastTouchedVersion") != load_versions()["openclaw"]["version"]
         or not isinstance(meta.get("migrations"), dict)
         or meta["migrations"].get("modelPolicyAllowlist") is not True
+        or meta["migrations"].get("utilityModelSeparation") is not True
     ):
         raise ValueError("Computer Use requires already-current native write metadata")
     config = _computer_use_config(original)

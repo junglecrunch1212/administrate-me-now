@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
-const expectedCommit = "ce67ffb70e83e5ebb56ea02e814e577153f84f61";
+const expectedCommit = "dc2523e5a5c7a309517fd7fa834add938231d526";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 function fail(message) {

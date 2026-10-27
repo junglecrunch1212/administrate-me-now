@@ -8,9 +8,9 @@ const readJson = async (name) => JSON.parse(await readFile(path.join(root, name)
 const pkg = await readJson("package.json");
 const manifest = await readJson("openclaw.plugin.json");
 const automations = await readJson("automations.json");
-const expectedVersion = "2026.7.2";
-const expectedCommit = "ce67ffb70e83e5ebb56ea02e814e577153f84f61";
-const expectedNode = ">=24.15.0 <25";
+const expectedVersion = "2026.10.8";
+const expectedCommit = "dc2523e5a5c7a309517fd7fa834add938231d526";
+const expectedNode = ">=24.22.1 <25";
 const expectedTools = [
   "administrateme_finance_bindings",
   "administrateme_finance_status",

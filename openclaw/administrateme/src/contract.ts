@@ -1,6 +1,6 @@
 import { FINANCE_ADVISOR_AVAILABLE, FINANCE_ADVISOR_TOOL_NAMES } from "./finance-release.js";
-export const OPENCLAW_VERSION = "2026.7.2" as const;
-export const OPENCLAW_COMMIT = "ce67ffb70e83e5ebb56ea02e814e577153f84f61" as const;
+export const OPENCLAW_VERSION = "2026.10.8" as const;
+export const OPENCLAW_COMMIT = "dc2523e5a5c7a309517fd7fa834add938231d526" as const;
 export const PLUGIN_ID = "administrateme" as const;
 
 export const BRIDGE_EVENT_KINDS = [
