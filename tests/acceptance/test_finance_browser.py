@@ -170,7 +170,9 @@ async def _assert_finance_projection_controls(call, evaluate, wait_for):
         assert await evaluate(
             "document.querySelector('[data-finance-comparison]') === null"
         )
-        await evaluate("document.querySelector('[data-finance-compare=horizons]').click()")
+        await evaluate(
+            "document.querySelector('[data-finance-compare=horizons]').click()"
+        )
         await wait_for(
             "Boolean(document.querySelector('[data-finance-comparison]')) && window.__financeBrowserProbe.calls.filter(c => c.report === 'planning_projection').length === 5"
         )
@@ -183,14 +185,18 @@ async def _assert_finance_projection_controls(call, evaluate, wait_for):
             "document.querySelector('[data-finance-comparison]')?.textContent.includes('365')"
         )
         await evaluate("window.__financeBrowserProbe.calls = []")
-        await evaluate("document.querySelector('[data-finance-compare=scenarios]').click()")
+        await evaluate(
+            "document.querySelector('[data-finance-compare=scenarios]').click()"
+        )
         await wait_for(
             "document.querySelectorAll('[data-finance-comparison] li').length === 3"
         )
         requests = await evaluate("window.__financeBrowserProbe.calls")
         assert len(requests) == 3, requests
         assert {row["context"] for row in requests} == {
-            "bank-current-base", "bank-expected-base", "bank-chosen-base"
+            "bank-current-base",
+            "bank-expected-base",
+            "bank-chosen-base",
         }
         assert await evaluate(
             "document.querySelector('[data-finance-comparison]').textContent.includes('Spending case:')"
@@ -218,7 +224,9 @@ async def _assert_finance_projection_controls(call, evaluate, wait_for):
             assert await evaluate(
                 "document.querySelector('[data-finance-metric=spendable]').textContent.includes('Not established')"
             )
-            await evaluate("document.querySelector('[data-finance-action=refresh]').click()")
+            await evaluate(
+                "document.querySelector('[data-finance-action=refresh]').click()"
+            )
             await wait_for(
                 "Boolean(document.querySelector('.finance-planning-summary')) && !document.querySelector('.finance-stale-notice')"
             )
@@ -231,7 +239,9 @@ async def _assert_finance_projection_controls(call, evaluate, wait_for):
         await wait_for(
             "Boolean(document.querySelector('.finance-planning-retry:not([hidden])'))"
         )
-        assert await evaluate("document.querySelector('.finance-planning-summary') === null")
+        assert await evaluate(
+            "document.querySelector('.finance-planning-summary') === null"
+        )
         await evaluate("document.querySelector('.finance-planning-retry').focus()")
         await _press_enter(call)
         await wait_for(
@@ -583,7 +593,9 @@ async def test_owner_saves_goal_and_preference_then_reloads(tmp_path):
                 "document.querySelector('.finance-event-list details > summary').focus()"
             )
             await _press_enter(call)
-            await wait_for("document.querySelector('.finance-event-list details')?.open")
+            await wait_for(
+                "document.querySelector('.finance-event-list details')?.open"
+            )
             assert await evaluate(
                 "document.querySelector('.finance-event-list details').textContent.includes('Published route:') && document.querySelector('.finance-event-list details').textContent.includes('Bank effect:') && document.querySelector('.finance-event-list details').textContent.includes('Debt effect:')"
             )
