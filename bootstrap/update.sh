@@ -361,7 +361,9 @@ if [[ -n "$approve_flag" ]]; then
     --instance-root "$ADMINME_INSTANCE_ROOT" \
     --candidate-python "$controller/bin/python" \
     --candidate-commit "$candidate_commit" \
-    --runtime-tag "$runtime_tag"
+    --runtime-tag "$runtime_tag" \
+    --candidate-manifest "$manifest" \
+    --preserve-unchanged-python
 fi
 
 upgrade_args=(upgrade "$candidate")

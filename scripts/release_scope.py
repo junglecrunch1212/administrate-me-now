@@ -526,6 +526,22 @@ UPDATER_TOOLING_SHARED = {
         "6aa680807216ac0d3c6d3e56a6346a95a69e9a62266c06dbe737c5ac072174ab",
     ),
 }
+# Closed Node-only credential boundary; unrelated launcher/secret changes fall back.
+UPDATER_PYTHON_BOUNDARY_SOURCE = "bootstrap/keychain_runtime_migration.py"
+UPDATER_PYTHON_BOUNDARY_SHA256 = (
+    "9af922f722284bde4c80f7902b66cf50f5cc3f1620d6f3d4b185c9f79c0a9c31",
+    "57aeb2a09624c5f17bbfd220593f4645cf76bbfae39698d787927f412c5a1608",
+)
+UPDATER_PYTHON_BOUNDARY_LAUNCHER_SHA256 = (
+    "d5d74ca1590eeda364f79a955c540c11d159fa5f26ba5c0dd636148ddf777a74",
+    "d5d7a6b4fc54998110c623ce2df6cde4e0a7996f89661f12e0dabb132425c25f",
+)
+UPDATER_PYTHON_BOUNDARY_TEST = "tests/unit/bootstrap/test_phase5_operations.py"
+UPDATER_PYTHON_BOUNDARY_PATHS = {
+    UPDATER_PYTHON_BOUNDARY_SOURCE,
+    UPDATER_PYTHON_BOUNDARY_TEST,
+}
+
 UPDATER_TOOLING_PATHS = frozenset(
     {
         "bootstrap/doctor_tooling.py",
@@ -1034,6 +1050,7 @@ def choose_scope(
                 | UPDATER_EFFECT_CONTEXT_SHARED_PATHS
                 | {UPDATER_EMAIL_ATTRIBUTION}
                 | UPDATER_TOOLING_SHARED.keys()
+                | UPDATER_PYTHON_BOUNDARY_PATHS
                 | POLICY_PATHS
                 or path == UPDATER_CHECK_SCRIPT
                 or _prose(path)
@@ -1043,6 +1060,7 @@ def choose_scope(
         )
         and any(
             path in UPDATER_COMPONENT_PATHS | UPDATER_EFFECT_CONTEXT_SHARED_PATHS
+            or path == UPDATER_PYTHON_BOUNDARY_SOURCE
             or path == UPDATER_CHECK_SCRIPT
             for _, path in changes
         )
@@ -1363,6 +1381,17 @@ def _updater_effect_context_shared_source(
         return (
             (normalized, "cos_instruction_references" in source) if normalized else None
         )
+    if path == "bootstrap/update.sh" and "--preserve-unchanged-python" in source:
+        if (
+            hashlib.sha256(source.encode()).hexdigest()
+            != UPDATER_PYTHON_BOUNDARY_LAUNCHER_SHA256[1]
+        ):
+            return None
+        source = source.replace(
+            '    --runtime-tag "$runtime_tag" \\\n    --candidate-manifest "$manifest" \\\n    --preserve-unchanged-python\n',
+            '    --runtime-tag "$runtime_tag"\n',
+            1,
+        )
     replacements = UPDATER_EFFECT_CONTEXT_SHARED_REPLACEMENTS[path]
     counts = [source.count(new) for _, new in replacements]
     if any(counts) and counts != [1] * len(replacements):
@@ -1417,6 +1446,32 @@ def _updater_dependency_fingerprint(
     )
     shared_identities: list[tuple[str, str, str]] = []
     inventory = {entry.path: entry for entry in entries}
+    boundary = inventory.get(UPDATER_PYTHON_BOUNDARY_SOURCE)
+    if boundary is not None:
+        digest = hashlib.sha256(
+            _git(repository, "show", f"{revision}:{boundary.path}").encode()
+        ).hexdigest()
+        if boundary.mode != "100644" or digest not in UPDATER_PYTHON_BOUNDARY_SHA256:
+            return None
+        launcher = _git(repository, "show", f"{revision}:bootstrap/update.sh")
+        launcher_digest = hashlib.sha256(launcher.encode()).hexdigest()
+        enabled = digest == UPDATER_PYTHON_BOUNDARY_SHA256[1]
+        if enabled:
+            if (
+                launcher_digest != UPDATER_PYTHON_BOUNDARY_LAUNCHER_SHA256[1]
+                or UPDATER_PYTHON_BOUNDARY_TEST not in inventory
+                or inventory[UPDATER_PYTHON_BOUNDARY_TEST].mode != "100644"
+            ):
+                return None
+        elif "--preserve-unchanged-python" in launcher:
+            return None
+        shared_identities.append(
+            (boundary.path, boundary.mode, "reviewed-python-runtime-boundary-v1")
+        )
+    elif "bootstrap/update.sh" in inventory and "--preserve-unchanged-python" in _git(
+        repository, "show", f"{revision}:bootstrap/update.sh"
+    ):
+        return None
     tooling_present = "bootstrap/doctor_tooling.py" in inventory
     if tooling_present and not UPDATER_TOOLING_PATHS <= inventory.keys():
         return None
@@ -1469,6 +1524,7 @@ def _updater_dependency_fingerprint(
         | UPDATER_TEST_PATHS
         | UPDATER_EFFECT_CONTEXT_SHARED_PATHS
         | UPDATER_TOOLING_SHARED.keys()
+        | UPDATER_PYTHON_BOUNDARY_PATHS
         | POLICY_PATHS
         | {UPDATER_CHECK_SCRIPT}
     )

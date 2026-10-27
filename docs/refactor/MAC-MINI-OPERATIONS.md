@@ -545,6 +545,21 @@ fixed commit materialization, and passes the exact commit to the manager. A miss
 mismatched, or active-release controller fails before backup, service stop, or
 pointer mutation.
 
+A Node-only migration preserves credentials. Before entering maintenance, use
+that protected candidate's `bootstrap/keychain_runtime_migration.py` with the
+active release interpreter, `--check-runtime-boundary`, `--instance-root`,
+`--candidate-python` naming the reviewed candidate Python, and
+`--candidate-manifest` naming its `bootstrap/versions.json`. This read-only
+preflight returns `credential_migration_required: false` only when declared
+Python formula/version/compatibility and actual base interpreter path, bytes and
+version match. It does not read Keychain items. The public updater repeats this
+same check against its prepared controller and skips all credential copies and
+alias publication when Python is unchanged. Unknown identity or binary drift
+under an unchanged declaration fails closed. A declared Python migration keeps
+the existing explicit authority and credential-migration path. Before pausing,
+also establish the supported cancellation/restoration path for the exact current
+predecessor; a preflight pass is not permission to widen the transaction.
+
 Do not reset the login Keychain or select **Allow all applications** when a
 Python-boundary migration encounters an access prompt. The explicit migration
 launcher preserves the existing items for rollback. Under the active
