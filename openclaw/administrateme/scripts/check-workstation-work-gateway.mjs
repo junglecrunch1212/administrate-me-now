@@ -2,7 +2,7 @@
  * Hosted disposable state only; synthetic loopback model and real encrypted error receipt, no provider credentials.
  */
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { createHash, createHmac, randomBytes, randomUUID } from "node:crypto";
 import { copyFile, mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import net from "node:net";
@@ -14,7 +14,10 @@ import { startBrowserTransport } from "../../../tests/fixtures/openclaw_browser_
 import { startNativeFailureBackend, startWorkstationWorkFixtures } from "../../../tests/fixtures/openclaw_workstation_work_probe.mjs";
 
 assert.equal(process.env.GITHUB_ACTIONS, "true", "Use isolated hosted CI for candidate execution");
+assert.equal(process.env.RUNNER_ENVIRONMENT, "github-hosted", "Use isolated hosted CI for candidate execution");
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+const candidateCommit = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repository, encoding: "utf8" }).trim();
+assert.match(candidateCommit, /^[0-9a-f]{40}$/);
 const source = path.resolve(process.argv[2]);
 const versions = JSON.parse(await readFile(path.join(repository, "bootstrap/versions.json"), "utf8"));
 assert.equal(path.basename(source), versions.openclaw.commit);
@@ -45,7 +48,8 @@ const member = "member-conversation-fixture";
 const memberAgent = `adminme-${createHash("sha256").update(member).digest("hex").slice(0, 16)}`;
 let failureBackend, fixtures;
 let gateway, socket, logs = "";
-const nativeWorkers = [], browserHooks = [];
+const nativeWorkers = [], browserHooks = [], dnsTrace = [];
+let dnsTraceDropped = 0, probeOutcome = "failed", bodyReadCount = "not_observed";
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 async function until(check, label, timeout = 150_000) {
   const deadline = Date.now() + timeout;
@@ -73,17 +77,25 @@ const env = Object.fromEntries(["PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "USE
 Object.assign(env, { OPENCLAW_STATE_DIR: state, OPENCLAW_CONFIG_PATH: configPath, OPENCLAW_GATEWAY_PORT: String(port), OPENCLAW_GATEWAY_TOKEN: token,
   OPENCLAW_NO_RESPAWN: "1", OPENCLAW_DISABLE_BONJOUR: "1", NODE_DISABLE_COMPILE_CACHE: "1",
   OPENCLAW_SKIP_GMAIL_WATCHER: "1", OPENCLAW_SKIP_CANVAS_HOST: "1", OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1", ADMINME_OPENCLAW_SHARED_SECRET: secret });
-if (browserProbe) delete env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER;
+if (browserProbe) {
+  delete env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER;
+  env.ADMINME_SYNTHETIC_BROWSER_DNS_TRACE = directory;
+}
 async function start() {
-  gateway = spawn(process.execPath, [path.join(source, "openclaw.mjs"), "gateway", "run"], { cwd: directory, env, stdio: ["ignore", "pipe", "pipe"] });
+  const diagnostic = browserProbe ? ["--import", pathToFileURL(path.join(repository, "tests/fixtures/openclaw_browser_dns_trace.mjs")).href] : [];
+  gateway = spawn(process.execPath, [...diagnostic, path.join(source, "openclaw.mjs"), "gateway", "run"], { cwd: directory, env, stdio: ["ignore", "pipe", "pipe"] });
   for (const stream of [gateway.stdout, gateway.stderr]) {
     let buffered = "";
     stream.on("data", (chunk) => {
       logs = (logs + chunk).slice(-50_000); buffered += chunk;
       const lines = buffered.split("\n"); buffered = lines.pop().slice(-50_000);
-      for (const line of lines) for (const [marker, target] of [["SYNTHETIC_WORKER_STATE ", nativeWorkers], ["SYNTHETIC_BROWSER_BOUNDARY ", browserHooks]]) {
+      for (const line of lines) for (const [marker, target] of [["SYNTHETIC_WORKER_STATE ", nativeWorkers], ["SYNTHETIC_BROWSER_BOUNDARY ", browserHooks], ["SYNTHETIC_BROWSER_DNS ", dnsTrace]]) {
         const offset = line.indexOf(marker); if (offset < 0) continue;
-        try { target.push(JSON.parse(line.slice(offset + marker.length))); if (target.length > 200) target.shift(); }
+        try {
+          const entry = JSON.parse(line.slice(offset + marker.length));
+          if (target === dnsTrace && target.length >= 200) dnsTraceDropped++;
+          else { target.push(entry); if (target.length > 200) target.shift(); }
+        }
         catch { /* Incomplete metadata cannot establish a native run or capture. */ }
       }
     });
@@ -351,6 +363,7 @@ try {
     }
     console.log("Pinned native member -> CoS browser -> actual disposable Chrome DOM identity -> retained source -> same-origin return verified; synthetic extension/account only.");
   } else console.log("Pinned native conversation -> CoS subagent scratchpad -> actual read-back -> source-bound result verified for portal/Gmail; synthetic loopback fixtures only. No live provider effect.");
+  probeOutcome = "passed";
 } catch (error) {
   let redacted = logs.replaceAll(token, "[redacted]").replaceAll(secret, "[redacted]");
   for (const session of sessions) redacted = redacted.replaceAll(session, "[service-session]");
@@ -367,8 +380,24 @@ try {
         : boundary.some((entry) => entry.phase === "before_tool_call" && entry.admitted) ? "native_tool_still_running" : "native_worker_running" };
     });
     // Bound diagnostic CDP read; inability to read is unknown, never zero.
-    const bodyReadCount = await Promise.race([browser.privateBodyReadCount().catch(() => "unknown"), pause(1000).then(() => "unknown")]);
+    bodyReadCount = await Promise.race([browser.privateBodyReadCount().catch(() => "unknown"), pause(1000).then(() => "unknown")]);
     console.error("SYNTHETIC_BROWSER_TRANSPORT", JSON.stringify({ stages, nativeWorkers, browserHooks, errors: browser.errors, commands: browser.commands, bodyReadCount }));
   }
   throw error;
-} finally { await stop(); await fixtures?.close(); await failureBackend?.close(); await browser?.close(); await rm(directory, { recursive: true, force: true }); }
+} finally {
+  await stop();
+  try {
+    if (browser && process.env.RUNNER_TEMP) {
+      const evidence = path.join(process.env.RUNNER_TEMP, "adminme-browser-gateway-evidence");
+      await mkdir(evidence, { recursive: true });
+      await writeFile(path.join(evidence, gmailSelf ? "gmail-self.json" : "generic-page.json"), JSON.stringify({
+        contract: "synthetic-browser-stall-trace-v1", outcome: probeOutcome, candidate_commit: candidateCommit,
+        github_sha: process.env.GITHUB_SHA, openclaw_commit: versions.openclaw.commit, openclaw_version: versions.openclaw.version,
+        node_version: process.version, platform: process.platform, arch: process.arch, browser_version: browser.browserVersion,
+        nativeWorkers, browserHooks, commands: browser.commands, bodyReadCount,
+        dns: { entries: dnsTrace, limit: 200, dropped: dnsTraceDropped }, transport: browser.diagnosticTrace(),
+        limitations: "Fixture transport arrival/forwarding is not Playwright listener delivery. DNS records only the two synthetic destination hosts. Worker/hook/command summaries retain the last 200 entries; ordered transport/DNS traces retain their first limit entries with dropped counts. Forced process termination can prevent terminal flush. No content or resolved addresses retained.",
+      }, null, 2), { mode: 0o600 });
+    }
+  } finally { await fixtures?.close(); await failureBackend?.close(); await browser?.close(); await rm(directory, { recursive: true, force: true }); }
+}

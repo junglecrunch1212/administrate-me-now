@@ -26,11 +26,34 @@ export async function startBrowserTransport({ directory, state, relayPort, gmail
     throw new Error(`Synthetic browser timeout: ${label}`);
   }
   let socket, relay; const pending = new Map(); let nextId = 1, rootSession;
-  const errors = [], commands = [], url = gmailSelf
+  const errors = [], commands = [], trace = [], url = gmailSelf
     ? "https://mail.google.com/mail/u/0/#inbox" : "https://example.com/cos-workstation-fixture";
+  let traceOrder = 0, traceDropped = 0;
+  const tracedEvents = new Set(["Runtime.executionContextCreated", "Runtime.executionContextDestroyed", "Runtime.executionContextsCleared",
+    "Page.frameNavigated", "Page.frameAttached", "Page.frameDetached", "Target.attachedToTarget", "Target.detachedFromTarget"]);
+  const identifiers = new Map();
+  const opaqueId = (value) => {
+    if (typeof value !== "string") return undefined;
+    if (!identifiers.has(value) && identifiers.size < 100) identifiers.set(value, `opaque-${identifiers.size + 1}`);
+    return identifiers.get(value) ?? "unretained";
+  };
+  function record(entry) {
+    const row = { order: ++traceOrder, at_ms: Date.now(), ...entry };
+    if (trace.length < 600) trace.push(row); else traceDropped++;
+    return row.order;
+  }
+  function eventMetadata(frame) {
+    const context = frame.params?.context;
+    return { method: frame.method, session: frame.sessionId === rootSession ? "root" : frame.sessionId ? "child" : "browser",
+      frame: opaqueId(context?.auxData?.frameId ?? frame.params?.frame?.id ?? frame.params?.frameId),
+      context_id: Number.isSafeInteger(context?.id ?? frame.params?.executionContextId) ? context?.id ?? frame.params.executionContextId : undefined,
+      is_default: typeof context?.auxData?.isDefault === "boolean" ? context.auxData.isDefault : undefined };
+  }
   const requestUrl = url.split("#")[0];
   const send = (method, params = {}, sessionId) => new Promise((resolve, reject) => {
-    const id = nextId++; pending.set(id, { resolve, reject }); socket.send(JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) }));
+    const id = nextId++; pending.set(id, { resolve, reject, method });
+    record({ phase: "chrome_command_send", command_id: id, method });
+    socket.send(JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) }));
   });
   try {
     const version = await until(async () => { try { return await (await fetch(`http://127.0.0.1:${port}/json/version`)).json(); } catch { return null; } }, "Chrome CDP");
@@ -38,7 +61,15 @@ export async function startBrowserTransport({ directory, state, relayPort, gmail
     await new Promise((resolve, reject) => { socket.addEventListener("open", resolve, { once: true }); socket.addEventListener("error", reject, { once: true }); });
     socket.addEventListener("message", async ({ data }) => {
       const frame = JSON.parse(String(data));
-      if (frame.id) { const row = pending.get(frame.id); if (row) { pending.delete(frame.id); frame.error ? row.reject(new Error(frame.error.message)) : row.resolve(frame.result ?? {}); } return; }
+      if (frame.id) {
+        const row = pending.get(frame.id);
+        record({ phase: "chrome_response_received", command_id: frame.id, method: row?.method, error: !!frame.error,
+          frame: row?.method === "Page.getFrameTree" ? opaqueId(frame.result?.frameTree?.frame?.id) : undefined,
+          context_id: row?.method === "Page.createIsolatedWorld" ? frame.result?.executionContextId : undefined });
+        if (row) { pending.delete(frame.id); frame.error ? row.reject(new Error(frame.error.message)) : row.resolve(frame.result ?? {}); }
+        return;
+      }
+      const eventOrder = tracedEvents.has(frame.method) ? record({ phase: "chrome_event_received", ...eventMetadata(frame) }) : undefined;
       if (frame.method === "Fetch.requestPaused" && frame.sessionId === rootSession) {
         try {
           assert.equal(frame.params.request.url, requestUrl, "No outside browser navigation is permitted by the fixture");
@@ -53,7 +84,9 @@ export async function startBrowserTransport({ directory, state, relayPort, gmail
       }
       if (frame.sessionId === rootSession && relay?.readyState === WebSocket.OPEN && frame.method !== "Fetch.requestPaused") {
         relay.send(JSON.stringify({ type: "cdpEvent", tabId: 1, method: frame.method, params: frame.params }));
-      }
+        if (eventOrder !== undefined) record({ phase: "relay_event_forwarded", event_order: eventOrder, ...eventMetadata(frame) });
+      } else if (eventOrder !== undefined) record({ phase: "relay_event_not_forwarded", event_order: eventOrder,
+        reason: frame.sessionId !== rootSession ? "not_root_session" : "relay_not_open", ...eventMetadata(frame) });
     });
     const { targetId } = await send("Target.createTarget", { url: "about:blank" });
     ({ sessionId: rootSession } = await send("Target.attachToTarget", { targetId, flatten: true }));
@@ -74,7 +107,9 @@ export async function startBrowserTransport({ directory, state, relayPort, gmail
     })()`, returnByValue: true }, rootSession);
     assert.equal(counter.result?.value, true);
     return {
-      targetId, url, errors, commands,
+      targetId, url, errors, commands, browserVersion: version.Browser,
+      diagnosticTrace: () => ({ entries: trace, limit: 600, dropped: traceDropped, opaque_id_limit: 100,
+        pending_commands: [...pending].map(([command_id, row]) => ({ command_id, method: row.method })) }),
       resource: { resource_id: "fixture-browser-resource", inventory_binding_id: "fixture-browser", binding_revision: 1, policy_revision: 1, target_evidence_reference: "synthetic-native-target", native_target_id: targetId, profile: "chrome", url,
         expected_identity: { account: "cos@example.invalid", workspace: "Synthetic household", ...(gmailSelf ? { role: "account user" } : {}) },
         ...(gmailSelf ? { identity_verifier: "gmail_self_mailbox_v1" } : {}),
@@ -115,6 +150,7 @@ export async function startBrowserTransport({ directory, state, relayPort, gmail
           if (command.type === "ping") { relay.send(JSON.stringify({ type: "pong" })); return; }
           const metadata = { seq: command.seq, type: command.type, method: command.method, started_at_ms: Date.now(), state: "running" };
           commands.push(metadata); if (commands.length > 200) commands.shift();
+          record({ phase: "relay_command_received", seq: command.seq, type: command.type, method: command.method });
           try {
             let result = {};
             if (command.type === "attach") { assert.equal(command.tabId, 1); result = { targetId }; }
@@ -123,8 +159,12 @@ export async function startBrowserTransport({ directory, state, relayPort, gmail
               result = await send(command.method, command.params, rootSession);
             } else if (command.type !== "detach") throw new Error("Fixture forbids browser creation/navigation/close operations");
             metadata.state = "settled"; metadata.settled_at_ms = Date.now();
+            record({ phase: "relay_command_settled", seq: command.seq, method: command.method });
             relay.send(JSON.stringify({ type: "result", seq: command.seq, result }));
-          } catch (error) { metadata.state = "error"; metadata.settled_at_ms = Date.now(); errors.push(error.message); relay.send(JSON.stringify({ type: "error", seq: command.seq, message: "Synthetic extension command failed" })); }
+            record({ phase: "relay_result_sent", seq: command.seq, method: command.method });
+          } catch (error) { metadata.state = "error"; metadata.settled_at_ms = Date.now(); errors.push(error.message);
+            record({ phase: "relay_command_error", seq: command.seq, method: command.method });
+            relay.send(JSON.stringify({ type: "error", seq: command.seq, message: "Synthetic extension command failed" })); }
         });
         relay.send(JSON.stringify({ type: "hello", userAgent: "Synthetic Chrome fixture", browserVersion: version.Browser,
           extensionVersion: "0.0.0-fixture", tabs: [{ tabId: 1, url, title: "Synthetic CoS workspace", active: true }] }));
