@@ -140,7 +140,12 @@ Cancelled commitments remain in history and stop prospectively only with
 source evidence. Unknown amounts and clocks never become zeros or current dates.
 
 Member presentation pins a snapshot until explicit refresh, shows supersession,
-and discards late responses after selection changes. Daily source refresh,
+and discards late responses after selection changes. If accounting advances
+between the page and latest projection-index reads, the UI withholds estimates
+until a refresh returns matching current accounting heads. An older projection
+remains readable and labels any difference from the page summary and saved choices.
+Changing one selector cannot silently change currency, timezone or source date.
+Daily source refresh,
 advisor activation, new persistent grants and external sharing remain separate.
 
 ## Validation and recovery

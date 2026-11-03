@@ -69,6 +69,7 @@ def _serve_choices(root, listener, ready):
 
 
 async def _press_enter(call):
+    # Chromium's keyDown needs Enter's character as well as its physical code.
     for event in ("keyDown", "keyUp"):
         await call(
             "Input.dispatchKeyEvent",
@@ -77,6 +78,9 @@ async def _press_enter(call):
                 "key": "Enter",
                 "code": "Enter",
                 "windowsVirtualKeyCode": 13,
+                **(
+                    {"text": "\r", "unmodifiedText": "\r"} if event == "keyDown" else {}
+                ),
             },
         )
 
@@ -120,7 +124,7 @@ async def _assert_finance_projection_controls(call, evaluate, wait_for):
         if (url.pathname !== '/api/member/v1/finance/planning') return probe.original.call(window, input, init);
         const report = url.searchParams.get('report_id');
         probe.calls.push({report, context: url.searchParams.get('context_id'), days: Number(url.searchParams.get('horizon_days'))});
-        const mode = report === 'planning_projection' || (report === 'planning_contexts' && probe.mode === 'hold-index') ? probe.mode : null;
+        const mode = report === 'planning_projection' || (report === 'planning_contexts' && ['hold-index', 'changed-accounting-index', 'older-accounting-index'].includes(probe.mode)) ? probe.mode : null;
         if (mode) probe.mode = null;
         if (mode === 'fail') throw new TypeError('Synthetic planning transport failure');
         const response = await probe.original.call(window, input, init);
@@ -128,6 +132,14 @@ async def _assert_finance_projection_controls(call, evaluate, wait_for):
         const body = await response.json();
         if (mode === 'stale-projection') body.projection.head_id = 'synthetic-newer-projection';
         if (mode === 'stale-accounting') body.publication.current_head_publication_id = 'synthetic-newer-publication';
+        if (mode === 'changed-accounting-index' || mode === 'different-accounting-summary') {
+          body.publication.publication_id = 'synthetic-different-publication';
+          body.publication.current_head_publication_id = body.publication.publication_id;
+        }
+        if (mode === 'older-accounting-index' || mode === 'older-accounting-summary') {
+          body.publication.publication_id = 'synthetic-older-publication';
+          if (mode === 'older-accounting-index') probe.mode = 'older-accounting-summary';
+        }
         const replacement = new Response(JSON.stringify(body), {status: response.status, headers: response.headers});
         if (mode === 'hold' || mode === 'hold-failure' || mode === 'hold-index') {
           return new Promise((resolve, reject) => {
@@ -163,6 +175,63 @@ async def _assert_finance_projection_controls(call, evaluate, wait_for):
         await evaluate("window.__financeBrowserProbe.release()")
         await wait_for("Boolean(document.querySelector('.finance-planning-summary'))")
 
+        # Accounting can advance between the surface and latest-index reads.
+        # Hold the amounts until both reads agree on the current accounting head.
+        await evaluate("""(() => {
+          const probe = window.__financeBrowserProbe;
+          probe.calls = []; probe.mode = 'changed-accounting-index';
+          document.querySelector('[data-finance-action=refresh]').click();
+        })()""")
+        await wait_for(
+            "document.querySelector('.finance-planning').textContent.includes('Accounting changed while loading this page.')"
+        )
+        assert await evaluate("""(() => {
+          return !document.querySelector('.finance-planning-summary') &&
+            document.querySelector('.finance-planning-controls').hidden &&
+            document.querySelector('[data-finance-action=reset]').disabled &&
+            !window.__financeBrowserProbe.calls.some(c => c.report === 'planning_projection');
+        })()"""), "A refresh must not mix accounting generations on the page"
+        await evaluate(
+            "document.querySelector('[data-finance-action=refresh]').click()"
+        )
+        await wait_for("Boolean(document.querySelector('.finance-planning-summary'))")
+
+        # Accounting may legitimately advance before its next dated projection.
+        await evaluate("""(() => {
+          window.__financeBrowserProbe.mode = 'older-accounting-index';
+          document.querySelector('[data-finance-action=refresh]').click();
+        })()""")
+        await wait_for(
+            "document.querySelector('.finance-planning-summary')?.textContent.includes('different accounting publication from the page summary and saved choices')"
+        )
+        assert await evaluate(
+            "!document.querySelector('.finance-planning-controls').hidden && !document.querySelector('.finance-planning').textContent.includes('Accounting changed while loading this page.')"
+        ), (
+            "A historical projection remains readable when the current head matches the page"
+        )
+        await evaluate(
+            "document.querySelector('[data-finance-action=refresh]').click()"
+        )
+        await wait_for(
+            "Boolean(document.querySelector('.finance-planning-summary')) && !document.querySelector('.finance-stale-notice')"
+        )
+
+        # Explicit historical projections remain readable, with page scope clear.
+        await evaluate("""(() => {
+          window.__financeBrowserProbe.mode = 'different-accounting-summary';
+          const horizon = document.querySelector('[aria-label="Projection horizon"]');
+          horizon.value = '90'; horizon.dispatchEvent(new Event('change'));
+        })()""")
+        await wait_for(
+            "document.querySelector('.finance-planning-summary')?.textContent.includes('different accounting publication from the page summary and saved choices')"
+        )
+        await evaluate(
+            "document.querySelector('[data-finance-action=refresh]').click()"
+        )
+        await wait_for(
+            "Boolean(document.querySelector('.finance-planning-summary')) && !document.querySelector('.finance-stale-notice')"
+        )
+
         # A comparison is an explicit bounded request, with no event acquisition.
         await evaluate("document.querySelector('[data-finance-view=cashflow]').click()")
         await wait_for("Boolean(document.querySelector('.finance-planning-summary'))")
@@ -184,6 +253,9 @@ async def _assert_finance_projection_controls(call, evaluate, wait_for):
         await wait_for(
             "document.querySelector('[data-finance-comparison]')?.textContent.includes('365')"
         )
+        assert await evaluate(
+            "Array.from(document.querySelectorAll('[data-finance-comparison] li')).every(row => row.textContent.includes('Conservative minimum:'))"
+        ), "Comparisons must preserve the source scalar-minimum qualification"
         await evaluate("window.__financeBrowserProbe.calls = []")
         await evaluate(
             "document.querySelector('[data-finance-compare=scenarios]').click()"

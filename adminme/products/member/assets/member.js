@@ -4042,7 +4042,7 @@ function financePublishedRange(value, currency) {
   return value[0] === value[1] ? publishedMoneyMinor(value[0], currency) : `${publishedMoneyMinor(value[0], currency)} to ${publishedMoneyMinor(value[1], currency)}`;
 }
 
-function financePlanningSummary(answer) {
+function financePlanningSummary(answer, pagePublicationId) {
   const c = answer.context; const h = answer.summary; const bank = c.measure === "BANK_CASH_SUBSET";
   const summary = document.createElement("section"); summary.className = "finance-planning-summary"; summary.setAttribute("aria-label", "Selected financial outlook");
   summary.append(text("p", `${titleCase(c.scenario_id)} · ${titleCase(c.plan_case_id)} · ${h.days} days from ${h.start_inclusive}`, "eyebrow"));
@@ -4070,6 +4070,9 @@ function financePlanningSummary(answer) {
   if (answer.projection.id !== answer.projection.head_id || answer.publication.publication_id !== answer.publication.current_head_publication_id) {
     summary.prepend(text("p", "A newer publication is available. You are viewing a pinned historical snapshot; refresh to review the latest accepted data.", "finance-stale-notice"));
   }
+  if (answer.publication.publication_id !== pagePublicationId) {
+    summary.prepend(text("p", "This pinned projection uses a different accounting publication from the page summary and saved choices. Refresh accepted data to align the page.", "finance-stale-notice"));
+  }
   return summary;
 }
 
@@ -4082,7 +4085,7 @@ function financePlanningComparison(answers, labels) {
   for (const [i, answer] of answers.entries()) {
     const h = answer.summary; const currency = answer.context.currency;
     const item = document.createElement("li");
-    item.append(text("h4", labels[i]), text("p", `Ending: ${financePublishedRange(h.closing, currency)}`), text("p", `Lowest: ${financePublishedRange(h.minimum, currency)} · ${h.minimum_date.date || "Date unknown"}`, "state-note"));
+    item.append(text("h4", labels[i]), text("p", `Ending: ${financePublishedRange(h.closing, currency)}`), text("p", `${Array.isArray(h.minimum) ? "Lowest" : "Conservative minimum"}: ${financePublishedRange(h.minimum, currency)} · ${h.minimum_date.date || "Date unknown"}`, "state-note"));
     if (h.closing.every(Number.isFinite) && width > 0) {
       const track = document.createElement("div"); track.className = "finance-range-track"; track.setAttribute("aria-hidden", "true");
       const band = document.createElement("span"); band.style.left = `${100 * (h.closing[0] - low) / width}%`; band.style.width = `${100 * (h.closing[1] - h.closing[0]) / width}%`; track.append(band); item.append(track);
@@ -4191,7 +4194,7 @@ function financePlanningCard(books) {
       const c = answer.context; const h = answer.summary;
       if (!c || !h) throw new Error("No published estimate");
       status.textContent = `${c.measure === "BANK_CASH_SUBSET" ? "Bank cash subset" : "Cash-equivalent funding — not bank cash"} · ${h.completeness_state} · ${h.estimate_state}`;
-      summary.replaceChildren(financePlanningSummary(answer));
+      summary.replaceChildren(financePlanningSummary(answer, books.publication_id));
       content.append(text("p", `${titleCase(c.scenario_id)} · Plan case ${c.plan_case_id} · ${incomeLabel(c.income_basis)} · ${openingLabel(c.opening_basis)}`, "state-note"));
       content.append(text("p", `${h.start_inclusive} inclusive to ${h.end_exclusive} exclusive · ${c.timezone}. Cash safety: ${h.safety_state === "SOURCE_VERIFIED" ? "historically verified by source; current safety unverified" : "not established"}.`, "state-note"));
       const stats = document.createElement("dl"); stats.className = "finance-scenario-stats";
@@ -4273,7 +4276,7 @@ function financePlanningCard(books) {
   contextSelect.addEventListener("change", () => { alignAxes(); void load(); }); horizonSelect.addEventListener("change", () => { void load(); });
   for (const input of Object.values(axes)) input.addEventListener("change", () => {
     const selected = contexts.find(item => item.context_id === contextSelect.value);
-    const matches = contexts.filter(item => Object.entries(axes).every(([key, el]) => item[key] === el.value));
+    const matches = contexts.filter(item => Object.entries(axes).every(([key, el]) => item[key] === el.value) && ["currency", "timezone", "as_of_date"].every(key => item[key] === selected?.[key]));
     const match = matches.find(item => ["plan_case_id", "currency", "timezone", "as_of_date"].every(key => item[key] === selected?.[key])) || (matches.length === 1 ? matches[0] : null);
     if (!match) { ++requestNumber; ++compareNumber; ++eventNumber; clearSelected(); status.textContent = "This combination has no unambiguous published estimate. Choose an exact published choice under assumptions."; return; }
     contextSelect.value = match.context_id; void load();
@@ -4299,6 +4302,11 @@ function financePlanningCard(books) {
       const index = await request("planning_contexts");
       if (!current(generation)) return;
       if (!index.contexts?.length) { status.textContent = "No verified dated projection is available. Accounting acceptance alone does not establish a forecast."; return; }
+      if (!projectionId && index.publication?.current_head_publication_id !== books.publication_id) {
+        contexts = []; contextSelect.replaceChildren();
+        status.textContent = "Accounting changed while loading this page. Refresh accepted data again to load a matching snapshot.";
+        return;
+      }
       projectionId = index.projection.id; contexts = index.contexts; contextSelect.replaceChildren();
       for (const c of contexts) { const option = text("option", `${labels.measure[c.measure]} · ${titleCase(c.scenario_id)} · ${labels.income_basis[c.income_basis]} · ${labels.opening_basis[c.opening_basis]} · ${c.plan_case_id}`); option.value = c.context_id; contextSelect.append(option); }
       for (const [key, input] of Object.entries(axes)) { input.replaceChildren(); for (const value of new Set(contexts.map(c => c[key]))) { const option = text("option", labels[key][value] || titleCase(value)); option.value = value; input.append(option); } }
