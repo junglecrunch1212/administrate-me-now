@@ -162,6 +162,15 @@ repeated/failed/interrupted reads, URL/history/reset, keyboard use and narrow
 viewport reflow. Fixtures contain no household data. Passing hosted checks do
 not establish actual member-device acceptance or native source parity.
 
+**MODERNIZE** shared hosted qualification using the existing workspace owner's
+SDK discovery: all three real installation cases still run. If SDK 27 is absent,
+the older-toolchain artifact records its negative link probe as unavailable;
+that probe is deferred, not passed. No SDK 27 compatibility claim follows from
+current-platform installation results. Enrollment retains all selected tests
+and complete-evidence gates, with a 60-minute composition bound inside a
+75-minute job, duration output and five-minute stack diagnostics. Prior native
+runs reached only 62–72% before the former 35-minute job limit.
+
 Use current protected release selection and required checks. After supported
 activation, inspect the actual intended member browser and compare the same
 accepted heads/selected values. A narrow viewport is not physical mobile

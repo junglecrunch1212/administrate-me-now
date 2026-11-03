@@ -295,52 +295,72 @@ def test_real_clean_and_interrupted_member_install_preview(
     toolchain = _toolchain_evidence(workspace, artifact_dir, env)
     compatibility_probe = None
     if distribution == "homebrew-older-toolchain":
-        # Real mixed-toolchain failure, separately from the installer's default
-        # selection: an explicit override must never be disguised as absent.
+        # Use the actual selected older compiler. If the hosted image has the
+        # reviewed 27.x SDK, prove its incompatible link failure and canonical
+        # SDK success. Current macOS 26 images may only ship 26.5, in which case
+        # retain the real package-install proof and record the missing SDK proof.
         assert "clang-2100.1.1.101" in toolchain["compiler_version"]
-        newer_sdk = Path(os.environ["ADMINME_BRIDGE_INSTALLER_NEWER_SDK"]).resolve(
-            strict=True
+        compatibility_sdk = Path(
+            os.environ["ADMINME_BRIDGE_INSTALLER_COMPATIBILITY_SDK"]
+        ).resolve(strict=True)
+        sdk_version = _sdk_version(compatibility_sdk)
+        sdk27_available = (
+            os.environ.get("ADMINME_BRIDGE_INSTALLER_SDK27_AVAILABLE") == "true"
         )
-        assert _sdk_version(newer_sdk) == "27.0"
-        assert toolchain["canonical_sdk_version"] == "26.5"
-        probe_source = workspace / "native link probe.c"
-        probe_source.write_text("int adminme_native_probe(void) { return 0; }\n")
-        probe_command = [
-            toolchain["compiler_path"],
-            "-v",
-            "-bundle",
-            "-undefined",
-            "dynamic_lookup",
-            str(probe_source),
-            "-lm",
-            "-framework",
-            "CoreFoundation",
-            "-framework",
-            "CoreServices",
-            "-o",
-            str(workspace / "native link probe.so"),
-        ]
-        _run(
-            probe_command,
-            cwd=workspace,
-            env={**env, "SDKROOT": str(newer_sdk)},
-            log=artifact_dir / "older-compiler-newer-sdk-failure.log",
-            expected_failure="arm64e.x1",
+        assert sdk27_available == bool(
+            re.fullmatch(r"27(?:\.[0-9]+){0,2}", sdk_version)
         )
-        _run(
-            probe_command,
-            cwd=workspace,
-            env={**env, "SDKROOT": toolchain["canonical_sdk_resolved"]},
-            log=artifact_dir / "older-compiler-canonical-sdk-success.log",
-        )
-        assert "SDKROOT" not in env
-        compatibility_probe = {
-            "incompatible_sdk": str(newer_sdk),
-            "incompatible_result": "arm64e.x1 link failure",
-            "canonical_sdk": toolchain["canonical_sdk_resolved"],
-            "canonical_result": "linked successfully; binary not executed",
-            "installer_sdkroot_override": False,
-        }
+        if sdk27_available:
+            assert toolchain["canonical_sdk_version"].split(".", 1)[0] == "26"
+            probe_source = workspace / "native link probe.c"
+            probe_source.write_text("int adminme_native_probe(void) { return 0; }\n")
+            probe_command = [
+                toolchain["compiler_path"],
+                "-v",
+                "-bundle",
+                "-undefined",
+                "dynamic_lookup",
+                str(probe_source),
+                "-lm",
+                "-framework",
+                "CoreFoundation",
+                "-framework",
+                "CoreServices",
+                "-o",
+                str(workspace / "native link probe.so"),
+            ]
+            _run(
+                probe_command,
+                cwd=workspace,
+                env={**env, "SDKROOT": str(compatibility_sdk)},
+                log=artifact_dir / "older-compiler-newer-sdk-failure.log",
+                expected_failure="arm64e.x1",
+            )
+            _run(
+                probe_command,
+                cwd=workspace,
+                env={**env, "SDKROOT": toolchain["canonical_sdk_resolved"]},
+                log=artifact_dir / "older-compiler-canonical-sdk-success.log",
+            )
+            assert "SDKROOT" not in env
+            compatibility_probe = {
+                "status": "reproduced",
+                "incompatible_sdk": str(compatibility_sdk),
+                "incompatible_result": "arm64e.x1 link failure",
+                "canonical_sdk": toolchain["canonical_sdk_resolved"],
+                "canonical_result": "linked successfully; binary not executed",
+                "installer_sdkroot_override": False,
+            }
+        else:
+            assert sdk_version == toolchain["canonical_sdk_version"]
+            compatibility_probe = {
+                "status": "not-available-on-runner",
+                "reason": "the hosted image contains no macOS 27.x SDK",
+                "installed_sdk": str(compatibility_sdk),
+                "installed_sdk_version": sdk_version,
+                "canonical_sdk": toolchain["canonical_sdk_resolved"],
+                "package_install_remains_tested": True,
+            }
     commit = _run(
         ["/usr/bin/git", "--no-replace-objects", "-C", str(ROOT), "rev-parse", "HEAD"],
         cwd=workspace,
