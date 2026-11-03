@@ -528,6 +528,37 @@ main { min-width: 0; padding: 2rem clamp(1rem, 4vw, 4rem) 5rem; }
 .finance-inflow { color: var(--teal); }
 .finance-outflow { color: var(--danger); }
 .finance-health-grid { grid-template-columns: minmax(8rem, .5fr) minmax(0, 1fr); }
+.finance-books-hero { display: block; padding-block: 1rem; }
+.finance-books-hero .action-title { font-size: clamp(1.65rem, 4vw, 2.4rem); }
+.finance-books-controls { flex-wrap: wrap; }
+.finance-planning-controls { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) minmax(0, .6fr); gap: .8rem; }
+.finance-planning-controls select, .finance-assumptions select { width: 100%; min-width: 0; max-width: 100%; }
+.finance-planning-summary { margin-block: 1rem; }
+.finance-outlook-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .7rem; margin-block: .8rem; }
+.finance-outlook-grid > div { padding: .85rem; border: 1px solid var(--line); border-radius: var(--radius); background: #f4efe6; }
+.finance-outlook-grid dt { color: var(--muted); font-size: .8rem; }
+.finance-outlook-grid dd { margin: .4rem 0; font-size: 1.25rem; font-weight: 750; font-variant-numeric: tabular-nums; }
+.finance-outlook-grid .state-note { margin-bottom: 0; }
+.finance-next-review, .finance-stale-notice { padding: .8rem; border-left: 4px solid #9c6a14; background: #fff6df; color: var(--ink); }
+.finance-assumptions, .finance-technical { padding-block: .8rem; border-top: 1px solid var(--line); }
+.finance-assumptions > label { display: block; margin-top: .7rem; }
+.finance-planning summary, .finance-accepted-books summary { cursor: pointer; min-height: 2.75rem; padding-block: .6rem; }
+.finance-comparison-list, .finance-event-list { list-style: none; padding: 0; display: grid; gap: .8rem; }
+.finance-comparison-list > li, .finance-event-list > li { padding: .9rem; border: 1px solid var(--line); border-radius: var(--radius); min-width: 0; }
+.finance-comparison-list h4, .finance-comparison-list p, .finance-event-list p { margin-block: .4rem; }
+.finance-range-track { position: relative; height: .7rem; background: #e5dfd4; margin-block: .8rem; border-radius: 999px; }
+.finance-range-track span { position: absolute; top: 0; bottom: 0; min-width: 2px; max-width: 100%; border-radius: inherit; background: var(--teal); transform: translateX(-1px); }
+.finance-confidence-list { padding-left: 1.2rem; display: grid; gap: .7rem; }
+.finance-planning .button-row { flex-wrap: wrap; margin-block: .7rem; }
+.finance-planning button { white-space: normal; }
+.finance-planning [hidden] { display: none !important; }
+@media (max-width: 1000px) { .finance-outlook-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 600px) {
+  .finance-planning-controls, .finance-outlook-grid { grid-template-columns: 1fr; }
+  .finance-books-controls { flex-wrap: nowrap; }
+  .finance-outlook-grid > div { padding: .7rem; }
+  .finance-outlook-grid dd { font-size: 1.15rem; }
+}
 
 .chat-panel { border-left: 1px solid var(--line); background: #f2ebf5; padding: 1.35rem 1.1rem; display: flex; flex-direction: column; min-height: 100vh; }
 .chat-heading, .dialog-heading { display: flex; justify-content: space-between; align-items: start; gap: .75rem; }

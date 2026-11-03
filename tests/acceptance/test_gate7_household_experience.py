@@ -854,6 +854,7 @@ def test_accepted_books_reaches_finance_surface_without_reinterpreting_metrics(
         )
         assert response.status_code == 200
         cockpit = response.json()["cockpit"]
+        assert not response.json()["contract"]["workbook_planning_inputs_authoritative"]
         assert response.json()["freshness"]["state"] == "degraded"
         assert response.json()["freshness"]["latest_source_at"] is not None
         books = cockpit["accepted_books"]
@@ -880,16 +881,19 @@ def test_accepted_books_reaches_finance_surface_without_reinterpreting_metrics(
         assert other["cockpit"]["accepted_books"]["state"] == "missing_evidence"
         assert other["cockpit"]["accepted_books"]["reports"] == []
         assert "publication_id" not in other["cockpit"]["accepted_books"]
+        assert not other["contract"]["workbook_planning_inputs_authoritative"]
 
     # Turning the integration off suppresses a previously accepted snapshot.
     with TestClient(
         create_application(replace(settings, finance_publications_enabled=False))
     ) as client:
-        cockpit = client.get(
+        disabled = client.get(
             "/api/member/v1/surfaces/finance", headers=HEADERS[PRINCIPAL]
-        ).json()["cockpit"]
+        ).json()
+        cockpit = disabled["cockpit"]
         assert cockpit["accepted_books"]["state"] == "disabled"
         assert "publication_id" not in cockpit["accepted_books"]
+        assert disabled["contract"]["workbook_planning_inputs_authoritative"]
 
 
 def test_ac32_finance_workbook_to_cockpit_replay_and_member_isolation(

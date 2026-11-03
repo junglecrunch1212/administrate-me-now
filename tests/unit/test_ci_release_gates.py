@@ -921,11 +921,24 @@ def test_packaged_installation_requires_all_real_platform_cases() -> None:
     )
     assert "if" not in install
     assert install["env"]["ADMINME_RUN_BRIDGE_INSTALLER_RUNTIME"] == "1"
+    sdk = next(step for step in job["steps"] if step.get("id") == "member-native-sdk")
+    assert '"xcrun", "--sdk", "macosx", "--show-sdk-path"' in sdk["run"]
+    assert 'Path("/Applications").glob("Xcode*.app/Contents/Developer")' in sdk["run"]
+    assert 'Path("/Library/Developer/CommandLineTools")' in sdk["run"]
+    assert "value[0][0] == 27" in sdk["run"]
+    assert '"$GITHUB_OUTPUT"' in sdk["run"]
+    assert install["env"]["ADMINME_BRIDGE_INSTALLER_COMPATIBILITY_SDK"] == (
+        "${{ steps.member-native-sdk.outputs.compatibility-sdk-path }}"
+    )
+    assert install["env"]["ADMINME_BRIDGE_INSTALLER_SDK27_AVAILABLE"] == (
+        "${{ steps.member-native-sdk.outputs.sdk27-available }}"
+    )
     for key in (
         "ADMINME_BRIDGE_INSTALLER_PYTHON",
         "ADMINME_BRIDGE_INSTALLER_HOMEBREW_PYTHON",
         "ADMINME_BRIDGE_INSTALLER_OLDER_DEVELOPER",
-        "ADMINME_BRIDGE_INSTALLER_NEWER_SDK",
+        "ADMINME_BRIDGE_INSTALLER_COMPATIBILITY_SDK",
+        "ADMINME_BRIDGE_INSTALLER_SDK27_AVAILABLE",
     ):
         assert key in install["env"]
     assert "suites) == 3" in install["run"]
@@ -1023,6 +1036,17 @@ def test_enrollment_worker_requires_complete_affected_contract_and_final_binding
         assert commands.count("-k ") == 1
     else:
         assert "-k " not in commands
+        composition = next(
+            step
+            for step in job["steps"]
+            if step.get("name") == "Validate native helper and enrollment composition"
+        )
+        # Native runs were still making progress when the former 35-minute job
+        # limit cut them off. The outer limit must leave time for later gates.
+        assert int(composition["timeout-minutes"]) >= 60
+        assert int(job["timeout-minutes"]) >= int(composition["timeout-minutes"]) + 15
+        assert "--durations=20" in composition["run"]
+        assert "faulthandler_timeout=300" in composition["run"]
         browser = next(
             step
             for step in job["steps"]

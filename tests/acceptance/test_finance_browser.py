@@ -1,4 +1,4 @@
-"""Opt-in hosted Chromium smoke of private choices in a disposable synthetic app.
+"""Hosted Chromium acceptance of Finance views and private choices.
 
 This never opens a member browser or the household service. The browser uses a
 new temporary profile and the app contains only deterministic synthetic data.
@@ -66,6 +66,300 @@ def _serve_choices(root, listener, ready):
     uvicorn.Server(uvicorn.Config(app, log_level="error", access_log=False)).run(
         sockets=[listener]
     )
+
+
+async def _press_enter(call):
+    # Chromium's keyDown needs Enter's character as well as its physical code.
+    for event in ("keyDown", "keyUp"):
+        await call(
+            "Input.dispatchKeyEvent",
+            {
+                "type": event,
+                "key": "Enter",
+                "code": "Enter",
+                "windowsVirtualKeyCode": 13,
+                **(
+                    {"text": "\r", "unmodifiedText": "\r"} if event == "keyDown" else {}
+                ),
+            },
+        )
+
+
+async def _assert_finance_view_navigation(call, evaluate, wait_for):
+    views = ("overview", "cashflow", "scenarios", "spending", "networth", "health")
+    assert await evaluate(
+        "Array.from(document.querySelectorAll('.finance-books-controls [data-finance-view]')).map(b => b.dataset.financeView)"
+    ) == list(views)
+    for view in views:
+        await evaluate(
+            f"document.querySelector('.finance-books-controls [data-finance-view={view}]').click()"
+        )
+        await wait_for(
+            f"new URLSearchParams(location.search).get('view') === '{view}' && document.querySelector('.finance-books-controls [data-finance-view={view}]')?.getAttribute('aria-pressed') === 'true'"
+        )
+        assert await evaluate(
+            "document.querySelectorAll('.finance-books-controls [aria-pressed=true]').length === 1 && document.querySelectorAll('.finance-kpi, .finance-cashflow, .finance-budget, .finance-scenarios').length === 0"
+        )
+    await evaluate("history.back()")
+    await wait_for(
+        "new URLSearchParams(location.search).get('view') === 'networth' && document.querySelector('[data-finance-view=networth]')?.getAttribute('aria-pressed') === 'true'"
+    )
+    await evaluate("document.querySelector('[data-finance-view=overview]').focus()")
+    await _press_enter(call)
+    await wait_for(
+        "new URLSearchParams(location.search).get('view') === 'overview' && document.querySelector('[data-finance-view=overview]')?.getAttribute('aria-pressed') === 'true'"
+    )
+    await wait_for("Boolean(document.querySelector('.finance-choices'))")
+
+
+async def _assert_finance_projection_controls(call, evaluate, wait_for):
+    # Keep the production HTTP reads, altering only selected synthetic responses
+    # to exercise browser recovery and delivery ordering without private data.
+    await evaluate("""(() => {
+      const probe = window.__financeBrowserProbe = {
+        original: window.fetch, calls: [], mode: null, release: null
+      };
+      window.fetch = async (input, init) => {
+        const url = new URL(typeof input === 'string' ? input : input.url, location.href);
+        if (url.pathname !== '/api/member/v1/finance/planning') return probe.original.call(window, input, init);
+        const report = url.searchParams.get('report_id');
+        probe.calls.push({report, context: url.searchParams.get('context_id'), days: Number(url.searchParams.get('horizon_days'))});
+        const mode = report === 'planning_projection' || (report === 'planning_contexts' && ['hold-index', 'changed-accounting-index', 'older-accounting-index'].includes(probe.mode)) ? probe.mode : null;
+        if (mode) probe.mode = null;
+        if (mode === 'fail') throw new TypeError('Synthetic planning transport failure');
+        const response = await probe.original.call(window, input, init);
+        if (!mode) return response;
+        const body = await response.json();
+        if (mode === 'stale-projection') body.projection.head_id = 'synthetic-newer-projection';
+        if (mode === 'stale-accounting') body.publication.current_head_publication_id = 'synthetic-newer-publication';
+        if (mode === 'changed-accounting-index' || mode === 'different-accounting-summary') {
+          body.publication.publication_id = 'synthetic-different-publication';
+          body.publication.current_head_publication_id = body.publication.publication_id;
+        }
+        if (mode === 'older-accounting-index' || mode === 'older-accounting-summary') {
+          body.publication.publication_id = 'synthetic-older-publication';
+          if (mode === 'older-accounting-index') probe.mode = 'older-accounting-summary';
+        }
+        const replacement = new Response(JSON.stringify(body), {status: response.status, headers: response.headers});
+        if (mode === 'hold' || mode === 'hold-failure' || mode === 'hold-index') {
+          return new Promise((resolve, reject) => {
+            probe.release = () => mode === 'hold-failure' ? reject(new TypeError('Synthetic delayed failure')) : resolve(replacement);
+          });
+        }
+        return replacement;
+      };
+    })()""")
+    try:
+        await wait_for("Boolean(document.querySelector('.finance-planning-summary'))")
+        assert await evaluate("""(() => {
+          const spendable = document.querySelector('[data-finance-metric=spendable]');
+          const summary = document.querySelector('.finance-planning-summary');
+          return spendable.textContent.includes('Not established') &&
+            !/USD|[$][0-9]/.test(spendable.textContent) &&
+            summary.textContent.replaceAll('\u00a0', ' ').includes('USD 5.00 to USD 5.01') &&
+            summary.textContent.includes('Cash safety: not established for today.') &&
+            !summary.textContent.includes('Safe to spend');
+        })()""")
+
+        await evaluate("""(() => {
+          window.__financeBrowserProbe.mode = 'hold-index';
+          window.__financeBrowserProbe.release = null;
+          document.querySelector('[data-finance-action=refresh]').click();
+        })()""")
+        await wait_for("Boolean(window.__financeBrowserProbe.release)")
+        assert await evaluate("""(() => {
+          const controls = document.querySelector('.finance-planning-controls');
+          return controls.hidden && getComputedStyle(controls).display === 'none' &&
+            !document.querySelector('.finance-planning-summary');
+        })()"""), "Loading the context index must hide stale selections and amounts"
+        await evaluate("window.__financeBrowserProbe.release()")
+        await wait_for("Boolean(document.querySelector('.finance-planning-summary'))")
+
+        # Accounting can advance between the surface and latest-index reads.
+        # Hold the amounts until both reads agree on the current accounting head.
+        await evaluate("""(() => {
+          const probe = window.__financeBrowserProbe;
+          probe.calls = []; probe.mode = 'changed-accounting-index';
+          document.querySelector('[data-finance-action=refresh]').click();
+        })()""")
+        await wait_for(
+            "document.querySelector('.finance-planning').textContent.includes('Accounting changed while loading this page.')"
+        )
+        assert await evaluate("""(() => {
+          return !document.querySelector('.finance-planning-summary') &&
+            document.querySelector('.finance-planning-controls').hidden &&
+            document.querySelector('[data-finance-action=reset]').disabled &&
+            !window.__financeBrowserProbe.calls.some(c => c.report === 'planning_projection');
+        })()"""), "A refresh must not mix accounting generations on the page"
+        await evaluate(
+            "document.querySelector('[data-finance-action=refresh]').click()"
+        )
+        await wait_for("Boolean(document.querySelector('.finance-planning-summary'))")
+
+        # Accounting may legitimately advance before its next dated projection.
+        await evaluate("""(() => {
+          window.__financeBrowserProbe.mode = 'older-accounting-index';
+          document.querySelector('[data-finance-action=refresh]').click();
+        })()""")
+        await wait_for(
+            "document.querySelector('.finance-planning-summary')?.textContent.includes('different accounting publication from the page summary and saved choices')"
+        )
+        assert await evaluate(
+            "!document.querySelector('.finance-planning-controls').hidden && !document.querySelector('.finance-planning').textContent.includes('Accounting changed while loading this page.')"
+        ), (
+            "A historical projection remains readable when the current head matches the page"
+        )
+        await evaluate(
+            "document.querySelector('[data-finance-action=refresh]').click()"
+        )
+        await wait_for(
+            "Boolean(document.querySelector('.finance-planning-summary')) && !document.querySelector('.finance-stale-notice')"
+        )
+
+        # Explicit historical projections remain readable, with page scope clear.
+        await evaluate("""(() => {
+          window.__financeBrowserProbe.mode = 'different-accounting-summary';
+          const horizon = document.querySelector('[aria-label="Projection horizon"]');
+          horizon.value = '90'; horizon.dispatchEvent(new Event('change'));
+        })()""")
+        await wait_for(
+            "document.querySelector('.finance-planning-summary')?.textContent.includes('different accounting publication from the page summary and saved choices')"
+        )
+        await evaluate(
+            "document.querySelector('[data-finance-action=refresh]').click()"
+        )
+        await wait_for(
+            "Boolean(document.querySelector('.finance-planning-summary')) && !document.querySelector('.finance-stale-notice')"
+        )
+
+        # A comparison is an explicit bounded request, with no event acquisition.
+        await evaluate("document.querySelector('[data-finance-view=cashflow]').click()")
+        await wait_for("Boolean(document.querySelector('.finance-planning-summary'))")
+        await evaluate("window.__financeBrowserProbe.calls = []")
+        assert await evaluate(
+            "document.querySelector('[data-finance-comparison]') === null"
+        )
+        await evaluate(
+            "document.querySelector('[data-finance-compare=horizons]').click()"
+        )
+        await wait_for(
+            "Boolean(document.querySelector('[data-finance-comparison]')) && window.__financeBrowserProbe.calls.filter(c => c.report === 'planning_projection').length === 5"
+        )
+        requests = await evaluate("window.__financeBrowserProbe.calls")
+        assert len(requests) == 5, requests
+        assert {row["report"] for row in requests} == {"planning_projection"}
+        assert sorted(row["days"] for row in requests) == [7, 30, 90, 180, 365]
+        assert len({row["context"] for row in requests}) == 1
+        await wait_for(
+            "document.querySelector('[data-finance-comparison]')?.textContent.includes('365')"
+        )
+        assert await evaluate(
+            "Array.from(document.querySelectorAll('[data-finance-comparison] li')).every(row => row.textContent.includes('Conservative minimum:'))"
+        ), "Comparisons must preserve the source scalar-minimum qualification"
+        await evaluate("window.__financeBrowserProbe.calls = []")
+        await evaluate(
+            "document.querySelector('[data-finance-compare=scenarios]').click()"
+        )
+        await wait_for(
+            "document.querySelectorAll('[data-finance-comparison] li').length === 3"
+        )
+        requests = await evaluate("window.__financeBrowserProbe.calls")
+        assert len(requests) == 3, requests
+        assert {row["context"] for row in requests} == {
+            "bank-current-base",
+            "bank-expected-base",
+            "bank-chosen-base",
+        }
+        assert await evaluate(
+            "document.querySelector('[data-finance-comparison]').textContent.includes('Spending case:')"
+        )
+        await call(
+            "Emulation.setDeviceMetricsOverride",
+            {"width": 390, "height": 850, "deviceScaleFactor": 1, "mobile": False},
+        )
+        assert await evaluate("document.documentElement.scrollWidth <= innerWidth"), (
+            "The open horizon comparison must fit a 390px viewport"
+        )
+        await call(
+            "Emulation.setDeviceMetricsOverride",
+            {"width": 1280, "height": 1000, "deviceScaleFactor": 1, "mobile": False},
+        )
+        await evaluate("document.querySelector('[data-finance-view=overview]').click()")
+        await wait_for("Boolean(document.querySelector('.finance-planning-summary'))")
+
+        # Each independently superseded head must be visible and refreshable.
+        for mode, days in (("stale-projection", "90"), ("stale-accounting", "180")):
+            await evaluate(
+                f"(() => {{ window.__financeBrowserProbe.mode = '{mode}'; const horizon = document.querySelector('[aria-label=\"Projection horizon\"]'); horizon.value = '{days}'; horizon.dispatchEvent(new Event('change')); }})()"
+            )
+            await wait_for("Boolean(document.querySelector('.finance-stale-notice'))")
+            assert await evaluate(
+                "document.querySelector('[data-finance-metric=spendable]').textContent.includes('Not established')"
+            )
+            await evaluate(
+                "document.querySelector('[data-finance-action=refresh]').click()"
+            )
+            await wait_for(
+                "Boolean(document.querySelector('.finance-planning-summary')) && !document.querySelector('.finance-stale-notice')"
+            )
+
+        await evaluate("""(() => {
+          window.__financeBrowserProbe.mode = 'fail';
+          const horizon = document.querySelector('[aria-label="Projection horizon"]');
+          horizon.value = '7'; horizon.dispatchEvent(new Event('change'));
+        })()""")
+        await wait_for(
+            "Boolean(document.querySelector('.finance-planning-retry:not([hidden])'))"
+        )
+        assert await evaluate(
+            "document.querySelector('.finance-planning-summary') === null"
+        )
+        await evaluate("document.querySelector('.finance-planning-retry').focus()")
+        await _press_enter(call)
+        await wait_for(
+            "Boolean(document.querySelector('.finance-planning-summary')) && !document.querySelector('.finance-planning-retry:not([hidden])')"
+        )
+
+        # Neither a late success nor a late failure may replace the newer choice.
+        for mode in ("hold", "hold-failure"):
+            await evaluate(f"""(() => {{
+              const probe = window.__financeBrowserProbe;
+              probe.mode = '{mode}'; probe.release = null;
+              const context = document.querySelector('[aria-label="Projection context"]');
+              context.value = 'bank-expected-base'; context.dispatchEvent(new Event('change'));
+            }})()""")
+            await wait_for("Boolean(window.__financeBrowserProbe.release)")
+            await evaluate("""(() => {
+              const context = document.querySelector('[aria-label="Projection context"]');
+              context.value = 'funding-chosen-plan'; context.dispatchEvent(new Event('change'));
+            })()""")
+            await wait_for(
+                "document.querySelector('.finance-planning-summary')?.textContent.replaceAll('\u00a0', ' ').includes('USD 8.00 to USD 8.01')"
+            )
+            await evaluate("window.__financeBrowserProbe.release()")
+            await evaluate(
+                "new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))"
+            )
+            assert await evaluate(
+                "document.querySelector('[aria-label=\"Projection context\"]').value === 'funding-chosen-plan' && document.querySelector('.finance-planning-summary').textContent.replaceAll('\u00a0', ' ').includes('USD 8.00 to USD 8.01') && !document.querySelector('.finance-planning-retry:not([hidden])')"
+            )
+        await evaluate("document.querySelector('[data-finance-action=reset]').focus()")
+        await _press_enter(call)
+        await wait_for(
+            "document.querySelector('[aria-label=\"Projection context\"]')?.value === 'bank-current-base' && document.querySelector('[aria-label=\"Projection horizon\"]')?.value === '30' && document.querySelector('.finance-planning-summary')?.textContent.replaceAll('\u00a0', ' ').includes('USD 5.00 to USD 5.01')"
+        )
+        assert await evaluate("""(() => {
+          const params = new URLSearchParams(location.search);
+          return (!params.has('finance_context') || params.get('finance_context') === 'bank-current-base') &&
+            (!params.has('finance_horizon') || params.get('finance_horizon') === '30');
+        })()""")
+    finally:
+        await evaluate("""(() => {
+          const probe = window.__financeBrowserProbe;
+          if (probe.release) probe.release();
+          window.fetch = probe.original;
+          delete window.__financeBrowserProbe;
+        })()""")
 
 
 @pytest.mark.skipif(
@@ -213,27 +507,17 @@ async def test_owner_saves_goal_and_preference_then_reloads(tmp_path):
                 )
 
             await wait_for("Boolean(document.querySelector('.finance-choices'))")
-            # An accepted Books owner sees one source of planning truth. A
-            # stale legacy view URL must not restore the old workbook plan.
+            # Every accepted-Books view keeps one source of planning truth.
             assert await evaluate(
                 "document.querySelector('.finance-hero').textContent.includes('YOUR HOUSEHOLD BOOKS')"
             )
             assert (
                 await evaluate(
-                    "document.querySelectorAll('.finance-kpi, .finance-cashflow, .finance-budget, .finance-scenarios, .finance-controls').length"
+                    "document.querySelectorAll('.finance-kpi, .finance-cashflow, .finance-budget, .finance-scenarios').length"
                 )
                 == 0
             )
-            await evaluate(
-                "history.replaceState({}, '', '?view=scenarios'); renderFinance(state.surface)"
-            )
-            await wait_for("Boolean(document.querySelector('.finance-choices'))")
-            assert (
-                await evaluate(
-                    "document.querySelectorAll('.finance-scenarios, .finance-controls').length"
-                )
-                == 0
-            )
+            await _assert_finance_view_navigation(call, evaluate, wait_for)
             identity = await evaluate(
                 "fetch('/api/member/v1/bootstrap').then(r => r.json()).then(x => ({member:x.member,trust:x.trust}))"
             )
@@ -298,6 +582,7 @@ async def test_owner_saves_goal_and_preference_then_reloads(tmp_path):
                     "mobile": False,
                 },
             )
+            await _assert_finance_projection_controls(call, evaluate, wait_for)
             await evaluate("""(() => {
               const select=document.querySelector('[aria-label="Projection context"]');
               if(select.options.length!==24) throw Error('context coverage lost');
@@ -376,6 +661,51 @@ async def test_owner_saves_goal_and_preference_then_reloads(tmp_path):
             await wait_for(
                 "document.querySelector('.finance-planning').textContent.includes('2026-03-06 – 2026-03-08') && document.querySelector('.finance-planning').textContent.includes('do not prove occurrence')"
             )
+            await evaluate(
+                "document.querySelector('.finance-event-list details > summary').focus()"
+            )
+            await _press_enter(call)
+            await wait_for(
+                "document.querySelector('.finance-event-list details')?.open"
+            )
+            assert await evaluate(
+                "document.querySelector('.finance-event-list details').textContent.includes('Published route:') && document.querySelector('.finance-event-list details').textContent.includes('Bank effect:') && document.querySelector('.finance-event-list details').textContent.includes('Debt effect:')"
+            )
+            await evaluate(
+                "document.querySelector('.finance-event-list details button').focus()"
+            )
+            await _press_enter(call)
+            await wait_for(
+                "document.querySelector('.finance-event-list').textContent.includes('Protected reference; source content is not included.')"
+            )
+            await call(
+                "Emulation.setDeviceMetricsOverride",
+                {
+                    "width": 390,
+                    "height": 850,
+                    "deviceScaleFactor": 1,
+                    "mobile": False,
+                },
+            )
+            assert await evaluate(
+                "document.documentElement.scrollWidth <= innerWidth"
+            ), "Opened event evidence must fit a 390px viewport"
+            await evaluate(
+                "document.querySelector('.finance-event-list details').scrollIntoView({block:'start'})"
+            )
+            event_shot = await call("Page.captureScreenshot", {"format": "png"})
+            (planning_output / "finance-event-evidence-narrow.png").write_bytes(
+                base64.b64decode(event_shot["data"])
+            )
+            await call(
+                "Emulation.setDeviceMetricsOverride",
+                {
+                    "width": 1280,
+                    "height": 1000,
+                    "deviceScaleFactor": 1,
+                    "mobile": False,
+                },
+            )
             await evaluate("""(() => {
               const s=document.querySelector('[aria-label="Projection horizon"]');
               s.value='365';s.dispatchEvent(new Event('change'));
@@ -433,6 +763,9 @@ async def test_owner_saves_goal_and_preference_then_reloads(tmp_path):
             await call("Page.reload")
             await wait_for(
                 "Boolean(document.querySelector('.finance-choices')) && document.querySelector('.finance-choices').textContent.includes('Keep Menu') && document.querySelector('.finance-choices').textContent.includes('Paused')"
+            )
+            await wait_for(
+                "document.querySelector('[aria-label=\"Projection context\"]')?.value === 'funding-chosen-plan' && document.querySelector('[aria-label=\"Projection horizon\"]')?.value === '365' && document.querySelector('.finance-planning-summary')?.textContent.replaceAll('\u00a0', ' ').includes('USD 8.00 to USD 8.01')"
             )
             await evaluate(
                 "document.querySelector('.finance-choices').scrollIntoView({block:'start'})"
