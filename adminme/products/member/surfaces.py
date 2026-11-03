@@ -1752,7 +1752,9 @@ def build_surface(
         )
         base["cockpit"] = cockpit
         base["contract"] = {
-            "workbook_planning_inputs_authoritative": True,
+            # Books remains the selected authority even before a publication
+            # is available; its missing evidence never activates legacy inputs.
+            "workbook_planning_inputs_authoritative": not enabled,
             "provider_observations_protected": True,
             "provider_writeback": False,
             "model_decides_financial_action": False,

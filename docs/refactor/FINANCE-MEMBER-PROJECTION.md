@@ -8,6 +8,7 @@ not enable an advisor, acquire transactions, or publish source edits.
 
 ## First usable outcome
 
+Finance is the `/member/finance` surface within the shared member Dashboard.
 An authorized reader can select a published cash/funding context and horizon,
 understand the source estimate and its missing inputs, compare matching
 published estimates, and expand dated drivers and evidence. The first screen
@@ -21,6 +22,10 @@ keys retain the existing `overview`, `cashflow`, `scenarios`, `spending`,
 `networth`, and `health` values. Books readers never fall through to legacy
 workbook forecasts. Browser history, reload, reset and explicit refresh preserve
 or replace only presentation state, not source inputs or authorization.
+The surface's `workbook_planning_inputs_authoritative` flag is false whenever
+Books is selected, including while its accepted publication is missing. This
+flag describes the legacy planning inputs; missing Books evidence never makes
+those inputs authoritative for the selected Books view.
 
 ## Binding crosswalk for the shipped view
 
