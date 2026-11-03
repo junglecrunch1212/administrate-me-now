@@ -778,9 +778,44 @@ jobs:
           python --version
           xcode-select -p
           xcrun --find clang
-          member_sdk="$(xcrun --sdk macosx --show-sdk-path)"
-          test -d "$member_sdk"
-          printf 'sdk-path=%s\n' "$member_sdk" >> "$GITHUB_OUTPUT"
+          python3 - "$GITHUB_OUTPUT" <<'PY'
+          from pathlib import Path
+          import plistlib
+          import subprocess
+          import sys
+
+          selected = Path(subprocess.check_output(
+              ["xcrun", "--sdk", "macosx", "--show-sdk-path"], text=True
+          ).strip()).resolve(strict=True)
+          developers = [Path("/Library/Developer/CommandLineTools")]
+          developers.extend(Path("/Applications").glob("Xcode*.app/Contents/Developer"))
+          installed = {}
+          for developer in developers:
+              candidates = [
+                  *developer.glob("SDKs/MacOSX*.sdk"),
+                  *developer.glob("Platforms/MacOSX.platform/Developer/SDKs/MacOSX*.sdk"),
+              ]
+              for candidate in candidates:
+                  try:
+                      resolved = candidate.resolve(strict=True)
+                      with (resolved / "SDKSettings.plist").open("rb") as stream:
+                          metadata = plistlib.load(stream)
+                      version = metadata.get("Version") if isinstance(metadata, dict) else None
+                      if not isinstance(version, str):
+                          continue
+                      pieces = tuple(int(piece) for piece in version.split("."))
+                  except (OSError, KeyError, TypeError, ValueError):
+                      continue
+                  if pieces:
+                      installed[str(resolved)] = (pieces, version)
+          sdk27 = {path: value for path, value in installed.items() if value[0][0] == 27}
+          compatibility = max(sdk27, key=lambda path: sdk27[path][0]) if sdk27 else str(selected)
+          available = bool(sdk27)
+          print({"selected_sdk": str(selected), "installed_macos_sdks": sorted({value[1] for value in installed.values()}), "sdk27_paths": sorted(sdk27)})
+          with open(sys.argv[1], "a", encoding="utf-8") as output:
+              output.write(f"compatibility-sdk-path={compatibility}\n")
+              output.write(f"sdk27-available={str(available).lower()}\n")
+          PY
 
       - name: Prepare isolated Homebrew bridge interpreter
         id: homebrew-python
@@ -796,7 +831,8 @@ jobs:
           ADMINME_BRIDGE_INSTALLER_PYTHON: ${{ steps.bridge-python.outputs.python-path }}
           ADMINME_BRIDGE_INSTALLER_HOMEBREW_PYTHON: ${{ steps.homebrew-python.outputs.python-path }}
           ADMINME_BRIDGE_INSTALLER_OLDER_DEVELOPER: /Applications/Xcode_26.6.app/Contents/Developer
-          ADMINME_BRIDGE_INSTALLER_NEWER_SDK: ${{ steps.member-native-sdk.outputs.sdk-path }}
+          ADMINME_BRIDGE_INSTALLER_COMPATIBILITY_SDK: ${{ steps.member-native-sdk.outputs.compatibility-sdk-path }}
+          ADMINME_BRIDGE_INSTALLER_SDK27_AVAILABLE: ${{ steps.member-native-sdk.outputs.sdk27-available }}
           ADMINME_BRIDGE_INSTALLER_ARTIFACT_DIR: ${{ runner.temp }}/adminme-packaged-bridge-evidence
         run: |
           poetry run pytest -p no:cacheprovider --runxfail -q -ra \
