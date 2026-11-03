@@ -14,6 +14,7 @@ import hashlib
 import json
 import os
 import plistlib
+import re
 import shlex
 import subprocess
 import sys
@@ -202,7 +203,13 @@ def test_real_clean_and_interrupted_member_install_preview(
         text=True,
         check=True,
     ).stdout.strip()
-    assert version == "3.14.8"
+    if distribution == "setup-python":
+        assert version == "3.14.8"
+    else:
+        # Homebrew supplies the current stable patch of its python@3.14
+        # formula. Test that supported line and bind the exact patch to the
+        # real formula below, rather than assuming the setup-python pin.
+        assert re.fullmatch(r"3\.14\.[0-9]+", version), version
     artifact_dir = (
         Path(os.environ["ADMINME_BRIDGE_INSTALLER_ARTIFACT_DIR"]) / distribution
     )
@@ -266,7 +273,12 @@ def test_real_clean_and_interrupted_member_install_preview(
             env=env,
             log=artifact_dir / "homebrew-python-version.log",
         ).stdout.strip()
-        assert formula_version.startswith("python@3.14 3.14.8")
+        formula_parts = formula_version.split()
+        assert formula_parts[0] == "python@3.14"
+        assert any(
+            re.fullmatch(re.escape(version) + r"(?:_[0-9]+)?", installed)
+            for installed in formula_parts[1:]
+        ), formula_version
         formula_prefix = _run(
             ["/opt/homebrew/bin/brew", "--prefix", "python@3.14"],
             cwd=workspace,
