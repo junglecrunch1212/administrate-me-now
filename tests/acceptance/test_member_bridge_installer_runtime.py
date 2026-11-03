@@ -14,6 +14,7 @@ import hashlib
 import json
 import os
 import plistlib
+import re
 import shlex
 import subprocess
 import sys
@@ -21,6 +22,8 @@ import tarfile
 from pathlib import Path
 
 import pytest
+from packaging.specifiers import SpecifierSet
+from packaging.version import Version
 
 from adminme.bridge_enrollment import BridgeEnrollmentCoordinator
 from bootstrap.source_identity import write_source_marker
@@ -202,7 +205,15 @@ def test_real_clean_and_interrupted_member_install_preview(
         text=True,
         check=True,
     ).stdout.strip()
-    assert version == "3.14.8"
+    python_contract = json.loads((ROOT / "bootstrap/versions.json").read_text())[
+        "python"
+    ]
+    # setup-python is exactly pinned by the job. Homebrew exercises the real
+    # moving formula used by the installer, within its declared compatibility.
+    assert re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version), version
+    assert Version(version) in SpecifierSet(python_contract["compatible"]), version
+    if distribution == "setup-python":
+        assert version == "3.14.8"
     artifact_dir = (
         Path(os.environ["ADMINME_BRIDGE_INSTALLER_ARTIFACT_DIR"]) / distribution
     )
@@ -266,7 +277,14 @@ def test_real_clean_and_interrupted_member_install_preview(
             env=env,
             log=artifact_dir / "homebrew-python-version.log",
         ).stdout.strip()
-        assert formula_version.startswith("python@3.14 3.14.8")
+        formula, *installed_versions = formula_version.split()
+        assert formula == python_contract["formula"], formula_version
+        # Homebrew may retain several patches or add a bottle revision suffix.
+        # The resolved interpreter must still belong to the installed formula.
+        assert any(
+            re.fullmatch(re.escape(version) + r"(?:_[0-9]+)?", installed)
+            for installed in installed_versions
+        ), (version, formula_version)
         formula_prefix = _run(
             ["/opt/homebrew/bin/brew", "--prefix", "python@3.14"],
             cwd=workspace,
