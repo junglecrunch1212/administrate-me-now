@@ -1308,6 +1308,46 @@ describe("native OpenClaw contract fixture", () => {
 
 
 describe("authorized household Finance retention", () => {
+  it("accepts native tool-result metadata without widening the transcript", () => {
+    // Native SDK messages are interfaces without a string index signature.
+    interface TranscriptMessage {
+      role: "toolResult";
+      toolName: string;
+      toolCallId: string;
+      timestamp: number;
+      content: Array<{ type: "text"; text: string }>;
+    }
+    const runtime = fakeApi();
+    const persist = runtime.hooks.get("tool_result_persist")![0]!.handler;
+    const message: TranscriptMessage = { role: "toolResult", toolName: "administrateme_finance_query",
+      toolCallId: "synthetic-finance-call", timestamp: 42,
+      content: [{ type: "text", text: "Authorized synthetic result" }] };
+    const retained: TranscriptMessage = privateFinanceTranscript(message, true);
+    expect(retained).toBe(message);
+    expect(persist({ message }, {})).toEqual({ message });
+    expect(persist({ message }, { toolName: "administrateme_finance_query" })).toEqual({ message });
+    expect(persist({ toolName: "unrelated_tool", message }, {})).toBeUndefined();
+    expect(persist({ message }, { toolName: "unrelated_tool" })).toBeUndefined();
+  });
+  it("leaves native messages without assistant content untouched", () => {
+    const runtime = fakeApi();
+    const persist = runtime.hooks.get("tool_result_persist")![0]!.handler;
+    const write = runtime.hooks.get("before_message_write")![0]!.handler;
+    const message = { role: "bashExecution", command: "echo synthetic", output: "synthetic", exitCode: 0 };
+    expect(persist({ message }, {})).toBeUndefined();
+    expect(write({ message }, {})).toBeUndefined();
+    expect(write({ message: { role: "user", content: "Ordinary input" } }, {})).toBeUndefined();
+  });
+  it("preserves native assistant fields when invoking Finance", () => {
+    const runtime = fakeApi();
+    const write = runtime.hooks.get("before_message_write")![0]!.handler;
+    const message = { role: "assistant", api: "synthetic", provider: "fixture", model: "fixture",
+      timestamp: 42, stopReason: "toolUse",
+      content: [{ type: "toolCall", id: "synthetic-finance-call", name: "administrateme_finance_query", arguments: {} }] };
+    const result = write({ message }, {});
+    expect(result).toEqual({ message });
+    expect((result as { message: unknown }).message).toBe(message);
+  });
   it("preserves authorized tool evidence and ordinary conversation", () => {
     const runtime = fakeApi();
     const persist = runtime.hooks.get("tool_result_persist")![0]!.handler;

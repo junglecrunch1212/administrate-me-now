@@ -1996,7 +1996,7 @@ def test_runtime_baseline_change_requires_explicit_pre_switch_approval(
                 "formula": "node@24",
             },
             "to": {
-                "compatible": ">=24.15,<25",
+                "compatible": ">=24.22.1,<25",
                 "preferred": "24.22.1",
                 "formula": "node@24",
             },

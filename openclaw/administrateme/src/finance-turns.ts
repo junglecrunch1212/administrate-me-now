@@ -22,7 +22,7 @@ const activeFinance = new WeakMap<PluginRuntime, Map<string, string>>();
  * that member. New domain retrieval/reference delivery rechecks the book grant.
  * This does not grant another agent, audience or outbound tool any authority.
  */
-export function privateFinanceTranscript(message: Record<string, unknown>, _toolResult: boolean): Record<string, unknown> {
+export function privateFinanceTranscript<T extends object>(message: T, _toolResult: boolean): T {
   return message;
 }
 
@@ -70,15 +70,18 @@ export function registerFinanceTurns(api: OpenClawPluginApi, runtime: PluginRunt
     admitted.set(context.runId, { ...audience, runId: context.runId, expiresAt: Date.now() + 30_000 });
   }, { eligibleTriggers: ["user"] });
   api.on("tool_result_persist", (event, context) => {
-    if (FINANCE_TOOLS.has(event.toolName ?? context.toolName ?? String(event.message.toolName))) {
+    const toolName = event.toolName ?? context.toolName ??
+      ("toolName" in event.message ? String(event.message.toolName) : undefined);
+    if (toolName && FINANCE_TOOLS.has(toolName)) {
       return { message: privateFinanceTranscript(event.message, true) };
     }
     return;
   });
   api.on("before_message_write", (event, context) => {
+    if (event.message.role !== "assistant") return;
     const session = event.sessionKey ?? context.sessionKey;
     const invokesFinance = Array.isArray(event.message.content) && event.message.content.some((part: any) => part?.type === "toolCall" && FINANCE_TOOLS.has(part.name));
-    if (event.message.role === "assistant" && (invokesFinance || (session && activeFinance.get(runtime)?.has(session)))) {
+    if (invokesFinance || (session && activeFinance.get(runtime)?.has(session))) {
       return { message: privateFinanceTranscript(event.message, false) };
     }
     return;
