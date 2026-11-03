@@ -63,8 +63,9 @@ npm run build
 npm pack --dry-run
 ```
 
-AdministrateMe's reviewed runtime baseline requires Node `>=24.15.0 <25`. The current
-Windows development host is intentionally fixture-only. In a disposable Mac
+The selected AdministrateMe/OpenClaw runtime requires Node `>=24.22.1 <25`.
+Older retained releases may have a lower floor. The current Windows development
+host is intentionally fixture-only. In a disposable Mac
 lab with the exact OpenClaw checkout, set `ADMINME_LIVE_GATE=1` and
 `OPENCLAW_SOURCE_DIR`, then run `npm run test:live:mac`. That gate links the
 plugin, inspects its live runtime, restarts the Gateway, and requires deep RPC

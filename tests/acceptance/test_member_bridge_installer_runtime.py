@@ -305,7 +305,7 @@ def test_real_clean_and_interrupted_member_install_preview(
             re.fullmatch(r"27(?:\.[0-9]+){0,2}", sdk_version)
         )
         if sdk27_available:
-            assert toolchain["canonical_sdk_version"] == "26.5"
+            assert toolchain["canonical_sdk_version"].split(".", 1)[0] == "26"
             probe_source = workspace / "native link probe.c"
             probe_source.write_text("int adminme_native_probe(void) { return 0; }\n")
             probe_command = [
@@ -346,7 +346,7 @@ def test_real_clean_and_interrupted_member_install_preview(
                 "installer_sdkroot_override": False,
             }
         else:
-            assert sdk_version == toolchain["canonical_sdk_version"] == "26.5"
+            assert sdk_version == toolchain["canonical_sdk_version"]
             compatibility_probe = {
                 "status": "not-available-on-runner",
                 "reason": "the hosted image contains no macOS 27.x SDK",

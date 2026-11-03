@@ -24,10 +24,10 @@ from bootstrap.prepared_runtime import (
 
 CONTRACT = "administrateme-openclaw-generation-v1"
 PREDECESSOR = ("2026.7.2", "ce67ffb70e83e5ebb56ea02e814e577153f84f61")
-SUCCESSOR = ("2026.10.8", "dc2523e5a5c7a309517fd7fa834add938231d526")
+SUCCESSOR = ("2026.10.10", "7dc3350cb9f08fcf9a0af5c4845a20d5b2f1a8be")
 SCHEMAS = {
     PREDECESSOR[1]: {"state": 6, "agent": 16},
-    SUCCESSOR[1]: {"state": 20, "agent": 25},
+    SUCCESSOR[1]: {"state": 22, "agent": 27},
 }
 _HEX32 = re.compile(r"[a-f0-9]{32}")
 _HEX64 = re.compile(r"[a-f0-9]{64}")

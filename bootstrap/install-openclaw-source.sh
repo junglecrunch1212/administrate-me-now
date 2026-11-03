@@ -155,7 +155,7 @@ if [[ ! -d "$source_root" ]]; then
   STAGING_DIR=""
 fi
 
-if [[ "$OPENCLAW_COMMIT" == dc2523e5a5c7a309517fd7fa834add938231d526 ]]; then
+if [[ "$OPENCLAW_COMMIT" == 7dc3350cb9f08fcf9a0af5c4845a20d5b2f1a8be ]]; then
   PYTHONPATH="$REPOSITORY_ROOT" "$PYTHON_BIN" - "$INSTANCE_ROOT" "$REPOSITORY_ROOT" "$SELECT_PREPARED" <<'PYSEAL'
 import json
 import sys

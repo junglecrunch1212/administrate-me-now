@@ -16,8 +16,8 @@ from adminme.openclaw_approvals import (
 
 
 SECRET = "fixture-secret-at-least-24-characters"
-VERSION = "2026.10.8"
-COMMIT = "dc2523e5a5c7a309517fd7fa834add938231d526"
+VERSION = "2026.10.10"
+COMMIT = "7dc3350cb9f08fcf9a0af5c4845a20d5b2f1a8be"
 FINGERPRINT = "a" * 64
 
 

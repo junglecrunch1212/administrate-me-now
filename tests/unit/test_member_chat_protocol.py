@@ -242,7 +242,7 @@ async def test_unconfirmed_subscription_never_starts_or_aborts_a_member_run(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("server_version", ["2026.10.8", "2026.7.2", "9999.1.1"])
+@pytest.mark.parametrize("server_version", ["2026.10.10", "2026.7.2", "9999.1.1"])
 async def test_gateway_handshake_accepts_only_the_exact_current_native_version(
     monkeypatch: pytest.MonkeyPatch, server_version: str
 ) -> None:
@@ -286,7 +286,7 @@ async def test_gateway_handshake_accepts_only_the_exact_current_native_version(
     transport = OpenClawGatewayChatTransport(
         url="ws://127.0.0.1:18789", token="fixture-token"
     )
-    if server_version == "2026.10.8":
+    if server_version == "2026.10.10":
         assert await transport._connect() is socket
         assert not socket.closed
         await socket.close()

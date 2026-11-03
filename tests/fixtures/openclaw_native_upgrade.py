@@ -161,10 +161,10 @@ def main() -> None:
             with sqlite3.connect(store.as_uri() + "?mode=ro", uri=True) as database:
                 version = database.execute("PRAGMA user_version").fetchone()[0]
                 if store.name == "openclaw.sqlite":
-                    assert version == 20
+                    assert version == 22
                     state_count += 1
                 else:
-                    assert version == 25
+                    assert version == 27
                     retained = database.execute(
                         "SELECT entry_json FROM session_nodes"
                     ).fetchall()
@@ -176,7 +176,7 @@ def main() -> None:
             == original_credential_hash
         )
         print(
-            "Actual dc252 Doctor: shared20 / three agent25 stores; retained sessions, authority and auth fixture PASS",
+            "Actual 7dc3350 Doctor: shared22 / three agent27 stores; retained sessions, authority and auth fixture PASS",
             flush=True,
         )
         # Simulate only a failed activation before normal work is released.

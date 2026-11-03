@@ -308,7 +308,7 @@ def test_required_llm_tool_status_proves_config_and_runtime_registration(
                         "toolNames": ["llm-task"],
                         "origin": "bundled",
                         "packageName": "@openclaw/llm-task",
-                        "packageVersion": "2026.10.8",
+                        "packageVersion": "2026.10.10",
                     }
                 }
             ),
@@ -362,7 +362,7 @@ def test_required_llm_tool_configuration_preserves_existing_allow_entries(
                             "toolNames": ["llm-task"],
                             "origin": "bundled",
                             "packageName": "@openclaw/llm-task",
-                            "packageVersion": "2026.10.8",
+                            "packageVersion": "2026.10.10",
                         }
                     }
                 ),
@@ -1028,7 +1028,7 @@ def test_launchers_share_keychain_gateway_token_and_load_member_chat_policy(
     monkeypatch.setattr(
         openclaw_service.subprocess,
         "run",
-        lambda *_args, **_kwargs: SimpleNamespace(stdout="OpenClaw 2026.10.8"),
+        lambda *_args, **_kwargs: SimpleNamespace(stdout="OpenClaw 2026.10.10"),
     )
     exec_capture: dict[str, object] = {}
 
@@ -1064,7 +1064,7 @@ def test_openclaw_activation_probes_server_side_and_writes_metadata_only(
     def run(command, **kwargs):
         commands.append(command)
         environments.append(dict(kwargs.get("env", {})))
-        return SimpleNamespace(stdout="OpenClaw 2026.10.8")
+        return SimpleNamespace(stdout="OpenClaw 2026.10.10")
 
     monkeypatch.setattr(
         "bootstrap.openclaw_activation.resolve_reviewed_openclaw",
