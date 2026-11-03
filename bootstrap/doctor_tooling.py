@@ -94,6 +94,8 @@ def tooling_versions_supported(
         else:
             return False
     python, node, npm = (_version(observed[key]) for key in ("python", "node", "npm"))
+    if not isinstance(node_compatible, str):
+        return False
     node_bounds = re.fullmatch(r">=(\d+(?:\.\d+){1,2}),<(\d+)", node_compatible)
     if node_bounds is None:
         return False

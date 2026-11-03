@@ -245,6 +245,16 @@ def test_retained_tooling_keeps_its_reviewed_node_range():
     )
 
 
+def test_current_node_range_refuses_missing_manifest_value(monkeypatch):
+    manifest = json.loads((ROOT / "bootstrap/versions.json").read_text())
+    manifest["node"]["compatible"] = None
+    monkeypatch.setattr(tooling, "load_versions", lambda: manifest)
+    expected = manifest["openclaw"]["version"]
+    assert not tooling.tooling_versions_supported(
+        {**OBSERVED, "openclaw": f"OpenClaw {expected}"}, expected
+    )
+
+
 def test_immutable_predecessors_really_have_complete_contract_and_old_ceiling():
     for commit in tooling.RETAINED_DOCTORS:
         source = subprocess.check_output(
