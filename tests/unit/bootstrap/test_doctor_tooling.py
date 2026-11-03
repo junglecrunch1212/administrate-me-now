@@ -6,6 +6,7 @@ import ast
 import copy
 import hashlib
 import json
+import re
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
@@ -177,6 +178,70 @@ def test_current_tooling_rule_accepts_only_compatible_tuple(version):
     )
     assert not tooling.tooling_versions_supported(
         {**OBSERVED, "node": None}, "2026.7.2"
+    )
+
+
+@pytest.mark.parametrize("major", [5, 6, 7, 8])
+def test_bootstrap_homebrew_guard_matches_reviewed_doctor_and_manifest(major):
+    installer = (ROOT / "bootstrap/bootstrap-macos.sh").read_text()
+    guard = re.search(
+        r'if \(\(brew_major .*?\)\); then\n  fail "Homebrew .*?"\nfi',
+        installer,
+    )
+    assert guard is not None
+    result = subprocess.run(
+        [
+            "/bin/bash",
+            "-c",
+            'fail() { exit 42; }\nbrew_major="$1"\nbrew_version="$1.0.0"\n'
+            + guard.group(),
+            "bootstrap-tooling-fixture",
+            str(major),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode in {0, 42}
+    assert (result.returncode == 0) == tooling.tooling_versions_supported(
+        {**OBSERVED, "homebrew": f"Homebrew {major}.0.0"}, "2026.7.2"
+    )
+    manifest = json.loads((ROOT / "bootstrap/versions.json").read_text())
+    assert manifest["package_managers"]["homebrew"] == ">=6,<8"
+
+
+@pytest.mark.parametrize(
+    "node,accepted",
+    [
+        ("24.15.0", False),
+        ("24.19.0", False),
+        ("24.22.0", False),
+        ("24.22.1", True),
+        ("24.23.0", True),
+        ("25.0.0", False),
+    ],
+)
+def test_current_node_matrix_uses_its_declared_floor(node, accepted):
+    manifest = json.loads((ROOT / "bootstrap/versions.json").read_text())
+    expected = manifest["openclaw"]["version"]
+    observed = {**OBSERVED, "node": node, "openclaw": f"OpenClaw {expected}"}
+    assert (
+        tooling.tooling_versions_supported(
+            observed, expected, node_compatible=manifest["node"]["compatible"]
+        )
+        is accepted
+    )
+    assert tooling.tooling_versions_supported(observed, expected) is accepted
+
+
+def test_retained_tooling_keeps_its_reviewed_node_range():
+    observed = {**OBSERVED, "node": "24.19.0"}
+    assert tooling.tooling_versions_supported(observed, "2026.7.2")
+    assert not tooling.tooling_versions_supported(
+        observed, "2026.7.2", node_compatible="invalid"
+    )
+    assert not tooling.tooling_versions_supported(
+        {**observed, "openclaw": "OpenClaw 2099.1.1"}, "2099.1.1"
     )
 
 

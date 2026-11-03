@@ -96,7 +96,7 @@
     "python_version": "0.6.2"
   },
   "package_managers": {
-    "homebrew": ">=6,<7",
+    "homebrew": ">=6,<8",
     "poetry": "2.4.1",
     "npm": ">=11.6,<12"
   }

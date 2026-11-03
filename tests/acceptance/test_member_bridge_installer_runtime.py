@@ -295,7 +295,10 @@ def test_real_clean_and_interrupted_member_install_preview(
         newer_sdk = Path(os.environ["ADMINME_BRIDGE_INSTALLER_NEWER_SDK"]).resolve(
             strict=True
         )
-        assert _sdk_version(newer_sdk) == "27.0"
+        # Follow the selected CLT SDK within the reviewed major. The real
+        # incompatible-link and canonical-SDK success probes below remain
+        # mandatory; a changed failure cannot pass on a version string alone.
+        assert re.fullmatch(r"27(?:\.[0-9]+){0,2}", _sdk_version(newer_sdk))
         assert toolchain["canonical_sdk_version"] == "26.5"
         probe_source = workspace / "native link probe.c"
         probe_source.write_text("int adminme_native_probe(void) { return 0; }\n")

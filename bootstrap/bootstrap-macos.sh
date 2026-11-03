@@ -206,8 +206,8 @@ BREW=/opt/homebrew/bin/brew
 brew_version="$("$BREW" --version | awk 'NR==1 {print $2}')"
 IFS=. read -r brew_major _ <<<"$brew_version"
 [[ "$brew_major" =~ ^[0-9]+$ ]] || fail "could not read the Homebrew version"
-if ((brew_major < 6 || brew_major >= 7)); then
-  fail "Homebrew $brew_version is outside >=6,<7"
+if ((brew_major < 6 || brew_major >= 8)); then
+  fail "Homebrew $brew_version is outside >=6,<8"
 fi
 
 free_kib="$(df -Pk "$(dirname "$INSTANCE_ROOT")" | awk 'NR==2 {print $4}')"

@@ -921,6 +921,12 @@ def test_packaged_installation_requires_all_real_platform_cases() -> None:
     )
     assert "if" not in install
     assert install["env"]["ADMINME_RUN_BRIDGE_INSTALLER_RUNTIME"] == "1"
+    sdk = next(step for step in job["steps"] if step.get("id") == "member-native-sdk")
+    assert "xcrun --sdk macosx --show-sdk-path" in sdk["run"]
+    assert '"$GITHUB_OUTPUT"' in sdk["run"]
+    assert install["env"]["ADMINME_BRIDGE_INSTALLER_NEWER_SDK"] == (
+        "${{ steps.member-native-sdk.outputs.sdk-path }}"
+    )
     for key in (
         "ADMINME_BRIDGE_INSTALLER_PYTHON",
         "ADMINME_BRIDGE_INSTALLER_HOMEBREW_PYTHON",

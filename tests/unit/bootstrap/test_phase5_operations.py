@@ -167,7 +167,7 @@ def test_fixed_entrypoints_exist_and_delegate_without_secret_arguments() -> None
     assert "openclaw config set gateway.mode local" in installer
     assert "bootstrap.openclaw_tools" in installer
     assert "openclaw config validate" in installer
-    assert "outside >=6,<7" in installer
+    assert "outside >=6,<8" in installer
     assert 'OPENCLAW_STATE_DIR="$INSTANCE_ROOT/state/openclaw/runtime"' in installer
     assert 'OPENCLAW_CONFIG_PATH="$OPENCLAW_STATE_DIR/openclaw.json"' in installer
     updater = (REPO_ROOT / "bootstrap" / "update.sh").read_text("utf-8")

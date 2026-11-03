@@ -3,6 +3,41 @@
 The current tooling predicate accepts Homebrew 6 and 7 with the existing
 Python 3.14, Node 24, npm 11 and pinned OpenClaw bounds. Maintenance preparation
 and pause run only the selected tooling probe before stopping services.
+The bootstrap guard and version manifest use the same reviewed Homebrew range,
+`>=6,<8`; boundary regressions exercise the actual shell guard against Doctor.
+Current Doctor also uses the selected manifest's Node compatibility floor.
+The separate retained-report correction keeps its reviewed historical Node
+range; it does not reinterpret immutable predecessor manifests.
+
+## Update ownership and reproducibility
+
+One protected AdministrateMe release owns the selected OpenClaw commit, archive
+digest, plugin API, runtime declarations and dependency locks. Update discovery
+and notices do not authorize installation. The managed Gateway startup disables
+independent upstream auto-installation; a check-only release report creates no
+schedule or update worker. An unattended delivery path must explicitly connect
+discovery to protected candidate qualification and the guarded updater before
+it can be described as automatic updating.
+
+Production selects reviewed Python and Node executables and locked Python/npm
+packages. A compatible range allows qualification of a newer patch; it does not
+silently move the selected executable. Homebrew formula refreshes and desktop
+application updates have separate ownership and may drift independently.
+Do not run broad package upgrades against serving virtual environments or remove
+retained runtimes before compatible recovery is established.
+
+CI keeps deterministic runtime pins and separately exercises rolling supported
+Homebrew patches. The rolling case must prove the actual formula/executable
+binding. Apple SDK fixtures resolve the runner's selected SDK within the reviewed
+major and retain real compilation/linking assertions. New major versions, changed
+native APIs, database schemas and incompatible toolchains require qualification;
+accepting arbitrary newest versions would remove that proof.
+
+Keep the last known-working generation and required verified backups. Recovery
+must respect accepted history: after new-schema work is accepted, revoke the
+affected feature or roll forward on a compatible runtime rather than launch an
+older binary against newer data. Standing automation must preserve transaction
+locks, a bounded maintenance window, recorded outcomes and compatible recovery.
 
 Two source-verified retained releases have the obsolete Homebrew-6 ceiling:
 `471d20ec71d40d59490ff763be524d73a3c3cb7d` and

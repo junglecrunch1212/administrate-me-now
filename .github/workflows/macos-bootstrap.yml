@@ -770,6 +770,7 @@ jobs:
             tests/acceptance/test_eventkit_color_native.py
 
       - name: Record isolated member installation platform
+        id: member-native-sdk
         run: |
           sudo xcode-select --switch /Library/Developer/CommandLineTools
           uname -m
@@ -777,7 +778,9 @@ jobs:
           python --version
           xcode-select -p
           xcrun --find clang
-          xcrun --sdk macosx --show-sdk-path
+          member_sdk="$(xcrun --sdk macosx --show-sdk-path)"
+          test -d "$member_sdk"
+          printf 'sdk-path=%s\n' "$member_sdk" >> "$GITHUB_OUTPUT"
 
       - name: Prepare isolated Homebrew bridge interpreter
         id: homebrew-python
@@ -793,7 +796,7 @@ jobs:
           ADMINME_BRIDGE_INSTALLER_PYTHON: ${{ steps.bridge-python.outputs.python-path }}
           ADMINME_BRIDGE_INSTALLER_HOMEBREW_PYTHON: ${{ steps.homebrew-python.outputs.python-path }}
           ADMINME_BRIDGE_INSTALLER_OLDER_DEVELOPER: /Applications/Xcode_26.6.app/Contents/Developer
-          ADMINME_BRIDGE_INSTALLER_NEWER_SDK: /Library/Developer/CommandLineTools/SDKs/MacOSX27.0.sdk
+          ADMINME_BRIDGE_INSTALLER_NEWER_SDK: ${{ steps.member-native-sdk.outputs.sdk-path }}
           ADMINME_BRIDGE_INSTALLER_ARTIFACT_DIR: ${{ runner.temp }}/adminme-packaged-bridge-evidence
         run: |
           poetry run pytest -p no:cacheprovider --runxfail -q -ra \
