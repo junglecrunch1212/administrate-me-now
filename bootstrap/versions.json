@@ -1,8 +1,12 @@
 {
   "schema_version": 1,
-  "reviewed_on": "2026-08-08",
+  "reviewed_on": "2026-11-03",
   "macos": {
-    "supported_majors": [14, 15, 26],
+    "supported_majors": [
+      14,
+      15,
+      26
+    ],
     "preferred_major": 26,
     "architecture": "arm64"
   },
@@ -20,18 +24,20 @@
     ]
   },
   "node": {
-    "compatible": ">=24.15,<25",
+    "compatible": ">=24.22.1,<25",
     "preferred": "24.22.1",
     "formula": "node@24",
     "reviewed_retained_releases": [
       {
         "commit": "471d20ec71d40d59490ff763be524d73a3c3cb7d",
         "declared_preferred": "24.19.0",
+        "declared_compatible": ">=24.15,<25",
         "runtime_preferred": "24.22.1"
       },
       {
         "commit": "02c2957acc4e659a19720db5bfb296ebba710bbd",
         "declared_preferred": "24.19.0",
+        "declared_compatible": ">=24.15,<25",
         "runtime_preferred": "24.22.1"
       }
     ]
@@ -40,21 +46,47 @@
     "required": false
   },
   "openclaw": {
-    "version": "2026.7.2",
-    "commit": "ce67ffb70e83e5ebb56ea02e814e577153f84f61",
-    "supersedes_commit": "944cf08f94c334cff2b0fdf7e01187a9efa42715",
-    "source_archive_url": "https://codeload.github.com/openclaw/openclaw/tar.gz/ce67ffb70e83e5ebb56ea02e814e577153f84f61",
-    "source_archive_sha256": "3fffb07090f63492bff89daac6ae0879e66e205c743911598bc79e3bb7e2b577",
-    "package_manager": "pnpm@11.15.1+sha512.81350b07e53c9538a02f1f2303b4290fa2d7be04e56e2a970c4cc4b417dc761de196edabd49d55c7dc9580db81007c44143e4e3d7e462b3000d23c255122d065",
-    "plugin_api": "2026.7.2",
-    "gateway_port": 18789
+    "version": "2026.10.10",
+    "commit": "7dc3350cb9f08fcf9a0af5c4845a20d5b2f1a8be",
+    "supersedes_commit": "ce67ffb70e83e5ebb56ea02e814e577153f84f61",
+    "source_archive_url": "https://codeload.github.com/openclaw/openclaw/tar.gz/7dc3350cb9f08fcf9a0af5c4845a20d5b2f1a8be",
+    "source_archive_sha256": "91f191e11ac7d02d97dc7246f4a713aee57c17de34c9771d7ad2951b5605d0bf",
+    "package_manager": "pnpm@12.15.0+sha512.b3951d6d6ff4a9f13dc7cf56cd28d2b8eb37dbcc9c68e52e1e1191873ea9f82a017287ab50baadc5ccc494f036c67c0e47eb13608c2fa36f47711b61ea128e61",
+    "plugin_api": "2026.10.10",
+    "gateway_port": 18789,
+    "state_schema_versions": {
+      "state": 22,
+      "agent": 27
+    },
+    "predecessor": {
+      "version": "2026.7.2",
+      "commit": "ce67ffb70e83e5ebb56ea02e814e577153f84f61",
+      "supersedes_commit": "944cf08f94c334cff2b0fdf7e01187a9efa42715",
+      "source_archive_url": "https://codeload.github.com/openclaw/openclaw/tar.gz/ce67ffb70e83e5ebb56ea02e814e577153f84f61",
+      "source_archive_sha256": "3fffb07090f63492bff89daac6ae0879e66e205c743911598bc79e3bb7e2b577",
+      "package_manager": "pnpm@11.15.1+sha512.81350b07e53c9538a02f1f2303b4290fa2d7be04e56e2a970c4cc4b417dc761de196edabd49d55c7dc9580db81007c44143e4e3d7e462b3000d23c255122d065",
+      "plugin_api": "2026.7.2",
+      "gateway_port": 18789,
+      "state_schema_versions": {
+        "state": 6,
+        "agent": 16
+      }
+    }
   },
   "administrateme": {
     "runtime_port": 3330,
     "plugin_package_version": "2.0.0-gate8",
-    "supported_communication_intake_policies": ["explicit-member-submission-v1"],
-    "supported_apple_service_write_contracts": ["administrateme-apple-service-permission-v1"],
-    "supported_acquisition_contracts": ["disposable-test-acquisition-v1", "cos-forwarded-acquisition-v1", "member-google-connections-v1"],
+    "supported_communication_intake_policies": [
+      "explicit-member-submission-v1"
+    ],
+    "supported_apple_service_write_contracts": [
+      "administrateme-apple-service-permission-v1"
+    ],
+    "supported_acquisition_contracts": [
+      "disposable-test-acquisition-v1",
+      "cos-forwarded-acquisition-v1",
+      "member-google-connections-v1"
+    ],
     "communication_intake_release_role": "cutover",
     "default_communication_intake_policy": "explicit-member-submission-v1"
   },
@@ -64,7 +96,7 @@
     "python_version": "0.6.2"
   },
   "package_managers": {
-    "homebrew": ">=6,<7",
+    "homebrew": ">=6,<8",
     "poetry": "2.4.1",
     "npm": ">=11.6,<12"
   }

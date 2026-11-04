@@ -1,3 +1,4 @@
+import type { GatewayHandlerOptions } from "../src/sdk-types.js";
 import { privateFinanceTranscript } from "../src/finance-turns.js";
 import { readFile } from "node:fs/promises";
 import { createHash, createHmac, randomUUID } from "node:crypto";
@@ -6,7 +7,6 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   AnyAgentTool,
-  GatewayHandlerOptions,
   OpenClawPluginToolContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { approvalRequestFingerprint } from "../src/approval.js";
@@ -14,8 +14,8 @@ import { OPENCLAW_COMMIT, OPENCLAW_VERSION } from "../src/contract.js";
 import { AdministrateMeTransport, TransportError } from "../src/transport.js";
 import { readPluginConfig } from "../src/config.js";
 import { COS_SERVICE_PRINCIPAL_ID, serviceAgentId, serviceSessionKey } from "../src/service-private.js";
-import { fixtureApprovalRuntimes } from "./fixtures/openclaw-2026.7.2/approval-runtime.js";
-import * as approvalRuntimeFixture from "./fixtures/openclaw-2026.7.2/approval-runtime.js";
+import { fixtureApprovalRuntimes } from "./fixtures/openclaw-2026.10.8/approval-runtime.js";
+import * as approvalRuntimeFixture from "./fixtures/openclaw-2026.10.8/approval-runtime.js";
 import type { PluginApprovalRequest } from "openclaw/plugin-sdk/approval-runtime";
 
 import { fakeApi } from "./fixtures/plugin-api.js";
@@ -444,6 +444,26 @@ describe("native OpenClaw contract fixture", () => {
     expect(requestBody(healthFetch, 3)).toMatchObject({ state: "unavailable" });
   });
 
+  it("continues health retry when the native logger omits optional debug", async () => {
+    vi.useFakeTimers();
+    const healthFetch = vi.fn()
+      .mockRejectedValueOnce(new TypeError("loopback runtime unavailable"))
+      .mockRejectedValueOnce(new TypeError("still unavailable"))
+      .mockResolvedValue(jsonResponse({ event_id: "ev_health", state: "healthy" }));
+    vi.stubGlobal("fetch", healthFetch);
+    const runtime = fakeApi();
+    delete runtime.api.logger.debug;
+    const service = runtime.services[0]!;
+    service.start();
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(healthFetch).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(healthFetch).toHaveBeenCalledTimes(3);
+    expect(runtime.api.logger.info).toHaveBeenCalledWith(expect.stringContaining("plugin ready"));
+    await service.stop();
+  });
+
   it("cancels pending health reconciliation when the plugin stops", async () => {
     vi.useFakeTimers();
     const healthFetch = vi
@@ -472,6 +492,17 @@ describe("native OpenClaw contract fixture", () => {
       expect(runtime.tools.has(`administrateme_finance_${name}`)).toBe(true);
     }
     expect(runtime.services).toHaveLength(0);
+  });
+
+  it("rejects non-object native arguments for every registered tool before any transport", async () => {
+    const runtime = fakeApi();
+    for (const [name, factory] of runtime.tools) {
+      const tool = factory(toolContext()) as AnyAgentTool;
+      for (const input of [undefined, null, [], true, 1, "malformed"]) {
+        await expect(tool.execute(`invalid-${name}`, input)).rejects.toThrow("tool arguments must be an object");
+      }
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("sends a typed tool request with full trusted provenance and no operator token body", async () => {
@@ -1277,6 +1308,46 @@ describe("native OpenClaw contract fixture", () => {
 
 
 describe("authorized household Finance retention", () => {
+  it("accepts native tool-result metadata without widening the transcript", () => {
+    // Native SDK messages are interfaces without a string index signature.
+    interface TranscriptMessage {
+      role: "toolResult";
+      toolName: string;
+      toolCallId: string;
+      timestamp: number;
+      content: Array<{ type: "text"; text: string }>;
+    }
+    const runtime = fakeApi();
+    const persist = runtime.hooks.get("tool_result_persist")![0]!.handler;
+    const message: TranscriptMessage = { role: "toolResult", toolName: "administrateme_finance_query",
+      toolCallId: "synthetic-finance-call", timestamp: 42,
+      content: [{ type: "text", text: "Authorized synthetic result" }] };
+    const retained: TranscriptMessage = privateFinanceTranscript(message, true);
+    expect(retained).toBe(message);
+    expect(persist({ message }, {})).toEqual({ message });
+    expect(persist({ message }, { toolName: "administrateme_finance_query" })).toEqual({ message });
+    expect(persist({ toolName: "unrelated_tool", message }, {})).toBeUndefined();
+    expect(persist({ message }, { toolName: "unrelated_tool" })).toBeUndefined();
+  });
+  it("leaves native messages without assistant content untouched", () => {
+    const runtime = fakeApi();
+    const persist = runtime.hooks.get("tool_result_persist")![0]!.handler;
+    const write = runtime.hooks.get("before_message_write")![0]!.handler;
+    const message = { role: "bashExecution", command: "echo synthetic", output: "synthetic", exitCode: 0 };
+    expect(persist({ message }, {})).toBeUndefined();
+    expect(write({ message }, {})).toBeUndefined();
+    expect(write({ message: { role: "user", content: "Ordinary input" } }, {})).toBeUndefined();
+  });
+  it("preserves native assistant fields when invoking Finance", () => {
+    const runtime = fakeApi();
+    const write = runtime.hooks.get("before_message_write")![0]!.handler;
+    const message = { role: "assistant", api: "synthetic", provider: "fixture", model: "fixture",
+      timestamp: 42, stopReason: "toolUse",
+      content: [{ type: "toolCall", id: "synthetic-finance-call", name: "administrateme_finance_query", arguments: {} }] };
+    const result = write({ message }, {});
+    expect(result).toEqual({ message });
+    expect((result as { message: unknown }).message).toBe(message);
+  });
   it("preserves authorized tool evidence and ordinary conversation", () => {
     const runtime = fakeApi();
     const persist = runtime.hooks.get("tool_result_persist")![0]!.handler;

@@ -193,7 +193,13 @@ def _prepare_upgrade(
     )
     monkeypatch.setattr(manager, "_attest_controller_provenance", lambda *_a: None)
     monkeypatch.setattr(
-        manager, "_validate_instance_candidate", lambda *_a, **_kw: {"compatible": True}
+        manager,
+        "_validate_instance_candidate",
+        lambda *_a, **_kw: {
+            "compatible": True,
+            "native_state_migration": False,
+            "native_state_recovery_required": False,
+        },
     )
     monkeypatch.setattr(manager, "_preflight_keychain_access", lambda *_a: None)
     monkeypatch.setattr(manager, "_publish_release", lambda *_a: candidate)

@@ -292,7 +292,7 @@ print(json.dumps([enabled, entry["hooks"]]))
     return hooks[0].handler;
   };
   const appleContext = { runId: "native-apple-run", agentId: agent, sessionKey: incoming.sessionKey };
-  await nativeHook("message_received")(appleInbound, { agentId: agent, sessionKey: incoming.sessionKey, channelId: "imessage", accountId: "fixture" });
+  await nativeHook("message_received")(appleInbound, { sessionKey: incoming.sessionKey, channelId: "imessage", accountId: "fixture" });
   const appleEnvelope = buildReplyPromptEnvelope({ ctx: {}, sessionCtx: {}, baseBody: appleMessage,
     hasUserBody: true, inboundUserContext: "", isBareSessionReset: false, startupAction: "new", systemEventBlocks: ["Synthetic host status context"] });
   await nativeHook("before_agent_reply")({ cleanedBody: appleEnvelope.queuedBody }, appleContext);
@@ -405,7 +405,7 @@ print(json.dumps([enabled, entry["hooks"]]))
     const received = hookSdk.toPluginMessageReceivedEvent(hookSdk.deriveInboundMessageHookContext({
       From: incoming.senderId, SenderId: incoming.senderId, Body: content, Provider: "imessage", AccountId: "fixture", MessageSid: messageId, SessionKey: policySession,
     }));
-    await policyHook("message_received")(received, { agentId: policyAgent, sessionKey: policySession, channelId: "imessage", accountId: "fixture" });
+    await policyHook("message_received")(received, { sessionKey: policySession, channelId: "imessage", accountId: "fixture" });
     await policyHook("before_agent_reply")({ cleanedBody: content }, policyContext);
   };
   await deliverPolicyInput("native-request-input", policyText);

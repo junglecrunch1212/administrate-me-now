@@ -26,6 +26,15 @@ from bootstrap.activation_transaction import (
     sha256_json,
 )
 from bootstrap.backup_restore import BackupManager
+from bootstrap.openclaw_state_transition import (
+    NativeStateError,
+    capture_generation,
+    declared_transition,
+    inspect_coverage,
+    restore_generation,
+    validate_migrated_authority,
+    native_source_fingerprint,
+)
 from bootstrap.prepared_runtime import (
     PreparedRuntimeError,
     runtime_artifact_fingerprint,
@@ -254,8 +263,14 @@ def validate_candidate(
     incoming = load_versions(candidate)
     active_claw = active["openclaw"]
     incoming_claw = incoming["openclaw"]
+    native_forward = declared_transition(active_claw, incoming_claw)
+    native_reverse = allow_openclaw_rollback and declared_transition(
+        incoming_claw, active_claw
+    )
     for key in ("version", "plugin_api"):
-        if incoming_claw[key] != active_claw[key]:
+        if incoming_claw[key] != active_claw[key] and not (
+            native_forward or native_reverse
+        ):
             raise UpgradeError(
                 f"candidate OpenClaw {key} is incompatible; service replacement refused"
             )
@@ -275,7 +290,7 @@ def validate_candidate(
     compat = package.get("openclaw", {}).get("compat", {})
     if (
         build.get("openclawCommit") != incoming_claw["commit"]
-        or compat.get("pluginApi") != active_claw["plugin_api"]
+        or compat.get("pluginApi") != incoming_claw["plugin_api"]
     ):
         raise UpgradeError(
             "candidate plugin package contradicts its compatibility manifest"
@@ -313,7 +328,9 @@ def validate_candidate(
     )
     return {
         "compatible": True,
-        "openclaw_version": active_claw["version"],
+        "openclaw_version": incoming_claw["version"],
+        "native_state_migration": native_forward,
+        "native_state_recovery_required": native_reverse,
         "openclaw_commit": incoming_claw["commit"],
         "openclaw_migration": (
             {"from": active_claw["commit"], "to": incoming_claw["commit"]}
@@ -1756,9 +1773,10 @@ class UpgradeManager:
         active_root: Path,
         approve_runtime_migration: bool = False,
         allow_openclaw_rollback: bool = False,
+        preparing_native_recovery: bool = False,
     ) -> dict[str, Any]:
         required = self._required_intake_policies()
-        return validate_candidate(
+        result = validate_candidate(
             candidate,
             active_root=active_root,
             approve_runtime_migration=approve_runtime_migration,
@@ -1768,6 +1786,17 @@ class UpgradeManager:
             required_apple_service_write_contracts=required
             & {APPLE_SERVICE_WRITE_CONTRACT},
         )
+        if result["native_state_recovery_required"] and not preparing_native_recovery:
+            raise UpgradeError(
+                "native state has crossed a schema boundary; committed work requires "
+                "schema-aware forward recovery, not an older OpenClaw binary"
+            )
+        if result["native_state_migration"] and not self.test_mode:
+            try:
+                inspect_coverage(self.paths)
+            except NativeStateError as exc:
+                raise UpgradeError(str(exc)) from exc
+        return result
 
     def _require_instance_intake_compatibility(
         self, active: Path, incoming: Path
@@ -1932,6 +1961,7 @@ class UpgradeManager:
             return journal
         if journal["phase"] not in {
             "openclaw_selected",
+            "native_state_migrated",
             "provider_config_selected",
             "cos_guard_selected",
         }:
@@ -2128,7 +2158,11 @@ class UpgradeManager:
         rebind = journal.get("cos_imessage_rebind")
         if rebind is None:
             return journal
-        if journal["phase"] not in {"openclaw_selected", "provider_config_selected"}:
+        if journal["phase"] not in {
+            "openclaw_selected",
+            "native_state_migrated",
+            "provider_config_selected",
+        }:
             raise UpgradeError("CoS guard selection requires stopped-service selection")
         for side, release_key in (
             ("before", "predecessor_path"),
@@ -2325,6 +2359,15 @@ class UpgradeManager:
                     "service quiescence is unproven; control files were not restored"
                 ) from exc
             self._require_instance_intake_compatibility(target, predecessor)
+            if "native_generation" in recovery_journal:
+                # Restore before even invoking the predecessor CLI. Retain the
+                # failed native generation; the central event log is untouched.
+                self._require_native_migration_settled(target)
+                restore_generation(
+                    self.paths,
+                    recovery_journal["native_generation"],
+                    recovery_journal["transaction_id"],
+                )
             for operation in (
                 lambda: self._install_reviewed_openclaw(predecessor),
                 lambda: self._restore_journal_control_files(recovery_journal),
@@ -2538,6 +2581,7 @@ class UpgradeManager:
             active_root=candidate_release,
             approve_runtime_migration=True,
             allow_openclaw_rollback=True,
+            preparing_native_recovery=True,
         )
         for relative in (
             Path("bootstrap") / "install-openclaw-source.sh",
@@ -2559,6 +2603,9 @@ class UpgradeManager:
             "prepared_runtime_valid": True,
             "launchagent_restore_available": True,
             "openclaw_restore_available": True,
+            "native_generation_required": compatibility[
+                "native_state_recovery_required"
+            ],
             "content_exposed": False,
         }
 
@@ -3105,6 +3152,17 @@ class UpgradeManager:
                 # hold at the first selector mutation. This does not reset the
                 # already established candidate settlement deadline.
                 self._require_activation_capacity()
+                native_generation: dict[str, Any] | None = None
+                if compatibility["native_state_migration"]:
+                    journal = self.activation_journal.transition(
+                        journal, "native_state_capturing"
+                    )
+                    native_generation = capture_generation(self.paths, transaction_id)
+                    journal = self.activation_journal.transition(
+                        journal,
+                        "native_state_captured",
+                        native_generation=native_generation,
+                    )
                 journal = self.activation_journal.transition(
                     journal,
                     "openclaw_selecting",
@@ -3114,6 +3172,31 @@ class UpgradeManager:
                     journal,
                     "openclaw_selected",
                 )
+                if compatibility["native_state_migration"]:
+                    if native_generation is None:
+                        raise UpgradeError("native generation capture is missing")
+                    journal = self.activation_journal.transition(
+                        journal, "native_state_migrating"
+                    )
+                    metadata = os.fstat(activity_descriptor)
+                    fcntl.flock(activity_descriptor, fcntl.LOCK_SH)
+                    self._active_preparation_activity_descriptor = activity_descriptor
+                    self._active_preparation_activity_path = (
+                        release.parent / self._preparation_activity_name(commit)
+                    )
+                    self._active_preparation_activity_coordinate = (
+                        metadata.st_dev,
+                        metadata.st_ino,
+                    )
+                    try:
+                        self._migrate_openclaw_state(release, native_generation)
+                    finally:
+                        self._active_preparation_activity_descriptor = None
+                        self._active_preparation_activity_path = None
+                        self._active_preparation_activity_coordinate = None
+                    journal = self.activation_journal.transition(
+                        journal, "native_state_migrated"
+                    )
             finally:
                 cleanup_error: BaseException | None = None
                 try:
@@ -3373,6 +3456,10 @@ class UpgradeManager:
             active_root=active_root,
             approve_runtime_migration=self.approve_runtime_migration,
         )
+        if evidence["native_state_migration"]:
+            raise UpgradeError(
+                "native schema upgrade requires prepared transactional activation"
+            )
         self._preflight_keychain_access(candidate)
         release = self._publish_release(candidate, commit)
         backup = BackupManager(
@@ -4143,6 +4230,81 @@ class UpgradeManager:
             raise
         return {"status": "rolled_back", "commit": previous["commit"]}
 
+    def _require_native_migration_settled(self, release: Path) -> None:
+        """A guardian retaining unknown child liveness must block state recovery."""
+        activity = release.parent / self._preparation_activity_name(release.name)
+        descriptor = os.open(activity, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        try:
+            info, public = os.fstat(descriptor), activity.lstat()
+            if (
+                not stat.S_ISREG(info.st_mode)
+                or info.st_uid != os.getuid()
+                or info.st_nlink != 1
+                or stat.S_IMODE(info.st_mode) != 0o600
+                or (info.st_dev, info.st_ino) != (public.st_dev, public.st_ino)
+            ):
+                raise UpgradeError("native migration activity identity is unsafe")
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError as exc:
+                raise UpgradeError(
+                    "native migration child terminality is unproven; services remain stopped"
+                ) from exc
+        finally:
+            os.close(descriptor)
+
+    def _migrate_openclaw_state(
+        self, release: Path, generation: dict[str, Any]
+    ) -> None:
+        if self.test_mode:
+            return
+        runtime = self.paths.instance_dir / "openclaw" / "runtime"
+        node_bin = (
+            Path("/opt/homebrew/opt")
+            / load_versions(release)["node"]["formula"]
+            / "bin"
+        )
+        environment = os.environ.copy()
+        environment.update(
+            {
+                "PATH": f"{node_bin}:{environment.get('PATH', '')}",
+                "OPENCLAW_STATE_DIR": str(runtime),
+                "OPENCLAW_CONFIG_PATH": str(runtime / "openclaw.json"),
+                "OPENCLAW_SERVICE_REPAIR_POLICY": "external",
+                "OPENCLAW_NO_AUTO_UPDATE": "1",
+            }
+        )
+        try:
+            # Reuse the lease-owning guardian: parent cancellation and timeout
+            # settle Doctor's entire process group before recovery can run.
+            self._run_preparation_command(
+                [
+                    str(self.paths.root / "bin" / "openclaw"),
+                    "doctor",
+                    "--fix",
+                    "--non-interactive",
+                ],
+                release=release,
+                cwd=release,
+                environment=environment,
+                timeout_seconds=300,
+                private_output=True,
+            )
+        except (OSError, subprocess.SubprocessError, UpgradeError) as exc:
+            # Doctor may print private auth/path diagnostics; discard its output.
+            raise UpgradeError(
+                "native OpenClaw migration failed; stopped-generation recovery required"
+            ) from exc
+        before = (
+            self.paths.rollback_dir
+            / f"openclaw-{generation['transaction_id']}"
+            / "before"
+            / "runtime"
+            / "openclaw.json"
+        )
+        validate_migrated_authority(before, runtime / "openclaw.json")
+        inspect_coverage(self.paths)
+
     def _install_reviewed_openclaw(self, release: Path) -> None:
         """Build and atomically select the exact OpenClaw pin for a release."""
 
@@ -4169,6 +4331,11 @@ class UpgradeManager:
                 str(self.paths.root),
                 "--python",
                 str(python),
+                *(
+                    ["--select-prepared"]
+                    if versions["openclaw"].get("predecessor")
+                    else []
+                ),
             ],
             cwd=release,
             env=environment,
@@ -4511,6 +4678,8 @@ class UpgradeManager:
         release: Path,
         cwd: Path | None = None,
         environment: dict[str, str] | None = None,
+        timeout_seconds: float = _PREPARATION_COMMAND_TIMEOUT_SECONDS,
+        private_output: bool = False,
     ) -> None:
         activity_descriptor = self._active_preparation_activity_descriptor
         activity_path = self._active_preparation_activity_path
@@ -4580,13 +4749,16 @@ class UpgradeManager:
                     str(lifecycle_device),
                     str(lifecycle_inode),
                     str(operation_lock_descriptor),
-                    str(_PREPARATION_COMMAND_TIMEOUT_SECONDS),
+                    str(timeout_seconds),
                     "--",
                     *command,
                 ],
                 cwd=cwd,
                 env=environment,
                 start_new_session=True,
+                stdin=subprocess.DEVNULL if private_output else None,
+                stdout=subprocess.DEVNULL if private_output else None,
+                stderr=subprocess.DEVNULL if private_output else None,
                 pass_fds=(
                     activity_descriptor,
                     ready_write,
@@ -4609,9 +4781,7 @@ class UpgradeManager:
                     "candidate preparation worker did not acquire its lease"
                 )
             self._assert_preparation_activity_coordinate()
-            return_code = process.wait(
-                timeout=_PREPARATION_COMMAND_TIMEOUT_SECONDS + 60
-            )
+            return_code = process.wait(timeout=timeout_seconds + 60)
             if return_code:
                 raise subprocess.CalledProcessError(return_code, command)
             if self._process_group_exists(process.pid):
@@ -4653,6 +4823,14 @@ class UpgradeManager:
                 self._terminate_preparation_group(process)
             if owned_operation_lock_descriptor is not None:
                 os.close(owned_operation_lock_descriptor)
+
+    def _prepared_artifact_fingerprint(self, release: Path) -> str:
+        runtime_digest = runtime_artifact_fingerprint(release)
+        native = load_versions(release)["openclaw"]
+        if native.get("predecessor") and not self.test_mode:
+            native_digest = native_source_fingerprint(self.paths, native)
+            return sha256_json({"runtime": runtime_digest, "native": native_digest})
+        return runtime_digest
 
     def _prepare_release(self, release: Path) -> None:
         if self.test_mode:
@@ -4732,6 +4910,21 @@ class UpgradeManager:
                 cwd=plugin,
                 environment=poetry_environment,
             )
+            # Build the successor in an isolated home while the installed
+            # Gateway remains selected. Activation only publishes prepared bytes.
+            if load_versions(release)["openclaw"].get("predecessor"):
+                self._run_preparation_command(
+                    [
+                        str(release / "bootstrap" / "install-openclaw-source.sh"),
+                        "--instance-root",
+                        str(self.paths.root),
+                        "--python",
+                        str(python),
+                        "--prepare-only",
+                    ],
+                    release=release,
+                    environment=poetry_environment,
+                )
         self._validate_prepared_runtime(release)
 
     @staticmethod
@@ -5133,7 +5326,7 @@ class UpgradeManager:
                 expected_runtime = state.get("runtime_artifact_sha256")
                 if expected_runtime is not None:
                     self._validate_prepared_runtime(release)
-                    if runtime_artifact_fingerprint(release) == expected_runtime:
+                    if self._prepared_artifact_fingerprint(release) == expected_runtime:
                         return
                 state = {**state, "phase": "preparing"}
                 state.pop("runtime_artifact_sha256", None)
@@ -5210,7 +5403,9 @@ class UpgradeManager:
                 {
                     **state,
                     "phase": "complete",
-                    "runtime_artifact_sha256": runtime_artifact_fingerprint(release),
+                    "runtime_artifact_sha256": self._prepared_artifact_fingerprint(
+                        release
+                    ),
                 },
             )
         except (
@@ -5282,7 +5477,7 @@ class UpgradeManager:
                 raise UpgradeError("candidate preparation activity lease changed")
             self._validate_prepared_runtime(release)
             try:
-                runtime_digest = runtime_artifact_fingerprint(release)
+                runtime_digest = self._prepared_artifact_fingerprint(release)
             except PreparedRuntimeError as exc:
                 raise UpgradeError("candidate generated runtime is unsafe") from exc
             if runtime_digest != state.get("runtime_artifact_sha256"):

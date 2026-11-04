@@ -167,7 +167,7 @@ def test_fixed_entrypoints_exist_and_delegate_without_secret_arguments() -> None
     assert "openclaw config set gateway.mode local" in installer
     assert "bootstrap.openclaw_tools" in installer
     assert "openclaw config validate" in installer
-    assert "outside >=6,<7" in installer
+    assert "outside >=6,<8" in installer
     assert 'OPENCLAW_STATE_DIR="$INSTANCE_ROOT/state/openclaw/runtime"' in installer
     assert 'OPENCLAW_CONFIG_PATH="$OPENCLAW_STATE_DIR/openclaw.json"' in installer
     updater = (REPO_ROOT / "bootstrap" / "update.sh").read_text("utf-8")
@@ -214,7 +214,7 @@ def test_fixed_entrypoints_exist_and_delegate_without_secret_arguments() -> None
         in versions["openclaw"]["source_archive_url"]
     )
     assert versions["openclaw"]["package_manager"] == (
-        "pnpm@11.15.1+sha512.81350b07e53c9538a02f1f2303b4290fa2d7be04e56e2a970c4cc4b417dc761de196edabd49d55c7dc9580db81007c44143e4e3d7e462b3000d23c255122d065"
+        "pnpm@12.15.0+sha512.b3951d6d6ff4a9f13dc7cf56cd28d2b8eb37dbcc9c68e52e1e1191873ea9f82a017287ab50baadc5ccc494f036c67c0e47eb13608c2fa36f47711b61ea128e61"
     )
     assert (
         'OPENCLAW_STATE_DIR="$ADMINME_INSTANCE_ROOT/state/openclaw/runtime"' in common
@@ -308,7 +308,7 @@ def test_required_llm_tool_status_proves_config_and_runtime_registration(
                         "toolNames": ["llm-task"],
                         "origin": "bundled",
                         "packageName": "@openclaw/llm-task",
-                        "packageVersion": "2026.7.2",
+                        "packageVersion": "2026.10.10",
                     }
                 }
             ),
@@ -362,7 +362,7 @@ def test_required_llm_tool_configuration_preserves_existing_allow_entries(
                             "toolNames": ["llm-task"],
                             "origin": "bundled",
                             "packageName": "@openclaw/llm-task",
-                            "packageVersion": "2026.7.2",
+                            "packageVersion": "2026.10.10",
                         }
                     }
                 ),
@@ -1028,7 +1028,7 @@ def test_launchers_share_keychain_gateway_token_and_load_member_chat_policy(
     monkeypatch.setattr(
         openclaw_service.subprocess,
         "run",
-        lambda *_args, **_kwargs: SimpleNamespace(stdout="OpenClaw 2026.7.2"),
+        lambda *_args, **_kwargs: SimpleNamespace(stdout="OpenClaw 2026.10.10"),
     )
     exec_capture: dict[str, object] = {}
 
@@ -1064,7 +1064,7 @@ def test_openclaw_activation_probes_server_side_and_writes_metadata_only(
     def run(command, **kwargs):
         commands.append(command)
         environments.append(dict(kwargs.get("env", {})))
-        return SimpleNamespace(stdout="OpenClaw 2026.7.2")
+        return SimpleNamespace(stdout="OpenClaw 2026.10.10")
 
     monkeypatch.setattr(
         "bootstrap.openclaw_activation.resolve_reviewed_openclaw",
@@ -1996,7 +1996,7 @@ def test_runtime_baseline_change_requires_explicit_pre_switch_approval(
                 "formula": "node@24",
             },
             "to": {
-                "compatible": ">=24.15,<25",
+                "compatible": ">=24.22.1,<25",
                 "preferred": "24.22.1",
                 "formula": "node@24",
             },
@@ -2048,6 +2048,8 @@ def test_runtime_coordinate_change_requires_explicit_approval(
 def test_same_version_openclaw_repair_requires_declared_successor(
     tmp_path: Path,
 ) -> None:
+    # This exercises the original same-version repair, not the later schema upgrade.
+    retained_source = "36d09a3e32bdef565c434800886cca4e036d4635"
     active = tmp_path / "active"
     candidate = tmp_path / "candidate"
     (active / "bootstrap").mkdir(parents=True)
@@ -2059,9 +2061,14 @@ def test_same_version_openclaw_repair_requires_declared_successor(
     ):
         destination = candidate / source.relative_to(REPO_ROOT)
         destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.write_bytes(source.read_bytes())
+        destination.write_bytes(
+            subprocess.check_output(
+                ["git", "show", f"{retained_source}:{source.relative_to(REPO_ROOT)}"],
+                cwd=REPO_ROOT,
+            )
+        )
     active_versions = json.loads(
-        (REPO_ROOT / "bootstrap" / "versions.json").read_text("utf-8")
+        (candidate / "bootstrap" / "versions.json").read_text("utf-8")
     )
     old_commit = active_versions["openclaw"].pop("supersedes_commit")
     active_versions["openclaw"]["commit"] = old_commit
@@ -2071,6 +2078,8 @@ def test_same_version_openclaw_repair_requires_declared_successor(
 
     result = validate_candidate(candidate, active_root=active)
 
+    assert result["native_state_migration"] is False
+    assert result["native_state_recovery_required"] is False
     assert result["openclaw_migration"] == {
         "from": old_commit,
         "to": "ce67ffb70e83e5ebb56ea02e814e577153f84f61",
@@ -2852,7 +2861,14 @@ def test_failed_explicit_rollback_reports_unhealthy_current_release_restart(
     pointer.write_text(json.dumps(current), encoding="utf-8")
     pointer.chmod(0o600)
 
-    monkeypatch.setattr("bootstrap.upgrade.validate_candidate", lambda *_a, **_k: {})
+    monkeypatch.setattr(
+        "bootstrap.upgrade.validate_candidate",
+        lambda *_a, **_k: {
+            "compatible": True,
+            "native_state_migration": False,
+            "native_state_recovery_required": False,
+        },
+    )
     monkeypatch.setattr(
         "bootstrap.upgrade.reconcile_administrateme_plugin",
         lambda *_a, **_k: {"ok": True},
@@ -2933,7 +2949,14 @@ def test_legacy_rollback_requires_quiescence_and_current_capacity_before_selecti
     pointer.write_text(json.dumps(current), encoding="utf-8")
     pointer.chmod(0o600)
     original_pointer = pointer.read_bytes()
-    monkeypatch.setattr("bootstrap.upgrade.validate_candidate", lambda *_a, **_k: {})
+    monkeypatch.setattr(
+        "bootstrap.upgrade.validate_candidate",
+        lambda *_a, **_k: {
+            "compatible": True,
+            "native_state_migration": False,
+            "native_state_recovery_required": False,
+        },
+    )
     pins = []
     plugins = []
     agents = []

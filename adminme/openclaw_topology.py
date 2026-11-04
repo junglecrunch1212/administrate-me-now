@@ -220,6 +220,58 @@ def binding_fingerprints(
     return tuple(sorted(values))
 
 
+def runtime_agent_rows(config: dict[str, Any]) -> list[dict[str, Any]]:
+    """Read either native roster format, rejecting ambiguous identity carriers."""
+    agents = config.get("agents", {})
+    if not isinstance(agents, dict) or ("list" in agents and "entries" in agents):
+        raise ValueError("OpenClaw agent roster is ambiguous")
+    if "entries" in agents:
+        entries = agents["entries"]
+        if not isinstance(entries, dict) or any(
+            not isinstance(key, str)
+            or not key
+            or not isinstance(row, dict)
+            or "id" in row
+            for key, row in entries.items()
+        ):
+            raise ValueError("OpenClaw keyed agent roster is invalid")
+        rows = [{"id": key, **row} for key, row in entries.items()]
+    else:
+        rows = agents.get("list", [])
+    if (
+        not isinstance(rows, list)
+        or any(
+            not isinstance(row, dict)
+            or not isinstance(row.get("id"), str)
+            or not row["id"]
+            for row in rows
+        )
+        or len({row["id"] for row in rows}) != len(rows)
+    ):
+        raise ValueError("OpenClaw agent roster is invalid")
+    return rows
+
+
+def replace_runtime_agent_rows(
+    config: dict[str, Any], rows: list[dict[str, Any]]
+) -> None:
+    """Preserve the selected native format and its explicit owner-role settings."""
+    runtime_agent_rows({"agents": {"list": rows}})
+    agents = config.setdefault("agents", {})
+    runtime_agent_rows(config)
+    if "entries" in agents:
+        if any("default" in row for row in rows):
+            raise ValueError(
+                "canonical native ownership cannot use a retired default marker"
+            )
+        agents["entries"] = {
+            row["id"]: {key: value for key, value in row.items() if key != "id"}
+            for row in rows
+        }
+    else:
+        agents["list"] = rows
+
+
 def inspect_runtime_topology(
     path: Path | None,
     *,
@@ -245,7 +297,10 @@ def inspect_runtime_topology(
         return {"state": "blocked", "reason": "runtime_config_invalid"}
     if not isinstance(config, dict):
         return {"state": "blocked", "reason": "runtime_config_invalid"}
-    raw_agents = (config.get("agents") or {}).get("list") or []
+    try:
+        raw_agents = runtime_agent_rows(config)
+    except ValueError:
+        return {"state": "blocked", "reason": "runtime_topology_invalid"}
     raw_bindings = config.get("bindings") or []
     if not isinstance(raw_agents, list) or not isinstance(raw_bindings, list):
         return {"state": "blocked", "reason": "runtime_topology_invalid"}

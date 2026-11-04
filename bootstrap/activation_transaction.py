@@ -46,6 +46,10 @@ _ACTIVATE_PHASES = frozenset(
         "services_quiesced_for_repair",
         "preparation_consuming",
         "preparation_consumed",
+        "native_state_capturing",
+        "native_state_captured",
+        "native_state_migrating",
+        "native_state_migrated",
         "openclaw_selecting",
         "openclaw_selected",
         "services_quiescing",
@@ -421,6 +425,7 @@ def validate_journal(value: object) -> dict[str, Any]:
             "restored_readiness",
             "cos_imessage_rebind",
             "workspace_instructions",
+            "native_generation",
             "submission_repair_manifest",
             "submission_repair",
             "submission_repair_request_event_ids",
@@ -480,6 +485,24 @@ def validate_journal(value: object) -> dict[str, Any]:
             ) from exc
     elif phase in {"cos_guard_selecting", "cos_guard_selected"}:
         raise ActivationJournalError("activation CoS guard transition is missing")
+    if "native_generation" in value:
+        from bootstrap.openclaw_state_transition import (
+            NativeStateError,
+            validate_receipt,
+        )
+
+        if value["operation"] != "activate":
+            raise ActivationJournalError("native generation inverse is activation-only")
+        try:
+            validate_receipt(value["native_generation"], value["transaction_id"])
+        except NativeStateError as exc:
+            raise ActivationJournalError(str(exc)) from exc
+    if (
+        value["phase"]
+        in {"native_state_captured", "native_state_migrating", "native_state_migrated"}
+        and "native_generation" not in value
+    ):
+        raise ActivationJournalError("native migration lacks its stopped generation")
     instructions = value.get("workspace_instructions")
     if instructions is not None:
         from bootstrap.workspace_instructions import (

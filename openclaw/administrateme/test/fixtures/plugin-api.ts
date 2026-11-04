@@ -1,4 +1,5 @@
-import type { AnyAgentTool, GatewayHandlerOptions, OpenClawPluginApi, OpenClawPluginCommandDefinition, OpenClawPluginService, OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
+import type { GatewayHandlerOptions } from "../../src/sdk-types.js";
+import type { AnyAgentTool, OpenClawPluginApi, OpenClawPluginCommandDefinition, OpenClawPluginService, OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
 import { vi } from "vitest";
 import plugin from "../../src/index.js";
 

@@ -1,0 +1,1 @@
+export async function callGatewayTool<T = Record<string, unknown>>(_method: string, _opts: { timeoutMs?: number }, _params?: unknown, _extra?: { requireAgentRuntimeIdentity?: boolean }): Promise<T> { throw new Error("Gateway RPC requires an explicit isolated fixture"); }

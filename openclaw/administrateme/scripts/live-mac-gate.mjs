@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
-const expectedCommit = "ce67ffb70e83e5ebb56ea02e814e577153f84f61";
+const expectedCommit = "7dc3350cb9f08fcf9a0af5c4845a20d5b2f1a8be";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 function fail(message) {
@@ -15,12 +15,10 @@ if (process.env.ADMINME_LIVE_GATE !== "1") fail("set ADMINME_LIVE_GATE=1 after r
 if (!process.env.OPENCLAW_SOURCE_DIR) fail("OPENCLAW_SOURCE_DIR must identify the reviewed OpenClaw checkout");
 const [nodeMajor, nodeMinor, nodePatch] = process.versions.node.split(".").map(Number);
 const supportedNode =
-  (nodeMajor === 22 && (nodeMinor > 22 || (nodeMinor === 22 && nodePatch >= 3))) ||
-  (nodeMajor === 24 && nodeMinor >= 15) ||
-  (nodeMajor === 25 && nodeMinor >= 9) ||
-  nodeMajor > 25;
+  nodeMajor === 24 &&
+  (nodeMinor > 22 || (nodeMinor === 22 && nodePatch >= 1));
 if (!supportedNode) {
-  fail(`Node ${process.versions.node} is outside the pinned OpenClaw source requirement`);
+  fail(`Node ${process.versions.node} is outside the selected runtime contract`);
 }
 const sourceCommit = execFileSync("git", ["-C", process.env.OPENCLAW_SOURCE_DIR, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
 if (sourceCommit !== expectedCommit) fail(`OpenClaw checkout is ${sourceCommit}, expected ${expectedCommit}`);

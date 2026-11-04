@@ -7,6 +7,8 @@ REPOSITORY_ROOT="$(cd "$SCRIPT_DIR/.." && pwd -P)"
 INSTANCE_ROOT=""
 PYTHON_BIN=""
 STAGING_DIR=""
+PREPARE_ONLY=0
+SELECT_PREPARED=0
 
 fail() {
   echo "AdministrateMe OpenClaw install: $1" >&2
@@ -33,6 +35,14 @@ while (($#)); do
       (($# >= 2)) || fail "--python requires a value"
       PYTHON_BIN="$2"
       shift 2
+      ;;
+    --prepare-only)
+      PREPARE_ONLY=1
+      shift
+      ;;
+    --select-prepared)
+      SELECT_PREPARED=1
+      shift
       ;;
     *) fail "unknown option: $1" ;;
   esac
@@ -73,7 +83,10 @@ download_dir="$INSTANCE_ROOT/app/downloads"
 archive="$download_dir/openclaw-$OPENCLAW_COMMIT.tar.gz"
 bin_dir="$INSTANCE_ROOT/bin"
 receipt="$INSTANCE_ROOT/state/openclaw/source-install.json"
-mkdir -p "$openclaw_parent" "$download_dir" "$bin_dir" "$(dirname "$receipt")"
+mkdir -p "$openclaw_parent" "$download_dir"
+if ((SELECT_PREPARED)) && [[ ! -d "$source_root" ]]; then
+  fail "the native source must be prepared before stopped activation"
+fi
 
 validate_source() {
   local candidate="$1"
@@ -115,21 +128,70 @@ if [[ ! -d "$source_root" ]]; then
   validate_source "$STAGING_DIR" \
     || fail "the verified OpenClaw archive does not match the reviewed package contract"
 
-  corepack enable --install-directory "$bin_dir"
-  export PATH="$bin_dir:$PATH"
+  # A prepared source artifact cannot replace active shims or discover the
+  # service account's real home, credentials or serving Gateway state.
+  build_home="$STAGING_DIR/.adminme-build-home"
+  build_bin="$STAGING_DIR/.adminme-build-bin"
+  mkdir -m 700 "$build_home" "$build_bin"
+  corepack enable --install-directory "$build_bin"
   (
     cd "$STAGING_DIR"
+    export HOME="$build_home"
+    export PATH="$build_bin:$PATH"
+    export OPENCLAW_STATE_DIR="$build_home/openclaw"
+    export OPENCLAW_CONFIG_PATH="$OPENCLAW_STATE_DIR/openclaw.json"
+    export OPENCLAW_NO_AUTO_UPDATE=1
     CI=true pnpm install --frozen-lockfile
     pnpm ui:build
     pnpm build
   )
-  observed_version="$(node "$STAGING_DIR/dist/entry.js" --version)"
+  observed_version="$(HOME="$build_home" OPENCLAW_STATE_DIR="$build_home/openclaw" \
+    OPENCLAW_CONFIG_PATH="$build_home/openclaw/openclaw.json" OPENCLAW_NO_AUTO_UPDATE=1 \
+    node "$STAGING_DIR/dist/entry.js" --version)"
   [[ "$observed_version" == *"$OPENCLAW_VERSION"* ]] \
     || fail "the built OpenClaw CLI reports an unexpected version"
+  rm -rf "$build_home" "$build_bin"
   mv "$STAGING_DIR" "$source_root"
   STAGING_DIR=""
 fi
 
+if [[ "$OPENCLAW_COMMIT" == 7dc3350cb9f08fcf9a0af5c4845a20d5b2f1a8be ]]; then
+  PYTHONPATH="$REPOSITORY_ROOT" "$PYTHON_BIN" - "$INSTANCE_ROOT" "$REPOSITORY_ROOT" "$SELECT_PREPARED" <<'PYSEAL'
+import json
+import sys
+from pathlib import Path
+from bootstrap.contracts import DeploymentPaths, atomic_write, load_versions
+from bootstrap.openclaw_state_transition import native_source_inventory, _json
+paths = DeploymentPaths.from_root(Path(sys.argv[1]))
+manifest = load_versions(Path(sys.argv[2]))["openclaw"]
+seal = paths.app_dir / "openclaw" / (manifest["commit"] + ".prepared.json")
+record = {
+    "contract": "administrateme-native-source-v2",
+    "commit": manifest["commit"],
+    "archive_sha256": manifest["source_archive_sha256"],
+    **native_source_inventory(paths, manifest),
+}
+if seal.exists() or seal.is_symlink():
+    if _json(seal) != record:
+        raise RuntimeError("prepared native source bytes changed")
+elif sys.argv[3] == "1":
+    raise RuntimeError("prepared native source binding is missing")
+else:
+    atomic_write(seal, json.dumps(record, sort_keys=True).encode(), mode=0o600)
+print("Prepared native inventory: " + json.dumps({
+    key: record[key] for key in (
+        "profile", "record_count", "content_bytes", "inventory_metadata_bytes"
+    )
+}, sort_keys=True))
+PYSEAL
+fi
+
+if ((PREPARE_ONLY)); then
+  echo "Prepared immutable OpenClaw $OPENCLAW_VERSION source commit $OPENCLAW_COMMIT; active selection unchanged"
+  exit 0
+fi
+
+mkdir -p "$bin_dir" "$(dirname "$receipt")"
 corepack enable --install-directory "$bin_dir"
 temporary_link="$bin_dir/openclaw.$$.tmp"
 ln -s "$source_root/openclaw.mjs" "$temporary_link"

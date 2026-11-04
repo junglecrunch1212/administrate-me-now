@@ -10,6 +10,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -72,12 +73,32 @@ def _version(value: str) -> tuple[int, int, int]:
     return tuple((numbers + [0, 0, 0])[:3])  # type: ignore[return-value]
 
 
-def tooling_versions_supported(observed: dict[str, Any], openclaw_version: str) -> bool:
+def tooling_versions_supported(
+    observed: dict[str, Any],
+    openclaw_version: str,
+    *,
+    node_compatible: str | None = None,
+) -> bool:
     if set(observed) != {"python", "node", "npm", "homebrew", "openclaw"} or any(
         not isinstance(value, str) for value in observed.values()
     ):
         return False
+    if node_compatible is None:
+        versions = load_versions()
+        if openclaw_version == versions["openclaw"]["version"]:
+            node_compatible = versions["node"]["compatible"]
+        elif openclaw_version == "2026.7.2":
+            # Preserve the reviewed retained-report rule. Changing Doctor's
+            # source itself would also change maintenance source admission.
+            node_compatible = ">=24.15,<25"
+        else:
+            return False
     python, node, npm = (_version(observed[key]) for key in ("python", "node", "npm"))
+    if not isinstance(node_compatible, str):
+        return False
+    node_bounds = re.fullmatch(r">=(\d+(?:\.\d+){1,2}),<(\d+)", node_compatible)
+    if node_bounds is None:
+        return False
     brew = (
         _version(observed["homebrew"].splitlines()[0].replace("Homebrew", "").strip())
         if observed["homebrew"].strip()
@@ -86,7 +107,7 @@ def tooling_versions_supported(observed: dict[str, Any], openclaw_version: str) 
     return (
         python[:2] == (3, 14)
         and node[0] == 24
-        and node >= (24, 15, 0)
+        and _version(node_bounds[1]) <= node < (int(node_bounds[2]), 0, 0)
         and npm[0] == 11
         and npm >= (11, 6, 0)
         and brew[0] in {6, 7}

@@ -1,3 +1,4 @@
+import type { GatewayHandlerOptions } from "../src/sdk-types.js";
 /** Synthetic OS boundary: this suite never loads CoreServices or requests TCC. */
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
@@ -6,7 +7,7 @@ import { chmodSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import type { OpenClawPluginApi, GatewayHandlerOptions } from "openclaw/plugin-sdk/plugin-entry";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "../src/runtime.js";
 
 const spawn = vi.hoisted(() => vi.fn());

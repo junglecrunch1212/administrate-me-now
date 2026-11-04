@@ -9,7 +9,7 @@ if [[ $# -gt 1 ]]; then
   exit 2
 fi
 case "${1:-}" in
-  ""|--service-work|--self-reminder|--service-work-and-approval|--native-account-policy) ;;
+  ""|--service-work|--self-reminder|--service-work-and-approval|--native-account-policy|--native-upgrade) ;;
   *) echo "Unsupported native proof selector" >&2; exit 2 ;;
 esac
 
@@ -86,11 +86,38 @@ node "$REPOSITORY_ROOT/openclaw/administrateme/scripts/check-cos-permission-pins
 openclaw_commit="$("$python_bin" -c \
   'import json,sys; print(json.load(open(sys.argv[1]))["openclaw"]["commit"])' \
   "$REPOSITORY_ROOT/bootstrap/versions.json")"
+if [[ "${1:-}" == --native-upgrade ]]; then
+  node "$REPOSITORY_ROOT/openclaw/administrateme/scripts/check-native-sdk.mjs" \
+    "$TEST_ROOT/app/openclaw/$openclaw_commit"
+  # Build each immutable source once; predecessor state is written by its own
+  # real schema/session code rather than fabricated tables or version numbers.
+  predecessor_controller="$TEST_ROOT/predecessor-controller"
+  mkdir -p "$predecessor_controller/bootstrap"
+  cp "$REPOSITORY_ROOT/bootstrap/install-openclaw-source.sh" "$predecessor_controller/bootstrap/"
+  "$python_bin" - "$REPOSITORY_ROOT/bootstrap/versions.json" "$predecessor_controller/bootstrap/versions.json" <<'PYOLD'
+import json
+import sys
+from pathlib import Path
+value = json.loads(Path(sys.argv[1]).read_text())
+value["openclaw"] = value["openclaw"]["predecessor"]
+Path(sys.argv[2]).write_text(json.dumps(value))
+PYOLD
+  "$predecessor_controller/bootstrap/install-openclaw-source.sh" \
+    --instance-root "$TEST_ROOT" --python "$python_bin" --prepare-only
+  old_commit="$("$python_bin" -c 'import json,sys; print(json.load(open(sys.argv[1]))["openclaw"]["predecessor"]["commit"])' "$REPOSITORY_ROOT/bootstrap/versions.json")"
+  echo "Starting actual retained native generation migration/recovery proof"
+  poetry run python tests/fixtures/openclaw_native_upgrade.py \
+    "$REPOSITORY_ROOT" "$TEST_ROOT" "$TEST_ROOT/app/openclaw/$old_commit"
+  # The recovery proof leaves the exact predecessor selected. Re-select only
+  # this disposable test artifact for the remaining independent native proofs.
+  "$REPOSITORY_ROOT/bootstrap/install-openclaw-source.sh" \
+    --instance-root "$TEST_ROOT" --python "$python_bin" --select-prepared
+fi
 if [[ "${1:-}" == --native-account-policy ]]; then
   node "$REPOSITORY_ROOT/openclaw/administrateme/scripts/check-cos-native-account-policy.mjs" \
     "$TEST_ROOT/app/openclaw/$openclaw_commit" "$(poetry env info --executable)"
 fi
-if [[ "${1:-}" == --service-work || "${1:-}" == --service-work-and-approval ]]; then
+if [[ "${1:-}" == --service-work || "${1:-}" == --service-work-and-approval || "${1:-}" == --native-upgrade ]]; then
   node "$REPOSITORY_ROOT/openclaw/administrateme/scripts/check-workstation-codex-policy.mjs" \
     "$TEST_ROOT/app/openclaw/$openclaw_commit" "$(poetry env info --executable)"
   node "$REPOSITORY_ROOT/openclaw/administrateme/scripts/check-cos-native-account-policy.mjs" \
@@ -108,13 +135,13 @@ if [[ "${1:-}" == --service-work || "${1:-}" == --service-work-and-approval ]]; 
 fi
 if [[ "${1:-}" != --service-work && "${1:-}" != --native-account-policy ]]; then
   # The service-work group already proves this boundary through Poetry.
-  if [[ "${1:-}" != --service-work-and-approval ]]; then
+  if [[ "${1:-}" != --service-work-and-approval && "${1:-}" != --native-upgrade ]]; then
     node "$REPOSITORY_ROOT/openclaw/administrateme/scripts/check-cos-imessage-text.mjs" \
       "$TEST_ROOT/app/openclaw/$openclaw_commit"
   fi
   node "$REPOSITORY_ROOT/openclaw/administrateme/scripts/check-cos-approval-gateway.mjs" \
     "$TEST_ROOT/app/openclaw/$openclaw_commit" "$TEST_ROOT/permission-helper.json"
-  if [[ "${1:-}" == --self-reminder ]]; then
+  if [[ "${1:-}" == --self-reminder || "${1:-}" == --native-upgrade ]]; then
     node "$REPOSITORY_ROOT/openclaw/administrateme/scripts/check-self-reminder-gateway.mjs" \
       "$TEST_ROOT/app/openclaw/$openclaw_commit"
   fi

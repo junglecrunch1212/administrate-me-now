@@ -16,9 +16,64 @@ from adminme.openclaw_approvals import (
 
 
 SECRET = "fixture-secret-at-least-24-characters"
-VERSION = "2026.7.2"
-COMMIT = "ce67ffb70e83e5ebb56ea02e814e577153f84f61"
+VERSION = "2026.10.10"
+COMMIT = "7dc3350cb9f08fcf9a0af5c4845a20d5b2f1a8be"
 FINGERPRINT = "a" * 64
+
+
+@pytest.mark.parametrize("request_kind", ["provenance", "approval"])
+@pytest.mark.parametrize(
+    ("version", "commit", "accepted"),
+    [
+        (VERSION, COMMIT, True),
+        ("2026.7.2", COMMIT, False),
+        (VERSION, "ce67ffb70e83e5ebb56ea02e814e577153f84f61", False),
+        ("2026.7.2", "ce67ffb70e83e5ebb56ea02e814e577153f84f61", False),
+    ],
+)
+def test_current_request_models_enforce_exact_native_tuple(
+    request_kind: str, version: str, commit: str, accepted: bool
+) -> None:
+    from pydantic import ValidationError
+
+    from adminme.products.openclaw.main import ApprovalResolutionRequest, Provenance
+
+    model: type[Provenance] | type[ApprovalResolutionRequest]
+    payload: dict[str, Any]
+    if request_kind == "provenance":
+        model = Provenance
+        payload = {
+            "actor_id": "fixture-actor",
+            "channel_id": "fixture",
+            "correlation_id": "fixture-correlation",
+            "call_kind": "tool",
+        }
+    else:
+        model = ApprovalResolutionRequest
+        payload = {
+            "receipt_id": "fixture-receipt",
+            "tool_name": "administrateme_review",
+            "request_fingerprint": FINGERPRINT,
+            "issued_at_ms": 1_000_000,
+            "expires_at_ms": 1_120_000,
+            "decision": "allow-once",
+            "signature": "a" * 64,
+        }
+    payload.update(openclaw_version=version, openclaw_commit=commit)
+    if accepted:
+        parsed = model.model_validate(payload)
+        assert (parsed.openclaw_version, parsed.openclaw_commit) == (VERSION, COMMIT)
+    else:
+        with pytest.raises(ValidationError) as failure:
+            model.model_validate(payload)
+        assert {tuple(row["loc"]) for row in failure.value.errors()} == {
+            (key,)
+            for key, observed, expected in (
+                ("openclaw_version", version, VERSION),
+                ("openclaw_commit", commit, COMMIT),
+            )
+            if observed != expected
+        }
 
 
 def _resolve(

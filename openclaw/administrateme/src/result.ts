@@ -1,4 +1,4 @@
-import type { ToolResult } from "openclaw/plugin-sdk/plugin-entry";
+import type { ToolResult } from "./sdk-types.js";
 
 export function toolResult(value: unknown): ToolResult {
   return {

@@ -41,6 +41,9 @@ def main() -> None:
     )
     environment["ADMINME_OPENCLAW_SHARED_SECRET"] = shared
     environment["OPENCLAW_GATEWAY_TOKEN"] = shared
+    # AdministrateMe owns exact protected runtime updates. Upstream's new node
+    # auto-update default cannot create a second mutable update owner.
+    environment["OPENCLAW_NO_AUTO_UPDATE"] = "1"
     environment["ADMINISTRATEME_COS_IMSG_GUARD_CONFIG"] = str(
         paths.instance_dir / "config" / "cos-imsg-guard.json"
     )

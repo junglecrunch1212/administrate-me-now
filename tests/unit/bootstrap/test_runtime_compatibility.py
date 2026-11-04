@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import copy
+import json
+from pathlib import Path
+import subprocess
 
 import pytest
 
@@ -195,4 +198,53 @@ def test_node_formula_cannot_be_ambient_or_another_major():
     controller, retained = _node_manifests()
     controller["node"]["formula"] = "node"
     with pytest.raises(RetainedRuntimeError):
+        retained_node_pin(controller, retained, NODE_COMMITS[0])
+
+
+@pytest.mark.parametrize("commit", NODE_COMMITS)
+def test_current_node_floor_preserves_exact_reviewed_archived_runtime(commit):
+    root = Path(__file__).resolve().parents[3]
+    controller = json.loads((root / "bootstrap/versions.json").read_text())
+    retained = json.loads(
+        subprocess.check_output(
+            ["git", "show", f"{commit}:bootstrap/versions.json"], cwd=root
+        )
+    )
+    before = copy.deepcopy(retained)
+    assert controller["node"]["compatible"] == ">=24.22.1,<25"
+    assert retained["node"]["compatible"] == ">=24.15,<25"
+    assert retained_node_pin(controller, retained, commit) == "24.22.1"
+    assert retained == before
+    assert retained_node_pin(controller, retained, COMMIT) == "24.19.0"
+    # Historical metadata is not permission to select another executable.
+    controller["node"]["preferred"] = "24.22.2"
+    with pytest.raises(RetainedRuntimeError, match="exact forward"):
+        retained_node_pin(controller, retained, commit)
+
+
+@pytest.mark.parametrize(
+    "declared_range", [None, "", ">=24", ">=22.15,<25", ">=24.15,<27", ">=24.20,<25"]
+)
+def test_explicit_retained_node_range_must_include_only_its_reviewed_major_and_pins(
+    declared_range,
+):
+    controller, retained = _node_manifests()
+    controller["node"]["reviewed_retained_releases"][0]["declared_compatible"] = (
+        declared_range
+    )
+    with pytest.raises(RetainedRuntimeError, match="compatibility"):
+        retained_node_pin(controller, retained, NODE_COMMITS[0])
+
+
+@pytest.mark.parametrize("declared_range", [None, ">=24.16,<25"])
+def test_raised_controller_floor_requires_exact_archived_range_declaration(
+    declared_range,
+):
+    controller, retained = _node_manifests()
+    controller["node"]["compatible"] = ">=24.22.1,<25"
+    if declared_range is not None:
+        controller["node"]["reviewed_retained_releases"][0]["declared_compatible"] = (
+            declared_range
+        )
+    with pytest.raises(RetainedRuntimeError, match="contradicts"):
         retained_node_pin(controller, retained, NODE_COMMITS[0])

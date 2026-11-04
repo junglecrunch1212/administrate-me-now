@@ -2864,3 +2864,33 @@ def test_public_reviewed_launcher_bounds_and_reaps_git_process_group(
     for process_id in process_ids:
         with pytest.raises(ProcessLookupError):
             os.kill(process_id, 0)
+
+
+def test_private_native_command_timeout_settles_descendants(tmp_path, monkeypatch):
+    repository, commit = _upgrade_repository(tmp_path)
+    paths = DeploymentPaths.from_root(tmp_path / "native-timeout")
+    stub_uninitialized_intake(monkeypatch, paths)
+    manager = UpgradeManager(paths, root=repository, test_mode=True)
+    delayed_write = tmp_path / "must-not-be-written"
+
+    def prepare(release):
+        child = (
+            "import subprocess,sys,time; "
+            "subprocess.Popen([sys.executable,'-c',"
+            "'import time,sys; from pathlib import Path; time.sleep(0.7); "
+            'Path(sys.argv[1]).write_text("unsafe")\',sys.argv[1]]); time.sleep(30)'
+        )
+        manager._run_preparation_command(
+            [sys.executable, "-c", child, str(delayed_write)],
+            release=release,
+            timeout_seconds=0.2,
+            private_output=True,
+        )
+
+    monkeypatch.setattr(manager, "_prepare_release", prepare)
+    with pytest.raises(UpgradeError, match="stable release path") as raised:
+        manager._publish_release(repository, commit)
+    assert isinstance(raised.value.__cause__, subprocess.CalledProcessError)
+    assert raised.value.__cause__.returncode == 75
+    time.sleep(0.8)
+    assert not delayed_write.exists()

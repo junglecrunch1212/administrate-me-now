@@ -5,6 +5,7 @@ import type { PluginRuntime } from "./runtime.js";
 import { takeReminderInput } from "./self-replies.js";
 import { rememberRequestAuthorization, COS_EMAIL_RULE } from "./request-policy.js";
 import { toolResult } from "./result.js";
+import { assertToolInput } from "./tool-input.js";
 
 export const REQUESTED_EMAIL_INPUT_TOOLS = [
   "administrateme_confirm_requested_email",
@@ -23,11 +24,12 @@ export function registerRequestedEmailTools(api: OpenClawPluginApi, runtime: Plu
       request_id: Type.String({ minLength: 8, maxLength: 120 }),
     }, { additionalProperties: false }),
     async execute(id, params) {
+      assertToolInput(params);
       const input = await takeReminderInput(runtime, id, context);
       const result = await runtime.transport.request("/api/openclaw/v1/tools/confirm-requested-email", {
         ...params, provenance: input.provenance, source_message_event_id: input.source_message_event_id,
       });
-      rememberRequestAuthorization(runtime, result, input, params as Record<string, unknown>, COS_EMAIL_RULE);
+      rememberRequestAuthorization(runtime, result, input, params, COS_EMAIL_RULE);
       return toolResult(result);
     },
   }), { name: "administrateme_confirm_requested_email", optional: true });
@@ -39,6 +41,7 @@ export function registerRequestedEmailTools(api: OpenClawPluginApi, runtime: Plu
       approval_event_id: Type.String({ minLength: 1, maxLength: 240 }),
     }, { additionalProperties: false }),
     async execute(id, params) {
+      assertToolInput(params);
       const input = await takeReminderInput(runtime, id, context);
       return toolResult(await runtime.transport.request("/api/openclaw/v1/tools/requested-email-status", {
         ...params, provenance: input.provenance, source_message_event_id: input.source_message_event_id,

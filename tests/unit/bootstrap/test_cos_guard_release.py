@@ -116,7 +116,11 @@ def _services(manager: UpgradeManager, monkeypatch: pytest.MonkeyPatch) -> list[
     monkeypatch.setattr(manager, "_validate_runtime", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
         "bootstrap.upgrade.validate_candidate",
-        lambda *_args, **_kwargs: {"compatible": True},
+        lambda *_args, **_kwargs: {
+            "compatible": True,
+            "native_state_migration": False,
+            "native_state_recovery_required": False,
+        },
     )
     monkeypatch.setattr(
         "bootstrap.upgrade.reconcile_administrateme_plugin",

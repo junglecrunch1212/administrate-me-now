@@ -174,7 +174,7 @@ PERMISSION_RECOVERY_COS_OVERLAY: dict[str, tuple[str | None, str]] = {
         None,
         "f8e44083e13975c967d806fb4e5a8a79ce40bbf4778b4dc9e1f93d8e3525ed42",
     ),
-    "openclaw/administrateme/test/fixtures/openclaw-2026.7.2/plugin-entry.d.ts": (
+    "openclaw/administrateme/test/fixtures/openclaw-2026.10.8/plugin-entry.d.ts": (
         "5a8ef3477b9987d830548f4c4eac6a6df47e6a1a9ccb81cd7b96ddebe7c09633",
         "b8382bf2ef0d59959591adce4d7d24271957f7d3a7635894f0b5f504387c93eb",
     ),

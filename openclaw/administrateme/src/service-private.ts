@@ -4,6 +4,7 @@ import type { AnyAgentTool, OpenClawPluginApi, OpenClawPluginToolContext } from 
 import { OPENCLAW_COMMIT, OPENCLAW_VERSION, type Provenance } from "./contract.js";
 import type { PluginRuntime } from "./runtime.js";
 import { toolResult } from "./result.js";
+import { assertToolInput } from "./tool-input.js";
 
 export const COS_SERVICE_PRINCIPAL_ID = "service-principal:chief-of-staff";
 export const SERVICE_PRIVATE_TOOL_NAMES = [
@@ -174,6 +175,7 @@ export function registerServicePrivateTools(api: OpenClawPluginApi, runtime: Plu
       description: definition.description,
       parameters: definition.parameters,
       async execute(_id, params) {
+        assertToolInput(params);
         const provenance = provenanceFromServiceTool(context, runtime.transport.config.sharedSecretEnv, runtime.transport.config.serviceWorkEnabled);
         const values = { ...params };
         const path = typeof definition.path === "function" ? definition.path(values) : definition.path;
