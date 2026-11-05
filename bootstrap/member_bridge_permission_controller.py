@@ -1390,6 +1390,7 @@ def run_controller(
                     source_coordinate=choice.source_coordinate,
                     account_coordinate=choice.account_coordinate,
                     connector_config=choice.connector_config,
+                    allowed_coordinates=choice.allowed_coordinates,
                 )
                 helper.record_permission(capability, granted=True, pack_config=config)
                 helper.permission_stage = "probe"

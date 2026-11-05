@@ -172,6 +172,7 @@ def _run(
     interaction: NativeFixture,
     *,
     headers: dict[str, str] | None = None,
+    operation: str = "continue",
 ) -> dict[str, Any]:
     def status(bound: Any) -> dict[str, Any]:
         response = client.get(
@@ -191,7 +192,7 @@ def _run(
     return run_controller(
         helper,
         interaction,
-        operation="continue",
+        operation=operation,
         expected_commit=helper.transfer["release_commit"],
         expected_central_commit=helper.transfer["release_commit"],
         progress_snapshot=status,
@@ -857,6 +858,80 @@ def test_initial_start_does_not_resume_revoked_active_or_unknown_operations(
             == before
         )
         assert client.portal.call(_events, runtime, "external.sent") == []
+
+
+@pytest.mark.parametrize("operation", ["initial", "continue"])
+def test_controller_preserves_all_selected_calendars_and_reminder_lists(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, operation: str
+) -> None:
+    class MultipleSources(NativeFixture):
+        def choose_source(self, capability: str, label: str) -> LocalSourceChoice:
+            choice = super().choose_source(capability, label)
+            assert choice.source_coordinate is not None
+            return replace(
+                choice,
+                allowed_coordinates=(
+                    f"fixture-{capability}-extra-first",
+                    choice.source_coordinate,
+                    f"fixture-{capability}-extra-last",
+                ),
+            )
+
+    monkeypatch.setenv("ADMINME_TEST_MODE", "1")
+    selected = ["apple_calendar", "apple_reminders"]
+    with TestClient(
+        create_application(_configuration_settings(tmp_path)),
+        base_url="https://central-fixture.ts.net",
+    ) as client:
+        runtime = client.app.state.runtime
+        _manual_policies(client)
+        original, transfer = _prepare_helper(client, tmp_path, selected)
+        if operation == "continue":
+            for capability in selected:
+                original.record_permission(capability, granted=False)
+        helper = _resume(client, original)
+        result = _run(client, helper, MultipleSources(), operation=operation)
+        assert result["outcome"] == "ready", result
+        assert result["provider_effects"] is False
+        local = load_config(helper.paths.config_path)
+        record = runtime.settings.bridge_enrollments[
+            MEMBER_HEADERS["Tailscale-User-Login"]
+        ]
+        assert local.observation_only is True
+        assert local.provider_writes == "deny"
+        for capability, default_key, observed_key in (
+            ("apple_calendar", "calendar_identifier", "calendar_external_id"),
+            ("apple_reminders", "target_list_identifier", "list_external_id"),
+        ):
+            default = f"fixture-{capability}-container"
+            containers = {
+                default,
+                f"fixture-{capability}-extra-first",
+                f"fixture-{capability}-extra-last",
+            }
+            pack = PACKS[capability]
+            for config in (local.pack_config[pack], record["pack_config"][pack]):
+                assert config[default_key] == default
+                assert set(config["allowed_container_ids"]) == containers
+                assert config["shared_container_ids"] == []
+            for index, container in enumerate(sorted(containers)):
+                event = _observation(runtime, capability, f"multi-{capability}-{index}")
+                event["payload"][observed_key] = container
+                accepted = client.post(
+                    "/api/bridge/ingest", headers=_bridge_headers(transfer), json=event
+                )
+                assert accepted.status_code == 202, accepted.text
+            unselected = _observation(runtime, capability, f"outside-{capability}")
+            unselected["payload"][observed_key] = "unselected-container"
+            refused = client.post(
+                "/api/bridge/ingest", headers=_bridge_headers(transfer), json=unselected
+            )
+            assert refused.status_code == 403, refused.text
+        for event_type in (
+            "external_sync.write_requested",
+            "external_sync.write_completed",
+        ):
+            assert client.portal.call(_events, runtime, event_type) == []
 
 
 def test_three_blocked_apple_paths_recover_with_original_signed_history_and_settle(
